@@ -19,7 +19,7 @@ const sitColor = {
 
 const Badge = ({ situation }) => {
   const c = sitColor[situation] || sitColor.Open;
-  const label = situation === "Close" ? "Cerrado" : situation === "Empty" ? "Vacío" : "Activo";
+  const label = situation === "Close" ? "Cerrado" : situation === "Empty" ? "Vacio" : "Activo";
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:500, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text }}>
       <span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />
@@ -66,7 +66,7 @@ function Modal({ title, onClose, children, footer }) {
       <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:600, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,0.15)" }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"18px 20px 14px", borderBottom:"1px solid #f0f0f0" }}>
           <span style={{ fontWeight:600, fontSize:15 }}>{title}</span>
-          <button onClick={onClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>×</button>
+          <button onClick={onClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>x</button>
         </div>
         <div style={{ padding:"16px 20px" }}>{children}</div>
         {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8 }}>{footer}</div>}
@@ -146,7 +146,7 @@ function LoginScreen() {
     setLoading(false);
   }
 
-  const inp2 = { fontSize:14, padding:"10px 14px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", outline:"none", marginBottom:10 };
+  const inp2 = { fontSize:14, padding:"10px 14px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", outline:"none", marginBottom:10, boxSizing:"border-box" };
 
   return (
     <div style={{ minHeight:"100vh", background:"#fafafa", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"system-ui,sans-serif" }}>
@@ -159,12 +159,12 @@ function LoginScreen() {
         {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
         {message && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{message}</div>}
         <input style={inp2} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
-        <input style={{ ...inp2, marginBottom:14 }} type="password" placeholder="Contrasena" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+        <input style={{ ...inp2, marginBottom:16 }} type="password" placeholder="Contrasena" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
         <button onClick={handleSubmit} disabled={loading || !email || !password}
           style={{ width:"100%", padding:"11px", borderRadius:8, border:"none", background:"#111", color:"#fff", fontSize:14, fontWeight:600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginBottom:14 }}>
           {loading ? "Cargando..." : isSignUp ? "Crear cuenta" : "Iniciar sesion"}
         </button>
-        <p style={{ textAlign:"center", fontSize:13, color:"#888" }}>
+        <p style={{ textAlign:"center", fontSize:13, color:"#888", margin:0 }}>
           {isSignUp ? "Ya tenes cuenta? " : "No tenes cuenta? "}
           <span onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null); }} style={{ color:"#111", fontWeight:600, cursor:"pointer", textDecoration:"underline" }}>
             {isSignUp ? "Inicia sesion" : "Registrate"}
@@ -182,26 +182,14 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
-    return () => subscription.unsubscribe();
-  }, []);
-
-  if (session === undefined) return null;
-  if (!session) return <LoginScreen />;
-
   const [tab, setTab] = useState("all");
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
   const [sortBy, setSortBy] = useState("date-desc");
-
   const [detailId, setDetailId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
-
   const [showImport, setShowImport] = useState(false);
   const [importTab, setImportTab] = useState("paste");
   const [pasteText, setPasteText] = useState("");
@@ -212,7 +200,12 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const fileRef = useRef();
 
-  // Load data from Supabase
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
   const loadData = useCallback(async () => {
     const { data, error } = await supabase.from("storages").select("*").order("date_opened", { ascending: false });
     if (error) { setError(error.message); setLoading(false); return; }
@@ -220,8 +213,8 @@ export default function App() {
     setLoading(false);
   }, []);
 
-  // Subscribe to real-time updates
   useEffect(() => {
+    if (!session) return;
     loadData();
     const channel = supabase.channel("storages-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "storages" }, (payload) => {
@@ -233,7 +226,7 @@ export default function App() {
       })
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [loadData]);
+  }, [session, loadData]);
 
   const drivers = useMemo(() => [...new Set(records.map(r => r.driver).filter(Boolean))].sort(), [records]);
 
@@ -279,59 +272,39 @@ export default function App() {
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
-    setForm({
-      customer: r.customer||"", driver: r.driver||"", brand: r.brand||"", state: r.state||"",
-      address: r.address||"", unit: r.unit||"", size: r.size||"", gate_code: r.gate_code||"",
-      lock: r.lock||"", email: r.email||"", account: r.account||"", situation: r.situation||"Open",
-      monthly_cost: r.monthly_cost||"", card_on_file: r.card_on_file||"",
-      date_opened: r.date_opened||"", job_number: r.job_number||"", notes: r.notes||""
-    });
+    setForm({ customer:r.customer||"", driver:r.driver||"", brand:r.brand||"", state:r.state||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", situation:r.situation||"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"", job_number:r.job_number||"", notes:r.notes||"" });
     setEditId(r.id); setShowAdd(true);
   }
 
   async function saveForm() {
     setSaving(true);
-    const payload = {
-      customer: form.customer || null, driver: form.driver || null, brand: form.brand || null,
-      state: form.state || null, address: form.address || null, unit: form.unit || null,
-      size: form.size || null, gate_code: form.gate_code || null, lock: form.lock || null,
-      email: form.email || null, account: form.account || null, situation: form.situation,
-      monthly_cost: form.monthly_cost ? parseFloat(form.monthly_cost) : null,
-      card_on_file: form.card_on_file || null, date_opened: form.date_opened || null,
-      job_number: form.job_number || null, notes: form.notes || null,
-    };
-    if (editId) {
-      await supabase.from("storages").update(payload).eq("id", editId);
-    } else {
-      await supabase.from("storages").insert([payload]);
-    }
-    setSaving(false);
-    setShowAdd(false);
+    const payload = { customer:form.customer||null, driver:form.driver||null, brand:form.brand||null, state:form.state||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null, job_number:form.job_number||null, notes:form.notes||null };
+    if (editId) { await supabase.from("storages").update(payload).eq("id", editId); }
+    else { await supabase.from("storages").insert([payload]); }
+    setSaving(false); setShowAdd(false);
   }
 
   async function deleteRecord(id) {
-    if (!window.confirm("¿Eliminar este storage?")) return;
+    if (!window.confirm("Eliminar este storage?")) return;
     await supabase.from("storages").delete().eq("id", id);
     setDetailId(null);
   }
 
   function openImportModal() { setShowImport(true); setImportTab("paste"); setPasteText(""); setPending([]); setExcluded({}); setZipStatus(""); setZipName(""); }
-
   function previewPaste() { setPending(parsePastedMessages(pasteText)); setExcluded({}); }
 
   async function handleZip(file) {
     if (!file) return;
-    setZipName(file.name);
-    setZipStatus("Leyendo ZIP...");
+    setZipName(file.name); setZipStatus("Leyendo ZIP...");
     try {
       const { default: JSZip } = await import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm");
       const zip = await JSZip.loadAsync(file);
       let chatFile = Object.keys(zip.files).find(n => /chat.*\.txt$/i.test(n) && !zip.files[n].dir);
       if (!chatFile) chatFile = Object.keys(zip.files).find(n => /\.txt$/i.test(n) && !zip.files[n].dir);
-      if (!chatFile) { setZipStatus("No se encontró un archivo .txt dentro del ZIP."); return; }
+      if (!chatFile) { setZipStatus("No se encontro un archivo .txt dentro del ZIP."); return; }
       const text = await zip.files[chatFile].async("string");
       const parsed = parseWhatsAppExport(text);
-      if (!parsed.length) { setZipStatus(`No se detectaron mensajes con datos de storage en "${chatFile}".`); return; }
+      if (!parsed.length) { setZipStatus("No se detectaron mensajes con datos de storage."); return; }
       setPending(parsed); setExcluded({});
       setZipStatus(`${parsed.length} storage(s) detectados en "${chatFile}".`);
     } catch (err) { setZipStatus("Error: " + err.message); }
@@ -342,12 +315,14 @@ export default function App() {
     if (!toAdd.length) return;
     setSaving(true);
     await supabase.from("storages").insert(toAdd);
-    setSaving(false);
-    setShowImport(false);
+    setSaving(false); setShowImport(false);
   }
 
   const tabStyle = (t) => ({ fontSize:13, fontWeight: tab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: tab === t ? "#111" : "#999", borderBottom: tab === t ? "2px solid #111" : "2px solid transparent" });
   const impTabStyle = (t) => ({ flex:1, fontSize:13, padding:"8px", borderRadius:7, cursor:"pointer", border:"none", background: importTab === t ? "#fff" : "none", color: importTab === t ? "#111" : "#888", fontWeight: importTab === t ? 600 : 400, boxShadow: importTab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none" });
+
+  if (session === undefined) return null;
+  if (!session) return <LoginScreen />;
 
   if (loading) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", flexDirection:"column", gap:12, color:"#888", fontFamily:"system-ui,sans-serif" }}>
@@ -359,20 +334,17 @@ export default function App() {
 
   if (error) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", flexDirection:"column", gap:12, color:"#b91c1c", fontFamily:"system-ui,sans-serif", padding:24 }}>
-      <span style={{ fontSize:28 }}>⚠️</span>
-      <span style={{ fontSize:15, fontWeight:600 }}>Error de conexión</span>
-      <span style={{ fontSize:13, color:"#888", textAlign:"center" }}>{error}</span>
-      <button onClick={loadData} style={{ marginTop:8, padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer", fontSize:13 }}>Reintentar</button>
+      <span style={{ fontSize:15, fontWeight:600 }}>Error de conexion</span>
+      <span style={{ fontSize:13, color:"#888" }}>{error}</span>
+      <button onClick={loadData} style={{ padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer", fontSize:13 }}>Reintentar</button>
     </div>
   );
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", padding:"20px 24px 40px", minHeight:"100vh", background:"#fafafa" }}>
-
-      {/* HEADER */}
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:2 }}>No Borders Moving & Storage</div>
+          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:2 }}>No Borders Moving and Storage</div>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
             <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>Storage Manager</h1>
             <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 8px", borderRadius:20, background: liveIndicator ? "#EAF3DE" : "#f5f5f5", color: liveIndicator ? "#3B6D11" : "#aaa", transition:"all .3s" }}>
@@ -382,22 +354,18 @@ export default function App() {
           </div>
         </div>
         <div style={{ display:"flex", gap:8 }}>
-          <Btn onClick={openImportModal}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Importar WhatsApp
-          </Btn>
+          <Btn onClick={openImportModal}>Importar WhatsApp</Btn>
           <Btn primary onClick={openAdd}>+ Nuevo storage</Btn>
           <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
         </div>
       </div>
 
-      {/* METRICS */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom: metrics.missingCost > 0 ? 10 : 20 }}>
         {[
           { label:"Total storages", value:metrics.total, color:"#111" },
           { label:"Activos", value:metrics.active, color:"#3B6D11" },
           { label:"Cerrados", value:metrics.closed, color:"#A32D2D" },
-          { label:"Vacíos", value:metrics.empty, color:"#854F0B" },
+          { label:"Vacios", value:metrics.empty, color:"#854F0B" },
           { label:"Costo mensual", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
           { label:"Estados USA", value:metrics.states, color:"#888" },
         ].map(m => (
@@ -409,19 +377,17 @@ export default function App() {
       </div>
       {metrics.missingCost > 0 && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:8 }}>
-          <span style={{ fontSize:16 }}>⚠️</span>
-          <span><strong>{metrics.missingCost} storage{metrics.missingCost > 1 ? "s" : ""} activo{metrics.missingCost > 1 ? "s" : ""}</strong> sin costo cargado — el total puede estar incompleto.</span>
+          <span>Warning:</span>
+          <span><strong>{metrics.missingCost} storage(s) activo(s)</strong> sin costo cargado — el total puede estar incompleto.</span>
         </div>
       )}
 
-      {/* TABS */}
       <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14 }}>
-        {[["all","Todos"],["Open","Activos"],["Close","Cerrados"],["Empty","Vacíos"]].map(([t,l]) => (
+        {[["all","Todos"],["Open","Activos"],["Close","Cerrados"],["Empty","Vacios"]].map(([t,l]) => (
           <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
         ))}
       </div>
 
-      {/* FILTERS */}
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar driver, brand, estado, job..." style={{ ...inp, flex:1, minWidth:180 }} />
         <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
@@ -429,25 +395,24 @@ export default function App() {
           {drivers.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inp, minWidth:150 }}>
-          <option value="date-desc">Más reciente</option>
-          <option value="date-asc">Más antiguo</option>
+          <option value="date-desc">Mas reciente</option>
+          <option value="date-asc">Mas antiguo</option>
           <option value="driver">Driver A-Z</option>
           <option value="state">Estado A-Z</option>
         </select>
       </div>
 
-      {/* TABLE */}
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
         <div style={{ overflowX:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
             <colgroup>
-              <col style={{width:130}}/><col style={{width:120}}/><col style={{width:90}}/>
-              <col style={{width:55}}/><col style={{width:65}}/><col style={{width:65}}/>
+              <col style={{width:100}}/><col style={{width:110}}/><col style={{width:110}}/>
+              <col style={{width:110}}/><col style={{width:55}}/><col style={{width:65}}/>
               <col style={{width:105}}/><col style={{width:75}}/>
             </colgroup>
             <thead>
               <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                {["Job #","Cliente","Driver","Brand","Estado","Unidad","Gate Code","Situación"].map(h => (
+                {["Job #","Cliente","Driver","Brand","Estado","Unidad","Gate Code","Situacion"].map(h => (
                   <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                 ))}
               </tr>
@@ -478,7 +443,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* DETAIL MODAL */}
       {detail && (
         <Modal title={`${detail.driver||"Storage"} — ${detail.state||""}`} onClose={() => setDetailId(null)}
           footer={<>
@@ -492,10 +456,10 @@ export default function App() {
           </div>
           <SectionLabel>Storage</SectionLabel>
           <DetailRow label="Brand" value={detail.brand} />
-          <DetailRow label="Dirección" value={detail.address} />
+          <DetailRow label="Direccion" value={detail.address} />
           <DetailRow label="Estado" value={detail.state} />
           <DetailRow label="Unidad" value={detail.unit} />
-          <DetailRow label="Tamaño" value={detail.size} />
+          <DetailRow label="Tamano" value={detail.size} />
           <DetailRow label="Gate Code" value={detail.gate_code} />
           <DetailRow label="Lock / Combo" value={detail.lock} />
           <SectionLabel>Cuenta</SectionLabel>
@@ -510,7 +474,6 @@ export default function App() {
         </Modal>
       )}
 
-      {/* ADD / EDIT MODAL */}
       {showAdd && (
         <Modal title={editId ? "Editar storage" : "Nuevo storage"} onClose={() => setShowAdd(false)}
           footer={<>
@@ -522,14 +485,14 @@ export default function App() {
             <Field label="Driver"><input style={inp} value={form.driver} onChange={e => setForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
             <Field label="Brand"><input style={inp} value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="CubeSmart, Public Storage..." /></Field>
             <Field label="Estado"><input style={inp} value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value}))} placeholder="TN" /></Field>
-            <Field label="Dirección" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
+            <Field label="Direccion" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
             <Field label="Unidad #"><input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" /></Field>
-            <Field label="Tamaño"><input style={inp} value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
+            <Field label="Tamano"><input style={inp} value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
             <Field label="Gate Code"><input style={inp} value={form.gate_code} onChange={e => setForm(f => ({...f, gate_code:e.target.value}))} placeholder="*130438#" /></Field>
             <Field label="Lock / Combo"><input style={inp} value={form.lock} onChange={e => setForm(f => ({...f, lock:e.target.value}))} placeholder="use 8141 to unlock..." /></Field>
             <Field label="Email"><input style={inp} value={form.email} onChange={e => setForm(f => ({...f, email:e.target.value}))} placeholder="service@..." /></Field>
             <Field label="Account #"><input style={inp} value={form.account} onChange={e => setForm(f => ({...f, account:e.target.value}))} placeholder="NONE" /></Field>
-            <Field label="Situación">
+            <Field label="Situacion">
               <select style={inp} value={form.situation} onChange={e => setForm(f => ({...f, situation:e.target.value}))}>
                 <option value="Open">Open</option>
                 <option value="Close">Close</option>
@@ -545,7 +508,6 @@ export default function App() {
         </Modal>
       )}
 
-      {/* IMPORT MODAL */}
       {showImport && (
         <Modal title="Importar desde WhatsApp" onClose={() => setShowImport(false)}
           footer={<>
@@ -561,7 +523,7 @@ export default function App() {
           </div>
           {importTab === "paste" && (
             <>
-              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Pegá uno o varios mensajes del grupo de WhatsApp.</p>
+              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Pega uno o varios mensajes del grupo de WhatsApp.</p>
               <textarea value={pasteText} onChange={e => setPasteText(e.target.value)}
                 placeholder={"Storage para: Elvin Medina\nGo Store It!\nsize: 10x10\nAddress: 1870 West Avenue, Crossville, TN\nUnit Number: G13\nGate Code: 130438"}
                 style={{ ...inp, fontFamily:"monospace", fontSize:12, resize:"vertical", minHeight:120, display:"block", marginBottom:8 }} />
@@ -569,13 +531,13 @@ export default function App() {
           )}
           {importTab === "zip" && (
             <>
-              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Subí el .zip exportado del chat de WhatsApp. Se procesa en tu navegador.</p>
+              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Subi el .zip exportado del chat de WhatsApp. Se procesa en tu navegador.</p>
               <div onDragOver={e => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)}
                 onDrop={e => { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f) handleZip(f); }}
                 onClick={() => fileRef.current.click()}
                 style={{ border:`2px dashed ${isDragging ? "#378ADD" : "#ddd"}`, borderRadius:10, padding:"28px 16px", textAlign:"center", cursor:"pointer", background: isDragging ? "#E6F1FB" : "#fafafa", transition:"all .15s" }}>
-                <div style={{ fontSize:28, marginBottom:8 }}>📦</div>
-                <p style={{ fontSize:13, color:"#888" }}>Hacé clic o arrastrá el archivo .zip acá</p>
+                <div style={{ fontSize:28, marginBottom:8 }}>zip</div>
+                <p style={{ fontSize:13, color:"#888" }}>Hace clic o arrastra el archivo .zip aca</p>
                 {zipName && <p style={{ fontSize:13, fontWeight:600, color:"#111", marginTop:6 }}>{zipName}</p>}
               </div>
               <input ref={fileRef} type="file" accept=".zip" style={{ display:"none" }} onChange={e => handleZip(e.target.files[0])} />
