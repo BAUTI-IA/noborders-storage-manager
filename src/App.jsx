@@ -125,6 +125,78 @@ function parseWhatsAppExport(rawText) {
     .map(b => parsePastedMessages(b.lines.join("\n"))[0] || null).filter(Boolean);
 }
 
+function AIPanel({ records }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+
+  async function analyze() {
+    setLoading(true); setResult(null);
+    const active = records.filter(r => r.situation === "Open");
+    const byState = active.reduce((acc,r)=>{ if(r.state) acc[r.state]=(acc[r.state]||0)+1; return acc; },{});
+    const byBrand = active.reduce((acc,r)=>{ if(r.brand) acc[r.brand.trim()]=(acc[r.brand.trim()]||0)+1; return acc; },{});
+    const withCost = active.filter(r=>r.monthly_cost);
+    const totalCost = withCost.reduce((s,r)=>s+Number(r.monthly_cost),0);
+    const noCost = active.length - withCost.length;
+    const sameState = Object.entries(byState).filter(([,v])=>v>=3).map(([k,v])=>`${k}: ${v} storages`);
+    const sameBrand = Object.entries(byBrand).filter(([,v])=>v>=3).map(([k,v])=>`${k}: ${v} unidades`);
+
+    const prompt = `Sos un experto en operaciones de empresas de mudanzas en USA. Analiza estos datos de storages activos y dame 4-6 recomendaciones concretas y accionables para mejorar la eficiencia y reducir costos. Se especifico, directo y práctico.
+
+DATOS:
+- Total storages activos: ${active.length}
+- Costo mensual total registrado: $${totalCost.toLocaleString()} (${noCost} storages sin costo cargado)
+- Storages por estado: ${JSON.stringify(byState)}
+- Storages por empresa: ${JSON.stringify(byBrand)}
+- Estados con 3+ storages: ${sameState.join(", ") || "ninguno"}
+- Empresas con 3+ unidades: ${sameBrand.join(", ") || "ninguna"}
+
+Formato: lista numerada, cada recomendacion en 2-3 lineas max. Empieza directo con "1."`;
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }]
+        })
+      });
+      const data = await res.json();
+      setResult(data.content?.[0]?.text || "No se pudo obtener respuesta.");
+    } catch(e) {
+      setResult("Error al conectar con la IA. Intenta de nuevo.");
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom: result ? 16 : 0 }}>
+        <div>
+          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Recomendaciones con IA</div>
+          <div style={{ fontSize:12, color:"#bbb" }}>Analisis automatico de tu operacion de storages</div>
+        </div>
+        <button onClick={analyze} disabled={loading}
+          style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background: loading ? "#f5f5f5" : "#111", color: loading ? "#aaa" : "#fff", cursor: loading ? "not-allowed" : "pointer", flexShrink:0, display:"flex", alignItems:"center", gap:6 }}>
+          {loading ? "Analizando..." : "Analizar con IA"}
+        </button>
+      </div>
+      {loading && (
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"20px 0", color:"#888", fontSize:13 }}>
+          <div style={{ width:16, height:16, border:"2px solid #f0f0f0", borderTop:"2px solid #111", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
+          Analizando {records.filter(r=>r.situation==="Open").length} storages activos...
+        </div>
+      )}
+      {result && (
+        <div style={{ marginTop:16, padding:"16px", background:"#fafafa", borderRadius:10, fontSize:13, lineHeight:1.7, color:"#333", whiteSpace:"pre-wrap" }}>
+          {result}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -387,17 +459,45 @@ export default function App() {
       {/* ANALYTICS */}
       {showAnalytics && (
         <div style={{ marginBottom:20 }}>
+
+          {/* Fila 1: Aperturas vs Cierres + Costo por mes */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
 
-            {/* Gasto por empresa de storage */}
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Aperturas vs cierres por mes</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Evolucion mensual de tu operacion</div>
+              {(() => {
+                const monthNames = {"01":"Ene","02":"Feb","03":"Mar","04":"Abr","05":"May","06":"Jun","07":"Jul","08":"Ago","09":"Sep","10":"Oct","11":"Nov","12":"Dic"};
+                const opens = records.reduce((acc,r)=>{ if(r.date_opened){ const m=r.date_opened.slice(0,7); acc[m]=(acc[m]||0)+1; } return acc; },{});
+                const months = Object.keys(opens).sort().slice(-8);
+                const maxVal = Math.max(...months.map(m=>opens[m]||0), 1);
+                return months.map(month => {
+                  const [year, m] = month.split("-");
+                  const label = `${monthNames[m]} ${year.slice(2)}`;
+                  const openCount = opens[month]||0;
+                  return (
+                    <div key={month} style={{ marginBottom:10 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
+                        <span style={{ fontWeight:500 }}>{label}</span>
+                        <span style={{ color:"#3B6D11" }}>+{openCount} abiertos</span>
+                      </div>
+                      <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
+                        <div style={{ background:"#3B6D11", borderRadius:6, height:8, width:`${(openCount/maxVal)*100}%`, transition:"width .4s" }} />
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Gasto mensual por empresa</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Solo storages con costo cargado</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto le pagas a cada cadena de storages</div>
               {(() => {
                 const byBrand = records.filter(r=>r.situation==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byBrand).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
-                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos mensuales para ver este grafico</p>;
+                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
                 return sorted.map(([brand,cost]) => (
                   <div key={brand} style={{ marginBottom:12 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
@@ -411,11 +511,13 @@ export default function App() {
                 ));
               })()}
             </div>
+          </div>
 
-            {/* Storages abiertos por estado */}
+          {/* Fila 2: Storages por estado + Costo por estado */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storages activos por estado</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cantidad de unidades abiertas</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Donde tenes mas exposicion operativa</div>
               {(() => {
                 const byState = records.filter(r=>r.situation==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{});
                 const sorted = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,10);
@@ -434,18 +536,14 @@ export default function App() {
               })()}
             </div>
 
-          </div>
-
-          {/* Costo mensual por estado */}
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Costo mensual por estado</div>
-            <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto gastas en storages en cada estado (solo con costo cargado)</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 40px" }}>
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Costo mensual por estado</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Donde gastas mas dinero en storages</div>
               {(() => {
                 const byCost = records.filter(r=>r.situation==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
-                const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]);
+                const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
-                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",gridColumn:"1/-1"}}>Carga costos mensuales para ver este grafico</p>;
+                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
                 return sorted.map(([state,cost]) => (
                   <div key={state} style={{ marginBottom:12 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
@@ -460,6 +558,9 @@ export default function App() {
               })()}
             </div>
           </div>
+
+          {/* Panel IA */}
+          <AIPanel records={records} />
 
         </div>
       )}
