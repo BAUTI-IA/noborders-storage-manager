@@ -387,68 +387,80 @@ export default function App() {
       {/* ANALYTICS */}
       {showAnalytics && (
         <div style={{ marginBottom:20 }}>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>
-            
-            {/* Storages por estado */}
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
-              <div style={{ fontSize:12, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:12 }}>Storages por estado</div>
-              {Object.entries(records.filter(r=>r.situation==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([state,count]) => {
-                const max = Math.max(...Object.values(records.filter(r=>r.situation==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{})));
-                return (
-                  <div key={state} style={{ marginBottom:8 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
-                      <span style={{ fontWeight:500 }}>{state}</span>
-                      <span style={{ color:"#888" }}>{count}</span>
-                    </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:4, height:6 }}>
-                      <div style={{ background:"#3B6D11", borderRadius:4, height:6, width:`${(count/max)*100}%`, transition:"width .3s" }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
 
-            {/* Costo por driver */}
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
-              <div style={{ fontSize:12, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:12 }}>Costo mensual por driver</div>
-              {Object.entries(records.filter(r=>r.situation==="Open" && r.monthly_cost).reduce((acc,r)=>{ if(r.driver){acc[r.driver]=(acc[r.driver]||0)+Number(r.monthly_cost);} return acc; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([driver,cost]) => {
-                const max = Math.max(...Object.values(records.filter(r=>r.situation==="Open" && r.monthly_cost).reduce((acc,r)=>{ if(r.driver){acc[r.driver]=(acc[r.driver]||0)+Number(r.monthly_cost);} return acc; },{})));
-                return (
-                  <div key={driver} style={{ marginBottom:8 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
-                      <span style={{ fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:120 }}>{driver}</span>
-                      <span style={{ color:"#888", flexShrink:0 }}>${Number(cost).toLocaleString()}</span>
-                    </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:4, height:6 }}>
-                      <div style={{ background:"#185FA5", borderRadius:4, height:6, width:`${(cost/max)*100}%`, transition:"width .3s" }} />
-                    </div>
-                  </div>
-                );
-              })}
-              {records.filter(r=>r.situation==="Open" && r.monthly_cost).length === 0 && <p style={{ fontSize:12, color:"#bbb", textAlign:"center", marginTop:20 }}>Sin costos cargados aun</p>}
-            </div>
-
-            {/* Storages abiertos por mes */}
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
-              <div style={{ fontSize:12, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:12 }}>Aperturas por mes</div>
+            {/* Gasto por empresa de storage */}
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Gasto mensual por empresa</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Solo storages con costo cargado</div>
               {(() => {
-                const byMonth = records.reduce((acc,r)=>{ if(r.date_opened){ const m=r.date_opened.slice(0,7); acc[m]=(acc[m]||0)+1; } return acc; },{});
-                const sorted = Object.entries(byMonth).sort((a,b)=>a[0]>b[0]?1:-1).slice(-8);
-                const max = Math.max(...sorted.map(s=>s[1]));
-                return sorted.map(([month,count]) => (
-                  <div key={month} style={{ marginBottom:8 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
-                      <span style={{ fontWeight:500 }}>{month}</span>
-                      <span style={{ color:"#888" }}>{count}</span>
+                const byBrand = records.filter(r=>r.situation==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
+                const sorted = Object.entries(byBrand).sort((a,b)=>b[1]-a[1]).slice(0,10);
+                const max = sorted[0]?.[1] || 1;
+                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos mensuales para ver este grafico</p>;
+                return sorted.map(([brand,cost]) => (
+                  <div key={brand} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                      <span style={{ fontSize:13, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"65%" }}>{brand}</span>
+                      <span style={{ fontSize:13, color:"#888", flexShrink:0 }}>${Number(cost).toLocaleString()}</span>
                     </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:4, height:6 }}>
-                      <div style={{ background:"#854F0B", borderRadius:4, height:6, width:`${(count/max)*100}%`, transition:"width .3s" }} />
+                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
+                      <div style={{ background:"#A32D2D", borderRadius:6, height:8, width:`${(cost/max)*100}%`, transition:"width .4s" }} />
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+
+            {/* Storages abiertos por estado */}
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storages activos por estado</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cantidad de unidades abiertas</div>
+              {(() => {
+                const byState = records.filter(r=>r.situation==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{});
+                const sorted = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,10);
+                const max = sorted[0]?.[1] || 1;
+                return sorted.map(([state,count]) => (
+                  <div key={state} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                      <span style={{ fontSize:13, fontWeight:500 }}>{state}</span>
+                      <span style={{ fontSize:13, color:"#888" }}>{count}</span>
+                    </div>
+                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
+                      <div style={{ background:"#3B6D11", borderRadius:6, height:8, width:`${(count/max)*100}%`, transition:"width .4s" }} />
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+
+          </div>
+
+          {/* Costo mensual por estado */}
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Costo mensual por estado</div>
+            <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto gastas en storages en cada estado (solo con costo cargado)</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 40px" }}>
+              {(() => {
+                const byCost = records.filter(r=>r.situation==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
+                const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]);
+                const max = sorted[0]?.[1] || 1;
+                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",gridColumn:"1/-1"}}>Carga costos mensuales para ver este grafico</p>;
+                return sorted.map(([state,cost]) => (
+                  <div key={state} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                      <span style={{ fontSize:13, fontWeight:500 }}>{state}</span>
+                      <span style={{ fontSize:13, color:"#888" }}>${Number(cost).toLocaleString()}</span>
+                    </div>
+                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
+                      <div style={{ background:"#185FA5", borderRadius:6, height:8, width:`${(cost/max)*100}%`, transition:"width .4s" }} />
                     </div>
                   </div>
                 ));
               })()}
             </div>
           </div>
+
         </div>
       )}
 
