@@ -125,12 +125,72 @@ function parseWhatsAppExport(rawText) {
     .map(b => parsePastedMessages(b.lines.join("\n"))[0] || null).filter(Boolean);
 }
 
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit() {
+    setLoading(true); setError(null); setMessage(null);
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) setError(error.message);
+      else setMessage("Cuenta creada. Revisa tu email para confirmar.");
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) setError("Email o contrasena incorrectos.");
+    }
+    setLoading(false);
+  }
+
+  const inp2 = { fontSize:14, padding:"10px 14px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", outline:"none", marginBottom:10 };
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#fafafa", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"system-ui,sans-serif" }}>
+      <div style={{ background:"#fff", borderRadius:16, border:"1px solid #efefef", padding:"36px 32px", width:"100%", maxWidth:380, boxShadow:"0 4px 24px rgba(0,0,0,0.06)" }}>
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>No Borders Moving and Storage</div>
+          <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>Storage Manager</h1>
+          <p style={{ fontSize:13, color:"#888", marginTop:6 }}>{isSignUp ? "Crea tu cuenta para acceder" : "Inicia sesion para continuar"}</p>
+        </div>
+        {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
+        {message && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{message}</div>}
+        <input style={inp2} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+        <input style={{ ...inp2, marginBottom:14 }} type="password" placeholder="Contrasena" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+        <button onClick={handleSubmit} disabled={loading || !email || !password}
+          style={{ width:"100%", padding:"11px", borderRadius:8, border:"none", background:"#111", color:"#fff", fontSize:14, fontWeight:600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginBottom:14 }}>
+          {loading ? "Cargando..." : isSignUp ? "Crear cuenta" : "Iniciar sesion"}
+        </button>
+        <p style={{ textAlign:"center", fontSize:13, color:"#888" }}>
+          {isSignUp ? "Ya tenes cuenta? " : "No tenes cuenta? "}
+          <span onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null); }} style={{ color:"#111", fontWeight:600, cursor:"pointer", textDecoration:"underline" }}>
+            {isSignUp ? "Inicia sesion" : "Registrate"}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [session, setSession] = useState(undefined);
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) return null;
+  if (!session) return <LoginScreen />;
 
   const [tab, setTab] = useState("all");
   const [search, setSearch] = useState("");
@@ -327,6 +387,7 @@ export default function App() {
             Importar WhatsApp
           </Btn>
           <Btn primary onClick={openAdd}>+ Nuevo storage</Btn>
+          <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
         </div>
       </div>
 
@@ -386,7 +447,7 @@ export default function App() {
             </colgroup>
             <thead>
               <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                {["Driver","Brand","Dirección","Estado","Unidad","Tamaño","Gate Code","Situación"].map(h => (
+                {["Job #","Cliente","Driver","Brand","Estado","Unidad","Gate Code","Situación"].map(h => (
                   <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                 ))}
               </tr>
@@ -399,12 +460,12 @@ export default function App() {
                   style={{ borderBottom:"1px solid #fafafa", cursor:"pointer" }}
                   onMouseEnter={e => e.currentTarget.style.background="#fafafa"}
                   onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                  <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.job_number||"—"}</td>
+                  <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer||"—"}</td>
                   <td style={{ padding:"10px 12px", fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.driver||"—"}</td>
                   <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.brand||"—"}</td>
-                  <td style={{ padding:"10px 12px", color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.address ? r.address.split(",").slice(-2).join(",").trim() : "—"}</td>
                   <td style={{ padding:"10px 12px" }}>{r.state||"—"}</td>
                   <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{r.unit||"—"}</td>
-                  <td style={{ padding:"10px 12px" }}>{r.size||"—"}</td>
                   <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.gate_code||"—"}</td>
                   <td style={{ padding:"10px 12px" }}><Badge situation={r.situation} /></td>
                 </tr>
