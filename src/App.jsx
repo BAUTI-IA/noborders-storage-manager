@@ -198,6 +198,7 @@ export default function App() {
   const [zipStatus, setZipStatus] = useState("");
   const [zipName, setZipName] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -354,6 +355,7 @@ export default function App() {
           </div>
         </div>
         <div style={{ display:"flex", gap:8 }}>
+          <Btn onClick={() => setShowAnalytics(a => !a)}>{showAnalytics ? "Ocultar graficos" : "Ver graficos"}</Btn>
           <Btn onClick={openImportModal}>Importar WhatsApp</Btn>
           <Btn primary onClick={openAdd}>+ Nuevo storage</Btn>
           <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
@@ -382,7 +384,75 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14 }}>
+      {/* ANALYTICS */}
+      {showAnalytics && (
+        <div style={{ marginBottom:20 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>
+            
+            {/* Storages por estado */}
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
+              <div style={{ fontSize:12, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:12 }}>Storages por estado</div>
+              {Object.entries(records.filter(r=>r.situation==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([state,count]) => {
+                const max = Math.max(...Object.values(records.filter(r=>r.situation==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{})));
+                return (
+                  <div key={state} style={{ marginBottom:8 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
+                      <span style={{ fontWeight:500 }}>{state}</span>
+                      <span style={{ color:"#888" }}>{count}</span>
+                    </div>
+                    <div style={{ background:"#f5f5f5", borderRadius:4, height:6 }}>
+                      <div style={{ background:"#3B6D11", borderRadius:4, height:6, width:`${(count/max)*100}%`, transition:"width .3s" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Costo por driver */}
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
+              <div style={{ fontSize:12, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:12 }}>Costo mensual por driver</div>
+              {Object.entries(records.filter(r=>r.situation==="Open" && r.monthly_cost).reduce((acc,r)=>{ if(r.driver){acc[r.driver]=(acc[r.driver]||0)+Number(r.monthly_cost);} return acc; },{})).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([driver,cost]) => {
+                const max = Math.max(...Object.values(records.filter(r=>r.situation==="Open" && r.monthly_cost).reduce((acc,r)=>{ if(r.driver){acc[r.driver]=(acc[r.driver]||0)+Number(r.monthly_cost);} return acc; },{})));
+                return (
+                  <div key={driver} style={{ marginBottom:8 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
+                      <span style={{ fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:120 }}>{driver}</span>
+                      <span style={{ color:"#888", flexShrink:0 }}>${Number(cost).toLocaleString()}</span>
+                    </div>
+                    <div style={{ background:"#f5f5f5", borderRadius:4, height:6 }}>
+                      <div style={{ background:"#185FA5", borderRadius:4, height:6, width:`${(cost/max)*100}%`, transition:"width .3s" }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {records.filter(r=>r.situation==="Open" && r.monthly_cost).length === 0 && <p style={{ fontSize:12, color:"#bbb", textAlign:"center", marginTop:20 }}>Sin costos cargados aun</p>}
+            </div>
+
+            {/* Storages abiertos por mes */}
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
+              <div style={{ fontSize:12, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:12 }}>Aperturas por mes</div>
+              {(() => {
+                const byMonth = records.reduce((acc,r)=>{ if(r.date_opened){ const m=r.date_opened.slice(0,7); acc[m]=(acc[m]||0)+1; } return acc; },{});
+                const sorted = Object.entries(byMonth).sort((a,b)=>a[0]>b[0]?1:-1).slice(-8);
+                const max = Math.max(...sorted.map(s=>s[1]));
+                return sorted.map(([month,count]) => (
+                  <div key={month} style={{ marginBottom:8 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
+                      <span style={{ fontWeight:500 }}>{month}</span>
+                      <span style={{ color:"#888" }}>{count}</span>
+                    </div>
+                    <div style={{ background:"#f5f5f5", borderRadius:4, height:6 }}>
+                      <div style={{ background:"#854F0B", borderRadius:4, height:6, width:`${(count/max)*100}%`, transition:"width .3s" }} />
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+            <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14 }}>
         {[["all","Todos"],["Open","Activos"],["Close","Cerrados"],["Empty","Vacios"]].map(([t,l]) => (
           <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
         ))}
