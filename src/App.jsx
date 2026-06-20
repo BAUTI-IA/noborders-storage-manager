@@ -427,7 +427,7 @@ export default function App() {
           </div>
         </div>
         <div style={{ display:"flex", gap:8 }}>
-          <Btn onClick={() => setShowAnalytics(a => !a)}>{showAnalytics ? "Ocultar graficos" : "Ver graficos"}</Btn>
+          <Btn onClick={() => setShowAnalytics(a => !a)}>{showAnalytics ? "Ocultar graficos" : "📊 Analytics"}</Btn>
           <Btn onClick={openImportModal}>Importar WhatsApp</Btn>
           <Btn primary onClick={openAdd}>+ Nuevo storage</Btn>
           <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
