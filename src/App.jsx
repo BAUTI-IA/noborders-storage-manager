@@ -25,11 +25,15 @@ alter publication supabase_realtime add table public.storage_jobs;`;
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+// A storage = a physical unit (fixed: company, location, unit, gate code, account).
+// Jobs (customer, job number, driver, dates, notes) live in storage_jobs as history.
 const EMPTY_FORM = {
-  customer:"", driver:"", brand:"", state:"", address:"", unit:"", size:"",
+  brand:"", state:"", address:"", unit:"", size:"",
   gate_code:"", lock:"", email:"", account:"", situation:"Open",
-  monthly_cost:"", card_on_file:"", date_opened:"", job_number:"", notes:""
+  monthly_cost:"", card_on_file:"", date_opened:""
 };
+
+const EMPTY_JOB = { storage_id:"", job_number:"", customer:"", driver:"", date_in:"", notes:"" };
 
 const sitColor = {
   Open:  { bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
@@ -416,7 +420,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
-  const [tab, setTab] = useState("all");
+  const [tab, setTab] = useState("active");
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
   const [sortBy, setSortBy] = useState("date-desc");
@@ -424,6 +428,10 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [showAddJob, setShowAddJob] = useState(false);
+  const [jobForm, setJobForm] = useState(EMPTY_JOB);
+  const [jobSaving, setJobSaving] = useState(false);
+  const [jobErr, setJobErr] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importTab, setImportTab] = useState("paste");
   const [pasteText, setPasteText] = useState("");
@@ -503,7 +511,13 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session, loadData]);
 
-  const drivers = useMemo(() => [...new Set(records.map(r => r.driver).filter(Boolean))].sort(), [records]);
+  const storageById = useMemo(() => {
+    const m = {};
+    for (const r of records) m[r.id] = r;
+    return m;
+  }, [records]);
+
+  const drivers = useMemo(() => [...new Set(jobs.map(j => j.driver).filter(Boolean))].sort(), [jobs]);
 
   const activeJobsByStorage = useMemo(() => {
     const m = {};
@@ -517,58 +531,98 @@ export default function App() {
     [activeJobsByStorage]
   );
 
-  const filtered = useMemo(() => {
-    let data = records.filter(r => {
-      if (tab === "Open" && sit(r) !== "Open") return false;
-      if (tab === "Close" && sit(r) !== "Close") return false;
-      if (tab === "Empty" && sit(r) !== "Empty") return false;
-      if (driverFilter && r.driver !== driverFilter) return false;
-      if (search) {
-        const hay = [r.driver, r.brand, r.state, r.address, r.unit, r.customer, r.job_number, r.notes].join(" ").toLowerCase();
-        if (!hay.includes(search.toLowerCase())) return false;
-      }
-      return true;
-    });
+  // Job-first view: each row is a job joined with the unit where it's stored.
+  // You search a job number and instantly see WHERE it is.
+  const jobRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const data = jobs
+      .filter(j => tab === "delivered" ? j.date_out : !j.date_out)
+      .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
+      .filter(j => {
+        if (driverFilter && j.driver !== driverFilter) return false;
+        if (q) {
+          const s = j.storage || {};
+          const hay = [j.job_number, j.customer, j.driver, j.notes, s.brand, s.state, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
     data.sort((a, b) => {
-      if (sortBy === "date-desc") return (b.date_opened || "") > (a.date_opened || "") ? 1 : -1;
-      if (sortBy === "date-asc")  return (a.date_opened || "") > (b.date_opened || "") ? 1 : -1;
+      const ad = a.date_in || a.created_at || "", bd = b.date_in || b.created_at || "";
+      if (sortBy === "date-asc") return ad > bd ? 1 : -1;
+      if (sortBy === "customer") return (a.customer || "").localeCompare(b.customer || "");
       if (sortBy === "driver") return (a.driver || "").localeCompare(b.driver || "");
-      if (sortBy === "state")  return (a.state || "").localeCompare(b.state || "");
-      return 0;
+      return bd > ad ? 1 : -1;
     });
     return data;
-  }, [records, tab, search, driverFilter, sortBy, sit]);
+  }, [jobs, storageById, tab, search, driverFilter, sortBy]);
+
+  // Units view: manage the physical lockers themselves.
+  const unitRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const data = records.filter(r => {
+      if (!q) return true;
+      const hay = [r.brand, r.state, r.address, r.unit, r.gate_code].join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+    data.sort((a, b) => {
+      if (sortBy === "date-asc") return (a.date_opened || "") > (b.date_opened || "") ? 1 : -1;
+      if (sortBy === "customer" || sortBy === "driver") return (a.brand || "").localeCompare(b.brand || "");
+      return (b.date_opened || "") > (a.date_opened || "") ? 1 : -1;
+    });
+    return data;
+  }, [records, search, sortBy]);
 
   const metrics = useMemo(() => {
-    const active = records.filter(r => sit(r) === "Open");
-    const withCost = active.filter(r => r.monthly_cost && Number(r.monthly_cost) > 0);
+    const activeJobs = jobs.filter(j => !j.date_out);
+    const deliveredJobs = jobs.filter(j => j.date_out);
+    const occupied = new Set(activeJobs.map(j => j.storage_id));
+    const withCost = records.filter(r => occupied.has(r.id) && r.monthly_cost && Number(r.monthly_cost) > 0);
     const totalCost = withCost.reduce((sum, r) => sum + Number(r.monthly_cost), 0);
-    const missingCost = active.length - withCost.length;
     return {
-      total: records.length,
-      active: active.length,
-      closed: records.filter(r => sit(r) === "Close").length,
-      empty:  records.filter(r => sit(r) === "Empty").length,
+      activeJobs: activeJobs.length,
+      deliveredJobs: deliveredJobs.length,
+      units: records.length,
+      occupied: occupied.size,
       states: new Set(records.map(r => r.state).filter(Boolean)).size,
       totalCost,
-      missingCost,
     };
-  }, [records, sit]);
+  }, [jobs, records]);
 
   const detail = records.find(r => r.id === detailId);
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
-    setForm({ customer:r.customer||"", driver:r.driver||"", brand:r.brand||"", state:r.state||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", situation:r.situation||"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"", job_number:r.job_number||"", notes:r.notes||"" });
+    setForm({ brand:r.brand||"", state:r.state||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"" });
     setEditId(r.id); setShowAdd(true);
   }
 
   async function saveForm() {
     setSaving(true);
-    const payload = { customer:form.customer||null, driver:form.driver||null, brand:form.brand||null, state:form.state||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null, job_number:form.job_number||null, notes:form.notes||null };
+    const payload = { brand:form.brand||null, state:form.state||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
     if (editId) { await supabase.from("storages").update(payload).eq("id", editId); }
     else { await supabase.from("storages").insert([payload]); }
     setSaving(false); setShowAdd(false);
+  }
+
+  function openAddJob(storageId) { setJobForm({ ...EMPTY_JOB, storage_id: storageId || "" }); setJobErr(null); setShowAddJob(true); }
+  async function saveJob() {
+    if (!jobForm.storage_id) { setJobErr("Elegí en qué unidad está guardado."); return; }
+    if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Completá al menos job, cliente o driver."); return; }
+    setJobSaving(true); setJobErr(null);
+    const payload = {
+      storage_id: jobForm.storage_id,
+      job_number: jobForm.job_number || null,
+      customer: jobForm.customer || null,
+      driver: jobForm.driver || null,
+      date_in: jobForm.date_in || today(),
+      notes: jobForm.notes || null,
+    };
+    const { error } = await supabase.from("storage_jobs").insert([payload]);
+    setJobSaving(false);
+    if (error) { setJobErr(error.message); return; }
+    setShowAddJob(false);
+    loadJobs();
   }
 
   async function deleteRecord(id) {
@@ -640,10 +694,11 @@ export default function App() {
             </span>
           </div>
         </div>
-        <div style={{ display:"flex", gap:8 }}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           <Btn onClick={() => setShowAnalytics(a => !a)}>{showAnalytics ? "Ocultar graficos" : "📊 Analytics"}</Btn>
           <Btn onClick={openImportModal}>Importar WhatsApp</Btn>
-          <Btn primary onClick={openAdd}>+ Nuevo storage</Btn>
+          <Btn onClick={openAdd}>+ Unidad</Btn>
+          <Btn primary disabled={!dbReady || records.length === 0} onClick={() => openAddJob("")}>+ Nuevo job</Btn>
           <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
         </div>
       </div>
@@ -655,12 +710,12 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom: metrics.missingCost > 0 ? 10 : 20 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:20 }}>
         {[
-          { label:"Total storages", value:metrics.total, color:"#111" },
-          { label:"Activos", value:metrics.active, color:"#3B6D11" },
-          { label:"Cerrados", value:metrics.closed, color:"#A32D2D" },
-          { label:"Vacios", value:metrics.empty, color:"#854F0B" },
+          { label:"Jobs activos", value:metrics.activeJobs, color:"#3B6D11" },
+          { label:"Entregados", value:metrics.deliveredJobs, color:"#888" },
+          { label:"Unidades", value:metrics.units, color:"#111" },
+          { label:"Unidades ocupadas", value:metrics.occupied, color:"#185FA5" },
           { label:"Costo mensual", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
           { label:"Estados USA", value:metrics.states, color:"#888" },
         ].map(m => (
@@ -670,12 +725,6 @@ export default function App() {
           </div>
         ))}
       </div>
-      {metrics.missingCost > 0 && (
-        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:8 }}>
-          <span>Warning:</span>
-          <span><strong>{metrics.missingCost} storage(s) activo(s)</strong> sin costo cargado — el total puede estar incompleto.</span>
-        </div>
-      )}
 
       {/* ANALYTICS */}
       {showAnalytics && (
@@ -715,7 +764,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Gasto mensual por empresa</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto le pagas a cada cadena de storages</div>
               {(() => {
-                const byBrand = records.filter(r=>r.situation==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
+                const byBrand = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byBrand).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
@@ -740,7 +789,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storages activos por estado</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Donde tenes mas exposicion operativa</div>
               {(() => {
-                const byState = records.filter(r=>r.situation==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{});
+                const byState = records.filter(r=>sit(r)==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{});
                 const sorted = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 return sorted.map(([state,count]) => (
@@ -761,7 +810,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Costo mensual por estado</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Donde gastas mas dinero en storages</div>
               {(() => {
-                const byCost = records.filter(r=>r.situation==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
+                const byCost = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
@@ -786,94 +835,134 @@ export default function App() {
         </div>
       )}
 
-            <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14 }}>
-        {[["all","Todos"],["Open","Activos"],["Close","Cerrados"],["Empty","Vacios"]].map(([t,l]) => (
+      <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14 }}>
+        {[["active","Jobs activos"],["delivered","Entregados"],["units","Unidades"]].map(([t,l]) => (
           <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
         ))}
       </div>
 
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar driver, brand, estado, job..." style={{ ...inp, flex:1, minWidth:180 }} />
-        <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
-          <option value="">Todos los drivers</option>
-          {drivers.map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder={tab === "units" ? "Buscar empresa, ubicación, unidad..." : "Buscar por job #, cliente, driver, ubicación..."}
+          style={{ ...inp, flex:1, minWidth:180 }} />
+        {tab !== "units" && (
+          <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
+            <option value="">Todos los drivers</option>
+            {drivers.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        )}
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inp, minWidth:150 }}>
           <option value="date-desc">Mas reciente</option>
           <option value="date-asc">Mas antiguo</option>
+          <option value="customer">Cliente A-Z</option>
           <option value="driver">Driver A-Z</option>
-          <option value="state">Estado A-Z</option>
         </select>
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
         <div style={{ overflowX:"auto" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
-            <colgroup>
-              <col style={{width:100}}/><col style={{width:110}}/><col style={{width:110}}/>
-              <col style={{width:110}}/><col style={{width:55}}/><col style={{width:65}}/>
-              <col style={{width:105}}/><col style={{width:70}}/><col style={{width:75}}/>
-            </colgroup>
-            <thead>
-              <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                {["Job #","Cliente","Driver","Brand","Estado","Unidad","Gate Code","Jobs activos","Situacion"].map(h => (
-                  <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 ? (
-                <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin resultados</td></tr>
-              ) : filtered.map(r => (
-                <tr key={r.id} onClick={() => setDetailId(r.id)}
-                  style={{ borderBottom:"1px solid #fafafa", cursor:"pointer" }}
-                  onMouseEnter={e => e.currentTarget.style.background="#fafafa"}
-                  onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                  <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.job_number||"—"}</td>
-                  <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.customer||"—"}</td>
-                  <td style={{ padding:"10px 12px", fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.driver||"—"}</td>
-                  <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.brand||"—"}</td>
-                  <td style={{ padding:"10px 12px" }}>{r.state||"—"}</td>
-                  <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{r.unit||"—"}</td>
-                  <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
-                    <span style={{ display:"inline-flex", alignItems:"center", maxWidth:"100%" }}>
-                      <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.gate_code||"—"}</span>
-                      {r.gate_code && <CopyButton value={r.gate_code} />}
-                    </span>
-                  </td>
-                  <td style={{ padding:"10px 12px" }}>
-                    {(() => {
-                      const n = activeJobsByStorage[r.id] || 0;
-                      return (
-                        <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600,
-                          background: n > 0 ? "#EAF3DE" : "#f5f5f5", color: n > 0 ? "#3B6D11" : "#bbb" }}>{n}</span>
-                      );
-                    })()}
-                  </td>
-                  <td style={{ padding:"10px 12px" }}><Badge situation={sit(r)} /></td>
+          {tab === "units" ? (
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
+              <colgroup>
+                <col style={{width:120}}/><col style={{width:55}}/><col style={{width:160}}/>
+                <col style={{width:65}}/><col style={{width:110}}/><col style={{width:75}}/><col style={{width:80}}/>
+              </colgroup>
+              <thead>
+                <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                  {["Empresa","Estado","Direccion","Unidad","Gate Code","Jobs activos","Situacion"].map(h => (
+                    <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {unitRows.length === 0 ? (
+                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
+                ) : unitRows.map(r => {
+                  const n = activeJobsByStorage[r.id] || 0;
+                  return (
+                    <tr key={r.id} onClick={() => setDetailId(r.id)}
+                      style={{ borderBottom:"1px solid #fafafa", cursor:"pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background="#fafafa"}
+                      onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                      <td style={{ padding:"10px 12px", fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.brand||"—"}</td>
+                      <td style={{ padding:"10px 12px" }}>{r.state||"—"}</td>
+                      <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.address||"—"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{r.unit||"—"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
+                        <span style={{ display:"inline-flex", alignItems:"center", maxWidth:"100%" }}>
+                          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.gate_code||"—"}</span>
+                          {r.gate_code && <CopyButton value={r.gate_code} />}
+                        </span>
+                      </td>
+                      <td style={{ padding:"10px 12px" }}>
+                        <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: n>0?"#EAF3DE":"#f5f5f5", color: n>0?"#3B6D11":"#bbb" }}>{n}</span>
+                      </td>
+                      <td style={{ padding:"10px 12px" }}><Badge situation={sit(r)} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
+              <colgroup>
+                <col style={{width:100}}/><col style={{width:120}}/><col style={{width:110}}/>
+                <col style={{width:55}}/><col style={{width:60}}/><col style={{width:105}}/><col style={{width:95}}/>
+              </colgroup>
+              <thead>
+                <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                  {["Job #","Cliente","Empresa","Estado","Unidad","Gate Code", tab==="delivered"?"Entregado":"Driver"].map(h => (
+                    <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {jobRows.length === 0 ? (
+                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                ) : jobRows.map(j => {
+                  const s = j.storage || {};
+                  return (
+                    <tr key={j.id} onClick={() => setDetailId(j.storage_id)}
+                      style={{ borderBottom:"1px solid #fafafa", cursor:"pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background="#fafafa"}
+                      onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.job_number||"—"}</td>
+                      <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer||"—"}</td>
+                      <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.brand||"—"}</td>
+                      <td style={{ padding:"10px 12px" }}>{s.state||"—"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{s.unit||"—"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
+                        <span style={{ display:"inline-flex", alignItems:"center", maxWidth:"100%" }}>
+                          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.gate_code||"—"}</span>
+                          {s.gate_code && <CopyButton value={s.gate_code} />}
+                        </span>
+                      </td>
+                      <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tab==="delivered" ? (j.date_out||"—") : (j.driver||"—")}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
         <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>
-          {filtered.length} de {records.length} storages
+          {tab === "units" ? `${unitRows.length} de ${records.length} unidades` : `${jobRows.length} job(s)`}
         </div>
       </div>
 
       {detail && (
-        <Modal title={`${detail.driver||"Storage"} — ${detail.state||""}`} onClose={() => setDetailId(null)}
+        <Modal title={`${detail.brand||"Unidad"}${detail.unit ? " — "+detail.unit : ""}${detail.state ? " · "+detail.state : ""}`} onClose={() => setDetailId(null)}
           footer={<>
             <Btn danger onClick={() => deleteRecord(detail.id)}>Eliminar</Btn>
-            <Btn onClick={() => { setDetailId(null); openEdit(detail); }}>Editar</Btn>
-            <Btn primary onClick={() => setDetailId(null)}>Cerrar</Btn>
+            <Btn onClick={() => { setDetailId(null); openEdit(detail); }}>Editar unidad</Btn>
+            <Btn primary onClick={() => openAddJob(detail.id)}>+ Agregar job</Btn>
           </>}>
           <div style={{ marginBottom:10, display:"flex", alignItems:"center", gap:10 }}>
             <Badge situation={sit(detail)} />
-            {detail.customer && <span style={{ fontSize:13, color:"#888" }}>Cliente: <strong>{detail.customer}</strong></span>}
+            <span style={{ fontSize:13, color:"#888" }}>{activeJobsByStorage[detail.id] || 0} job(s) activo(s)</span>
           </div>
-          <SectionLabel>Storage</SectionLabel>
-          <DetailRow label="Brand" value={detail.brand} />
+          <SectionLabel>Unidad</SectionLabel>
+          <DetailRow label="Empresa" value={detail.brand} />
           <DetailRow label="Direccion" value={detail.address} />
           <DetailRow label="Estado" value={detail.state} />
           <DetailRow label="Unidad" value={detail.unit} />
@@ -885,10 +974,7 @@ export default function App() {
           <DetailRow label="Account #" value={detail.account} />
           <DetailRow label="Tarjeta" value={detail.card_on_file} />
           <DetailRow label="Costo mensual" value={detail.monthly_cost ? "$" + detail.monthly_cost : null} />
-          <DetailRow label="Fecha apertura" value={detail.date_opened} />
-          <SectionLabel>Job</SectionLabel>
-          <DetailRow label="Job Number" value={detail.job_number} />
-          <DetailRow label="Notas" value={detail.notes} />
+          <DetailRow label="Fecha de alquiler" value={detail.date_opened} />
 
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"16px 0 8px" }}>
             <span style={{ fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.07em" }}>Job History</span>
@@ -905,15 +991,14 @@ export default function App() {
       )}
 
       {showAdd && (
-        <Modal title={editId ? "Editar storage" : "Nuevo storage"} onClose={() => setShowAdd(false)}
+        <Modal title={editId ? "Editar unidad" : "Nueva unidad"} onClose={() => setShowAdd(false)}
           footer={<>
             <Btn onClick={() => setShowAdd(false)}>Cancelar</Btn>
             <Btn primary disabled={saving} onClick={saveForm}>{saving ? "Guardando..." : "Guardar"}</Btn>
           </>}>
+          <p style={{ fontSize:12, color:"#999", margin:"0 0 12px" }}>Datos fijos de la unidad. Los clientes y jobs se cargan aparte en el historial.</p>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Customer"><input style={inp} value={form.customer} onChange={e => setForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
-            <Field label="Driver"><input style={inp} value={form.driver} onChange={e => setForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
-            <Field label="Brand"><input style={inp} value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="CubeSmart, Public Storage..." /></Field>
+            <Field label="Empresa"><input style={inp} value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="CubeSmart, Public Storage..." /></Field>
             <Field label="Estado"><input style={inp} value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value}))} placeholder="TN" /></Field>
             <Field label="Direccion" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
             <Field label="Unidad #"><input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" /></Field>
@@ -922,19 +1007,43 @@ export default function App() {
             <Field label="Lock / Combo"><input style={inp} value={form.lock} onChange={e => setForm(f => ({...f, lock:e.target.value}))} placeholder="use 8141 to unlock..." /></Field>
             <Field label="Email"><input style={inp} value={form.email} onChange={e => setForm(f => ({...f, email:e.target.value}))} placeholder="service@..." /></Field>
             <Field label="Account #"><input style={inp} value={form.account} onChange={e => setForm(f => ({...f, account:e.target.value}))} placeholder="NONE" /></Field>
-            <Field label="Situacion">
+            <Field label="Estado de la unidad">
               <select style={inp} value={form.situation} onChange={e => setForm(f => ({...f, situation:e.target.value}))}>
-                <option value="Open">Open</option>
-                <option value="Close">Close</option>
-                <option value="Empty">Empty</option>
+                <option value="Open">Activa (automático según jobs)</option>
+                <option value="Close">Cerrada</option>
               </select>
             </Field>
             <Field label="Costo mensual ($)"><input style={inp} type="number" value={form.monthly_cost} onChange={e => setForm(f => ({...f, monthly_cost:e.target.value}))} placeholder="0" /></Field>
             <Field label="Tarjeta"><input style={inp} value={form.card_on_file} onChange={e => setForm(f => ({...f, card_on_file:e.target.value}))} placeholder="Visa ****1234" /></Field>
-            <Field label="Fecha apertura"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
-            <Field label="Job Number"><input style={inp} value={form.job_number} onChange={e => setForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
-            <Field label="Notas" full><input style={inp} value={form.notes} onChange={e => setForm(f => ({...f, notes:e.target.value}))} placeholder="Notas adicionales" /></Field>
+            <Field label="Fecha de alquiler"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
           </div>
+        </Modal>
+      )}
+
+      {showAddJob && (
+        <Modal title="Nuevo job" onClose={() => setShowAddJob(false)}
+          footer={<>
+            <Btn onClick={() => setShowAddJob(false)}>Cancelar</Btn>
+            <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : "Guardar job"}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Unidad (dónde se guarda)" full>
+              <select style={inp} value={jobForm.storage_id} onChange={e => setJobForm(f => ({...f, storage_id:e.target.value}))}>
+                <option value="">Elegí la unidad...</option>
+                {records.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {[r.brand, r.unit && `Unidad ${r.unit}`, r.state].filter(Boolean).join(" · ") || `Unidad #${r.id}`}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Job #"><input style={inp} value={jobForm.job_number} onChange={e => setJobForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
+            <Field label="Date in"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
+            <Field label="Cliente"><input style={inp} value={jobForm.customer} onChange={e => setJobForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
+            <Field label="Driver (quién lo dejó)"><input style={inp} value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
+            <Field label="Notas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+          </div>
+          {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
         </Modal>
       )}
 
