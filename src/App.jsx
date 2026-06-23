@@ -35,11 +35,12 @@ const EMPTY_FORM = {
   monthly_cost:"", card_on_file:"", date_opened:""
 };
 
-// A job can span several units: it's stored as one storage_jobs row per unit,
-// all sharing the same job_number, and grouped back together in the UI.
-const EMPTY_JOB = { storage_ids:[], job_number:"", customer:"", driver:"", date_in:"", notes:"" };
+// A job can span several locations: one storage_jobs row per location (rented
+// unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
+const WAREHOUSES = ["Indiana", "New Jersey"];
+const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", volume:"", notes:"" };
 
-// Group key for a job: same job_number = same job (across units). Blank number = standalone.
+// Group key for a job: same job_number = same job (across locations). Blank number = standalone.
 const jobKey = (j) => j.job_number && j.job_number.trim() ? `n:${j.job_number.trim().toLowerCase()}` : `id:${j.id}`;
 
 const sitColor = {
@@ -526,10 +527,11 @@ export default function App() {
   }, [records]);
 
   const drivers = useMemo(() => [...new Set(jobs.map(j => j.driver).filter(Boolean))].sort(), [jobs]);
+  const brands = useMemo(() => [...new Set(records.map(r => r.brand).filter(Boolean))].sort(), [records]);
 
   const activeJobsByStorage = useMemo(() => {
     const m = {};
-    for (const j of jobs) if (!j.date_out) m[j.storage_id] = (m[j.storage_id] || 0) + 1;
+    for (const j of jobs) if (!j.date_out && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + 1;
     return m;
   }, [jobs]);
 
@@ -539,18 +541,23 @@ export default function App() {
     [activeJobsByStorage]
   );
 
-  // Job-first view: jobs grouped by job number (a job may span several units).
-  // You search a job number and instantly see all the units WHERE it is.
+  // Job-first view: jobs grouped by job number (a job may span several locations).
+  // You search a job number and instantly see all the places WHERE it is.
   const jobGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const wh = tab.startsWith("wh:") ? tab.slice(3) : null;
     const parts = jobs
-      .filter(j => tab === "delivered" ? j.date_out : !j.date_out)
+      .filter(j => {
+        if (wh) return !j.date_out && j.warehouse === wh;          // active jobs in this warehouse
+        if (tab === "delivered") return j.date_out;
+        return !j.date_out;                                        // "active" (includes warehouse jobs)
+      })
       .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
       .filter(j => {
         if (driverFilter && j.driver !== driverFilter) return false;
         if (q) {
           const s = j.storage || {};
-          const hay = [j.job_number, j.customer, j.driver, j.notes, s.brand, s.state, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
+          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, s.brand, s.state, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -558,7 +565,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, volume:p.volume, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -612,7 +619,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, notes:f.notes, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, volume:f.volume, notes:f.notes, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
@@ -633,8 +640,11 @@ export default function App() {
   function toggleJobUnit(id) {
     setJobForm(f => ({ ...f, storage_ids: f.storage_ids.includes(id) ? f.storage_ids.filter(x => x !== id) : [...f.storage_ids, id] }));
   }
+  function toggleJobWarehouse(name) {
+    setJobForm(f => ({ ...f, warehouses: f.warehouses.includes(name) ? f.warehouses.filter(x => x !== name) : [...f.warehouses, name] }));
+  }
   async function saveJob() {
-    if (!jobForm.storage_ids.length) { setJobErr("Elegí en qué unidad(es) está guardado."); return; }
+    if (!jobForm.storage_ids.length && !jobForm.warehouses.length) { setJobErr("Elegí dónde está guardado (unidad o warehouse)."); return; }
     if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Completá al menos job, cliente o driver."); return; }
     setJobSaving(true); setJobErr(null);
     const base = {
@@ -642,9 +652,13 @@ export default function App() {
       customer: jobForm.customer || null,
       driver: jobForm.driver || null,
       date_in: jobForm.date_in || today(),
+      volume: jobForm.volume || null,
       notes: jobForm.notes || null,
     };
-    const rows = jobForm.storage_ids.map(sid => ({ ...base, storage_id: sid }));
+    const rows = [
+      ...jobForm.storage_ids.map(sid => ({ ...base, storage_id: sid, warehouse: null })),
+      ...jobForm.warehouses.map(w => ({ ...base, storage_id: null, warehouse: w })),
+    ];
     const { error } = await supabase.from("storage_jobs").insert(rows);
     setJobSaving(false);
     if (error) { setJobErr(error.message); return; }
@@ -732,7 +746,7 @@ export default function App() {
           <Btn onClick={() => setShowAnalytics(a => !a)}>{showAnalytics ? "Ocultar graficos" : "📊 Analytics"}</Btn>
           <Btn onClick={openImportModal}>Importar WhatsApp</Btn>
           <Btn onClick={openAdd}>+ Unidad</Btn>
-          <Btn primary disabled={!dbReady || records.length === 0} onClick={() => openAddJob("")}>+ Nuevo job</Btn>
+          <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>
           <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
         </div>
       </div>
@@ -869,8 +883,12 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14 }}>
-        {[["active","Jobs activos"],["delivered","Entregados"],["units","Unidades"]].map(([t,l]) => (
+      <datalist id="drivers-list">{drivers.map(d => <option key={d} value={d} />)}</datalist>
+      <datalist id="brands-list">{brands.map(b => <option key={b} value={b} />)}</datalist>
+
+      <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
+        {[["active","Jobs activos"],["delivered","Entregados"],["units","Unidades"],
+          ...WAREHOUSES.map(w => [`wh:${w}`, `Warehouse ${w}`])].map(([t,l]) => (
           <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
         ))}
       </div>
@@ -941,7 +959,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Empresa","Ubicación","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                  {["Job #","Cliente","Volumen","Empresa","Ubicación","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                   {tab !== "delivered" && <th style={{ width:150 }} />}
@@ -949,10 +967,10 @@ export default function App() {
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
                 ) : jobGroups.map(g => {
                   const empresas = [...new Set(g.parts.map(p => p.storage?.brand).filter(Boolean))];
-                  const addrs = [...new Set(g.parts.map(p => p.storage?.address).filter(Boolean))];
+                  const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : p.storage?.address).filter(Boolean))];
                   return (
                   <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
                     <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
@@ -962,9 +980,10 @@ export default function App() {
                       </button>
                     </td>
                     <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
+                    <td style={{ padding:"12px" }}>{g.volume||"—"}</td>
                     <td style={{ padding:"12px", fontWeight:500 }}>{empresas.length ? empresas.join(", ") : "—"}</td>
                     <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
-                      {addrs.length ? addrs.map((a, i) => <div key={i} style={{ marginBottom: i < addrs.length-1 ? 3 : 0 }}>{a}</div>) : "—"}
+                      {locs.length ? locs.map((a, i) => <div key={i} style={{ marginBottom: i < locs.length-1 ? 3 : 0 }}>{a}</div>) : "—"}
                     </td>
                     <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
                     {tab === "delivered" ? (
@@ -997,14 +1016,16 @@ export default function App() {
           <SectionLabel>Datos del job</SectionLabel>
           <DetailRow label="Cliente" value={jobDetail.customer} />
           <DetailRow label="Driver (quién lo dejó)" value={jobDetail.driver} />
+          <DetailRow label="Volumen" value={jobDetail.volume} />
           <DetailRow label="Fecha de entrada" value={jobDetail.date_in} />
           <DetailRow label="Notas" value={jobDetail.notes} />
 
-          <SectionLabel>{jobDetail.parts.length === 1 ? "Unidad donde está guardado" : `Unidades donde está guardado (${jobDetail.parts.length})`}</SectionLabel>
+          <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {jobDetail.parts.map(p => {
               const s = p.storage || {};
               const delivered = !!p.date_out;
+              const isWh = !!p.warehouse;
               return (
                 <div key={p.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
@@ -1012,22 +1033,30 @@ export default function App() {
                       <span style={{ width:6, height:6, borderRadius:"50%", background: delivered ? "#bbb" : "#639922" }} />
                       {delivered ? "Entregado" : "Activo"}
                     </span>
-                    <strong style={{ fontSize:13 }}>{s.brand || "Unidad"}</strong>
+                    <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unidad")}</strong>
                     <span style={{ flex:1 }} />
                     {!delivered && <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Marcar entregado</Btn>}
                   </div>
                   <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
-                    {s.address && <div>📍 {s.address}</div>}
-                    <div>Unidad: <strong style={{ fontFamily:"monospace" }}>{s.unit || "—"}</strong></div>
-                    {s.gate_code && (
-                      <div style={{ display:"inline-flex", alignItems:"center" }}>Gate code: <span style={{ fontFamily:"monospace", marginLeft:4 }}>{s.gate_code}</span><CopyButton value={s.gate_code} /></div>
+                    {isWh ? (
+                      <div>📍 Warehouse propio — {p.warehouse}</div>
+                    ) : (
+                      <>
+                        {s.address && <div>📍 {s.address}</div>}
+                        <div>Unidad: <strong style={{ fontFamily:"monospace" }}>{s.unit || "—"}</strong></div>
+                        {s.gate_code && (
+                          <div style={{ display:"inline-flex", alignItems:"center" }}>Gate code: <span style={{ fontFamily:"monospace", marginLeft:4 }}>{s.gate_code}</span><CopyButton value={s.gate_code} /></div>
+                        )}
+                      </>
                     )}
                     <div style={{ color:"#888" }}>In: {p.date_in || "—"}{delivered ? ` · Out: ${p.date_out}` : ""}</div>
                   </div>
-                  <div style={{ marginTop:6 }}>
-                    <span onClick={() => { setJobDetailKey(null); setDetailId(p.storage_id); }}
-                      style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Ver unidad completa →</span>
-                  </div>
+                  {!isWh && (
+                    <div style={{ marginTop:6 }}>
+                      <span onClick={() => { setJobDetailKey(null); setDetailId(p.storage_id); }}
+                        style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Ver unidad completa →</span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1083,7 +1112,7 @@ export default function App() {
           </>}>
           <p style={{ fontSize:12, color:"#999", margin:"0 0 12px" }}>Datos fijos de la unidad. Los clientes y jobs se cargan aparte en el historial.</p>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Empresa"><input style={inp} value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="CubeSmart, Public Storage..." /></Field>
+            <Field label="Empresa"><input style={inp} list="brands-list" value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="Elegí o escribí (CubeSmart...)" /></Field>
             <Field label="Estado"><input style={inp} value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value}))} placeholder="TN" /></Field>
             <Field label="Direccion" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
             <Field label="Unidad #"><input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" /></Field>
@@ -1111,8 +1140,19 @@ export default function App() {
             <Btn onClick={() => setShowAddJob(false)}>Cancelar</Btn>
             <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : "Guardar job"}</Btn>
           </>}>
-          <Field label={`Unidad(es) donde se guarda — podés elegir varias${jobForm.storage_ids.length ? ` (${jobForm.storage_ids.length})` : ""}`} full>
-            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:170, overflowY:"auto", background:"#fff" }}>
+          <Field label={`Dónde se guarda — podés elegir varias${(jobForm.storage_ids.length + jobForm.warehouses.length) ? ` (${jobForm.storage_ids.length + jobForm.warehouses.length})` : ""}`} full>
+            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:200, overflowY:"auto", background:"#fff" }}>
+              <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Warehouses propios</div>
+              {WAREHOUSES.map(w => {
+                const checked = jobForm.warehouses.includes(w);
+                return (
+                  <label key={w} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleJobWarehouse(w)} />
+                    <span>🏭 Warehouse {w}</span>
+                  </label>
+                );
+              })}
+              <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Unidades alquiladas</div>
               {records.length === 0 ? (
                 <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No hay unidades cargadas todavía.</div>
               ) : records.map(r => {
@@ -1130,8 +1170,9 @@ export default function App() {
             <Field label="Job #"><input style={inp} value={jobForm.job_number} onChange={e => setJobForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
             <Field label="Date in"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
             <Field label="Cliente"><input style={inp} value={jobForm.customer} onChange={e => setJobForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
-            <Field label="Driver (quién lo dejó)"><input style={inp} value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
-            <Field label="Notas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+            <Field label="Driver (quién lo dejó)"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Elegí o escribí un driver" /></Field>
+            <Field label="Volumen"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200 cu ft / 5 pallets" /></Field>
+            <Field label="Notas"><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
           </div>
           {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
         </Modal>
