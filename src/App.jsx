@@ -743,6 +743,13 @@ export default function App() {
     loadJobs();
   }
 
+  // Revert a delivery (e.g. marked by mistake): clears the delivery date.
+  async function undeliverJobs(ids) {
+    if (!ids || !ids.length) return;
+    await supabase.from("storage_jobs").update({ date_out: null }).in("id", ids);
+    loadJobs();
+  }
+
   async function deleteRecord(id) {
     if (!window.confirm("Eliminar este storage?")) return;
     await supabase.from("storages").delete().eq("id", id);
@@ -1037,12 +1044,12 @@ export default function App() {
                   {["Job #","Cliente","Lot #","Sticker","Volumen","Empresa","Ubicación","Zip","Driver","Map", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
-                  {tab !== "delivered" && <th style={{ width:150 }} />}
+                  <th style={{ width:150 }} />
                 </tr>
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                  <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
                 ) : jobGroups.map(g => {
                   const empresas = [...new Set(g.parts.map(p => p.storage?.brand).filter(Boolean))];
                   const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : p.storage?.address).filter(Boolean))];
@@ -1070,7 +1077,12 @@ export default function App() {
                       {mapHref ? <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:13 }}>🗺️ Ruta</a> : "—"}
                     </td>
                     {tab === "delivered" ? (
-                      <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
+                      <>
+                        <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
+                        <td style={{ padding:"12px", textAlign:"right" }}>
+                          <Btn onClick={() => undeliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Desentregar</Btn>
+                        </td>
+                      </>
                     ) : (
                       <td style={{ padding:"12px", textAlign:"right" }}>
                         <Btn onClick={() => deliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Marcar entregado</Btn>
@@ -1094,6 +1106,9 @@ export default function App() {
             <Btn onClick={() => openEditJob(jobDetail)}>Editar</Btn>
             {jobDetail.parts.some(p => !p.date_out) && (
               <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Marcar todo entregado</Btn>
+            )}
+            {jobDetail.parts.some(p => p.date_out) && (
+              <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Desentregar todo</Btn>
             )}
             <Btn primary onClick={() => setJobDetailKey(null)}>Cerrar</Btn>
           </>}>
@@ -1135,7 +1150,9 @@ export default function App() {
                     </span>
                     <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unidad")}</strong>
                     <span style={{ flex:1 }} />
-                    {!delivered && <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Marcar entregado</Btn>}
+                    {!delivered
+                      ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Marcar entregado</Btn>
+                      : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Desentregar</Btn>}
                   </div>
                   <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
                     {isWh ? (
