@@ -5,6 +5,26 @@ const SUPABASE_URL = "https://szkmktxziojzgfjkomua.supabase.co";
 const SUPABASE_KEY = "sb_publishable_v2VNtyiQ_tTAAmEWDdHwYg_IJ-_IN-5";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// One physical storage = one row in `storages`. Jobs that pass through a unit are
+// tracked as history in `storage_jobs`. Multiple jobs can be active at once.
+const STORAGE_JOBS_SQL = `create table if not exists public.storage_jobs (
+  id bigint generated always as identity primary key,
+  storage_id bigint references public.storages(id) on delete cascade,
+  job_number text,
+  customer text,
+  driver text,
+  date_in date,
+  date_out date,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.storage_jobs enable row level security;
+create policy "storage_jobs_auth_all" on public.storage_jobs
+  for all to authenticated using (true) with check (true);
+alter publication supabase_realtime add table public.storage_jobs;`;
+
+const today = () => new Date().toISOString().slice(0, 10);
+
 const EMPTY_FORM = {
   customer:"", driver:"", brand:"", state:"", address:"", unit:"", size:"",
   gate_code:"", lock:"", email:"", account:"", situation:"Open",
@@ -271,6 +291,124 @@ function LoginScreen() {
   );
 }
 
+const jobBadgeStyle = (delivered) => ({
+  display:"inline-flex", alignItems:"center", gap:5, fontSize:10, fontWeight:600,
+  padding:"2px 8px", borderRadius:20, flexShrink:0,
+  background: delivered ? "#f1f1f1" : "#EAF3DE",
+  color: delivered ? "#888" : "#3B6D11",
+});
+
+function JobCard({ job, onDeliver }) {
+  const delivered = !!job.date_out;
+  return (
+    <div style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom: (job.customer||job.driver||job.notes) ? 6 : 0 }}>
+        <span style={jobBadgeStyle(delivered)}>
+          <span style={{ width:6, height:6, borderRadius:"50%", background: delivered ? "#bbb" : "#639922" }} />
+          {delivered ? "Delivered" : "Active"}
+        </span>
+        <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:600 }}>{job.job_number || "—"}</span>
+        <span style={{ flex:1 }} />
+        {!delivered && (
+          <Btn onClick={() => onDeliver(job)} style={{ padding:"4px 10px", fontSize:12 }}>Marcar entregado</Btn>
+        )}
+      </div>
+      <div style={{ fontSize:12, color:"#666", display:"flex", flexWrap:"wrap", gap:"2px 12px" }}>
+        {job.customer && <span>Cliente: <strong style={{ color:"#333" }}>{job.customer}</strong></span>}
+        {job.driver && <span>Driver: <strong style={{ color:"#333" }}>{job.driver}</strong></span>}
+        {job.date_in && <span>In: {job.date_in}</span>}
+        {job.date_out && <span>Out: {job.date_out}</span>}
+      </div>
+      {job.notes && <div style={{ fontSize:12, color:"#888", marginTop:4 }}>{job.notes}</div>}
+    </div>
+  );
+}
+
+function JobHistory({ storageId, jobs, dbReady, onSetup, onChange }) {
+  const EMPTY = { job_number:"", customer:"", driver:"", date_in:"", notes:"" };
+  const [form, setForm] = useState(EMPTY);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+  const [showDelivered, setShowDelivered] = useState(false);
+
+  const active = jobs.filter(j => !j.date_out);
+  const delivered = jobs.filter(j => j.date_out);
+
+  async function addJob() {
+    if (!form.job_number && !form.customer && !form.driver) { setErr("Completá al menos job, cliente o driver."); return; }
+    setSaving(true); setErr(null);
+    const payload = {
+      storage_id: storageId,
+      job_number: form.job_number || null,
+      customer: form.customer || null,
+      driver: form.driver || null,
+      date_in: form.date_in || today(),
+      notes: form.notes || null,
+    };
+    const { error } = await supabase.from("storage_jobs").insert([payload]);
+    setSaving(false);
+    if (error) { setErr(error.message); return; }
+    setForm(EMPTY);
+    onChange && onChange();
+  }
+
+  async function deliver(job) {
+    const { error } = await supabase.from("storage_jobs").update({ date_out: today() }).eq("id", job.id);
+    if (error) { setErr(error.message); return; }
+    onChange && onChange();
+  }
+
+  if (!dbReady) {
+    return (
+      <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"12px 14px", fontSize:13, color:"#854F0B" }}>
+        El historial de jobs necesita una configuración inicial de la base de datos.
+        {onSetup && <button onClick={onSetup} style={{ marginLeft:8, background:"none", border:"none", color:"#854F0B", fontWeight:600, textDecoration:"underline", cursor:"pointer", fontSize:13 }}>Ver cómo activarlo</button>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:14 }}>
+        {active.length === 0 && delivered.length === 0 && (
+          <div style={{ fontSize:13, color:"#bbb", padding:"6px 0" }}>Todavía no hay jobs en esta unidad.</div>
+        )}
+        {active.map(j => <JobCard key={j.id} job={j} onDeliver={deliver} />)}
+
+        {delivered.length > 0 && (
+          <div>
+            <button onClick={() => setShowDelivered(s => !s)}
+              style={{ background:"none", border:"none", cursor:"pointer", color:"#888", fontSize:12, fontWeight:600, padding:"4px 0", display:"flex", alignItems:"center", gap:6 }}>
+              <span style={{ display:"inline-block", transform: showDelivered ? "rotate(90deg)" : "none", transition:"transform .15s" }}>▸</span>
+              {delivered.length} entregado{delivered.length === 1 ? "" : "s"}
+            </button>
+            {showDelivered && (
+              <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:8 }}>
+                {delivered.map(j => <JobCard key={j.id} job={j} onDeliver={deliver} />)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background:"#fafafa", border:"1px solid #f0f0f0", borderRadius:10, padding:"12px" }}>
+        <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Agregar job</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+          <Field label="Job #"><input style={inp} value={form.job_number} onChange={e => setForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
+          <Field label="Date in"><input style={inp} type="date" value={form.date_in} onChange={e => setForm(f => ({...f, date_in:e.target.value}))} /></Field>
+          <Field label="Cliente"><input style={inp} value={form.customer} onChange={e => setForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
+          <Field label="Driver"><input style={inp} value={form.driver} onChange={e => setForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
+          <Field label="Notas" full><input style={inp} value={form.notes} onChange={e => setForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+        </div>
+        {err && <div style={{ fontSize:12, color:"#b91c1c", marginTop:8 }}>{err}</div>}
+        <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
+          <Btn primary disabled={saving} onClick={addJob}>{saving ? "Agregando..." : "+ Agregar job"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [records, setRecords] = useState([]);
@@ -295,6 +433,11 @@ export default function App() {
   const [zipName, setZipName] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [jobs, setJobs] = useState([]);
+  const [dbReady, setDbReady] = useState(false);
+  const [dbSetupNeeded, setDbSetupNeeded] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+  const [sqlCopied, setSqlCopied] = useState(false);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -309,6 +452,41 @@ export default function App() {
     setRecords(data || []);
     setLoading(false);
   }, []);
+
+  const loadJobs = useCallback(async () => {
+    const { data, error } = await supabase.from("storage_jobs").select("*").order("created_at", { ascending: false });
+    if (!error) setJobs(data || []);
+  }, []);
+
+  // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
+  // via REST, so we probe the table and, if missing, best-effort create it through
+  // an exec_sql-style RPC. If neither works, surface a one-time setup banner.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("id").limit(1);
+      if (cancelled) return;
+      if (!error) { setDbReady(true); setDbSetupNeeded(false); loadJobs(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: STORAGE_JOBS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { setDbReady(true); setDbSetupNeeded(false); loadJobs(); }
+      else { setDbReady(false); setDbSetupNeeded(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadJobs]);
+
+  useEffect(() => {
+    if (!session || !dbReady) return;
+    const channel = supabase.channel("storage-jobs-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "storage_jobs" }, () => loadJobs())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, dbReady, loadJobs]);
 
   useEffect(() => {
     if (!session) return;
@@ -327,11 +505,23 @@ export default function App() {
 
   const drivers = useMemo(() => [...new Set(records.map(r => r.driver).filter(Boolean))].sort(), [records]);
 
+  const activeJobsByStorage = useMemo(() => {
+    const m = {};
+    for (const j of jobs) if (!j.date_out) m[j.storage_id] = (m[j.storage_id] || 0) + 1;
+    return m;
+  }, [jobs]);
+
+  // Derived situation: Close is manual; otherwise Open if it has active jobs, else Empty.
+  const sit = useCallback(
+    (r) => r.situation === "Close" ? "Close" : ((activeJobsByStorage[r.id] || 0) > 0 ? "Open" : "Empty"),
+    [activeJobsByStorage]
+  );
+
   const filtered = useMemo(() => {
     let data = records.filter(r => {
-      if (tab === "Open" && r.situation !== "Open") return false;
-      if (tab === "Close" && r.situation !== "Close") return false;
-      if (tab === "Empty" && r.situation !== "Empty") return false;
+      if (tab === "Open" && sit(r) !== "Open") return false;
+      if (tab === "Close" && sit(r) !== "Close") return false;
+      if (tab === "Empty" && sit(r) !== "Empty") return false;
       if (driverFilter && r.driver !== driverFilter) return false;
       if (search) {
         const hay = [r.driver, r.brand, r.state, r.address, r.unit, r.customer, r.job_number, r.notes].join(" ").toLowerCase();
@@ -347,23 +537,23 @@ export default function App() {
       return 0;
     });
     return data;
-  }, [records, tab, search, driverFilter, sortBy]);
+  }, [records, tab, search, driverFilter, sortBy, sit]);
 
   const metrics = useMemo(() => {
-    const active = records.filter(r => r.situation === "Open");
+    const active = records.filter(r => sit(r) === "Open");
     const withCost = active.filter(r => r.monthly_cost && Number(r.monthly_cost) > 0);
     const totalCost = withCost.reduce((sum, r) => sum + Number(r.monthly_cost), 0);
     const missingCost = active.length - withCost.length;
     return {
       total: records.length,
       active: active.length,
-      closed: records.filter(r => r.situation === "Close").length,
-      empty:  records.filter(r => r.situation === "Empty").length,
+      closed: records.filter(r => sit(r) === "Close").length,
+      empty:  records.filter(r => sit(r) === "Empty").length,
       states: new Set(records.map(r => r.state).filter(Boolean)).size,
       totalCost,
       missingCost,
     };
-  }, [records]);
+  }, [records, sit]);
 
   const detail = records.find(r => r.id === detailId);
 
@@ -457,6 +647,13 @@ export default function App() {
           <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
         </div>
       </div>
+
+      {dbSetupNeeded && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span>El historial de jobs por unidad necesita crear la tabla <strong>storage_jobs</strong> una sola vez.</span>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver instrucciones</button>
+        </div>
+      )}
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom: metrics.missingCost > 0 ? 10 : 20 }}>
         {[
@@ -615,18 +812,18 @@ export default function App() {
             <colgroup>
               <col style={{width:100}}/><col style={{width:110}}/><col style={{width:110}}/>
               <col style={{width:110}}/><col style={{width:55}}/><col style={{width:65}}/>
-              <col style={{width:105}}/><col style={{width:75}}/>
+              <col style={{width:105}}/><col style={{width:70}}/><col style={{width:75}}/>
             </colgroup>
             <thead>
               <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                {["Job #","Cliente","Driver","Brand","Estado","Unidad","Gate Code","Situacion"].map(h => (
+                {["Job #","Cliente","Driver","Brand","Estado","Unidad","Gate Code","Jobs activos","Situacion"].map(h => (
                   <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin resultados</td></tr>
+                <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin resultados</td></tr>
               ) : filtered.map(r => (
                 <tr key={r.id} onClick={() => setDetailId(r.id)}
                   style={{ borderBottom:"1px solid #fafafa", cursor:"pointer" }}
@@ -644,7 +841,16 @@ export default function App() {
                       {r.gate_code && <CopyButton value={r.gate_code} />}
                     </span>
                   </td>
-                  <td style={{ padding:"10px 12px" }}><Badge situation={r.situation} /></td>
+                  <td style={{ padding:"10px 12px" }}>
+                    {(() => {
+                      const n = activeJobsByStorage[r.id] || 0;
+                      return (
+                        <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600,
+                          background: n > 0 ? "#EAF3DE" : "#f5f5f5", color: n > 0 ? "#3B6D11" : "#bbb" }}>{n}</span>
+                      );
+                    })()}
+                  </td>
+                  <td style={{ padding:"10px 12px" }}><Badge situation={sit(r)} /></td>
                 </tr>
               ))}
             </tbody>
@@ -663,7 +869,7 @@ export default function App() {
             <Btn primary onClick={() => setDetailId(null)}>Cerrar</Btn>
           </>}>
           <div style={{ marginBottom:10, display:"flex", alignItems:"center", gap:10 }}>
-            <Badge situation={detail.situation} />
+            <Badge situation={sit(detail)} />
             {detail.customer && <span style={{ fontSize:13, color:"#888" }}>Cliente: <strong>{detail.customer}</strong></span>}
           </div>
           <SectionLabel>Storage</SectionLabel>
@@ -683,6 +889,18 @@ export default function App() {
           <SectionLabel>Job</SectionLabel>
           <DetailRow label="Job Number" value={detail.job_number} />
           <DetailRow label="Notas" value={detail.notes} />
+
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"16px 0 8px" }}>
+            <span style={{ fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.07em" }}>Job History</span>
+            <span style={{ fontSize:11, color:"#bbb" }}>{activeJobsByStorage[detail.id] || 0} activo(s)</span>
+          </div>
+          <JobHistory
+            storageId={detail.id}
+            jobs={jobs.filter(j => j.storage_id === detail.id)}
+            dbReady={dbReady}
+            onSetup={() => setShowSetup(true)}
+            onChange={loadJobs}
+          />
         </Modal>
       )}
 
@@ -773,6 +991,23 @@ export default function App() {
               </div>
             </div>
           )}
+        </Modal>
+      )}
+
+      {showSetup && (
+        <Modal title="Activar historial de jobs" onClose={() => setShowSetup(false)}
+          footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
+          <p style={{ fontSize:13, color:"#555", lineHeight:1.6, marginTop:0 }}>
+            La app intenta crear la tabla <strong>storage_jobs</strong> automáticamente, pero la clave pública no
+            permite crear tablas. Ejecutá este SQL <strong>una sola vez</strong> en el SQL Editor de Supabase
+            (o pedíselo a quien administre la base). Después recargá: el historial de jobs se activa solo.
+          </p>
+          <pre style={{ background:"#0f172a", color:"#e2e8f0", borderRadius:10, padding:"14px", fontSize:11.5, lineHeight:1.5, overflowX:"auto", whiteSpace:"pre" }}>{STORAGE_JOBS_SQL}</pre>
+          <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
+            <Btn onClick={() => {
+              navigator.clipboard?.writeText(STORAGE_JOBS_SQL).then(() => { setSqlCopied(true); setTimeout(() => setSqlCopied(false), 1500); }).catch(() => {});
+            }}>{sqlCopied ? "✓ Copiado" : "Copiar SQL"}</Btn>
+          </div>
         </Modal>
       )}
     </div>
