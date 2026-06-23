@@ -33,7 +33,12 @@ const EMPTY_FORM = {
   monthly_cost:"", card_on_file:"", date_opened:""
 };
 
-const EMPTY_JOB = { storage_id:"", job_number:"", customer:"", driver:"", date_in:"", notes:"" };
+// A job can span several units: it's stored as one storage_jobs row per unit,
+// all sharing the same job_number, and grouped back together in the UI.
+const EMPTY_JOB = { storage_ids:[], job_number:"", customer:"", driver:"", date_in:"", notes:"" };
+
+// Group key for a job: same job_number = same job (across units). Blank number = standalone.
+const jobKey = (j) => j.job_number && j.job_number.trim() ? `n:${j.job_number.trim().toLowerCase()}` : `id:${j.id}`;
 
 const sitColor = {
   Open:  { bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
@@ -531,11 +536,11 @@ export default function App() {
     [activeJobsByStorage]
   );
 
-  // Job-first view: each row is a job joined with the unit where it's stored.
-  // You search a job number and instantly see WHERE it is.
-  const jobRows = useMemo(() => {
+  // Job-first view: jobs grouped by job number (a job may span several units).
+  // You search a job number and instantly see all the units WHERE it is.
+  const jobGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const data = jobs
+    const parts = jobs
       .filter(j => tab === "delivered" ? j.date_out : !j.date_out)
       .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
       .filter(j => {
@@ -547,14 +552,21 @@ export default function App() {
         }
         return true;
       });
-    data.sort((a, b) => {
-      const ad = a.date_in || a.created_at || "", bd = b.date_in || b.created_at || "";
+    const map = new Map();
+    for (const p of parts) {
+      const key = jobKey(p);
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, notes:p.notes, parts:[] });
+      map.get(key).parts.push(p);
+    }
+    const arr = [...map.values()];
+    arr.sort((a, b) => {
+      const ad = a.date_in || "", bd = b.date_in || "";
       if (sortBy === "date-asc") return ad > bd ? 1 : -1;
       if (sortBy === "customer") return (a.customer || "").localeCompare(b.customer || "");
       if (sortBy === "driver") return (a.driver || "").localeCompare(b.driver || "");
       return bd > ad ? 1 : -1;
     });
-    return data;
+    return arr;
   }, [jobs, storageById, tab, search, driverFilter, sortBy]);
 
   // Units view: manage the physical lockers themselves.
@@ -574,14 +586,14 @@ export default function App() {
   }, [records, search, sortBy]);
 
   const metrics = useMemo(() => {
-    const activeJobs = jobs.filter(j => !j.date_out);
-    const deliveredJobs = jobs.filter(j => j.date_out);
-    const occupied = new Set(activeJobs.map(j => j.storage_id));
+    const activeParts = jobs.filter(j => !j.date_out);
+    const deliveredParts = jobs.filter(j => j.date_out);
+    const occupied = new Set(activeParts.map(j => j.storage_id));
     const withCost = records.filter(r => occupied.has(r.id) && r.monthly_cost && Number(r.monthly_cost) > 0);
     const totalCost = withCost.reduce((sum, r) => sum + Number(r.monthly_cost), 0);
     return {
-      activeJobs: activeJobs.length,
-      deliveredJobs: deliveredJobs.length,
+      activeJobs: new Set(activeParts.map(jobKey)).size,
+      deliveredJobs: new Set(deliveredParts.map(jobKey)).size,
       units: records.length,
       occupied: occupied.size,
       states: new Set(records.map(r => r.state).filter(Boolean)).size,
@@ -605,23 +617,33 @@ export default function App() {
     setSaving(false); setShowAdd(false);
   }
 
-  function openAddJob(storageId) { setJobForm({ ...EMPTY_JOB, storage_id: storageId || "" }); setJobErr(null); setShowAddJob(true); }
+  function openAddJob(storageId) { setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
+  function toggleJobUnit(id) {
+    setJobForm(f => ({ ...f, storage_ids: f.storage_ids.includes(id) ? f.storage_ids.filter(x => x !== id) : [...f.storage_ids, id] }));
+  }
   async function saveJob() {
-    if (!jobForm.storage_id) { setJobErr("Elegí en qué unidad está guardado."); return; }
+    if (!jobForm.storage_ids.length) { setJobErr("Elegí en qué unidad(es) está guardado."); return; }
     if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Completá al menos job, cliente o driver."); return; }
     setJobSaving(true); setJobErr(null);
-    const payload = {
-      storage_id: jobForm.storage_id,
+    const base = {
       job_number: jobForm.job_number || null,
       customer: jobForm.customer || null,
       driver: jobForm.driver || null,
       date_in: jobForm.date_in || today(),
       notes: jobForm.notes || null,
     };
-    const { error } = await supabase.from("storage_jobs").insert([payload]);
+    const rows = jobForm.storage_ids.map(sid => ({ ...base, storage_id: sid }));
+    const { error } = await supabase.from("storage_jobs").insert(rows);
     setJobSaving(false);
     if (error) { setJobErr(error.message); return; }
     setShowAddJob(false);
+    loadJobs();
+  }
+
+  // Mark every part of a job (all its units) as delivered.
+  async function deliverJobs(ids) {
+    if (!ids || !ids.length) return;
+    await supabase.from("storage_jobs").update({ date_out: today() }).in("id", ids);
     loadJobs();
   }
 
@@ -904,49 +926,59 @@ export default function App() {
               </tbody>
             </table>
           ) : (
-            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
-              <colgroup>
-                <col style={{width:100}}/><col style={{width:120}}/><col style={{width:110}}/>
-                <col style={{width:55}}/><col style={{width:60}}/><col style={{width:105}}/><col style={{width:95}}/>
-              </colgroup>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Empresa","Estado","Unidad","Gate Code", tab==="delivered"?"Entregado":"Driver"].map(h => (
-                    <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
+                  {["Job #","Cliente","Ubicaciones","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                    <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
+                  {tab !== "delivered" && <th style={{ width:150 }} />}
                 </tr>
               </thead>
               <tbody>
-                {jobRows.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
-                ) : jobRows.map(j => {
-                  const s = j.storage || {};
-                  return (
-                    <tr key={j.id} onClick={() => setDetailId(j.storage_id)}
-                      style={{ borderBottom:"1px solid #fafafa", cursor:"pointer" }}
-                      onMouseEnter={e => e.currentTarget.style.background="#fafafa"}
-                      onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.job_number||"—"}</td>
-                      <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer||"—"}</td>
-                      <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.brand||"—"}</td>
-                      <td style={{ padding:"10px 12px" }}>{s.state||"—"}</td>
-                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{s.unit||"—"}</td>
-                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
-                        <span style={{ display:"inline-flex", alignItems:"center", maxWidth:"100%" }}>
-                          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.gate_code||"—"}</span>
-                          {s.gate_code && <CopyButton value={s.gate_code} />}
-                        </span>
+                {jobGroups.length === 0 ? (
+                  <tr><td colSpan={5} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                ) : jobGroups.map(g => (
+                  <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
+                    <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:600, whiteSpace:"nowrap" }}>{g.job_number||"—"}</td>
+                    <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
+                    <td style={{ padding:"8px 12px" }}>
+                      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                        {g.parts.map(p => {
+                          const s = p.storage || {};
+                          return (
+                            <div key={p.id} onClick={() => setDetailId(p.storage_id)}
+                              style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", cursor:"pointer", padding:"4px 8px", borderRadius:6, background:"#fafafa" }}
+                              onMouseEnter={e => e.currentTarget.style.background="#f0f0f0"}
+                              onMouseLeave={e => e.currentTarget.style.background="#fafafa"}>
+                              <span style={{ fontSize:12 }}>{[s.brand, s.state].filter(Boolean).join(" · ") || "Unidad ?"}</span>
+                              <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:600 }}>{s.unit || "—"}</span>
+                              {s.gate_code && (
+                                <span style={{ display:"inline-flex", alignItems:"center", fontFamily:"monospace", fontSize:11, color:"#666" }}>
+                                  {s.gate_code}<CopyButton value={s.gate_code} />
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </td>
+                    <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
+                    {tab === "delivered" ? (
+                      <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
+                    ) : (
+                      <td style={{ padding:"12px", textAlign:"right" }}>
+                        <Btn onClick={() => deliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Marcar entregado</Btn>
                       </td>
-                      <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tab==="delivered" ? (j.date_out||"—") : (j.driver||"—")}</td>
-                    </tr>
-                  );
-                })}
+                    )}
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
         </div>
         <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>
-          {tab === "units" ? `${unitRows.length} de ${records.length} unidades` : `${jobRows.length} job(s)`}
+          {tab === "units" ? `${unitRows.length} de ${records.length} unidades` : `${jobGroups.length} job(s)`}
         </div>
       </div>
 
@@ -1026,17 +1058,22 @@ export default function App() {
             <Btn onClick={() => setShowAddJob(false)}>Cancelar</Btn>
             <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : "Guardar job"}</Btn>
           </>}>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Unidad (dónde se guarda)" full>
-              <select style={inp} value={jobForm.storage_id} onChange={e => setJobForm(f => ({...f, storage_id:e.target.value}))}>
-                <option value="">Elegí la unidad...</option>
-                {records.map(r => (
-                  <option key={r.id} value={r.id}>
-                    {[r.brand, r.unit && `Unidad ${r.unit}`, r.state].filter(Boolean).join(" · ") || `Unidad #${r.id}`}
-                  </option>
-                ))}
-              </select>
-            </Field>
+          <Field label={`Unidad(es) donde se guarda — podés elegir varias${jobForm.storage_ids.length ? ` (${jobForm.storage_ids.length})` : ""}`} full>
+            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:170, overflowY:"auto", background:"#fff" }}>
+              {records.length === 0 ? (
+                <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No hay unidades cargadas todavía.</div>
+              ) : records.map(r => {
+                const checked = jobForm.storage_ids.includes(r.id);
+                return (
+                  <label key={r.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleJobUnit(r.id)} />
+                    <span>{[r.brand, r.unit && `Unidad ${r.unit}`, r.state].filter(Boolean).join(" · ") || `Unidad #${r.id}`}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </Field>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
             <Field label="Job #"><input style={inp} value={jobForm.job_number} onChange={e => setJobForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
             <Field label="Date in"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
             <Field label="Cliente"><input style={inp} value={jobForm.customer} onChange={e => setJobForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
