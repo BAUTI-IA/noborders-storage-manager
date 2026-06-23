@@ -1,8 +1,10 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPABASE_URL = "https://szkmktxziojzgfjkomua.supabase.co";
-const SUPABASE_KEY = "sb_publishable_v2VNtyiQ_tTAAmEWDdHwYg_IJ-_IN-5";
+// Reads from Vercel env vars when present (so the test/preview deployment can
+// point to a separate test database), falling back to the production project.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://szkmktxziojzgfjkomua.supabase.co";
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "sb_publishable_v2VNtyiQ_tTAAmEWDdHwYg_IJ-_IN-5";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // One physical storage = one row in `storages`. Jobs that pass through a unit are
