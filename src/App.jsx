@@ -30,10 +30,12 @@ const today = () => new Date().toISOString().slice(0, 10);
 // A storage = a physical unit (fixed: company, location, unit, gate code, account).
 // Jobs (customer, job number, driver, dates, notes) live in storage_jobs as history.
 const EMPTY_FORM = {
-  brand:"", state:"", address:"", unit:"", size:"",
+  brand:"", state:"", zip:"", address:"", unit:"", size:"",
   gate_code:"", lock:"", email:"", account:"", situation:"Open",
   monthly_cost:"", card_on_file:"", date_opened:""
 };
+
+const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
 // A job can span several locations: one storage_jobs row per location (rented
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
@@ -624,13 +626,13 @@ export default function App() {
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
-    setForm({ brand:r.brand||"", state:r.state||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"" });
+    setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"" });
     setEditId(r.id); setShowAdd(true);
   }
 
   async function saveForm() {
     setSaving(true);
-    const payload = { brand:form.brand||null, state:form.state||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
+    const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
     if (editId) { await supabase.from("storages").update(payload).eq("id", editId); }
     else { await supabase.from("storages").insert([payload]); }
     setSaving(false); setShowAdd(false);
@@ -885,6 +887,7 @@ export default function App() {
 
       <datalist id="drivers-list">{drivers.map(d => <option key={d} value={d} />)}</datalist>
       <datalist id="brands-list">{brands.map(b => <option key={b} value={b} />)}</datalist>
+      <datalist id="states-list">{US_STATES.map(s => <option key={s} value={s} />)}</datalist>
 
       <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
         {[["active","Jobs activos"],["delivered","Entregados"],["units","Unidades"],
@@ -1079,6 +1082,7 @@ export default function App() {
           <DetailRow label="Empresa" value={detail.brand} />
           <DetailRow label="Direccion" value={detail.address} />
           <DetailRow label="Estado" value={detail.state} />
+          <DetailRow label="Zip code" value={detail.zip} />
           <DetailRow label="Unidad" value={detail.unit} />
           <DetailRow label="Tamano" value={detail.size} />
           <DetailRow label="Gate Code" value={detail.gate_code} />
@@ -1113,7 +1117,8 @@ export default function App() {
           <p style={{ fontSize:12, color:"#999", margin:"0 0 12px" }}>Datos fijos de la unidad. Los clientes y jobs se cargan aparte en el historial.</p>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Empresa"><input style={inp} list="brands-list" value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="Elegí o escribí (CubeSmart...)" /></Field>
-            <Field label="Estado"><input style={inp} value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value}))} placeholder="TN" /></Field>
+            <Field label="Estado"><input style={inp} list="states-list" value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value.toUpperCase()}))} placeholder="TN" /></Field>
+            <Field label="Zip code"><input style={inp} value={form.zip} onChange={e => setForm(f => ({...f, zip:e.target.value}))} placeholder="38555" /></Field>
             <Field label="Direccion" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
             <Field label="Unidad #"><input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" /></Field>
             <Field label="Tamano"><input style={inp} value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
