@@ -459,6 +459,7 @@ export default function App() {
   const [jobForm, setJobForm] = useState(EMPTY_JOB);
   const [jobSaving, setJobSaving] = useState(false);
   const [jobErr, setJobErr] = useState(null);
+  const [editingJobKey, setEditingJobKey] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importTab, setImportTab] = useState("paste");
   const [pasteText, setPasteText] = useState("");
@@ -654,7 +655,18 @@ export default function App() {
     setSaving(false); setShowAdd(false);
   }
 
-  function openAddJob(storageId) { setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
+  function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
+  function openEditJob(jd) {
+    setEditingJobKey(jd.key);
+    setJobForm({
+      storage_ids: [...new Set(jd.parts.filter(p => p.storage_id).map(p => p.storage_id))],
+      warehouses: [...new Set(jd.parts.filter(p => p.warehouse).map(p => p.warehouse))],
+      job_number: jd.job_number || "", customer: jd.customer || "", driver: jd.driver || "",
+      date_in: jd.date_in || "", volume: jd.volume || "", lot_number: jd.lot_number || "",
+      sticker_color: jd.sticker_color || "", notes: jd.notes || "",
+    });
+    setJobErr(null); setJobDetailKey(null); setShowAddJob(true);
+  }
   function toggleJobUnit(id) {
     setJobForm(f => ({ ...f, storage_ids: f.storage_ids.includes(id) ? f.storage_ids.filter(x => x !== id) : [...f.storage_ids, id] }));
   }
@@ -665,7 +677,7 @@ export default function App() {
     if (!jobForm.storage_ids.length && !jobForm.warehouses.length) { setJobErr("Elegí dónde está guardado (unidad o warehouse)."); return; }
     if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Completá al menos job, cliente o driver."); return; }
     setJobSaving(true); setJobErr(null);
-    const base = {
+    const fields = {
       job_number: jobForm.job_number || null,
       customer: jobForm.customer || null,
       driver: jobForm.driver || null,
@@ -675,13 +687,36 @@ export default function App() {
       sticker_color: jobForm.sticker_color || null,
       notes: jobForm.notes || null,
     };
-    const rows = [
-      ...jobForm.storage_ids.map(sid => ({ ...base, storage_id: sid, warehouse: null })),
-      ...jobForm.warehouses.map(w => ({ ...base, storage_id: null, warehouse: w })),
-    ];
-    const { error } = await supabase.from("storage_jobs").insert(rows);
-    setJobSaving(false);
-    if (error) { setJobErr(error.message); return; }
+
+    if (editingJobKey) {
+      // Update job-level fields on all existing parts, then reconcile locations.
+      const current = jobs.filter(j => jobKey(j) === editingJobKey);
+      const desiredUnits = new Set(jobForm.storage_ids);
+      const desiredWhs = new Set(jobForm.warehouses);
+      const toDelete = [], keptUnits = new Set(), keptWhs = new Set();
+      for (const p of current) {
+        if (p.storage_id) { desiredUnits.has(p.storage_id) ? keptUnits.add(p.storage_id) : toDelete.push(p.id); }
+        else if (p.warehouse) { desiredWhs.has(p.warehouse) ? keptWhs.add(p.warehouse) : toDelete.push(p.id); }
+      }
+      const newRows = [
+        ...jobForm.storage_ids.filter(id => !keptUnits.has(id)).map(sid => ({ ...fields, storage_id: sid, warehouse: null })),
+        ...jobForm.warehouses.filter(w => !keptWhs.has(w)).map(w => ({ ...fields, storage_id: null, warehouse: w })),
+      ];
+      let error = null;
+      if (current.length) ({ error } = await supabase.from("storage_jobs").update(fields).in("id", current.map(p => p.id)));
+      if (!error && toDelete.length) ({ error } = await supabase.from("storage_jobs").delete().in("id", toDelete));
+      if (!error && newRows.length) ({ error } = await supabase.from("storage_jobs").insert(newRows));
+      setJobSaving(false);
+      if (error) { setJobErr(error.message); return; }
+    } else {
+      const rows = [
+        ...jobForm.storage_ids.map(sid => ({ ...fields, storage_id: sid, warehouse: null })),
+        ...jobForm.warehouses.map(w => ({ ...fields, storage_id: null, warehouse: w })),
+      ];
+      const { error } = await supabase.from("storage_jobs").insert(rows);
+      setJobSaving(false);
+      if (error) { setJobErr(error.message); return; }
+    }
     setShowAddJob(false);
     loadJobs();
   }
@@ -1033,6 +1068,7 @@ export default function App() {
       {jobDetail && (
         <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
           footer={<>
+            <Btn onClick={() => openEditJob(jobDetail)}>Editar</Btn>
             {jobDetail.parts.some(p => !p.date_out) && (
               <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Marcar todo entregado</Btn>
             )}
@@ -1171,10 +1207,10 @@ export default function App() {
       )}
 
       {showAddJob && (
-        <Modal title="Nuevo job" onClose={() => setShowAddJob(false)}
+        <Modal title={editingJobKey ? "Editar job" : "Nuevo job"} onClose={() => setShowAddJob(false)}
           footer={<>
             <Btn onClick={() => setShowAddJob(false)}>Cancelar</Btn>
-            <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : "Guardar job"}</Btn>
+            <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : (editingJobKey ? "Guardar cambios" : "Guardar job")}</Btn>
           </>}>
           <Field label={`Dónde se guarda — podés elegir varias${(jobForm.storage_ids.length + jobForm.warehouses.length) ? ` (${jobForm.storage_ids.length + jobForm.warehouses.length})` : ""}`} full>
             <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:200, overflowY:"auto", background:"#fff" }}>
