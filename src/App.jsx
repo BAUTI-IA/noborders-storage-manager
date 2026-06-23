@@ -31,7 +31,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 // Jobs (customer, job number, driver, dates, notes) live in storage_jobs as history.
 const EMPTY_FORM = {
   brand:"", state:"", zip:"", address:"", unit:"", size:"",
-  gate_code:"", lock:"", email:"", account:"", situation:"Open",
+  gate_code:"", lock:"", email:"", account:"", phone:"", situation:"Open",
   monthly_cost:"", card_on_file:"", date_opened:""
 };
 
@@ -626,13 +626,13 @@ export default function App() {
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
-    setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"" });
+    setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", phone:r.phone||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"" });
     setEditId(r.id); setShowAdd(true);
   }
 
   async function saveForm() {
     setSaving(true);
-    const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
+    const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, phone:form.phone||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
     if (editId) { await supabase.from("storages").update(payload).eq("id", editId); }
     else { await supabase.from("storages").insert([payload]); }
     setSaving(false); setShowAdd(false);
@@ -1091,6 +1091,7 @@ export default function App() {
           <SectionLabel>Cuenta</SectionLabel>
           <DetailRow label="Email" value={detail.email} />
           <DetailRow label="Account #" value={detail.account} />
+          <DetailRow label="Teléfono" value={detail.phone} />
           <DetailRow label="Tarjeta" value={detail.card_on_file} />
           <DetailRow label="Costo mensual" value={detail.monthly_cost ? "$" + detail.monthly_cost : null} />
           <DetailRow label="Fecha de alquiler" value={detail.date_opened} />
@@ -1127,6 +1128,7 @@ export default function App() {
             <Field label="Lock / Combo"><input style={inp} value={form.lock} onChange={e => setForm(f => ({...f, lock:e.target.value}))} placeholder="use 8141 to unlock..." /></Field>
             <Field label="Email"><input style={inp} value={form.email} onChange={e => setForm(f => ({...f, email:e.target.value}))} placeholder="service@..." /></Field>
             <Field label="Account #"><input style={inp} value={form.account} onChange={e => setForm(f => ({...f, account:e.target.value}))} placeholder="NONE" /></Field>
+            <Field label="Teléfono"><input style={inp} value={form.phone} onChange={e => setForm(f => ({...f, phone:e.target.value}))} placeholder="(931) 555-0199" /></Field>
             <Field label="Estado de la unidad">
               <select style={inp} value={form.situation} onChange={e => setForm(f => ({...f, situation:e.target.value}))}>
                 <option value="Open">Activa (automático según jobs)</option>
