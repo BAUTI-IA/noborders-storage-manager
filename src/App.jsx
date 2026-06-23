@@ -586,7 +586,7 @@ export default function App() {
     const q = search.trim().toLowerCase();
     const data = records.filter(r => {
       if (!q) return true;
-      const hay = [r.brand, r.state, r.address, r.unit, r.gate_code].join(" ").toLowerCase();
+      const hay = [r.brand, r.state, r.zip, r.address, r.unit, r.gate_code].join(" ").toLowerCase();
       return hay.includes(q);
     });
     data.sort((a, b) => {
@@ -919,19 +919,19 @@ export default function App() {
           {tab === "units" ? (
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
               <colgroup>
-                <col style={{width:120}}/><col style={{width:55}}/><col style={{width:160}}/>
+                <col style={{width:120}}/><col style={{width:55}}/><col style={{width:70}}/><col style={{width:150}}/>
                 <col style={{width:65}}/><col style={{width:110}}/><col style={{width:75}}/><col style={{width:80}}/>
               </colgroup>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Empresa","Estado","Direccion","Unidad","Gate Code","Jobs activos","Situacion"].map(h => (
+                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Jobs activos","Situacion"].map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {unitRows.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
+                  <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
                 ) : unitRows.map(r => {
                   const n = activeJobsByStorage[r.id] || 0;
                   return (
@@ -941,6 +941,7 @@ export default function App() {
                       onMouseLeave={e => e.currentTarget.style.background="transparent"}>
                       <td style={{ padding:"10px 12px", fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.brand||"—"}</td>
                       <td style={{ padding:"10px 12px" }}>{r.state||"—"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{r.zip||"—"}</td>
                       <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.address||"—"}</td>
                       <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{r.unit||"—"}</td>
                       <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
