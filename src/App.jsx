@@ -576,7 +576,7 @@ export default function App() {
         if (driverFilter && j.driver !== driverFilter) return false;
         if (q) {
           const s = j.storage || {};
-          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, j.lot_number, j.sticker_color, s.brand, s.state, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
+          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, j.lot_number, j.sticker_color, s.brand, s.state, s.zip, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -952,7 +952,7 @@ export default function App() {
 
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder={tab === "units" ? "Buscar empresa, ubicación, unidad..." : "Buscar por job #, cliente, driver, ubicación..."}
+          placeholder={tab === "units" ? "Buscar empresa, ubicación, zip, unidad..." : "Buscar por job #, cliente, driver, zip, ubicación..."}
           style={{ ...inp, flex:1, minWidth:180 }} />
         {tab !== "units" && (
           <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
@@ -1017,7 +1017,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Lot #","Sticker","Volumen","Empresa","Ubicación","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                  {["Job #","Cliente","Lot #","Sticker","Volumen","Empresa","Ubicación","Zip","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                   {tab !== "delivered" && <th style={{ width:150 }} />}
@@ -1025,10 +1025,11 @@ export default function App() {
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                  <tr><td colSpan={10} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
                 ) : jobGroups.map(g => {
                   const empresas = [...new Set(g.parts.map(p => p.storage?.brand).filter(Boolean))];
                   const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : p.storage?.address).filter(Boolean))];
+                  const zips = [...new Set(g.parts.map(p => p.storage?.zip).filter(Boolean))];
                   return (
                   <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
                     <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
@@ -1045,6 +1046,7 @@ export default function App() {
                     <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
                       {locs.length ? locs.map((a, i) => <div key={i} style={{ marginBottom: i < locs.length-1 ? 3 : 0 }}>{a}</div>) : "—"}
                     </td>
+                    <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{zips.length ? zips.join(", ") : "—"}</td>
                     <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
                     {tab === "delivered" ? (
                       <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
