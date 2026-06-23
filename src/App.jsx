@@ -929,7 +929,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Ubicaciones","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                  {["Job #","Cliente","Empresa","Ubicaciones","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                   {tab !== "delivered" && <th style={{ width:150 }} />}
@@ -937,11 +937,14 @@ export default function App() {
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={5} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
-                ) : jobGroups.map(g => (
+                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                ) : jobGroups.map(g => {
+                  const empresas = [...new Set(g.parts.map(p => p.storage?.brand).filter(Boolean))];
+                  return (
                   <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
                     <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:600, whiteSpace:"nowrap" }}>{g.job_number||"—"}</td>
                     <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
+                    <td style={{ padding:"12px", fontWeight:500 }}>{empresas.length ? empresas.join(", ") : "—"}</td>
                     <td style={{ padding:"8px 12px" }}>
                       <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                         {g.parts.map(p => {
@@ -951,8 +954,8 @@ export default function App() {
                               style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", cursor:"pointer", padding:"4px 8px", borderRadius:6, background:"#fafafa" }}
                               onMouseEnter={e => e.currentTarget.style.background="#f0f0f0"}
                               onMouseLeave={e => e.currentTarget.style.background="#fafafa"}>
-                              <span style={{ fontSize:12 }}>{[s.brand, s.state].filter(Boolean).join(" · ") || "Unidad ?"}</span>
-                              <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:600 }}>{s.unit || "—"}</span>
+                              {s.state && <span style={{ fontSize:12 }}>{s.state}</span>}
+                              <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:600 }}>{s.unit || "Unidad ?"}</span>
                               {s.gate_code && (
                                 <span style={{ display:"inline-flex", alignItems:"center", fontFamily:"monospace", fontSize:11, color:"#666" }}>
                                   {s.gate_code}<CopyButton value={s.gate_code} />
@@ -972,7 +975,8 @@ export default function App() {
                       </td>
                     )}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}
