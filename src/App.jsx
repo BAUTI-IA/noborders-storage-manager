@@ -254,17 +254,14 @@ DATOS:
 Formato: lista numerada, cada recomendacion en 2-3 lineas max. Empieza directo con "1."`;
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }]
-        })
+        body: JSON.stringify({ prompt })
       });
       const data = await res.json();
-      setResult(data.content?.[0]?.text || "No se pudo obtener respuesta.");
+      if (!res.ok) setResult(data.error || "No se pudo conectar con la IA.");
+      else setResult(data.text || "No se pudo obtener respuesta.");
     } catch(e) {
       setResult("Error al conectar con la IA. Intenta de nuevo.");
     }
