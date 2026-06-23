@@ -43,6 +43,16 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", volume:"", lot_number:"", sticker_color:"", delivery_address:"", delivery_zip:"", notes:"" };
 
+// Google Maps directions URL from the job's storage location to its delivery address.
+const routeUrl = (g) => {
+  const sp = g.parts.find(p => p.storage?.address);
+  const origin = sp ? [sp.storage.address, sp.storage.zip].filter(Boolean).join(" ")
+    : (g.parts.find(p => p.warehouse) ? `Warehouse ${g.parts.find(p => p.warehouse).warehouse}` : "");
+  const dest = [g.delivery_address, g.delivery_zip].filter(Boolean).join(" ");
+  if (!origin || !dest) return null;
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}`;
+};
+
 // Sticker color: stored as free text, with a color swatch for the known names.
 const STICKER_COLORS = ["Rojo","Azul","Verde","Amarillo","Naranja","Rosa","Violeta","Blanco","Negro","Gris","Marrón"];
 const COLOR_MAP = { rojo:"#e24b4a", red:"#e24b4a", azul:"#185FA5", blue:"#185FA5", verde:"#3B6D11", green:"#3B6D11", amarillo:"#EAB308", yellow:"#EAB308", naranja:"#EA7C27", orange:"#EA7C27", rosa:"#EC4899", pink:"#EC4899", violeta:"#7C3AED", purple:"#7C3AED", blanco:"#FFFFFF", white:"#FFFFFF", negro:"#111111", black:"#111111", gris:"#888888", gray:"#888888", "marrón":"#92400E", marron:"#92400E", brown:"#92400E" };
@@ -1023,7 +1033,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Lot #","Sticker","Volumen","Empresa","Ubicación","Zip","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                  {["Job #","Cliente","Lot #","Sticker","Volumen","Empresa","Ubicación","Zip","Driver","Map", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                   {tab !== "delivered" && <th style={{ width:150 }} />}
@@ -1031,11 +1041,12 @@ export default function App() {
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={10} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                  <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
                 ) : jobGroups.map(g => {
                   const empresas = [...new Set(g.parts.map(p => p.storage?.brand).filter(Boolean))];
                   const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : p.storage?.address).filter(Boolean))];
                   const zips = [...new Set(g.parts.map(p => p.storage?.zip).filter(Boolean))];
+                  const mapHref = routeUrl(g);
                   return (
                   <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
                     <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
@@ -1054,6 +1065,9 @@ export default function App() {
                     </td>
                     <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{zips.length ? zips.join(", ") : "—"}</td>
                     <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
+                    <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                      {mapHref ? <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:13 }}>🗺️ Ruta</a> : "—"}
+                    </td>
                     {tab === "delivered" ? (
                       <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
                     ) : (
@@ -1096,6 +1110,12 @@ export default function App() {
           <DetailRow label="Fecha de entrada" value={jobDetail.date_in} />
           <DetailRow label="Delivery address" value={jobDetail.delivery_address} />
           <DetailRow label="Delivery zip" value={jobDetail.delivery_zip} />
+          {routeUrl(jobDetail) && (
+            <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
+              <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Ruta</span>
+              <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ Ver ruta storage → delivery en Google Maps</a>
+            </div>
+          )}
           <DetailRow label="Notas" value={jobDetail.notes} />
 
           <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
