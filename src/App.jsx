@@ -977,18 +977,18 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
               <colgroup>
                 <col style={{width:120}}/><col style={{width:55}}/><col style={{width:70}}/><col style={{width:150}}/>
-                <col style={{width:65}}/><col style={{width:110}}/><col style={{width:75}}/><col style={{width:80}}/>
+                <col style={{width:65}}/><col style={{width:110}}/><col style={{width:100}}/><col style={{width:75}}/><col style={{width:80}}/>
               </colgroup>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Jobs activos","Situacion"].map(h => (
+                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Apertura","Jobs activos","Situacion"].map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {unitRows.length === 0 ? (
-                  <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
+                  <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
                 ) : unitRows.map(r => {
                   const n = activeJobsByStorage[r.id] || 0;
                   return (
@@ -1007,6 +1007,7 @@ export default function App() {
                           {r.gate_code && <CopyButton value={r.gate_code} />}
                         </span>
                       </td>
+                      <td style={{ padding:"10px 12px", fontSize:12, color:"#555", whiteSpace:"nowrap" }}>{r.date_opened||"—"}</td>
                       <td style={{ padding:"10px 12px" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: n>0?"#EAF3DE":"#f5f5f5", color: n>0?"#3B6D11":"#bbb" }}>{n}</span>
                       </td>
@@ -1163,7 +1164,7 @@ export default function App() {
           <DetailRow label="Teléfono" value={detail.phone} />
           <DetailRow label="Tarjeta" value={detail.card_on_file} />
           <DetailRow label="Costo mensual" value={detail.monthly_cost ? "$" + detail.monthly_cost : null} />
-          <DetailRow label="Fecha de alquiler" value={detail.date_opened} />
+          <DetailRow label="Fecha de apertura" value={detail.date_opened} />
 
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"16px 0 8px" }}>
             <span style={{ fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.07em" }}>Job History</span>
@@ -1206,7 +1207,7 @@ export default function App() {
             </Field>
             <Field label="Costo mensual ($)"><input style={inp} type="number" value={form.monthly_cost} onChange={e => setForm(f => ({...f, monthly_cost:e.target.value}))} placeholder="0" /></Field>
             <Field label="Tarjeta"><input style={inp} value={form.card_on_file} onChange={e => setForm(f => ({...f, card_on_file:e.target.value}))} placeholder="Visa ****1234" /></Field>
-            <Field label="Fecha de alquiler"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
+            <Field label="Fecha de apertura"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
           </div>
         </Modal>
       )}
