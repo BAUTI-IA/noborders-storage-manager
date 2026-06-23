@@ -36,6 +36,7 @@ const EMPTY_FORM = {
 };
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
+const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x30","12x20","15x20","20x20"];
 
 // A job can span several locations: one storage_jobs row per location (rented
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
@@ -547,6 +548,7 @@ export default function App() {
 
   const drivers = useMemo(() => [...new Set(jobs.map(j => j.driver).filter(Boolean))].sort(), [jobs]);
   const brands = useMemo(() => [...new Set(records.map(r => r.brand).filter(Boolean))].sort(), [records]);
+  const sizes = useMemo(() => [...new Set([...STANDARD_SIZES, ...records.map(r => r.size).filter(Boolean)])], [records]);
 
   const activeJobsByStorage = useMemo(() => {
     const m = {};
@@ -942,6 +944,7 @@ export default function App() {
       <datalist id="brands-list">{brands.map(b => <option key={b} value={b} />)}</datalist>
       <datalist id="states-list">{US_STATES.map(s => <option key={s} value={s} />)}</datalist>
       <datalist id="sticker-colors-list">{STICKER_COLORS.map(c => <option key={c} value={c} />)}</datalist>
+      <datalist id="sizes-list">{sizes.map(s => <option key={s} value={s} />)}</datalist>
 
       <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
         {[["active","Jobs activos"],["delivered","Entregados"],["units","Unidades"],
@@ -1189,7 +1192,7 @@ export default function App() {
             <Field label="Zip code"><input style={inp} value={form.zip} onChange={e => setForm(f => ({...f, zip:e.target.value}))} placeholder="38555" /></Field>
             <Field label="Direccion" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
             <Field label="Unidad #"><input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" /></Field>
-            <Field label="Tamano"><input style={inp} value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
+            <Field label="Tamano"><input style={inp} list="sizes-list" value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
             <Field label="Gate Code"><input style={inp} value={form.gate_code} onChange={e => setForm(f => ({...f, gate_code:e.target.value}))} placeholder="*130438#" /></Field>
             <Field label="Lock / Combo"><input style={inp} value={form.lock} onChange={e => setForm(f => ({...f, lock:e.target.value}))} placeholder="use 8141 to unlock..." /></Field>
             <Field label="Email"><input style={inp} value={form.email} onChange={e => setForm(f => ({...f, email:e.target.value}))} placeholder="service@..." /></Field>
