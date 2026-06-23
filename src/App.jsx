@@ -53,6 +53,22 @@ const routeUrl = (g) => {
   return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}`;
 };
 
+// Audit trail: who created / last edited a record, and when (shown in light gray).
+const fmtTs = (ts) => {
+  if (!ts) return null;
+  try { return new Date(ts).toLocaleString("es-AR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" }); }
+  catch { return ts; }
+};
+function AuditInfo({ rec }) {
+  if (!rec || (!rec.created_by && !rec.updated_by && !rec.created_at)) return null;
+  return (
+    <div style={{ marginTop:14, paddingTop:10, borderTop:"1px solid #f5f5f5", fontSize:11, color:"#bbb", lineHeight:1.6 }}>
+      {(rec.created_by || rec.created_at) && <div>Creado por {rec.created_by || "—"}{rec.created_at ? ` · ${fmtTs(rec.created_at)}` : ""}</div>}
+      {(rec.updated_by || rec.updated_at) && <div>Última edición por {rec.updated_by || "—"}{rec.updated_at ? ` · ${fmtTs(rec.updated_at)}` : ""}</div>}
+    </div>
+  );
+}
+
 // Sticker color: stored as free text, with a color swatch for the known names.
 const STICKER_COLORS = ["Rojo","Azul","Verde","Amarillo","Naranja","Rosa","Violeta","Blanco","Negro","Gris","Marrón"];
 const COLOR_MAP = { rojo:"#e24b4a", red:"#e24b4a", azul:"#185FA5", blue:"#185FA5", verde:"#3B6D11", green:"#3B6D11", amarillo:"#EAB308", yellow:"#EAB308", naranja:"#EA7C27", orange:"#EA7C27", rosa:"#EC4899", pink:"#EC4899", violeta:"#7C3AED", purple:"#7C3AED", blanco:"#FFFFFF", white:"#FFFFFF", negro:"#111111", black:"#111111", gris:"#888888", gray:"#888888", "marrón":"#92400E", marron:"#92400E", brown:"#92400E" };
@@ -650,8 +666,10 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, delivery_address:f.delivery_address, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, delivery_address:f.delivery_address, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
+
+  const userEmail = session?.user?.email || null;
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
@@ -662,8 +680,8 @@ export default function App() {
   async function saveForm() {
     setSaving(true);
     const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, phone:form.phone||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
-    if (editId) { await supabase.from("storages").update(payload).eq("id", editId); }
-    else { await supabase.from("storages").insert([payload]); }
+    if (editId) { await supabase.from("storages").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editId); }
+    else { await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]); }
     setSaving(false); setShowAdd(false);
   }
 
@@ -713,20 +731,22 @@ export default function App() {
         if (p.storage_id) { desiredUnits.has(p.storage_id) ? keptUnits.add(p.storage_id) : toDelete.push(p.id); }
         else if (p.warehouse) { desiredWhs.has(p.warehouse) ? keptWhs.add(p.warehouse) : toDelete.push(p.id); }
       }
+      const created = { ...fields, created_by: userEmail };
       const newRows = [
-        ...jobForm.storage_ids.filter(id => !keptUnits.has(id)).map(sid => ({ ...fields, storage_id: sid, warehouse: null })),
-        ...jobForm.warehouses.filter(w => !keptWhs.has(w)).map(w => ({ ...fields, storage_id: null, warehouse: w })),
+        ...jobForm.storage_ids.filter(id => !keptUnits.has(id)).map(sid => ({ ...created, storage_id: sid, warehouse: null })),
+        ...jobForm.warehouses.filter(w => !keptWhs.has(w)).map(w => ({ ...created, storage_id: null, warehouse: w })),
       ];
       let error = null;
-      if (current.length) ({ error } = await supabase.from("storage_jobs").update(fields).in("id", current.map(p => p.id)));
+      if (current.length) ({ error } = await supabase.from("storage_jobs").update({ ...fields, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", current.map(p => p.id)));
       if (!error && toDelete.length) ({ error } = await supabase.from("storage_jobs").delete().in("id", toDelete));
       if (!error && newRows.length) ({ error } = await supabase.from("storage_jobs").insert(newRows));
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
     } else {
+      const created = { ...fields, created_by: userEmail };
       const rows = [
-        ...jobForm.storage_ids.map(sid => ({ ...fields, storage_id: sid, warehouse: null })),
-        ...jobForm.warehouses.map(w => ({ ...fields, storage_id: null, warehouse: w })),
+        ...jobForm.storage_ids.map(sid => ({ ...created, storage_id: sid, warehouse: null })),
+        ...jobForm.warehouses.map(w => ({ ...created, storage_id: null, warehouse: w })),
       ];
       const { error } = await supabase.from("storage_jobs").insert(rows);
       setJobSaving(false);
@@ -739,14 +759,14 @@ export default function App() {
   // Mark every part of a job (all its units) as delivered.
   async function deliverJobs(ids) {
     if (!ids || !ids.length) return;
-    await supabase.from("storage_jobs").update({ date_out: today() }).in("id", ids);
+    await supabase.from("storage_jobs").update({ date_out: today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     loadJobs();
   }
 
   // Revert a delivery (e.g. marked by mistake): clears the delivery date.
   async function undeliverJobs(ids) {
     if (!ids || !ids.length) return;
-    await supabase.from("storage_jobs").update({ date_out: null }).in("id", ids);
+    await supabase.from("storage_jobs").update({ date_out: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     loadJobs();
   }
 
@@ -1178,6 +1198,7 @@ export default function App() {
               );
             })}
           </div>
+          <AuditInfo rec={jobDetail} />
         </Modal>
       )}
 
@@ -1220,6 +1241,7 @@ export default function App() {
             onSetup={() => setShowSetup(true)}
             onChange={loadJobs}
           />
+          <AuditInfo rec={detail} />
         </Modal>
       )}
 
