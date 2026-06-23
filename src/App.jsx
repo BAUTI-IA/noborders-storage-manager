@@ -28,6 +28,30 @@ const Badge = ({ situation }) => {
   );
 };
 
+const CopyButton = ({ value }) => {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  return (
+    <button
+      onClick={copy}
+      title={copied ? "Copiado" : "Copiar gate code"}
+      style={{ flexShrink:0, marginLeft:6, padding:0, width:18, height:18, lineHeight:"18px", border:"none", background:"none", cursor:"pointer", color:copied?"#16a34a":"#bbb", fontSize:11, opacity:0.8 }}
+      onMouseEnter={e => e.currentTarget.style.opacity=1}
+      onMouseLeave={e => e.currentTarget.style.opacity=0.8}>
+      {copied ? "✓" : "⧉"}
+    </button>
+  );
+};
+
 const DetailRow = ({ label, value }) => {
   if (!value) return null;
   return (
@@ -614,7 +638,12 @@ export default function App() {
                   <td style={{ padding:"10px 12px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.brand||"—"}</td>
                   <td style={{ padding:"10px 12px" }}>{r.state||"—"}</td>
                   <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:12 }}>{r.unit||"—"}</td>
-                  <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.gate_code||"—"}</td>
+                  <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
+                    <span style={{ display:"inline-flex", alignItems:"center", maxWidth:"100%" }}>
+                      <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.gate_code||"—"}</span>
+                      {r.gate_code && <CopyButton value={r.gate_code} />}
+                    </span>
+                  </td>
                   <td style={{ padding:"10px 12px" }}><Badge situation={r.situation} /></td>
                 </tr>
               ))}
