@@ -40,7 +40,23 @@ const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","
 // A job can span several locations: one storage_jobs row per location (rented
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
-const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", volume:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", volume:"", lot_number:"", sticker_color:"", notes:"" };
+
+// Sticker color: stored as free text, with a color swatch for the known names.
+const STICKER_COLORS = ["Rojo","Azul","Verde","Amarillo","Naranja","Rosa","Violeta","Blanco","Negro","Gris","Marrón"];
+const COLOR_MAP = { rojo:"#e24b4a", red:"#e24b4a", azul:"#185FA5", blue:"#185FA5", verde:"#3B6D11", green:"#3B6D11", amarillo:"#EAB308", yellow:"#EAB308", naranja:"#EA7C27", orange:"#EA7C27", rosa:"#EC4899", pink:"#EC4899", violeta:"#7C3AED", purple:"#7C3AED", blanco:"#FFFFFF", white:"#FFFFFF", negro:"#111111", black:"#111111", gris:"#888888", gray:"#888888", "marrón":"#92400E", marron:"#92400E", brown:"#92400E" };
+const colorHex = (name) => { if (!name) return null; const k = name.trim().toLowerCase(); return COLOR_MAP[k] || null; };
+
+function Sticker({ color }) {
+  if (!color) return <span>—</span>;
+  const hex = colorHex(color);
+  return (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}>
+      <span style={{ width:12, height:12, borderRadius:"50%", flexShrink:0, background: hex || "#fff", border:"1px solid #ccc" }} />
+      {color}
+    </span>
+  );
+}
 
 // Group key for a job: same job_number = same job (across locations). Blank number = standalone.
 const jobKey = (j) => j.job_number && j.job_number.trim() ? `n:${j.job_number.trim().toLowerCase()}` : `id:${j.id}`;
@@ -559,7 +575,7 @@ export default function App() {
         if (driverFilter && j.driver !== driverFilter) return false;
         if (q) {
           const s = j.storage || {};
-          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, s.brand, s.state, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
+          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, j.lot_number, j.sticker_color, s.brand, s.state, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -567,7 +583,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, volume:p.volume, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -621,7 +637,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, volume:f.volume, notes:f.notes, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, notes:f.notes, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
@@ -655,6 +671,8 @@ export default function App() {
       driver: jobForm.driver || null,
       date_in: jobForm.date_in || today(),
       volume: jobForm.volume || null,
+      lot_number: jobForm.lot_number || null,
+      sticker_color: jobForm.sticker_color || null,
       notes: jobForm.notes || null,
     };
     const rows = [
@@ -888,6 +906,7 @@ export default function App() {
       <datalist id="drivers-list">{drivers.map(d => <option key={d} value={d} />)}</datalist>
       <datalist id="brands-list">{brands.map(b => <option key={b} value={b} />)}</datalist>
       <datalist id="states-list">{US_STATES.map(s => <option key={s} value={s} />)}</datalist>
+      <datalist id="sticker-colors-list">{STICKER_COLORS.map(c => <option key={c} value={c} />)}</datalist>
 
       <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
         {[["active","Jobs activos"],["delivered","Entregados"],["units","Unidades"],
@@ -963,7 +982,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Volumen","Empresa","Ubicación","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                  {["Job #","Cliente","Lot #","Sticker","Volumen","Empresa","Ubicación","Driver", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                   {tab !== "delivered" && <th style={{ width:150 }} />}
@@ -971,7 +990,7 @@ export default function App() {
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                  <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
                 ) : jobGroups.map(g => {
                   const empresas = [...new Set(g.parts.map(p => p.storage?.brand).filter(Boolean))];
                   const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : p.storage?.address).filter(Boolean))];
@@ -984,6 +1003,8 @@ export default function App() {
                       </button>
                     </td>
                     <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
+                    <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{g.lot_number||"—"}</td>
+                    <td style={{ padding:"12px" }}><Sticker color={g.sticker_color} /></td>
                     <td style={{ padding:"12px" }}>{g.volume||"—"}</td>
                     <td style={{ padding:"12px", fontWeight:500 }}>{empresas.length ? empresas.join(", ") : "—"}</td>
                     <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
@@ -1021,6 +1042,13 @@ export default function App() {
           <DetailRow label="Cliente" value={jobDetail.customer} />
           <DetailRow label="Driver (quién lo dejó)" value={jobDetail.driver} />
           <DetailRow label="Volumen" value={jobDetail.volume} />
+          <DetailRow label="Lot number (sticker)" value={jobDetail.lot_number} />
+          {jobDetail.sticker_color && (
+            <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
+              <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Color del sticker</span>
+              <span style={{ fontWeight:500 }}><Sticker color={jobDetail.sticker_color} /></span>
+            </div>
+          )}
           <DetailRow label="Fecha de entrada" value={jobDetail.date_in} />
           <DetailRow label="Notas" value={jobDetail.notes} />
 
@@ -1180,7 +1208,14 @@ export default function App() {
             <Field label="Cliente"><input style={inp} value={jobForm.customer} onChange={e => setJobForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
             <Field label="Driver (quién lo dejó)"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Elegí o escribí un driver" /></Field>
             <Field label="Volumen"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200 cu ft / 5 pallets" /></Field>
-            <Field label="Notas"><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+            <Field label="Lot number (del sticker)"><input style={inp} value={jobForm.lot_number} onChange={e => setJobForm(f => ({...f, lot_number:e.target.value}))} placeholder="ej: LOT-4821" /></Field>
+            <Field label="Color del sticker">
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
+                <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={e => setJobForm(f => ({...f, sticker_color:e.target.value}))} placeholder="Rojo, Azul..." />
+              </div>
+            </Field>
+            <Field label="Notas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
           </div>
           {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
         </Modal>
