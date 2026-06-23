@@ -41,14 +41,14 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // A job can span several locations: one storage_jobs row per location (rented
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
-const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", volume:"", lot_number:"", sticker_color:"", delivery_address:"", delivery_zip:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", volume:"", lot_number:"", sticker_color:"", delivery_address:"", delivery_state:"", delivery_zip:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
   const sp = g.parts.find(p => p.storage?.address);
-  const origin = sp ? [sp.storage.address, sp.storage.zip].filter(Boolean).join(" ")
+  const origin = sp ? [sp.storage.address, sp.storage.state, sp.storage.zip].filter(Boolean).join(" ")
     : (g.parts.find(p => p.warehouse) ? `Warehouse ${g.parts.find(p => p.warehouse).warehouse}` : "");
-  const dest = [g.delivery_address, g.delivery_zip].filter(Boolean).join(" ");
+  const dest = [g.delivery_address, g.delivery_state, g.delivery_zip].filter(Boolean).join(" ");
   if (!origin || !dest) return null;
   return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}`;
 };
@@ -588,7 +588,7 @@ export default function App() {
         if (driverFilter && j.driver !== driverFilter) return false;
         if (q) {
           const s = j.storage || {};
-          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, j.lot_number, j.sticker_color, j.delivery_address, j.delivery_zip, s.brand, s.state, s.zip, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
+          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, j.lot_number, j.sticker_color, j.delivery_address, j.delivery_state, j.delivery_zip, s.brand, s.state, s.zip, s.address, s.unit, s.gate_code].join(" ").toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -596,7 +596,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, delivery_address:p.delivery_address, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, delivery_address:p.delivery_address, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -650,7 +650,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, delivery_address:f.delivery_address, delivery_zip:f.delivery_zip, notes:f.notes, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, delivery_address:f.delivery_address, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
@@ -675,7 +675,7 @@ export default function App() {
       warehouses: [...new Set(jd.parts.filter(p => p.warehouse).map(p => p.warehouse))],
       job_number: jd.job_number || "", customer: jd.customer || "", driver: jd.driver || "",
       date_in: jd.date_in || "", volume: jd.volume || "", lot_number: jd.lot_number || "",
-      sticker_color: jd.sticker_color || "", delivery_address: jd.delivery_address || "", delivery_zip: jd.delivery_zip || "", notes: jd.notes || "",
+      sticker_color: jd.sticker_color || "", delivery_address: jd.delivery_address || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "", notes: jd.notes || "",
     });
     setJobErr(null); setJobDetailKey(null); setShowAddJob(true);
   }
@@ -698,6 +698,7 @@ export default function App() {
       lot_number: jobForm.lot_number || null,
       sticker_color: jobForm.sticker_color || null,
       delivery_address: jobForm.delivery_address || null,
+      delivery_state: jobForm.delivery_state || null,
       delivery_zip: jobForm.delivery_zip || null,
       notes: jobForm.notes || null,
     };
@@ -1109,6 +1110,7 @@ export default function App() {
           )}
           <DetailRow label="Fecha de entrada" value={jobDetail.date_in} />
           <DetailRow label="Delivery address" value={jobDetail.delivery_address} />
+          <DetailRow label="Delivery estado" value={jobDetail.delivery_state} />
           <DetailRow label="Delivery zip" value={jobDetail.delivery_zip} />
           {routeUrl(jobDetail) && (
             <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
@@ -1282,6 +1284,7 @@ export default function App() {
               </div>
             </Field>
             <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={e => setJobForm(f => ({...f, delivery_address:e.target.value}))} placeholder="Dirección de entrega" /></Field>
+            <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={e => setJobForm(f => ({...f, delivery_state:e.target.value.toUpperCase()}))} placeholder="NJ" /></Field>
             <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={e => setJobForm(f => ({...f, delivery_zip:e.target.value}))} placeholder="ej: 07030" /></Field>
             <Field label="Notas"><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
           </div>
