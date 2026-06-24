@@ -2167,73 +2167,93 @@ export default function App() {
 
       {page === "storage" && (
         <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-          {[["rented","Unidades alquiladas"],["warehouses","Warehouses propios"]].map(([t,l]) => (
+          {[["rented","Unidades alquiladas"], ...WAREHOUSES.map(w => [w, `🏭 ${w}`])].map(([t,l]) => (
             <button key={t} onClick={() => setStorageTab(t)}
               style={{ fontSize:13, fontWeight: storageTab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: storageTab === t ? "#111" : "#999", borderBottom: storageTab === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
           ))}
         </div>
       )}
 
-      {/* WAREHOUSES (owned) — card layout with occupancy */}
-      {page === "storage" && storageTab === "warehouses" && (
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))", gap:14 }}>
-          {WAREHOUSES.map(name => {
-            const meta = warehouseMeta[name];
-            const cap = meta && meta.total_capacity_cf != null ? Number(meta.total_capacity_cf) : null;
-            const used = usedCfByWarehouse[name] || 0;
-            const free = cap != null ? Math.max(0, cap - used) : null;
-            const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0;
-            const inside = jobs.filter(j => !j.date_out && j.warehouse === name);
-            const byJob = []; const seen = new Set();
-            for (const j of inside) { const k = jobKey(j); if (!seen.has(k)) { seen.add(k); byJob.push(j); } }
-            return (
-              <div key={name} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
-                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-                  <div>
-                    <div style={{ fontSize:16, fontWeight:700 }}>🏭 {name}</div>
-                    <div style={{ fontSize:12, color:"#999" }}>Warehouse propio</div>
-                  </div>
-                  <span style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>{byJob.length} job(s)</span>
-                </div>
-                {cap != null ? (
-                  <div style={{ marginBottom:14 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:5 }}>
-                      <span style={{ fontWeight:600, color:occColor(pct) }}>{pct}% ocupado</span>
-                      <span style={{ color:"#888" }}>{Math.round(used).toLocaleString()} usado · {Math.round(free).toLocaleString()} libre · {cap.toLocaleString()} CF</span>
-                    </div>
-                    <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}>
-                      <div style={{ background:occColor(pct), height:12, width:`${pct}%`, transition:"width .4s" }} />
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ marginBottom:14, fontSize:13, color:"#999" }}>Capacidad sin configurar · {Math.round(used).toLocaleString()} CF en uso</div>
-                )}
-                <div style={{ borderTop:"1px solid #f3f3f3", paddingTop:10, marginBottom:12 }}>
-                  {byJob.length === 0 ? (
-                    <div style={{ fontSize:12, color:"#bbb" }}>Sin jobs activos en este warehouse.</div>
-                  ) : (
-                    <div style={{ display:"flex", flexDirection:"column", gap:7, maxHeight:200, overflowY:"auto" }}>
-                      {byJob.map(j => (
-                        <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12 }}>
-                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
-                          <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}{j.driver ? ` · ${j.driver}` : ""}</span>
-                          {j.volume && <span style={{ color:"#888" }}>{parseCf(j.volume).toLocaleString()} CF</span>}
-                          {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc", flexShrink:0 }} title={j.sticker_color} />}
-                          {j.fadd && <span title="FADD" style={{ color:"#C2410C", whiteSpace:"nowrap" }}>{j.fadd}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+      {/* WAREHOUSE (owned) — one tab per warehouse: occupancy header + jobs table */}
+      {page === "storage" && WAREHOUSES.includes(storageTab) && (() => {
+        const name = storageTab;
+        const meta = warehouseMeta[name];
+        const cap = meta && meta.total_capacity_cf != null ? Number(meta.total_capacity_cf) : null;
+        const used = usedCfByWarehouse[name] || 0;
+        const free = cap != null ? Math.max(0, cap - used) : null;
+        const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0;
+        const inside = jobs.filter(j => !j.date_out && j.warehouse === name);
+        const byJob = []; const seen = new Set();
+        for (const j of inside) { const k = jobKey(j); if (!seen.has(k)) { seen.add(k); byJob.push(j); } }
+        return (
+          <>
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px", marginBottom:14 }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:14 }}>
+                <div>
+                  <div style={{ fontSize:18, fontWeight:700 }}>🏭 {name}</div>
+                  <div style={{ fontSize:12, color:"#999" }}>Warehouse propio · {byJob.length} job(s) activo(s)</div>
                 </div>
                 <div style={{ display:"flex", gap:8 }}>
-                  <Btn primary disabled={!dbReady} onClick={() => openAddJobWarehouse(name)} style={{ padding:"6px 12px", fontSize:12 }}>+ Job</Btn>
-                  <Btn onClick={() => openCapacity({ kind:"warehouse", name, value: cap != null ? String(cap) : "" })} style={{ padding:"6px 12px", fontSize:12 }}>Editar capacidad</Btn>
+                  <Btn primary disabled={!dbReady} onClick={() => openAddJobWarehouse(name)} style={{ padding:"7px 14px" }}>+ Job a este warehouse</Btn>
+                  <Btn onClick={() => openCapacity({ kind:"warehouse", name, value: cap != null ? String(cap) : "" })} style={{ padding:"7px 14px" }}>Editar capacidad</Btn>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+              {cap != null ? (
+                <div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:6 }}>
+                    <span style={{ fontWeight:700, color:occColor(pct) }}>{pct}% ocupado</span>
+                    <span style={{ color:"#888" }}>{Math.round(used).toLocaleString()} usado · {Math.round(free).toLocaleString()} libre · {cap.toLocaleString()} CF total</span>
+                  </div>
+                  <div style={{ background:"#f0f0f0", borderRadius:8, height:16, overflow:"hidden" }}>
+                    <div style={{ background:occColor(pct), height:16, width:`${pct}%`, transition:"width .4s" }} />
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize:13, color:"#999", display:"flex", alignItems:"center", gap:8 }}>
+                  Capacidad sin configurar · {Math.round(used).toLocaleString()} CF en uso.
+                  <span onClick={() => openCapacity({ kind:"warehouse", name, value:"" })} style={{ color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Configurar capacidad</span>
+                </div>
+              )}
+            </div>
+
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Job #","Cliente","Lot #","Sticker","Volumen","Driver","FADD","Estado",""].map((h,i) => (
+                        <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {byJob.length === 0 ? (
+                      <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs activos en este warehouse.</td></tr>
+                    ) : byJob.map(j => (
+                      <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                        </td>
+                        <td style={{ padding:"12px" }}>{j.customer || "—"}</td>
+                        <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{j.lot_number || "—"}</td>
+                        <td style={{ padding:"12px" }}><Sticker color={j.sticker_color} /></td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{j.volume || "—"}</td>
+                        <td style={{ padding:"12px" }}>{j.driver || "—"}</td>
+                        <td style={{ padding:"12px" }}><FaddBadge fadd={j.fadd} /></td>
+                        <td style={{ padding:"12px" }}><StatusBadge status={j.status} /></td>
+                        <td style={{ padding:"12px", textAlign:"right" }}>
+                          <span onClick={() => setJobDetailKey(jobKey(j))} style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Ver</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{byJob.length} job(s) en {name}</div>
+            </div>
+          </>
+        );
+      })()}
 
       {page === "jobs" && (
         <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
