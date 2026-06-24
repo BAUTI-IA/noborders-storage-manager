@@ -153,6 +153,46 @@ function FaddCell({ group, onSet }) {
   );
 }
 
+// Click-to-edit field used in the job detail. Date inputs commit on change
+// (the native calendar steals focus); text/datalist inputs commit on blur/Enter.
+function InlineField({ value, onSave, type = "text", listId, placeholder = "—", display, transform, mono }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value || "");
+  useEffect(() => { setVal(value || ""); }, [value]);
+  if (!editing) {
+    return (
+      <span onClick={() => { setVal(value || ""); setEditing(true); }} title="Click para editar"
+        style={{ cursor:"pointer", borderBottom:"1px dashed #ddd", paddingBottom:1, fontFamily: mono ? "monospace" : undefined }}>
+        {display != null ? display : (value ? value : <span style={{ color:"#bbb" }}>{placeholder}</span>)}
+      </span>
+    );
+  }
+  const commit = () => { const v = (transform ? transform(val) : val) || ""; if (v !== (value || "")) onSave(v); setEditing(false); };
+  if (type === "date") {
+    return (
+      <input type="date" autoFocus value={val}
+        onChange={e => { onSave(e.target.value); setEditing(false); }}
+        onKeyDown={e => { if (e.key === "Escape") setEditing(false); }}
+        style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #185FA5", outline:"none" }} />
+    );
+  }
+  return (
+    <input autoFocus list={listId} value={val}
+      onChange={e => setVal(transform ? transform(e.target.value) : e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+      style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #185FA5", outline:"none", width:"100%", fontFamily: mono ? "monospace" : undefined }} />
+  );
+}
+function EditRow({ label, children }) {
+  return (
+    <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, alignItems:"center" }}>
+      <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>{label}</span>
+      <span style={{ fontWeight:500, flex:1 }}>{children}</span>
+    </div>
+  );
+}
+
 // Sticker color: stored as free text, with a color swatch for the known names.
 const STICKER_COLORS = ["Rojo","Azul","Verde","Amarillo","Naranja","Rosa","Violeta","Blanco","Negro","Gris","Marrón"];
 const COLOR_MAP = { rojo:"#e24b4a", red:"#e24b4a", azul:"#185FA5", blue:"#185FA5", verde:"#3B6D11", green:"#3B6D11", amarillo:"#EAB308", yellow:"#EAB308", naranja:"#EA7C27", orange:"#EA7C27", rosa:"#EC4899", pink:"#EC4899", violeta:"#7C3AED", purple:"#7C3AED", blanco:"#FFFFFF", white:"#FFFFFF", negro:"#111111", black:"#111111", gris:"#888888", gray:"#888888", "marrón":"#92400E", marron:"#92400E", brown:"#92400E" };
@@ -943,6 +983,14 @@ export default function App() {
     loadJobs();
   }
 
+  // Inline-edit a single job-level field across all parts of a job.
+  async function updateJobField(parts, field, value) {
+    if (!parts?.length) return;
+    if (field === "fadd" && faddColMissing) return;
+    await supabase.from("storage_jobs").update({ [field]: value || null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", parts.map(p => p.id));
+    loadJobs();
+  }
+
   async function deleteRecord(id) {
     if (!window.confirm("Eliminar este storage?")) return;
     await supabase.from("storages").delete().eq("id", id);
@@ -1406,36 +1454,29 @@ export default function App() {
             )}
             <Btn primary onClick={() => setJobDetailKey(null)}>Cerrar</Btn>
           </>}>
-          <SectionLabel>Datos del job</SectionLabel>
-          <DetailRow label="Cliente" value={jobDetail.customer} />
-          <DetailRow label="Driver (quién lo dejó)" value={jobDetail.driver} />
-          <DetailRow label="Volumen" value={jobDetail.volume} />
-          <DetailRow label="Lot number (sticker)" value={jobDetail.lot_number} />
-          {jobDetail.sticker_color && (
-            <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
-              <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Color del sticker</span>
-              <span style={{ fontWeight:500 }}><Sticker color={jobDetail.sticker_color} /></span>
-            </div>
-          )}
-          <DetailRow label="Fecha de entrada" value={jobDetail.date_in} />
-          {jobDetail.fadd && (
-            <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, alignItems:"center" }}>
-              <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>FADD</span>
-              <span style={{ fontWeight:500 }}>{jobDetail.fadd}</span>
-              <span style={{ flex:1 }} />
-              <FaddBadge fadd={jobDetail.fadd} />
-            </div>
-          )}
-          <DetailRow label="Delivery address" value={jobDetail.delivery_address} />
-          <DetailRow label="Delivery estado" value={jobDetail.delivery_state} />
-          <DetailRow label="Delivery zip" value={jobDetail.delivery_zip} />
+          <SectionLabel>Datos del job <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:"#bbb" }}>· click para editar</span></SectionLabel>
+          {(() => { const P = jobDetail.parts; const set = (f) => (v) => updateJobField(P, f, v); return (
+          <>
+          <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
+          <EditRow label="Cliente"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
+          <EditRow label="Driver (quién lo dejó)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
+          <EditRow label="Volumen"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
+          <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
+          <EditRow label="Color del sticker"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
+          <EditRow label="Fecha de entrada"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
+          <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
+          <EditRow label="Delivery address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
+          <EditRow label="Delivery estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
+          <EditRow label="Delivery zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
           {routeUrl(jobDetail) && (
             <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
               <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Ruta</span>
               <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ Ver ruta storage → delivery en Google Maps</a>
             </div>
           )}
-          <DetailRow label="Notas" value={jobDetail.notes} />
+          <EditRow label="Notas"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
+          </>
+          ); })()}
 
           <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
