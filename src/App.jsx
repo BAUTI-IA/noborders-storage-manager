@@ -135,9 +135,9 @@ function FaddCell({ group, onSet }) {
   if (editing) {
     return (
       <input type="date" autoFocus defaultValue={group.fadd || ""}
-        onChange={e => { if (e.target.value) onSet(group, e.target.value); setEditing(false); }}
-        onBlur={() => setEditing(false)}
-        style={{ fontSize:12, padding:"4px 6px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none" }} />
+        onChange={e => { if (e.target.value) { onSet(group, e.target.value); setEditing(false); } }}
+        onKeyDown={e => { if (e.key === "Escape") setEditing(false); }}
+        style={{ fontSize:12, padding:"4px 6px", borderRadius:8, border:"1px solid #185FA5", outline:"none" }} />
     );
   }
   if (!group.fadd) {
