@@ -41,7 +41,8 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // A job can span several locations: one storage_jobs row per location (rented
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
-const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", notes:"" };
+const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", pickup_balance:"", delivery_balance:"", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -206,6 +207,36 @@ const JOB_COLS_SQL = `alter table public.storage_jobs
   add column if not exists pickup_zip text,
   add column if not exists delivery_date date,
   add column if not exists delivery_city text;`;
+// brokers table + broker/balance columns on storage_jobs (CRM v2). The app probes
+// the brokers table and the pickup_balance column; if missing it shows this SQL.
+const CRM_V2_SQL = `create table if not exists public.brokers (
+  id bigint generated always as identity primary key,
+  name text,
+  contact_name text,
+  contact_phone text,
+  contact_email text,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.brokers enable row level security;
+drop policy if exists "brokers_all" on public.brokers;
+create policy "brokers_all" on public.brokers for all to anon, authenticated using (true) with check (true);
+
+insert into public.brokers (name)
+select v.name from (values
+  ('Allied Van Lines'),('Atlas Van Lines'),('Mayflower'),('United Van Lines'),
+  ('North American Van Lines'),('Wheaton'),('Arpin'),('Bekins'),('Direct (no broker)')
+) as v(name)
+where not exists (select 1 from public.brokers b where b.name = v.name);
+
+alter table public.storage_jobs
+  add column if not exists broker_id bigint references public.brokers(id),
+  add column if not exists pickup_balance numeric,
+  add column if not exists delivery_balance numeric;
+
+do $$ begin
+  alter publication supabase_realtime add table public.brokers;
+exception when others then null; end $$;`;
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
 const STATUSES = [
@@ -235,16 +266,22 @@ function nextStatus(g) {
   if (s === "out_for_delivery") return "delivered";
   return null;
 }
-function waLink(g, storeLabel) {
+const money = (v) => (v || v === 0) && !isNaN(Number(v)) ? `$${Number(v).toLocaleString()}` : null;
+function waLink(g, storeLabel, brokerName) {
+  const pickup = [[g.pickup_address, g.pickup_city, g.pickup_state].filter(Boolean).join(", "), g.pickup_date].filter(Boolean).join(" - ");
+  const delivery = [g.delivery_address, g.delivery_city, g.delivery_state].filter(Boolean).join(", ");
   const txt = [
-    `Job #: ${g.job_number || "-"}`,
-    `Cliente: ${g.customer || "-"}`,
-    `Pickup: ${[g.pickup_address, g.pickup_city, g.pickup_state, g.pickup_zip].filter(Boolean).join(", ") || "-"}`,
-    `Delivery: ${[g.delivery_address, g.delivery_city, g.delivery_state, g.delivery_zip].filter(Boolean).join(", ") || "-"}`,
+    `Job: ${g.job_number || "-"}`,
+    `Customer: ${g.customer || "-"}`,
+    `Broker: ${brokerName || "-"}`,
+    `Pick up: ${pickup || "-"}`,
+    `Delivery: ${delivery || "-"}`,
     `FADD: ${g.fadd || "-"}`,
-    `CF: ${g.volume || "-"}`,
-    `Sticker/Lot: ${[g.sticker_color, g.lot_number].filter(Boolean).join(" / ") || "-"}`,
+    `Volume: ${g.volume || "-"} CF`,
+    `Sticker: ${g.sticker_color || "-"} - Lot ${g.lot_number || "-"}`,
     `Storage: ${storeLabel || "-"}`,
+    `Pick up balance: ${money(g.pickup_balance) || "$0"}`,
+    `Delivery balance: ${money(g.delivery_balance) || "$0"}`,
   ].join("\n");
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
@@ -649,6 +686,7 @@ const NAV = [
     { id:"dispatching", label:"Dispatching", icon:"🚚" },
     { id:"storage", label:"Storage", icon:"📦" },
     { id:"jobs", label:"Jobs", icon:"📋" },
+    { id:"brokers", label:"Brokers", icon:"🤝" },
   ]},
   { section:"Fleet", items:[
     { id:"drivers", label:"Drivers", icon:"🧑‍✈️" },
@@ -697,6 +735,7 @@ const PAGE_META = {
   dispatching: { title:"Dispatching", sub:"Despacho de pickups y deliveries" },
   storage:     { title:"Storage", sub:"Unidades físicas y ocupación" },
   jobs:        { title:"Jobs", sub:"Todos los trabajos con detalle completo" },
+  brokers:     { title:"Brokers", sub:"Brokers y balances pendientes" },
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
   analytics:   { title:"Analytics", sub:"Métricas y recomendaciones con IA" },
@@ -743,6 +782,12 @@ export default function App() {
   const [paymentColMissing, setPaymentColMissing] = useState(false);
   const [faddColMissing, setFaddColMissing] = useState(false);
   const [jobColsMissing, setJobColsMissing] = useState(false);
+  const [crmV2Missing, setCrmV2Missing] = useState(false);
+  const [brokers, setBrokers] = useState([]);
+  const [showBrokerModal, setShowBrokerModal] = useState(false);
+  const [brokerForm, setBrokerForm] = useState(EMPTY_BROKER);
+  const [editingBrokerId, setEditingBrokerId] = useState(null);
+  const [brokerSaving, setBrokerSaving] = useState(false);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -761,6 +806,11 @@ export default function App() {
   const loadJobs = useCallback(async () => {
     const { data, error } = await supabase.from("storage_jobs").select("*").order("created_at", { ascending: false });
     if (!error) setJobs(data || []);
+  }, []);
+
+  const loadBrokers = useCallback(async () => {
+    const { data, error } = await supabase.from("brokers").select("*").order("name", { ascending: true });
+    if (!error) setBrokers(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -846,6 +896,36 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session]);
 
+  // Probe the brokers table + balance columns (CRM v2). If present, load brokers
+  // and subscribe to realtime; otherwise surface the setup banner.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: bErr } = await supabase.from("brokers").select("id").limit(1);
+      const { error: balErr } = await supabase.from("storage_jobs").select("pickup_balance").limit(1);
+      if (cancelled) return;
+      if (!bErr && !balErr) { loadBrokers(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: CRM_V2_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadBrokers();
+      else setCrmV2Missing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadBrokers]);
+
+  useEffect(() => {
+    if (!session || crmV2Missing) return;
+    const channel = supabase.channel("brokers-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "brokers" }, () => loadBrokers())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, crmV2Missing, loadBrokers]);
+
   useEffect(() => {
     if (!session) return;
     loadData();
@@ -868,6 +948,8 @@ export default function App() {
   }, [records]);
 
   const drivers = useMemo(() => [...new Set(jobs.map(j => j.driver).filter(Boolean))].sort(), [jobs]);
+  const brokerById = useMemo(() => { const m = {}; for (const b of brokers) m[b.id] = b; return m; }, [brokers]);
+  const brokerName = useCallback((id) => (id && brokerById[id]?.name) || "", [brokerById]);
   const brands = useMemo(() => [...new Set(records.map(r => r.brand).filter(Boolean))].sort(), [records]);
   const sizes = useMemo(() => [...new Set([...STANDARD_SIZES, ...records.map(r => r.size).filter(Boolean)])], [records]);
 
@@ -907,7 +989,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -1007,13 +1089,14 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     let arr = [...map.values()];
-    if (dispatchFilter === "pickups") arr = arr.filter(g => (g.status || "scheduled") === "scheduled");
-    else if (dispatchFilter === "deliveries") arr = arr.filter(g => ["picked_up","in_storage","out_for_delivery"].includes(g.status || "scheduled"));
-    else if (dispatchFilter === "longhaul") arr = arr.filter(g => g.pickup_state && g.delivery_state && g.pickup_state !== g.delivery_state);
+    const td = today();
+    if (dispatchFilter === "pickups_today") arr = arr.filter(g => g.pickup_date === td);
+    else if (dispatchFilter === "deliveries_today") arr = arr.filter(g => g.delivery_date === td);
+    else if (dispatchFilter === "in_storage") arr = arr.filter(g => (g.status || "scheduled") === "in_storage");
     else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
     // Most urgent FADD first; jobs with no FADD sink to the bottom.
     arr.sort((a, b) => {
@@ -1026,7 +1109,9 @@ export default function App() {
   // Top-bar metrics for the Dispatching page (distinct active jobs).
   const dispatchMetrics = useMemo(() => {
     const td = today();
-    const pickups = new Set(), deliveries = new Set(), inStorage = new Set(), active = new Set();
+    const pickups = new Set(), deliveries = new Set(), inStorage = new Set(), active = new Set(), seen = new Set();
+    let puBal = 0, delBal = 0;
+    const num = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
     for (const j of jobs) {
       if (j.date_out || j.status === "cancelled") continue;
       const k = jobKey(j);
@@ -1034,8 +1119,13 @@ export default function App() {
       if (j.pickup_date === td) pickups.add(k);
       if (j.delivery_date === td) deliveries.add(k);
       if (j.status === "in_storage") inStorage.add(k);
+      if (!seen.has(k)) {
+        seen.add(k);
+        if ((j.status || "scheduled") === "scheduled") puBal += num(j.pickup_balance); // pending until picked up
+        delBal += num(j.delivery_balance); // pending until delivered
+      }
     }
-    return { pickups: pickups.size, deliveries: deliveries.size, inStorage: inStorage.size, active: active.size };
+    return { pickups: pickups.size, deliveries: deliveries.size, inStorage: inStorage.size, active: active.size, puBal, delBal };
   }, [jobs]);
 
   // Dispatching alert banner: FADD overdue, or a pickup/delivery scheduled today
@@ -1063,7 +1153,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -1094,6 +1184,7 @@ export default function App() {
       date_in: jd.date_in || "", fadd: jd.fadd || "", volume: jd.volume || "", lot_number: jd.lot_number || "",
       sticker_color: jd.sticker_color || "",
       job_type: jd.job_type || "full", status: jd.status || "scheduled",
+      broker_id: jd.broker_id || "", pickup_balance: jd.pickup_balance ?? "", delivery_balance: jd.delivery_balance ?? "",
       pickup_date: jd.pickup_date || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
       delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "", notes: jd.notes || "",
     });
@@ -1133,6 +1224,11 @@ export default function App() {
       fields.pickup_zip = jobForm.pickup_zip || null;
       fields.delivery_date = jobForm.delivery_date || null;
       fields.delivery_city = jobForm.delivery_city || null;
+    }
+    if (!crmV2Missing) {
+      fields.broker_id = jobForm.broker_id ? Number(jobForm.broker_id) : null;
+      fields.pickup_balance = jobForm.pickup_balance !== "" ? Number(jobForm.pickup_balance) : null;
+      fields.delivery_balance = jobForm.delivery_balance !== "" ? Number(jobForm.delivery_balance) : null;
     }
 
     if (editingJobKey) {
@@ -1184,6 +1280,47 @@ export default function App() {
     await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id));
     loadJobs();
   }
+
+  // ── Brokers CRUD ──
+  function openAddBroker() { setEditingBrokerId(null); setBrokerForm(EMPTY_BROKER); setShowBrokerModal(true); }
+  function openEditBroker(b) {
+    setEditingBrokerId(b.id);
+    setBrokerForm({ name:b.name||"", contact_name:b.contact_name||"", contact_phone:b.contact_phone||"", contact_email:b.contact_email||"", notes:b.notes||"" });
+    setShowBrokerModal(true);
+  }
+  async function saveBroker() {
+    if (!brokerForm.name.trim()) return;
+    setBrokerSaving(true);
+    const payload = { name:brokerForm.name.trim(), contact_name:brokerForm.contact_name||null, contact_phone:brokerForm.contact_phone||null, contact_email:brokerForm.contact_email||null, notes:brokerForm.notes||null };
+    if (editingBrokerId) await supabase.from("brokers").update(payload).eq("id", editingBrokerId);
+    else await supabase.from("brokers").insert([payload]);
+    setBrokerSaving(false); setShowBrokerModal(false);
+    loadBrokers();
+  }
+  async function deleteBroker(b) {
+    if (!window.confirm(`Eliminar el broker "${b.name}"? Los jobs asociados quedan sin broker.`)) return;
+    await supabase.from("brokers").delete().eq("id", b.id);
+    loadBrokers();
+  }
+
+  // Per-broker stats: active jobs count + pending balance (distinct jobs).
+  const brokerStats = useMemo(() => {
+    const num = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
+    const m = {};
+    const seen = new Set();
+    for (const j of jobs) {
+      if (!j.broker_id) continue;
+      const k = jobKey(j);
+      if (!m[j.broker_id]) m[j.broker_id] = { jobs: new Set(), balance: 0 };
+      m[j.broker_id].jobs.add(k);
+      const sk = j.broker_id + "|" + k;
+      if (!seen.has(sk) && !j.date_out && j.status !== "cancelled") {
+        seen.add(sk);
+        m[j.broker_id].balance += num(j.pickup_balance) + num(j.delivery_balance);
+      }
+    }
+    return m;
+  }, [jobs]);
 
   // Mark every part of a job (all its units) as delivered.
   async function deliverJobs(ids) {
@@ -1333,6 +1470,13 @@ export default function App() {
         </div>
       )}
 
+      {crmV2Missing && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span>Para Brokers y los balances de pickup/delivery, corré este SQL una sola vez en Supabase (SQL Editor).</span>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+        </div>
+      )}
+
       {page === "storage" && duePaymentsSoon.length > 0 && (
         <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D" }}>
           <strong>⚠️ {duePaymentsSoon.length} pago(s) vencen en 3 días o menos:</strong>
@@ -1356,7 +1500,8 @@ export default function App() {
               { label:"FADD overdue", value:faddStats.overdue, color:"#A32D2D" },
               { label:"FADD esta semana", value:faddStats.dueWeek, color:"#C2410C" },
               { label:"En storage", value:dispatchMetrics.inStorage, color:"#7C3AED" },
-              { label:"Jobs activos", value:dispatchMetrics.active, color:"#111" },
+              { label:"Balance pickup pend.", value:"$"+dispatchMetrics.puBal.toLocaleString(), color:"#1A8A4E" },
+              { label:"Balance delivery pend.", value:"$"+dispatchMetrics.delBal.toLocaleString(), color:"#1A8A4E" },
             ].map(m => (
               <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                 <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
@@ -1382,7 +1527,7 @@ export default function App() {
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","Todos"],["pickups","Pick ups"],["deliveries","Deliveries"],["longhaul","Long Haul"],["nofadd","Sin FADD"]].map(([t,l]) => (
+            {[["all","Todos"],["pickups_today","Pick ups hoy"],["deliveries_today","Deliveries hoy"],["in_storage","En storage"],["nofadd","Sin FADD"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -1403,14 +1548,14 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Estado","Job #","Tipo","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Storage","Acciones"].map((h, i) => (
+                    {["Estado","Job #","Tipo","Broker","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Bal. pickup","Bal. delivery","Storage","Acciones"].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {dispatchGroups.length === 0 ? (
-                    <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
+                    <tr><td colSpan={15} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
                   ) : dispatchGroups.map(g => {
                     const stores = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
                     const storeLabel = stores.join(" · ");
@@ -1428,6 +1573,7 @@ export default function App() {
                         </span>
                       </td>
                       <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
+                      <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>{brokerName(g.broker_id) || "—"}</td>
                       <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
                       <td style={{ padding:"12px" }}><FaddCell group={g} onSet={setJobFadd} /></td>
                       <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
@@ -1444,13 +1590,15 @@ export default function App() {
                         {g.lot_number && <div style={{ fontFamily:"monospace", fontSize:11, color:"#888", marginTop:2 }}>{g.lot_number}</div>}
                       </td>
                       <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.pickup_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.pickup_balance) || "—"}</td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.delivery_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.delivery_balance) || "—"}</td>
                       <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
                         {stores.length ? stores.map((s, i) => <div key={i} style={{ marginBottom: i < stores.length-1 ? 3 : 0 }}>{s}</div>) : "—"}
                       </td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                         <div style={{ display:"flex", flexDirection:"column", gap:5, alignItems:"flex-start" }}>
                           {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Ruta</a>}
-                          <a href={waLink(g, storeLabel)} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
+                          <a href={waLink(g, storeLabel, brokerName(g.broker_id))} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
                           {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
                         </div>
                       </td>
@@ -1461,6 +1609,51 @@ export default function App() {
               </table>
             </div>
             <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{dispatchGroups.length} job(s)</div>
+          </div>
+        </>
+      )}
+
+      {/* ───────────────────────── BROKERS ───────────────────────── */}
+      {page === "brokers" && (
+        <>
+          <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+            <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Nuevo broker</Btn>
+          </div>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                    {["Broker","Contacto","Teléfono","Email","Jobs","Balance pendiente",""].map((h, i) => (
+                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {brokers.length === 0 ? (
+                    <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV2Missing ? "Corré el SQL de configuración para activar brokers." : "Sin brokers cargados."}</td></tr>
+                  ) : brokers.map(b => {
+                    const st = brokerStats[b.id] || { jobs:new Set(), balance:0 };
+                    const count = st.jobs.size;
+                    return (
+                      <tr key={b.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                        <td style={{ padding:"12px", fontWeight:600 }}>{b.name}</td>
+                        <td style={{ padding:"12px" }}>{b.contact_name||"—"}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{b.contact_phone ? <a href={`tel:${b.contact_phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{b.contact_phone}</a> : "—"}</td>
+                        <td style={{ padding:"12px" }}>{b.contact_email ? <a href={`mailto:${b.contact_email}`} style={{ color:"#185FA5", textDecoration:"none" }}>{b.contact_email}</a> : "—"}</td>
+                        <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: count>0?"#EAF3DE":"#f5f5f5", color: count>0?"#3B6D11":"#bbb" }}>{count}</span></td>
+                        <td style={{ padding:"12px", fontWeight:600, color: st.balance>0 ? "#1A8A4E" : "#bbb", whiteSpace:"nowrap" }}>${st.balance.toLocaleString()}</td>
+                        <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                          <Btn onClick={() => openEditBroker(b)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
+                          <Btn danger onClick={() => deleteBroker(b)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{brokers.length} broker(s)</div>
           </div>
         </>
       )}
@@ -1522,7 +1715,7 @@ export default function App() {
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
             <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Base de datos</div>
-            <Btn onClick={() => setShowSetup(true)}>Ver SQL de configuración (storage_jobs)</Btn>
+            <Btn onClick={() => setShowSetup(true)}>Ver SQL de configuración (storage_jobs, brokers, balances)</Btn>
           </div>
         </div>
       )}
@@ -1822,6 +2015,13 @@ export default function App() {
           <>
           <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
           <EditRow label="Cliente"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
+          <EditRow label="Broker">
+            <select value={jobDetail.broker_id || ""} onChange={e => set("broker_id")(e.target.value ? Number(e.target.value) : "")}
+              style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
+              <option value="">— Sin broker —</option>
+              {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </EditRow>
           <EditRow label="Tipo"><TypeBadge type={jobDetail.job_type} /></EditRow>
           <EditRow label="Estado"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
           <EditRow label="Driver (quién lo dejó)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
@@ -1834,12 +2034,14 @@ export default function App() {
           <EditRow label="Pickup city"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
           <EditRow label="Pickup estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
           <EditRow label="Pickup zip"><InlineField value={jobDetail.pickup_zip} onSave={set("pickup_zip")} /></EditRow>
+          <EditRow label="Balance pickup ($)"><InlineField value={jobDetail.pickup_balance} onSave={set("pickup_balance")} display={money(jobDetail.pickup_balance)} /></EditRow>
           <EditRow label="Date in (a storage)"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
           <EditRow label="Delivery date"><InlineField type="date" value={jobDetail.delivery_date} onSave={set("delivery_date")} /></EditRow>
           <EditRow label="Delivery address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
           <EditRow label="Delivery city"><InlineField value={jobDetail.delivery_city} onSave={set("delivery_city")} /></EditRow>
           <EditRow label="Delivery estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
           <EditRow label="Delivery zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
+          <EditRow label="Balance delivery ($)"><InlineField value={jobDetail.delivery_balance} onSave={set("delivery_balance")} display={money(jobDetail.delivery_balance)} /></EditRow>
           {routeUrl(jobDetail) && (
             <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
               <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Ruta</span>
@@ -2030,6 +2232,12 @@ export default function App() {
                 {STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
               </select>
             </Field>
+            <Field label="Broker">
+              <select style={inp} value={jobForm.broker_id} onChange={e => setJobForm(f => ({...f, broker_id:e.target.value}))}>
+                <option value="">— Sin broker —</option>
+                {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </Field>
             <Field label="Driver"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Elegí o escribí un driver" /></Field>
             <Field label="FADD — First Available Delivery Date"><input style={inp} type="date" value={jobForm.fadd} onChange={e => setJobForm(f => ({...f, fadd:e.target.value}))} /></Field>
             <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200 cu ft / 5 pallets" /></Field>
@@ -2050,6 +2258,7 @@ export default function App() {
             <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={e => setJobForm(f => ({...f, pickup_city:e.target.value}))} placeholder="Ciudad" /></Field>
             <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={e => setJobForm(f => ({...f, pickup_state:e.target.value.toUpperCase()}))} placeholder="NY" /></Field>
             <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={e => setJobForm(f => ({...f, pickup_zip:e.target.value}))} placeholder="ej: 10001" /></Field>
+            <Field label="Balance a cobrar en pickup ($)"><input style={inp} type="number" value={jobForm.pickup_balance} onChange={e => setJobForm(f => ({...f, pickup_balance:e.target.value}))} placeholder="0" /></Field>
           </div>
 
           <SectionLabel>Delivery</SectionLabel>
@@ -2059,6 +2268,7 @@ export default function App() {
             <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={e => setJobForm(f => ({...f, delivery_city:e.target.value}))} placeholder="Ciudad" /></Field>
             <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={e => setJobForm(f => ({...f, delivery_state:e.target.value.toUpperCase()}))} placeholder="NJ" /></Field>
             <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={e => setJobForm(f => ({...f, delivery_zip:e.target.value}))} placeholder="ej: 07030" /></Field>
+            <Field label="Balance a cobrar en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={e => setJobForm(f => ({...f, delivery_balance:e.target.value}))} placeholder="0" /></Field>
             <Field label="Notas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
           </div>
           {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
@@ -2121,19 +2331,38 @@ export default function App() {
         </Modal>
       )}
 
-      {showSetup && (
-        <Modal title="Activar historial de jobs" onClose={() => setShowSetup(false)}
+      {showSetup && (() => {
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL].join("\n\n");
+        return (
+        <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
           <p style={{ fontSize:13, color:"#555", lineHeight:1.6, marginTop:0 }}>
-            La app intenta crear la tabla <strong>storage_jobs</strong> automáticamente, pero la clave pública no
-            permite crear tablas. Ejecutá este SQL <strong>una sola vez</strong> en el SQL Editor de Supabase
-            (o pedíselo a quien administre la base). Después recargá: el historial de jobs se activa solo.
+            La clave pública no permite crear tablas/columnas. Ejecutá este SQL <strong>una sola vez</strong> en el
+            SQL Editor de Supabase. Incluye <strong>storage_jobs</strong>, las columnas de Dispatching, la tabla
+            <strong> brokers</strong> (con los brokers comunes pre-cargados) y los balances. Después recargá.
           </p>
-          <pre style={{ background:"#0f172a", color:"#e2e8f0", borderRadius:10, padding:"14px", fontSize:11.5, lineHeight:1.5, overflowX:"auto", whiteSpace:"pre" }}>{STORAGE_JOBS_SQL}</pre>
+          <pre style={{ background:"#0f172a", color:"#e2e8f0", borderRadius:10, padding:"14px", fontSize:11.5, lineHeight:1.5, overflowX:"auto", whiteSpace:"pre" }}>{allSql}</pre>
           <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
             <Btn onClick={() => {
-              navigator.clipboard?.writeText(STORAGE_JOBS_SQL).then(() => { setSqlCopied(true); setTimeout(() => setSqlCopied(false), 1500); }).catch(() => {});
+              navigator.clipboard?.writeText(allSql).then(() => { setSqlCopied(true); setTimeout(() => setSqlCopied(false), 1500); }).catch(() => {});
             }}>{sqlCopied ? "✓ Copiado" : "Copiar SQL"}</Btn>
+          </div>
+        </Modal>
+        );
+      })()}
+
+      {showBrokerModal && (
+        <Modal title={editingBrokerId ? "Editar broker" : "Nuevo broker"} onClose={() => setShowBrokerModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowBrokerModal(false)}>Cancelar</Btn>
+            <Btn primary disabled={brokerSaving || !brokerForm.name.trim()} onClick={saveBroker}>{brokerSaving ? "Guardando..." : "Guardar"}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Nombre" full><input style={inp} value={brokerForm.name} onChange={e => setBrokerForm(f => ({...f, name:e.target.value}))} placeholder="Allied Van Lines" /></Field>
+            <Field label="Contacto"><input style={inp} value={brokerForm.contact_name} onChange={e => setBrokerForm(f => ({...f, contact_name:e.target.value}))} placeholder="Nombre del contacto" /></Field>
+            <Field label="Teléfono"><input style={inp} value={brokerForm.contact_phone} onChange={e => setBrokerForm(f => ({...f, contact_phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
+            <Field label="Email" full><input style={inp} value={brokerForm.contact_email} onChange={e => setBrokerForm(f => ({...f, contact_email:e.target.value}))} placeholder="ops@broker.com" /></Field>
+            <Field label="Notas" full><input style={inp} value={brokerForm.notes} onChange={e => setBrokerForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
           </div>
         </Modal>
       )}
