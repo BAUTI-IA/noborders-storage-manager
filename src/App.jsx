@@ -41,7 +41,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // A job can span several locations: one storage_jobs row per location (rented
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
-const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", delivery_address:"", delivery_state:"", delivery_zip:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -191,6 +191,62 @@ function EditRow({ label, children }) {
       <span style={{ fontWeight:500, flex:1 }}>{children}</span>
     </div>
   );
+}
+
+// ── Dispatching CRM: job types, statuses, badges, status flow, WhatsApp ──
+// New columns on storage_jobs for the Dispatching CRM. DDL can't run via the
+// anon key, so the app probes for `status` and shows this SQL if it's missing.
+const JOB_COLS_SQL = `alter table public.storage_jobs
+  add column if not exists job_type text,
+  add column if not exists status text default 'scheduled',
+  add column if not exists pickup_date date,
+  add column if not exists pickup_address text,
+  add column if not exists pickup_city text,
+  add column if not exists pickup_state text,
+  add column if not exists pickup_zip text,
+  add column if not exists delivery_date date,
+  add column if not exists delivery_city text;`;
+const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
+const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
+const STATUSES = [
+  { v:"scheduled", l:"Scheduled", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },
+  { v:"picked_up", l:"Picked up", bg:"#FDE3CF", text:"#C2410C", dot:"#EA580C" },
+  { v:"in_storage", l:"In storage", bg:"#EDE9FE", text:"#6D28D9", dot:"#7C3AED" },
+  { v:"out_for_delivery", l:"Out for delivery", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
+  { v:"delivered", l:"Delivered", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  { v:"cancelled", l:"Cancelled", bg:"#f1f1f1", text:"#888", dot:"#bbb" },
+];
+const statusMeta = (v) => STATUSES.find(s => s.v === v) || STATUSES[0];
+function StatusBadge({ status }) {
+  const c = statusMeta(status || "scheduled");
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
+}
+function TypeBadge({ type }) {
+  if (!type) return <span style={{ color:"#bbb" }}>—</span>;
+  const colors = { full:{ bg:"#E6F1FB", text:"#185FA5" }, direct:{ bg:"#EAF3DE", text:"#3B6D11" }, broker_delivery:{ bg:"#FDE3CF", text:"#C2410C" } };
+  const c = colors[type] || { bg:"#f1f1f1", text:"#888" };
+  return <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:6, background:c.bg, color:c.text, whiteSpace:"nowrap" }}>{jobTypeLabel(type)}</span>;
+}
+function nextStatus(g) {
+  const s = g.status || "scheduled";
+  if (s === "scheduled") return "picked_up";
+  if (s === "picked_up") return g.job_type === "full" ? "in_storage" : "out_for_delivery";
+  if (s === "in_storage") return "out_for_delivery";
+  if (s === "out_for_delivery") return "delivered";
+  return null;
+}
+function waLink(g, storeLabel) {
+  const txt = [
+    `Job #: ${g.job_number || "-"}`,
+    `Cliente: ${g.customer || "-"}`,
+    `Pickup: ${[g.pickup_address, g.pickup_city, g.pickup_state, g.pickup_zip].filter(Boolean).join(", ") || "-"}`,
+    `Delivery: ${[g.delivery_address, g.delivery_city, g.delivery_state, g.delivery_zip].filter(Boolean).join(", ") || "-"}`,
+    `FADD: ${g.fadd || "-"}`,
+    `CF: ${g.volume || "-"}`,
+    `Sticker/Lot: ${[g.sticker_color, g.lot_number].filter(Boolean).join(" / ") || "-"}`,
+    `Storage: ${storeLabel || "-"}`,
+  ].join("\n");
+  return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
 
 // Sticker color: stored as free text, with a color swatch for the known names.
@@ -587,6 +643,66 @@ function JobHistory({ storageId, jobs, dbReady, onSetup, onChange }) {
   );
 }
 
+// Left navigation for the Operations CRM.
+const NAV = [
+  { section:"Operations", items:[
+    { id:"dispatching", label:"Dispatching", icon:"🚚" },
+    { id:"storage", label:"Storage", icon:"📦" },
+    { id:"jobs", label:"Jobs", icon:"📋" },
+  ]},
+  { section:"Fleet", items:[
+    { id:"drivers", label:"Drivers", icon:"🧑‍✈️" },
+    { id:"trucks", label:"Trucks", icon:"🚛" },
+  ]},
+  { section:"Business", items:[
+    { id:"analytics", label:"Analytics", icon:"📊" },
+    { id:"settings", label:"Settings", icon:"⚙️" },
+  ]},
+];
+function Sidebar({ page, setPage, onSignOut, alertCount }) {
+  return (
+    <div style={{ width:200, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
+      <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3" }}>
+        <div style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.01em", lineHeight:1.2 }}>No Borders Moving</div>
+        <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
+      </div>
+      <div style={{ flex:1, overflowY:"auto", padding:"10px" }}>
+        {NAV.map(group => (
+          <div key={group.section} style={{ marginBottom:12 }}>
+            <div style={{ fontSize:10, fontWeight:600, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.07em", padding:"6px 10px 4px" }}>{group.section}</div>
+            {group.items.map(it => {
+              const active = page === it.id;
+              return (
+                <button key={it.id} onClick={() => setPage(it.id)}
+                  style={{ width:"100%", display:"flex", alignItems:"center", gap:9, padding:"8px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:13.5, fontWeight: active?600:500, textAlign:"left", marginBottom:2, background: active?"#111":"transparent", color: active?"#fff":"#444" }}>
+                  <span style={{ fontSize:14 }}>{it.icon}</span>
+                  <span style={{ flex:1 }}>{it.label}</span>
+                  {it.id === "dispatching" && alertCount > 0 && (
+                    <span style={{ background: active?"#fff":"#E24B4A", color: active?"#111":"#fff", fontSize:10, fontWeight:700, borderRadius:10, padding:"1px 6px" }}>{alertCount}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <div style={{ padding:"12px", borderTop:"1px solid #f3f3f3" }}>
+        <button onClick={onSignOut} style={{ width:"100%", padding:"8px", borderRadius:8, border:"1px solid #eee", background:"#fff", color:"#888", fontSize:12, cursor:"pointer" }}>Salir</button>
+      </div>
+    </div>
+  );
+}
+
+const PAGE_META = {
+  dispatching: { title:"Dispatching", sub:"Despacho de pickups y deliveries" },
+  storage:     { title:"Storage", sub:"Unidades físicas y ocupación" },
+  jobs:        { title:"Jobs", sub:"Todos los trabajos con detalle completo" },
+  drivers:     { title:"Drivers", sub:"Choferes de la operación" },
+  trucks:      { title:"Trucks", sub:"Flota de camiones" },
+  analytics:   { title:"Analytics", sub:"Métricas y recomendaciones con IA" },
+  settings:    { title:"Settings", sub:"Configuración de la operación" },
+};
+
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [records, setRecords] = useState([]);
@@ -594,7 +710,10 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
-  const [tab, setTab] = useState("active");
+  const [page, setPage] = useState("dispatching");   // sidebar navigation
+  const [tab, setTab] = useState("active");           // jobs page sub-tab: active/delivered/wh:*
+  const [dispatchFilter, setDispatchFilter] = useState("all"); // all/pickups/deliveries/longhaul/nofadd
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
   const [sortBy, setSortBy] = useState("date-desc");
@@ -616,7 +735,6 @@ export default function App() {
   const [zipStatus, setZipStatus] = useState("");
   const [zipName, setZipName] = useState("");
   const [isDragging, setIsDragging] = useState(false);
-  const [showAnalytics, setShowAnalytics] = useState(false);
   const [jobs, setJobs] = useState([]);
   const [dbReady, setDbReady] = useState(false);
   const [dbSetupNeeded, setDbSetupNeeded] = useState(false);
@@ -624,6 +742,7 @@ export default function App() {
   const [sqlCopied, setSqlCopied] = useState(false);
   const [paymentColMissing, setPaymentColMissing] = useState(false);
   const [faddColMissing, setFaddColMissing] = useState(false);
+  const [jobColsMissing, setJobColsMissing] = useState(false);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -709,6 +828,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session]);
 
+  // Probe the Dispatching CRM columns (job_type, status, pickup_*/delivery_*) on
+  // storage_jobs; if missing, try exec_sql, else surface the setup banner.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("status").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: JOB_COLS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setJobColsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
   useEffect(() => {
     if (!session) return;
     loadData();
@@ -770,7 +907,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, delivery_address:p.delivery_address, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -848,17 +985,74 @@ export default function App() {
     }
     return { overdue: overdue.size, dueWeek: dueWeek.size };
   }, [jobs]);
-  // Active jobs with FADD overdue or within 2 days (for the Dispatching banner).
-  const faddUrgent = useMemo(() => {
+
+  // Dispatching board: every non-delivered, non-cancelled job grouped by job
+  // number, enriched with storage info, filtered by the active sub-tab + search.
+  const dispatchGroups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const parts = jobs
+      .filter(j => !j.date_out && j.status !== "cancelled")
+      .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
+      .filter(j => {
+        if (driverFilter && j.driver !== driverFilter) return false;
+        if (q) {
+          const s = j.storage || {};
+          const hay = [j.job_number, j.customer, j.driver, j.notes, j.warehouse, j.lot_number, j.sticker_color,
+            j.pickup_address, j.pickup_city, j.pickup_state, j.delivery_address, j.delivery_city, j.delivery_state, j.delivery_zip,
+            s.brand, s.state, s.zip, s.address, s.unit].join(" ").toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+    const map = new Map();
+    for (const p of parts) {
+      const key = jobKey(p);
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      map.get(key).parts.push(p);
+    }
+    let arr = [...map.values()];
+    if (dispatchFilter === "pickups") arr = arr.filter(g => (g.status || "scheduled") === "scheduled");
+    else if (dispatchFilter === "deliveries") arr = arr.filter(g => ["picked_up","in_storage","out_for_delivery"].includes(g.status || "scheduled"));
+    else if (dispatchFilter === "longhaul") arr = arr.filter(g => g.pickup_state && g.delivery_state && g.pickup_state !== g.delivery_state);
+    else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
+    // Most urgent FADD first; jobs with no FADD sink to the bottom.
+    arr.sort((a, b) => {
+      const da = daysUntilFadd(a.fadd), db = daysUntilFadd(b.fadd);
+      return (da === null ? Infinity : da) - (db === null ? Infinity : db);
+    });
+    return arr;
+  }, [jobs, storageById, search, driverFilter, dispatchFilter]);
+
+  // Top-bar metrics for the Dispatching page (distinct active jobs).
+  const dispatchMetrics = useMemo(() => {
+    const td = today();
+    const pickups = new Set(), deliveries = new Set(), inStorage = new Set(), active = new Set();
+    for (const j of jobs) {
+      if (j.date_out || j.status === "cancelled") continue;
+      const k = jobKey(j);
+      active.add(k);
+      if (j.pickup_date === td) pickups.add(k);
+      if (j.delivery_date === td) deliveries.add(k);
+      if (j.status === "in_storage") inStorage.add(k);
+    }
+    return { pickups: pickups.size, deliveries: deliveries.size, inStorage: inStorage.size, active: active.size };
+  }, [jobs]);
+
+  // Dispatching alert banner: FADD overdue, or a pickup/delivery scheduled today
+  // with no driver assigned. Grouped by job.
+  const dispatchAlerts = useMemo(() => {
+    const td = today();
     const map = new Map();
     for (const j of jobs) {
-      if (j.date_out) continue;
+      if (j.date_out || j.status === "cancelled") continue;
       const d = daysUntilFadd(j.fadd);
-      if (d === null || d > 2) continue;
+      const overdue = d !== null && d < 0;
+      const todayNoDriver = (j.pickup_date === td || j.delivery_date === td) && !j.driver;
+      if (!overdue && !todayNoDriver) continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, fadd:j.fadd, days:d });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, reason: overdue ? "FADD vencido" : "Sin driver para hoy" });
     }
-    return [...map.values()].sort((a, b) => a.days - b.days);
+    return [...map.values()];
   }, [jobs]);
 
   const detail = records.find(r => r.id === detailId);
@@ -869,7 +1063,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, delivery_address:f.delivery_address, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -898,7 +1092,10 @@ export default function App() {
       warehouses: [...new Set(jd.parts.filter(p => p.warehouse).map(p => p.warehouse))],
       job_number: jd.job_number || "", customer: jd.customer || "", driver: jd.driver || "",
       date_in: jd.date_in || "", fadd: jd.fadd || "", volume: jd.volume || "", lot_number: jd.lot_number || "",
-      sticker_color: jd.sticker_color || "", delivery_address: jd.delivery_address || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "", notes: jd.notes || "",
+      sticker_color: jd.sticker_color || "",
+      job_type: jd.job_type || "full", status: jd.status || "scheduled",
+      pickup_date: jd.pickup_date || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
+      delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "", notes: jd.notes || "",
     });
     setJobErr(null); setJobDetailKey(null); setShowAddJob(true);
   }
@@ -926,6 +1123,17 @@ export default function App() {
       notes: jobForm.notes || null,
     };
     if (!faddColMissing) fields.fadd = jobForm.fadd || null;
+    if (!jobColsMissing) {
+      fields.job_type = jobForm.job_type || null;
+      fields.status = jobForm.status || "scheduled";
+      fields.pickup_date = jobForm.pickup_date || null;
+      fields.pickup_address = jobForm.pickup_address || null;
+      fields.pickup_city = jobForm.pickup_city || null;
+      fields.pickup_state = jobForm.pickup_state || null;
+      fields.pickup_zip = jobForm.pickup_zip || null;
+      fields.delivery_date = jobForm.delivery_date || null;
+      fields.delivery_city = jobForm.delivery_city || null;
+    }
 
     if (editingJobKey) {
       // Update job-level fields on all existing parts, then reconcile locations.
@@ -959,6 +1167,21 @@ export default function App() {
       if (error) { setJobErr(error.message); return; }
     }
     setShowAddJob(false);
+    loadJobs();
+  }
+
+  // Advance a job to its next status across all its parts. Reaching "delivered"
+  // also stamps date_out (so it leaves the active lists). Falls back to the
+  // delivered flag when the CRM status columns aren't present yet.
+  async function advanceStatus(g) {
+    if (!g?.parts?.length) return;
+    if (jobColsMissing) { await deliverJobs(g.parts.map(p => p.id)); return; }
+    const ns = nextStatus(g);
+    if (!ns) return;
+    const patch = { status: ns, updated_by: userEmail, updated_at: new Date().toISOString() };
+    if (ns === "delivered") patch.date_out = today();
+    if (ns === "picked_up" && !g.pickup_date) patch.pickup_date = today();
+    await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id));
     loadJobs();
   }
 
@@ -1061,24 +1284,24 @@ export default function App() {
   );
 
   return (
-    <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", padding:"20px 24px 40px", minHeight:"100vh", background:"#fafafa" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap" }}>
+    <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} alertCount={dispatchAlerts.length} />
+      <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:2 }}>No Borders Moving and Storage</div>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>Storage Manager</h1>
+            <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>{PAGE_META[page].title}</h1>
             <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 8px", borderRadius:20, background: liveIndicator ? "#EAF3DE" : "#f5f5f5", color: liveIndicator ? "#3B6D11" : "#aaa", transition:"all .3s" }}>
               <span style={{ width:6, height:6, borderRadius:"50%", background: liveIndicator ? "#639922" : "#ccc", transition:"all .3s" }} />
               {liveIndicator ? "Actualizado" : "Live"}
             </span>
           </div>
+          <div style={{ fontSize:13, color:"#999", marginTop:2 }}>{PAGE_META[page].sub}</div>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <Btn onClick={() => setShowAnalytics(a => !a)}>{showAnalytics ? "Ocultar graficos" : "📊 Analytics"}</Btn>
-          <Btn onClick={openImportModal}>Importar WhatsApp</Btn>
-          <Btn onClick={openAdd}>+ Unidad</Btn>
-          <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>
-          <Btn onClick={() => supabase.auth.signOut()} style={{ color:"#888", fontSize:12 }}>Salir</Btn>
+          {page === "storage" && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
+          {page === "storage" && <Btn onClick={openAdd}>+ Unidad</Btn>}
+          {(page === "dispatching" || page === "jobs") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
         </div>
       </div>
 
@@ -1103,7 +1326,14 @@ export default function App() {
         </div>
       )}
 
-      {duePaymentsSoon.length > 0 && (
+      {jobColsMissing && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
+          Para el CRM de Dispatching (tipo de job, estados, pickup/delivery), agregá estas columnas una sola vez en Supabase (SQL Editor):
+          <code style={{ display:"block", marginTop:6, fontFamily:"monospace", fontSize:12, whiteSpace:"pre-wrap" }}>{JOB_COLS_SQL}</code>
+        </div>
+      )}
+
+      {page === "storage" && duePaymentsSoon.length > 0 && (
         <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D" }}>
           <strong>⚠️ {duePaymentsSoon.length} pago(s) vencen en 3 días o menos:</strong>
           <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
@@ -1116,6 +1346,189 @@ export default function App() {
         </div>
       )}
 
+      {/* ───────────────────────── DISPATCHING ───────────────────────── */}
+      {page === "dispatching" && (
+        <>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:10, marginBottom:16 }}>
+            {[
+              { label:"Pickups hoy", value:dispatchMetrics.pickups, color:"#185FA5" },
+              { label:"Deliveries hoy", value:dispatchMetrics.deliveries, color:"#3B6D11" },
+              { label:"FADD overdue", value:faddStats.overdue, color:"#A32D2D" },
+              { label:"FADD esta semana", value:faddStats.dueWeek, color:"#C2410C" },
+              { label:"En storage", value:dispatchMetrics.inStorage, color:"#7C3AED" },
+              { label:"Jobs activos", value:dispatchMetrics.active, color:"#111" },
+            ].map(m => (
+              <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
+                <div style={{ fontSize:22, fontWeight:700, color:m.color }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {dispatchAlerts.length > 0 && !bannerDismissed && (
+            <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:13, color:"#A32D2D", display:"flex", alignItems:"flex-start", gap:10 }}>
+              <div style={{ flex:1 }}>
+                <strong>⚠️ {dispatchAlerts.length} job(s) requieren atención:</strong>
+                <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
+                  {dispatchAlerts.map(a => (
+                    <span key={a.key} onClick={() => setJobDetailKey(a.key)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                      <strong style={{ fontFamily:"monospace" }}>{a.job_number || "(job)"}</strong> · {a.customer || "—"} · {a.reason}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => setBannerDismissed(true)} title="Descartar" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#A32D2D", flexShrink:0 }}>×</button>
+            </div>
+          )}
+
+          <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
+            {[["all","Todos"],["pickups","Pick ups"],["deliveries","Deliveries"],["longhaul","Long Haul"],["nofadd","Sin FADD"]].map(([t,l]) => (
+              <button key={t} onClick={() => setDispatchFilter(t)}
+                style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
+            ))}
+          </div>
+
+          <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar por job #, cliente, driver, pickup, delivery..."
+              style={{ ...inp, flex:1, minWidth:180 }} />
+            <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
+              <option value="">Todos los drivers</option>
+              {drivers.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                    {["Estado","Job #","Tipo","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Storage","Acciones"].map((h, i) => (
+                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {dispatchGroups.length === 0 ? (
+                    <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
+                  ) : dispatchGroups.map(g => {
+                    const stores = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
+                    const storeLabel = stores.join(" · ");
+                    const mapHref = routeUrl(g);
+                    const ns = nextStatus(g);
+                    const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
+                    const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
+                    return (
+                    <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
+                      <td style={{ padding:"12px" }}><StatusBadge status={g.status} /></td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+                          {!g.sticker_color && <span title="Sticker sin asignar" style={{ cursor:"help" }}>⚠️</span>}
+                          <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(ver)"}</button>
+                        </span>
+                      </td>
+                      <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
+                      <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
+                      <td style={{ padding:"12px" }}><FaddCell group={g} onSet={setJobFadd} /></td>
+                      <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
+                        <div style={{ fontWeight:600 }}>{g.pickup_date || "—"}</div>
+                        {pickupAddr && <div style={{ color:"#888", marginTop:2 }}>{pickupAddr}</div>}
+                      </td>
+                      <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
+                        <div style={{ fontWeight:600 }}>{g.delivery_date || "—"}</div>
+                        {deliveryAddr && <div style={{ color:"#888", marginTop:2 }}>{deliveryAddr}</div>}
+                      </td>
+                      <td style={{ padding:"12px" }}>{g.volume||"—"}</td>
+                      <td style={{ padding:"12px" }}>
+                        <Sticker color={g.sticker_color} />
+                        {g.lot_number && <div style={{ fontFamily:"monospace", fontSize:11, color:"#888", marginTop:2 }}>{g.lot_number}</div>}
+                      </td>
+                      <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
+                      <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
+                        {stores.length ? stores.map((s, i) => <div key={i} style={{ marginBottom: i < stores.length-1 ? 3 : 0 }}>{s}</div>) : "—"}
+                      </td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                        <div style={{ display:"flex", flexDirection:"column", gap:5, alignItems:"flex-start" }}>
+                          {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Ruta</a>}
+                          <a href={waLink(g, storeLabel)} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
+                          {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
+                        </div>
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{dispatchGroups.length} job(s)</div>
+          </div>
+        </>
+      )}
+
+      {/* ───────────────────────── DRIVERS ───────────────────────── */}
+      {page === "drivers" && (
+        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead>
+              <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                {["Driver","Jobs activos","Entregados"].map(h => (
+                  <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {drivers.length === 0 ? (
+                <tr><td colSpan={3} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Todavía no hay drivers cargados.</td></tr>
+              ) : drivers.map(d => {
+                const active = new Set(jobs.filter(j => j.driver === d && !j.date_out).map(jobKey)).size;
+                const done = new Set(jobs.filter(j => j.driver === d && j.date_out).map(jobKey)).size;
+                return (
+                  <tr key={d} style={{ borderBottom:"1px solid #fafafa" }}>
+                    <td style={{ padding:"12px", fontWeight:600 }}>{d}</td>
+                    <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: active>0?"#EAF3DE":"#f5f5f5", color: active>0?"#3B6D11":"#bbb" }}>{active}</span></td>
+                    <td style={{ padding:"12px", color:"#888" }}>{done}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{drivers.length} driver(s). Se cargan automáticamente desde los jobs.</div>
+        </div>
+      )}
+
+      {/* ───────────────────────── TRUCKS ───────────────────────── */}
+      {page === "trucks" && (
+        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#999" }}>
+          <div style={{ fontSize:36, marginBottom:10 }}>🚛</div>
+          <div style={{ fontSize:15, fontWeight:600, color:"#555", marginBottom:6 }}>Gestión de flota</div>
+          <div style={{ fontSize:13, maxWidth:420, margin:"0 auto", lineHeight:1.6 }}>El registro de camiones llega pronto. Por ahora los drivers se administran desde la sección Drivers y se notifican por WhatsApp.</div>
+        </div>
+      )}
+
+      {/* ───────────────────────── SETTINGS ───────────────────────── */}
+      {page === "settings" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:640 }}>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Cuenta</div>
+            <DetailRow label="Usuario" value={userEmail} />
+            <DetailRow label="Base de datos" value={SUPABASE_URL} />
+            <div style={{ marginTop:14 }}><Btn onClick={() => supabase.auth.signOut()}>Cerrar sesión</Btn></div>
+          </div>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Warehouses propios</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+              {WAREHOUSES.map(w => <span key={w} style={{ background:"#f5f5f5", borderRadius:20, padding:"4px 12px", fontSize:13 }}>🏭 {w}</span>)}
+            </div>
+          </div>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Base de datos</div>
+            <Btn onClick={() => setShowSetup(true)}>Ver SQL de configuración (storage_jobs)</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* ───────────────────────── ANALYTICS ───────────────────────── */}
+      {page === "analytics" && (
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:20 }}>
         {[
           { label:"Jobs activos", value:metrics.activeJobs, color:"#3B6D11" },
@@ -1134,9 +1547,10 @@ export default function App() {
           </div>
         ))}
       </div>
+      )}
 
-      {/* ANALYTICS */}
-      {showAnalytics && (
+      {/* ANALYTICS CHARTS */}
+      {page === "analytics" && (
         <div style={{ marginBottom:20 }}>
 
           {/* Fila 1: Aperturas vs Cierres + Costo por mes */}
@@ -1250,18 +1664,21 @@ export default function App() {
       <datalist id="sticker-colors-list">{STICKER_COLORS.map(c => <option key={c} value={c} />)}</datalist>
       <datalist id="sizes-list">{sizes.map(s => <option key={s} value={s} />)}</datalist>
 
-      <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-        {[["dispatch","🚚 Dispatching"],["active","Jobs activos"],["delivered","Entregados"],["units","Unidades"],
-          ...WAREHOUSES.map(w => [`wh:${w}`, `Warehouse ${w}`])].map(([t,l]) => (
-          <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
-        ))}
-      </div>
+      {page === "jobs" && (
+        <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
+          {[["active","Activos"],["delivered","Entregados"],
+            ...WAREHOUSES.map(w => [`wh:${w}`, `Warehouse ${w}`])].map(([t,l]) => (
+            <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
+          ))}
+        </div>
+      )}
 
+      {(page === "storage" || page === "jobs") && (<>
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder={tab === "units" ? "Buscar empresa, ubicación, zip, unidad..." : "Buscar por job #, cliente, driver, zip, ubicación..."}
+          placeholder={page === "storage" ? "Buscar empresa, ubicación, zip, unidad..." : "Buscar por job #, cliente, driver, zip, ubicación..."}
           style={{ ...inp, flex:1, minWidth:180 }} />
-        {tab !== "units" && (
+        {page !== "storage" && (
           <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
             <option value="">Todos los drivers</option>
             {drivers.map(d => <option key={d} value={d}>{d}</option>)}
@@ -1275,66 +1692,9 @@ export default function App() {
         </select>
       </div>
 
-      {tab === "dispatch" && faddUrgent.length > 0 && (
-        <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:13, color:"#A32D2D" }}>
-          <strong>⚠️ {faddUrgent.length} job(s) con FADD vencido o en 2 días o menos:</strong>
-          <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
-            {faddUrgent.map(j => (
-              <span key={j.key} onClick={() => setJobDetailKey(j.key)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
-                <strong style={{ fontFamily:"monospace" }}>{j.job_number || "(job)"}</strong> · {j.customer || "—"} · {j.fadd} ({j.days < 0 ? "vencido" : j.days === 0 ? "hoy" : `${j.days}d`})
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
         <div style={{ overflowX:"auto" }}>
-          {tab === "dispatch" ? (
-            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-              <thead>
-                <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["FADD","Job #","Cliente","CF","Sticker","Lot #","Driver","Storage","Ruta",""].map((h, i) => (
-                    <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {jobGroups.length === 0 ? (
-                  <tr><td colSpan={10} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs activos para despachar.</td></tr>
-                ) : jobGroups.map(g => {
-                  const stores = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
-                  const mapHref = routeUrl(g);
-                  const noSticker = !g.sticker_color;
-                  return (
-                  <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
-                    <td style={{ padding:"12px" }}><FaddCell group={g} onSet={setJobFadd} /></td>
-                    <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                      <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
-                        {noSticker && <span title="Sticker not assigned" style={{ cursor:"help" }}>⚠️</span>}
-                        <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(ver)"}</button>
-                      </span>
-                    </td>
-                    <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
-                    <td style={{ padding:"12px" }}>{g.volume||"—"}</td>
-                    <td style={{ padding:"12px" }}><Sticker color={g.sticker_color} /></td>
-                    <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{g.lot_number||"—"}</td>
-                    <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
-                    <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
-                      {stores.length ? stores.map((s, i) => <div key={i} style={{ marginBottom: i < stores.length-1 ? 3 : 0 }}>{s}</div>) : "—"}
-                    </td>
-                    <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                      {mapHref ? <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:13 }}>🗺️ Ruta</a> : "—"}
-                    </td>
-                    <td style={{ padding:"12px", textAlign:"right" }}>
-                      <Btn onClick={() => deliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Marcar entregado</Btn>
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : tab === "units" ? (
+          {page === "storage" ? (
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
               <colgroup>
                 <col style={{width:120}}/><col style={{width:55}}/><col style={{width:70}}/><col style={{width:150}}/>
@@ -1438,9 +1798,12 @@ export default function App() {
           )}
         </div>
         <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>
-          {tab === "units" ? `${unitRows.length} de ${records.length} unidades` : `${jobGroups.length} job(s)`}
+          {page === "storage" ? `${unitRows.length} de ${records.length} unidades` : `${jobGroups.length} job(s)`}
         </div>
       </div>
+      </>)}
+
+      </div>{/* end page content */}
 
       {jobDetail && (
         <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
@@ -1459,13 +1822,22 @@ export default function App() {
           <>
           <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
           <EditRow label="Cliente"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
+          <EditRow label="Tipo"><TypeBadge type={jobDetail.job_type} /></EditRow>
+          <EditRow label="Estado"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
           <EditRow label="Driver (quién lo dejó)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
-          <EditRow label="Volumen"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
+          <EditRow label="Volumen (CF)"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
           <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
           <EditRow label="Color del sticker"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
-          <EditRow label="Fecha de entrada"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
           <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
+          <EditRow label="Pickup date"><InlineField type="date" value={jobDetail.pickup_date} onSave={set("pickup_date")} /></EditRow>
+          <EditRow label="Pickup address"><InlineField value={jobDetail.pickup_address} onSave={set("pickup_address")} /></EditRow>
+          <EditRow label="Pickup city"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
+          <EditRow label="Pickup estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
+          <EditRow label="Pickup zip"><InlineField value={jobDetail.pickup_zip} onSave={set("pickup_zip")} /></EditRow>
+          <EditRow label="Date in (a storage)"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
+          <EditRow label="Delivery date"><InlineField type="date" value={jobDetail.delivery_date} onSave={set("delivery_date")} /></EditRow>
           <EditRow label="Delivery address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
+          <EditRow label="Delivery city"><InlineField value={jobDetail.delivery_city} onSave={set("delivery_city")} /></EditRow>
           <EditRow label="Delivery estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
           <EditRow label="Delivery zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
           {routeUrl(jobDetail) && (
@@ -1647,11 +2019,20 @@ export default function App() {
           </Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
             <Field label="Job #"><input style={inp} value={jobForm.job_number} onChange={e => setJobForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
-            <Field label="Date in"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
-            <Field label="FADD — First Available Delivery Date" full><input style={inp} type="date" value={jobForm.fadd} onChange={e => setJobForm(f => ({...f, fadd:e.target.value}))} /></Field>
             <Field label="Cliente"><input style={inp} value={jobForm.customer} onChange={e => setJobForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
-            <Field label="Driver (quién lo dejó)"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Elegí o escribí un driver" /></Field>
-            <Field label="Volumen"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200 cu ft / 5 pallets" /></Field>
+            <Field label="Tipo de job">
+              <select style={inp} value={jobForm.job_type} onChange={e => setJobForm(f => ({...f, job_type:e.target.value}))}>
+                {JOB_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}{t.v==="full"?" (pickup → storage → delivery)":t.v==="direct"?" (pickup → delivery)":" (solo delivery)"}</option>)}
+              </select>
+            </Field>
+            <Field label="Estado">
+              <select style={inp} value={jobForm.status} onChange={e => setJobForm(f => ({...f, status:e.target.value}))}>
+                {STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+              </select>
+            </Field>
+            <Field label="Driver"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Elegí o escribí un driver" /></Field>
+            <Field label="FADD — First Available Delivery Date"><input style={inp} type="date" value={jobForm.fadd} onChange={e => setJobForm(f => ({...f, fadd:e.target.value}))} /></Field>
+            <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200 cu ft / 5 pallets" /></Field>
             <Field label="Lot number (del sticker)"><input style={inp} value={jobForm.lot_number} onChange={e => setJobForm(f => ({...f, lot_number:e.target.value}))} placeholder="ej: LOT-4821" /></Field>
             <Field label="Color del sticker">
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -1659,10 +2040,26 @@ export default function App() {
                 <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={e => setJobForm(f => ({...f, sticker_color:e.target.value}))} placeholder="Rojo, Azul..." />
               </div>
             </Field>
+            <Field label="Date in (a storage)"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
+          </div>
+
+          <SectionLabel>Pickup</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Pickup date"><input style={inp} type="date" value={jobForm.pickup_date} onChange={e => setJobForm(f => ({...f, pickup_date:e.target.value}))} /></Field>
+            <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={e => setJobForm(f => ({...f, pickup_address:e.target.value}))} placeholder="Dirección de pickup" /></Field>
+            <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={e => setJobForm(f => ({...f, pickup_city:e.target.value}))} placeholder="Ciudad" /></Field>
+            <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={e => setJobForm(f => ({...f, pickup_state:e.target.value.toUpperCase()}))} placeholder="NY" /></Field>
+            <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={e => setJobForm(f => ({...f, pickup_zip:e.target.value}))} placeholder="ej: 10001" /></Field>
+          </div>
+
+          <SectionLabel>Delivery</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Delivery date"><input style={inp} type="date" value={jobForm.delivery_date} onChange={e => setJobForm(f => ({...f, delivery_date:e.target.value}))} /></Field>
             <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={e => setJobForm(f => ({...f, delivery_address:e.target.value}))} placeholder="Dirección de entrega" /></Field>
+            <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={e => setJobForm(f => ({...f, delivery_city:e.target.value}))} placeholder="Ciudad" /></Field>
             <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={e => setJobForm(f => ({...f, delivery_state:e.target.value.toUpperCase()}))} placeholder="NJ" /></Field>
             <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={e => setJobForm(f => ({...f, delivery_zip:e.target.value}))} placeholder="ej: 07030" /></Field>
-            <Field label="Notas"><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+            <Field label="Notas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
           </div>
           {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
         </Modal>
