@@ -851,7 +851,8 @@ export default function App() {
   const [billingMissing, setBillingMissing] = useState(false);
   const [billingLoaded, setBillingLoaded] = useState(false);
   const [billing, setBilling] = useState([]);
-  const [storageTab, setStorageTab] = useState("units");    // units | unit_jobs | <warehouse name>
+  const [storageTab, setStorageTab] = useState("storage_units");  // storage_units | <warehouse name>
+  const [unitsSubTab, setUnitsSubTab] = useState("units");        // units | unit_jobs (inside Storage Units)
   const [billingTab, setBillingTab] = useState("all");       // all | pending | overdue | paid
   const [capTarget, setCapTarget] = useState(null);          // { kind, id?, name?, value }
   const [brokers, setBrokers] = useState([]);
@@ -2187,15 +2188,25 @@ export default function App() {
 
       {page === "storage" && (
         <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-          {[["units","Unidades"],["unit_jobs","Jobs en unidades"], ...WAREHOUSES.map(w => [w, `🏭 ${w}`])].map(([t,l]) => (
+          {[["storage_units","Storage Units"], ...WAREHOUSES.map(w => [w, `🏭 ${w}`])].map(([t,l]) => (
             <button key={t} onClick={() => setStorageTab(t)}
               style={{ fontSize:13, fontWeight: storageTab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: storageTab === t ? "#111" : "#999", borderBottom: storageTab === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
           ))}
         </div>
       )}
 
+      {/* Nested tabs inside Storage Units */}
+      {page === "storage" && storageTab === "storage_units" && (
+        <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
+          {[["units","Unidades"],["unit_jobs","Jobs en unidades"]].map(([t,l]) => (
+            <button key={t} onClick={() => setUnitsSubTab(t)}
+              style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: unitsSubTab === t ? "#fff" : "none", color: unitsSubTab === t ? "#111" : "#888", fontWeight: unitsSubTab === t ? 600 : 400, boxShadow: unitsSubTab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
+          ))}
+        </div>
+      )}
+
       {/* JOBS EN UNIDADES — active jobs stored in rented units, one row per unit */}
-      {page === "storage" && storageTab === "unit_jobs" && (
+      {page === "storage" && storageTab === "storage_units" && unitsSubTab === "unit_jobs" && (
         <>
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
             <input value={search} onChange={e => setSearch(e.target.value)}
@@ -2336,7 +2347,7 @@ export default function App() {
         </div>
       )}
 
-      {((page === "storage" && storageTab === "units") || page === "jobs") && (<>
+      {((page === "storage" && storageTab === "storage_units" && unitsSubTab === "units") || page === "jobs") && (<>
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder={page === "storage" ? "Buscar empresa, ubicación, zip, unidad..." : "Buscar por job #, cliente, driver, zip, ubicación..."}
