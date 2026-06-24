@@ -32,7 +32,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const EMPTY_FORM = {
   brand:"", state:"", zip:"", address:"", unit:"", size:"",
   gate_code:"", lock:"", email:"", account:"", phone:"", situation:"Open",
-  monthly_cost:"", card_on_file:"", date_opened:""
+  monthly_cost:"", card_on_file:"", date_opened:"", payment_due_date:""
 };
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
@@ -66,6 +66,44 @@ function AuditInfo({ rec }) {
       {(rec.created_by || rec.created_at) && <div>Creado por {rec.created_by || "—"}{rec.created_at ? ` · ${fmtTs(rec.created_at)}` : ""}</div>}
       {(rec.updated_by || rec.updated_at) && <div>Última edición por {rec.updated_by || "—"}{rec.updated_at ? ` · ${fmtTs(rec.updated_at)}` : ""}</div>}
     </div>
+  );
+}
+
+// Payment due dates. If payment_due_date isn't set, derive it from date_opened
+// + 30 days, rolled forward in 30-day steps until it lands on/after today.
+const ONE_DAY = 86400000;
+const fmtDateLocal = (d) => d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}` : null;
+const startOfToday = () => { const d = new Date(); d.setHours(0,0,0,0); return d; };
+const addDaysStr = (dateStr, n) => { const d = new Date(dateStr + "T00:00:00"); d.setDate(d.getDate() + n); return fmtDateLocal(d); };
+function paymentDueDate(r) {
+  if (!r) return null;
+  if (r.payment_due_date) return new Date(r.payment_due_date + "T00:00:00");
+  if (!r.date_opened) return null;
+  const d = new Date(r.date_opened + "T00:00:00");
+  d.setDate(d.getDate() + 30);
+  const today = startOfToday();
+  while (d < today) d.setDate(d.getDate() + 30);
+  return d;
+}
+function daysUntilDue(r) {
+  const due = paymentDueDate(r);
+  if (!due) return null;
+  return Math.round((due - startOfToday()) / ONE_DAY);
+}
+// Red ≤5 days, yellow 6–10, green 11+; gray "—" when the unit is Closed or Empty.
+function PaymentBadge({ record, situation }) {
+  if (situation === "Close" || situation === "Empty") return <span style={{ color:"#bbb" }}>—</span>;
+  const days = daysUntilDue(record);
+  if (days === null) return <span style={{ color:"#bbb" }}>—</span>;
+  const c = days <= 5 ? { bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" }
+          : days <= 10 ? { bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" }
+          : { bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
+  const label = days < 0 ? "Vencido" : days === 0 ? "Hoy" : `${days} días`;
+  return (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}>
+      <span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />
+      {label}
+    </span>
   );
 }
 
@@ -498,6 +536,7 @@ export default function App() {
   const [dbSetupNeeded, setDbSetupNeeded] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [sqlCopied, setSqlCopied] = useState(false);
+  const [paymentColMissing, setPaymentColMissing] = useState(false);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -547,6 +586,24 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, dbReady, loadJobs]);
+
+  // Ensure the payment_due_date column exists; with the anon key DDL isn't
+  // possible, so probe it and (if missing) try an exec_sql RPC, else flag a banner.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storages").select("payment_due_date").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storages add column if not exists payment_due_date date;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setPaymentColMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
 
   useEffect(() => {
     if (!session) return;
@@ -655,6 +712,18 @@ export default function App() {
     };
   }, [jobs, records]);
 
+  // Payments coming due on active units (not Closed/Empty).
+  const urgentPayments = useMemo(
+    () => records.filter(r => sit(r) === "Open" && (() => { const d = daysUntilDue(r); return d !== null && d <= 5; })()).length,
+    [records, sit]
+  );
+  const duePaymentsSoon = useMemo(
+    () => records.filter(r => sit(r) === "Open" && (() => { const d = daysUntilDue(r); return d !== null && d <= 3; })())
+      .map(r => ({ id:r.id, label: [r.brand, r.unit].filter(Boolean).join(" ") || r.address || `Unidad #${r.id}`, days: daysUntilDue(r) }))
+      .sort((a, b) => a.days - b.days),
+    [records, sit]
+  );
+
   const detail = records.find(r => r.id === detailId);
 
   // All parts (units) of the job currently open in the job-detail modal.
@@ -670,13 +739,15 @@ export default function App() {
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
-    setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", phone:r.phone||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"" });
+    setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", phone:r.phone||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"", payment_due_date:r.payment_due_date||"" });
     setEditId(r.id); setShowAdd(true);
   }
 
   async function saveForm() {
     setSaving(true);
     const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, phone:form.phone||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
+    // Auto-set payment due date (date_opened + 30) when empty — only if the column exists.
+    if (!paymentColMissing) payload.payment_due_date = form.payment_due_date || (form.date_opened ? addDaysStr(form.date_opened, 30) : null);
     if (editId) { await supabase.from("storages").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editId); }
     else { await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]); }
     setSaving(false); setShowAdd(false);
@@ -773,6 +844,19 @@ export default function App() {
     setDetailId(null);
   }
 
+  // Renew the payment: push the due date 30 days forward from its current value.
+  async function renewPayment(r) {
+    const base = paymentDueDate(r) || startOfToday();
+    base.setDate(base.getDate() + 30);
+    await supabase.from("storages").update({ payment_due_date: fmtDateLocal(base), updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", r.id);
+  }
+
+  // Close a storage: mark it Closed and clear its payment due date.
+  async function closeStorage(r) {
+    await supabase.from("storages").update({ situation: "Close", payment_due_date: null, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", r.id);
+    setDetailId(null);
+  }
+
   function openImportModal() { setShowImport(true); setImportTab("paste"); setPasteText(""); setPending([]); setExcluded({}); setZipStatus(""); setZipName(""); }
   function previewPaste() { setPending(parsePastedMessages(pasteText)); setExcluded({}); }
 
@@ -852,12 +936,33 @@ export default function App() {
         </div>
       )}
 
+      {paymentColMissing && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
+          Para el seguimiento de pagos, agregá la columna una sola vez en Supabase (SQL Editor):
+          <code style={{ display:"block", marginTop:6, fontFamily:"monospace", fontSize:12 }}>alter table public.storages add column if not exists payment_due_date date;</code>
+        </div>
+      )}
+
+      {duePaymentsSoon.length > 0 && (
+        <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D" }}>
+          <strong>⚠️ {duePaymentsSoon.length} pago(s) vencen en 3 días o menos:</strong>
+          <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
+            {duePaymentsSoon.map(p => (
+              <span key={p.id} onClick={() => setDetailId(p.id)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                {p.label} · {p.days < 0 ? "vencido" : p.days === 0 ? "hoy" : `${p.days}d`}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:20 }}>
         {[
           { label:"Jobs activos", value:metrics.activeJobs, color:"#3B6D11" },
           { label:"Entregados", value:metrics.deliveredJobs, color:"#888" },
           { label:"Unidades", value:metrics.units, color:"#111" },
           { label:"Unidades ocupadas", value:metrics.occupied, color:"#185FA5" },
+          { label:"Pagos urgentes", value:urgentPayments, color:"#A32D2D" },
           { label:"Costo mensual", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
           { label:"Estados USA", value:metrics.states, color:"#888" },
         ].map(m => (
@@ -1014,18 +1119,18 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
               <colgroup>
                 <col style={{width:120}}/><col style={{width:55}}/><col style={{width:70}}/><col style={{width:150}}/>
-                <col style={{width:65}}/><col style={{width:110}}/><col style={{width:100}}/><col style={{width:75}}/><col style={{width:80}}/>
+                <col style={{width:65}}/><col style={{width:110}}/><col style={{width:100}}/><col style={{width:85}}/><col style={{width:75}}/><col style={{width:80}}/>
               </colgroup>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Apertura","Jobs activos","Situacion"].map(h => (
+                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Apertura","Payment","Jobs activos","Situacion"].map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {unitRows.length === 0 ? (
-                  <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
+                  <tr><td colSpan={10} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
                 ) : unitRows.map(r => {
                   const n = activeJobsByStorage[r.id] || 0;
                   return (
@@ -1045,6 +1150,7 @@ export default function App() {
                         </span>
                       </td>
                       <td style={{ padding:"10px 12px", fontSize:12, color:"#555", whiteSpace:"nowrap" }}>{r.date_opened||"—"}</td>
+                      <td style={{ padding:"10px 12px" }}><PaymentBadge record={r} situation={sit(r)} /></td>
                       <td style={{ padding:"10px 12px" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: n>0?"#EAF3DE":"#f5f5f5", color: n>0?"#3B6D11":"#bbb" }}>{n}</span>
                       </td>
@@ -1227,6 +1333,18 @@ export default function App() {
           <DetailRow label="Costo mensual" value={detail.monthly_cost ? "$" + detail.monthly_cost : null} />
           <DetailRow label="Fecha de apertura" value={detail.date_opened} />
 
+          <SectionLabel>Pago</SectionLabel>
+          <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, alignItems:"center" }}>
+            <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Vencimiento de pago</span>
+            <span style={{ fontWeight:500 }}>{fmtDateLocal(paymentDueDate(detail)) || "—"}</span>
+            <span style={{ flex:1 }} />
+            <PaymentBadge record={detail} situation={sit(detail)} />
+          </div>
+          <div style={{ display:"flex", gap:8, marginTop:10 }}>
+            <Btn onClick={() => renewPayment(detail)}>Renovar — sumar 30 días</Btn>
+            {sit(detail) !== "Close" && <Btn danger onClick={() => closeStorage(detail)}>Cerrar storage</Btn>}
+          </div>
+
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"16px 0 8px" }}>
             <span style={{ fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.07em" }}>Job History</span>
             <span style={{ fontSize:11, color:"#bbb" }}>{activeJobsByStorage[detail.id] || 0} activo(s)</span>
@@ -1270,6 +1388,7 @@ export default function App() {
             <Field label="Costo mensual ($)"><input style={inp} type="number" value={form.monthly_cost} onChange={e => setForm(f => ({...f, monthly_cost:e.target.value}))} placeholder="0" /></Field>
             <Field label="Tarjeta"><input style={inp} value={form.card_on_file} onChange={e => setForm(f => ({...f, card_on_file:e.target.value}))} placeholder="Visa ****1234" /></Field>
             <Field label="Fecha de apertura"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
+            <Field label="Vencimiento de pago"><input style={inp} type="date" value={form.payment_due_date} onChange={e => setForm(f => ({...f, payment_due_date:e.target.value}))} /></Field>
           </div>
         </Modal>
       )}
