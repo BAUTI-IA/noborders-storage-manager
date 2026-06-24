@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 14mm 13mm 15mm 13mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html,body { margin:0; padding:0; }
+  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color:#1a1a1a; font-size:11.2px; line-height:1.55; }
+  h1,h2,h3 { margin:0; letter-spacing:-0.02em; }
+  p { margin:0 0 8px; }
+  .muted { color:#888; }
+  .accent { color:#185FA5; }
+  a { color:#185FA5; text-decoration:none; }
+  .break { page-break-before: always; }
+  h1.sec, h3 { break-after: avoid; }
+  table.g, table.t { break-inside: auto; }
+  tr { break-inside: avoid; }
+  .avoid { break-inside: avoid; }
+  ul { margin:4px 0 10px; padding-left:18px; }
+  li { margin-bottom:4px; }
+
+  /* ---------- Cover ---------- */
+  .cover { page-break-after: always; height: 261mm; border-radius:20px; overflow:hidden;
+           background: linear-gradient(160deg,#0f172a 0%, #122a44 55%, #0c1f33 100%); color:#fff; position:relative; padding:34mm 24mm; }
+  .cover .kicker { font-size:12px; font-weight:700; letter-spacing:0.22em; text-transform:uppercase; color:#7Fb2e6; }
+  .cover h1 { font-size:54px; font-weight:800; margin:14px 0 6px; line-height:1.02; }
+  .cover .sub { font-size:19px; color:#c9d6e5; font-weight:500; }
+  .cover .pill { display:inline-block; margin-top:30px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18);
+                 border-radius:30px; padding:9px 18px; font-size:13px; color:#e7eef7; }
+  .cover .foot { position:absolute; left:24mm; right:24mm; bottom:26mm; display:flex; justify-content:space-between; align-items:flex-end;
+                 border-top:1px solid rgba(255,255,255,0.14); padding-top:16px; font-size:12px; color:#9fb3c8; }
+  .cover .mock { position:absolute; right:18mm; top:120mm; display:flex; gap:10px; opacity:0.96; }
+  .cover .chip { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:14px 16px; min-width:120px; }
+  .cover .chip .n { font-size:26px; font-weight:800; }
+  .cover .chip .l { font-size:11px; color:#9fb3c8; margin-top:2px; }
+
+  /* ---------- Section headers ---------- */
+  .sec { font-size:21px; font-weight:800; margin:24px 0 4px; }
+  .sec .num { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:9px;
+              background:#111; color:#fff; font-size:15px; margin-right:10px; vertical-align:middle; }
+  .lead { color:#666; margin:0 0 14px; font-size:12px; }
+  .divider { height:1px; background:#eee; margin:20px 0; }
+
+  /* ---------- Screenshot frame ---------- */
+  .shot { border:1px solid #e6e6e6; border-radius:12px; overflow:hidden; box-shadow:0 10px 30px rgba(15,23,42,0.10); break-inside:avoid; margin:10px 0 6px; background:#fff; }
+  .shot .bar { background:#f3f4f6; padding:8px 12px; display:flex; gap:7px; align-items:center; border-bottom:1px solid #e9e9e9; }
+  .tl { width:11px; height:11px; border-radius:50%; }
+  .url { margin-left:8px; font-size:10.5px; color:#9aa3ad; background:#fff; border-radius:7px; padding:4px 12px; flex:1; }
+  .cap { font-size:10.5px; color:#9aa3ad; margin:6px 2px 16px; font-style:italic; }
+
+  /* ---------- App UI mock primitives ---------- */
+  .app { display:flex; background:#fafafa; }
+  .side { width:150px; flex-shrink:0; background:#fff; border-right:1px solid #efefef; padding:0; }
+  .side .brand { padding:13px 13px 11px; border-bottom:1px solid #f3f3f3; }
+  .side .brand .t { font-size:13px; font-weight:800; }
+  .side .brand .s { font-size:8px; font-weight:700; letter-spacing:0.09em; text-transform:uppercase; color:#aaa; margin-top:3px; }
+  .side .grp { padding:9px 9px 2px; }
+  .side .glabel { font-size:8px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#bbb; padding:5px 9px 4px; }
+  .side .item { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:8px; font-size:11px; color:#444; font-weight:500; margin-bottom:2px; }
+  .side .item.on { background:#111; color:#fff; font-weight:600; }
+  .side .item .ico { font-size:12px; }
+  .side .badge { margin-left:auto; background:#E24B4A; color:#fff; font-size:8.5px; font-weight:800; border-radius:10px; padding:1px 6px; }
+  .main { flex:1; padding:15px 16px; min-width:0; }
+  .phead { display:flex; align-items:center; gap:9px; margin-bottom:3px; }
+  .phead h2 { font-size:17px; font-weight:800; }
+  .live { display:inline-flex; align-items:center; gap:4px; font-size:8.5px; font-weight:700; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#3B6D11; }
+  .live i { width:5px; height:5px; border-radius:50%; background:#639922; display:inline-block; }
+  .psub { font-size:11px; color:#999; margin-bottom:12px; }
+  .btn { display:inline-block; font-size:10.5px; font-weight:600; padding:6px 12px; border-radius:8px; border:1px solid #e5e5e5; background:#fff; }
+  .btn.dark { background:#111; color:#fff; border-color:#111; }
+
+  .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
+  .mc { background:#fff; border:1px solid #efefef; border-radius:9px; padding:9px 11px; }
+  .mc .l { font-size:9px; color:#aaa; font-weight:600; }
+  .mc .n { font-size:18px; font-weight:800; margin-top:3px; }
+
+  .alert { background:#FCEBEB; border:1px solid #E24B4A; border-radius:9px; padding:9px 12px; font-size:10px; color:#A32D2D; margin-bottom:11px; }
+  .alert b { font-weight:800; }
+  .achip { display:inline-block; background:#fff; border:1px solid #f3c9c9; border-radius:20px; padding:2px 9px; margin:5px 5px 0 0; font-size:9.5px; }
+
+  .subtabs { display:flex; gap:2px; border-bottom:1px solid #efefef; margin-bottom:11px; }
+  .subtabs span { font-size:10.5px; padding:6px 12px; color:#999; }
+  .subtabs span.on { color:#111; font-weight:700; border-bottom:2px solid #111; }
+
+  table.t { width:100%; border-collapse:collapse; font-size:9.5px; }
+  table.t th { text-align:left; font-size:8px; font-weight:700; color:#aaa; text-transform:uppercase; letter-spacing:0.04em; padding:8px 9px; background:#fafafa; border-bottom:1px solid #efefef; white-space:nowrap; }
+  table.t td { padding:9px 9px; border-bottom:1px solid #f4f4f4; vertical-align:top; }
+  .jobn { font-family: ui-monospace, monospace; font-weight:700; color:#185FA5; text-decoration:underline; }
+  .mono { font-family: ui-monospace, monospace; }
+
+  .pill2 { display:inline-flex; align-items:center; gap:4px; font-size:9px; font-weight:700; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+  .pill2 i { width:5px; height:5px; border-radius:50%; }
+  .tag { display:inline-block; font-size:9px; font-weight:700; padding:2px 7px; border-radius:6px; }
+  .swatch { width:10px; height:10px; border-radius:50%; border:1px solid #ccc; display:inline-block; vertical-align:-1px; margin-right:4px; }
+  .act { color:#185FA5; font-size:9.5px; white-space:nowrap; }
+  .act.g { color:#1A8A4E; }
+  .miniadv { display:inline-block; font-size:8.5px; font-weight:700; border:1px solid #e5e5e5; border-radius:6px; padding:2px 7px; }
+
+  /* status colors */
+  .s-sch{background:#E6F1FB;color:#185FA5} .s-sch i{background:#378ADD}
+  .s-pic{background:#FDE3CF;color:#C2410C} .s-pic i{background:#EA580C}
+  .s-sto{background:#EDE9FE;color:#6D28D9} .s-sto i{background:#7C3AED}
+  .s-ofd{background:#FEF3C7;color:#92760B} .s-ofd i{background:#EAB308}
+  .s-del{background:#EAF3DE;color:#3B6D11} .s-del i{background:#639922}
+  /* type colors */
+  .t-full{background:#E6F1FB;color:#185FA5} .t-dir{background:#EAF3DE;color:#3B6D11} .t-bro{background:#FDE3CF;color:#C2410C}
+  /* fadd colors */
+  .f-over{background:#FCEBEB;color:#A32D2D} .f-over i{background:#E24B4A}
+  .f-3{background:#FDE3CF;color:#C2410C} .f-3 i{background:#EA580C}
+  .f-7{background:#FEF3C7;color:#92760B} .f-7 i{background:#EAB308}
+  .f-ok{background:#EAF3DE;color:#3B6D11} .f-ok i{background:#639922}
+  .f-no{background:#f1f1f1;color:#888}
+
+  /* callout */
+  .note { background:#F1F7FD; border:1px solid #D6E6F5; border-left:4px solid #378ADD; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .note b { color:#185FA5; }
+  .warn { background:#FFF6E8; border:1px solid #F4DDB0; border-left:4px solid #EF9F27; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+
+  /* flow diagram */
+  .flow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:10px 0; }
+  .fbox { border:1.5px solid #d8d8d8; border-radius:9px; padding:8px 12px; font-size:10.5px; font-weight:700; text-align:center; background:#fff; }
+  .farrow { color:#bbb; font-weight:800; }
+
+  /* glossary / generic table */
+  table.g { width:100%; border-collapse:collapse; font-size:11px; margin-top:6px; }
+  table.g th { text-align:left; background:#111; color:#fff; padding:8px 11px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  table.g td { padding:8px 11px; border-bottom:1px solid #eee; vertical-align:top; }
+  table.g tr:nth-child(even) td { background:#fafafa; }
+  table.g td:first-child { font-weight:700; white-space:nowrap; }
+
+  .occ { background:#f0f0f0; border-radius:6px; height:9px; overflow:hidden; }
+  .occ > div { height:9px; }
+
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .card { border:1px solid #ececec; border-radius:11px; padding:13px 15px; }
+  .card h3 { font-size:13px; margin-bottom:4px; }
+  .legend .row { display:flex; align-items:center; gap:8px; margin:5px 0; font-size:11px; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="cover">
+  <div class="kicker">No Borders Moving &amp; Storage</div>
+  <h1>Operations<br>CRM</h1>
+  <div class="sub">Guía de uso para el equipo</div>
+  <div class="pill">📘 Manual práctico · Dispatching · Storage · Billing</div>
+
+  <div class="mock">
+    <div class="chip"><div class="n" style="color:#7FB2E6">4</div><div class="l">Pickups hoy</div></div>
+    <div class="chip"><div class="n" style="color:#E88">1</div><div class="l">FADD overdue</div></div>
+    <div class="chip"><div class="n" style="color:#8Fd08f">12</div><div class="l">En storage</div></div>
+  </div>
+
+  <div class="foot">
+    <div>Versión 1.0 · Uso interno</div>
+    <div>En 10 minutos operás sin dudas 🚚</div>
+  </div>
+</div>
+
+<!-- ============ INTRO + INDEX ============ -->
+<h1 class="sec"><span class="num">›</span>Antes de empezar</h1>
+<p class="lead">Lo esencial para usar el sistema en el día a día.</p>
+<p>Este es el sistema con el que gestionamos <b>pickups, deliveries, storage y cobros</b>. Lo importante:</p>
+<ul>
+  <li><b>Todo es en vivo:</b> si un compañero carga o cambia algo, lo ves al instante, sin recargar la página.</li>
+  <li><b>Se usa desde el navegador</b> (computadora o celular). No hay que instalar nada.</li>
+  <li><b>Tu pantalla de trabajo es Dispatching.</b> Ahí vas a estar el 80% del tiempo.</li>
+</ul>
+
+<div class="card avoid" style="margin-top:14px">
+  <h3>Contenido</h3>
+  <table class="g" style="margin-top:8px">
+    <tr><td>1 · Acceso</td><td>Cómo entrar al sistema</td></tr>
+    <tr><td>2 · El menú</td><td>Las secciones de la barra lateral</td></tr>
+    <tr><td>3 · Dispatching</td><td>El tablero del día (lo más importante)</td></tr>
+    <tr><td>4 · Crear un job</td><td>Tipos de trabajo y carga de datos</td></tr>
+    <tr><td>5 · Storage</td><td>Unidades alquiladas y warehouses</td></tr>
+    <tr><td>6 · Brokers &amp; Drivers</td><td>Empresas y choferes</td></tr>
+    <tr><td>7 · Billing</td><td>Cobro mensual de storage al cliente</td></tr>
+    <tr><td>8 · Tips + Glosario</td><td>Reglas de oro y términos clave</td></tr>
+  </table>
+</div>
+
+<!-- ============ 1 ACCESO ============ -->
+<h1 class="sec"><span class="num">1</span>Acceso</h1>
+<p class="lead">Iniciar sesión.</p>
+<ul>
+  <li>Abrí el <b>link del sistema</b> en el navegador.</li>
+  <li>Ingresá con tu <b>email y contraseña</b> (si no tenés cuenta, pedísela al encargado).</li>
+  <li>Entrás directo a <b>Dispatching</b>.</li>
+</ul>
+
+<!-- ============ 2 MENU ============ -->
+<h1 class="sec"><span class="num">2</span>El menú de la izquierda</h1>
+<p class="lead">Todo se navega desde la barra lateral, dividida en tres bloques.</p>
+
+<div class="shot">
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app</span></div>
+  <div class="app">
+    <div class="side">
+      <div class="brand"><div class="t">No Borders Moving</div><div class="s">Operations CRM</div></div>
+      <div class="grp">
+        <div class="glabel">Operations</div>
+        <div class="item on"><span class="ico">🚚</span>Dispatching<span class="badge">3</span></div>
+        <div class="item"><span class="ico">📦</span>Storage</div>
+        <div class="item"><span class="ico">📋</span>Jobs</div>
+        <div class="item"><span class="ico">🤝</span>Brokers</div>
+      </div>
+      <div class="grp">
+        <div class="glabel">Fleet</div>
+        <div class="item"><span class="ico">🧑‍✈️</span>Drivers</div>
+        <div class="item"><span class="ico">🚛</span>Trucks</div>
+      </div>
+      <div class="grp">
+        <div class="glabel">Business</div>
+        <div class="item"><span class="ico">💵</span>Billing</div>
+        <div class="item"><span class="ico">📊</span>Analytics</div>
+        <div class="item"><span class="ico">⚙️</span>Settings</div>
+      </div>
+    </div>
+    <div class="main" style="padding-top:18px;padding-bottom:24px">
+      <div class="phead"><h2>Dispatching</h2><span class="live"><i></i>Live</span></div>
+      <div class="psub">Despacho de pickups y deliveries</div>
+      <div class="muted" style="font-size:10.5px">El contenido cambia según la sección que elijas en el menú →</div>
+    </div>
+  </div>
+</div>
+<div class="cap">La barra lateral. El número rojo en Dispatching = jobs que necesitan atención hoy.</div>
+
+<table class="g">
+  <tr><th>Sección</th><th>Para qué sirve</th></tr>
+  <tr><td>🚚 Dispatching</td><td>Tablero del día: pickups, deliveries y estado de cada job. <b>Tu pantalla principal.</b></td></tr>
+  <tr><td>📦 Storage</td><td>Unidades alquiladas y warehouses propios (Indiana / New Jersey) con ocupación.</td></tr>
+  <tr><td>📋 Jobs</td><td>Todos los trabajos con detalle completo (activos y entregados).</td></tr>
+  <tr><td>🤝 Brokers</td><td>Brokers (Allied, Atlas, Mayflower…) y balance pendiente de cada uno.</td></tr>
+  <tr><td>🧑‍✈️ Drivers</td><td>Choferes y cuántos jobs tiene cada uno (se cargan solos).</td></tr>
+  <tr><td>💵 Billing</td><td>Cobro mensual de storage a los clientes.</td></tr>
+  <tr><td>📊 Analytics</td><td>Gráficos de la operación + recomendaciones con IA.</td></tr>
+</table>
+
+<!-- ============ 3 DISPATCHING ============ -->
+<h1 class="sec"><span class="num">3</span>Dispatching — el tablero del día</h1>
+<p class="lead">La pantalla más importante. De arriba hacia abajo: métricas → alertas → pestañas → tabla.</p>
+
+<div class="shot">
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app — Dispatching</span></div>
+  <div class="app">
+    <div class="side">
+      <div class="brand"><div class="t">No Borders Moving</div><div class="s">Operations CRM</div></div>
+      <div class="grp">
+        <div class="glabel">Operations</div>
+        <div class="item on"><span class="ico">🚚</span>Dispatching<span class="badge">3</span></div>
+        <div class="item"><span class="ico">📦</span>Storage</div>
+        <div class="item"><span class="ico">📋</span>Jobs</div>
+        <div class="item"><span class="ico">🤝</span>Brokers</div>
+      </div>
+      <div class="grp">
+        <div class="glabel">Business</div>
+        <div class="item"><span class="ico">💵</span>Billing</div>
+        <div class="item"><span class="ico">📊</span>Analytics</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="phead"><h2>Dispatching</h2><span class="live"><i></i>Live</span><span style="margin-left:auto" class="btn dark">+ Nuevo job</span></div>
+      <div class="psub">Despacho de pickups y deliveries</div>
+
+      <div class="metrics">
+        <div class="mc"><div class="l">Pickups hoy</div><div class="n" style="color:#185FA5">4</div></div>
+        <div class="mc"><div class="l">Deliveries hoy</div><div class="n" style="color:#3B6D11">2</div></div>
+        <div class="mc"><div class="l">FADD overdue</div><div class="n" style="color:#A32D2D">1</div></div>
+        <div class="mc"><div class="l">FADD esta semana</div><div class="n" style="color:#C2410C">3</div></div>
+        <div class="mc"><div class="l">En storage</div><div class="n" style="color:#7C3AED">12</div></div>
+        <div class="mc"><div class="l">Balance pickup pend.</div><div class="n" style="color:#1A8A4E">$1,200</div></div>
+        <div class="mc"><div class="l">Balance delivery pend.</div><div class="n" style="color:#1A8A4E">$3,400</div></div>
+        <div class="mc"><div class="l">Billing overdue</div><div class="n" style="color:#A32D2D">2</div></div>
+      </div>
+
+      <div class="alert"><b>⚠️ 2 job(s) requieren atención:</b>
+        <div><span class="achip"><b class="mono">A1826927</b> · Monique F Hall · FADD vencido</span><span class="achip"><b class="mono">FV8132056</b> · Imad Majeed · Sin driver para hoy</span></div>
+      </div>
+
+      <div class="subtabs"><span class="on">Todos</span><span>Pick ups hoy</span><span>Deliveries hoy</span><span>En storage</span><span>Sin FADD</span></div>
+
+      <table class="t">
+        <thead><tr><th>Estado</th><th>Job #</th><th>Tipo</th><th>Broker</th><th>Cliente</th><th>FADD</th><th>Pickup</th><th>Delivery</th><th>Driver</th><th>Acciones</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="pill2 s-pic"><i></i>Picked up</span></td>
+            <td><span class="jobn">A1826927</span></td>
+            <td><span class="tag t-full">Full</span></td>
+            <td>Allied</td>
+            <td>Monique F Hall</td>
+            <td><span class="pill2 f-over"><i></i>Overdue</span></td>
+            <td>06-24 · Kansas City, MO</td>
+            <td>06-30 · Newark, NJ</td>
+            <td>Andres M.</td>
+            <td><span class="act">🗺️ Ruta</span><br><span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ In storage</span></td>
+          </tr>
+          <tr>
+            <td><span class="pill2 s-sch"><i></i>Scheduled</span></td>
+            <td><span class="jobn">FV8132056</span></td>
+            <td><span class="tag t-bro">Broker</span></td>
+            <td>Mayflower</td>
+            <td>Imad Majeed</td>
+            <td><span class="pill2 f-7"><i></i>6 días</span></td>
+            <td>06-26 · Louisville, KY</td>
+            <td>07-02 · Columbus, OH</td>
+            <td class="muted">—</td>
+            <td><span class="act">🗺️ Ruta</span><br><span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ Picked up</span></td>
+          </tr>
+          <tr>
+            <td><span class="pill2 s-sto"><i></i>In storage</span></td>
+            <td><span class="jobn">H2474156</span></td>
+            <td><span class="tag t-dir">Direct</span></td>
+            <td class="muted">—</td>
+            <td>Dustin Newman</td>
+            <td><span class="pill2 f-ok"><i></i>14 días</span></td>
+            <td>06-18 · Sewickley, PA</td>
+            <td>07-08 · Akron, OH</td>
+            <td>Wady P.</td>
+            <td><span class="act">🗺️ Ruta</span><br><span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ Out for delivery</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="muted" style="font-size:9px;padding-top:7px">3 job(s) · (la tabla real trae además CF, Sticker/Lot y los balances → scroll horizontal)</div>
+    </div>
+  </div>
+</div>
+<div class="cap">Pantalla de Dispatching: métricas arriba, banner de alertas, sub-pestañas y la tabla de jobs con sus acciones.</div>
+
+<h3 style="margin-top:16px">Las columnas, una por una</h3>
+<table class="g">
+  <tr><th>Columna</th><th>Qué muestra</th></tr>
+  <tr><td>Estado</td><td>Etapa del job (Scheduled → Picked up → In storage → Out for delivery → Delivered).</td></tr>
+  <tr><td>Job #</td><td>Número del trabajo. <b>Tocalo para abrir el detalle completo.</b></td></tr>
+  <tr><td>Tipo</td><td>Full / Direct / Broker (ver sección 4).</td></tr>
+  <tr><td>Broker · Cliente</td><td>Empresa para la que se trabaja y nombre del cliente.</td></tr>
+  <tr><td>FADD</td><td>Fecha posible de entrega, <b>con colores</b> según urgencia.</td></tr>
+  <tr><td>Pickup · Delivery</td><td>Fecha + ciudad de dónde se levanta y dónde se entrega.</td></tr>
+  <tr><td>CF · Sticker · Lot</td><td>Volumen (pies cúbicos), color de sticker y número de lote.</td></tr>
+  <tr><td>Driver</td><td>Chofer asignado.</td></tr>
+  <tr><td>Bal. pickup / delivery</td><td>Plata a cobrar en cada etapa.</td></tr>
+</table>
+
+<div class="two avoid" style="margin-top:16px">
+  <div class="card legend">
+    <h3>🎨 Colores del FADD</h3>
+    <p class="muted" style="font-size:10px;margin-bottom:8px">FADD = <b>First Available Delivery Date</b> (primera fecha posible de entrega). Manda la prioridad.</p>
+    <div class="row"><span class="pill2 f-over"><i></i>Overdue</span> Ya venció — prioridad máxima.</div>
+    <div class="row"><span class="pill2 f-3"><i></i>3 días</span> Vence en 3 días o menos.</div>
+    <div class="row"><span class="pill2 f-7"><i></i>7 días</span> Vence en 7 días o menos.</div>
+    <div class="row"><span class="pill2 f-ok"><i></i>14 días</span> 8 días o más — tranquilo.</div>
+    <div class="row"><span class="pill2 f-no">No FADD</span> Falta cargar la fecha.</div>
+  </div>
+  <div class="card">
+    <h3>⚡ Los 3 botones de acción</h3>
+    <div class="row" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0;font-size:11px"><span class="act" style="min-width:62px">🗺️ Ruta</span> Abre Google Maps con la ruta storage → cliente.</div>
+    <div class="row" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0;font-size:11px"><span class="act g" style="min-width:62px">💬 WhatsApp</span> Abre WhatsApp con el mensaje <b>ya armado</b> para el chofer.</div>
+    <div class="row" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0;font-size:11px"><span class="miniadv" style="min-width:62px">→ Avanzar</span> Mueve el job a la siguiente etapa. El botón te dice a cuál.</div>
+  </div>
+</div>
+
+<h3 style="margin-top:16px">El flujo de estados</h3>
+<p class="muted" style="font-size:11px">Cada vez que tocás <b>Avanzar</b>, el job pasa a la siguiente etapa:</p>
+<div class="flow">
+  <div class="fbox" style="border-color:#378ADD;color:#185FA5">Scheduled</div><span class="farrow">→</span>
+  <div class="fbox" style="border-color:#EA580C;color:#C2410C">Picked up</div><span class="farrow">→</span>
+  <div class="fbox" style="border-color:#7C3AED;color:#6D28D9">In storage</div><span class="farrow">→</span>
+  <div class="fbox" style="border-color:#EAB308;color:#92760B">Out for delivery</div><span class="farrow">→</span>
+  <div class="fbox" style="border-color:#639922;color:#3B6D11">Delivered</div>
+</div>
+<div class="note"><b>Importante:</b> los <b>Direct</b> y <b>Broker</b> NO pasan por <i>In storage</i> (van Picked up → Out for delivery). Al marcar <b>Delivered</b>, el job sale solo de las listas de activos.</div>
+
+<!-- ============ 4 CREAR JOB ============ -->
+<h1 class="sec"><span class="num">4</span>Crear y editar un trabajo</h1>
+<p class="lead">Tocá <b>“+ Nuevo job”</b> (arriba a la derecha en Dispatching o Jobs).</p>
+
+<div class="two avoid">
+  <div class="card"><h3 style="color:#185FA5">Full</h3><p style="font-size:11px;margin:0">Pickup → <b>storage</b> → delivery. Se guarda en el medio.</p></div>
+  <div class="card"><h3 style="color:#3B6D11">Direct</h3><p style="font-size:11px;margin:0">Pickup → delivery. Directo, sin guardar.</p></div>
+</div>
+<div class="card avoid" style="margin-top:12px"><h3 style="color:#C2410C">Broker delivery</h3><p style="font-size:11px;margin:0">Solo delivery: la mercadería ya está, únicamente se entrega.</p></div>
+
+<h3 style="margin-top:16px">Qué se carga</h3>
+<ul>
+  <li><b>Dónde se guarda</b> — tildá una o varias unidades y/o warehouses (un job puede ocupar varios lugares).</li>
+  <li><b>Datos del job</b> — Job #, Cliente, Tipo, Estado, Broker, Driver, FADD, Volumen (CF), Lot #, color de Sticker.</li>
+  <li><b>Pickup</b> y <b>Delivery</b> — fecha, dirección, ciudad, estado, zip y el <b>balance a cobrar</b> en cada etapa.</li>
+  <li><b>Billing de storage</b> — si al cliente se le cobra mensual por guardar (ver sección 7).</li>
+</ul>
+<div class="note"><b>Editar después:</b> tocá el <b>Job #</b> para abrir el detalle y <b>hacé clic en casi cualquier dato para cambiarlo en el momento</b> (FADD, cliente, driver, direcciones, balances…). También está el botón <b>Editar</b> para el formulario completo.</div>
+
+<!-- ============ 5 STORAGE ============ -->
+<h1 class="sec"><span class="num">5</span>Storage — unidades y warehouses</h1>
+<p class="lead">La sección Storage tiene una pestaña por lugar: <b>Storage Units</b>, <b>🏭 Indiana</b> y <b>🏭 New Jersey</b>.</p>
+
+<div class="shot">
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app — Storage · New Jersey</span></div>
+  <div class="main" style="background:#fafafa">
+    <div class="subtabs" style="margin-bottom:12px"><span>Storage Units</span><span>🏭 Indiana</span><span class="on">🏭 New Jersey</span></div>
+    <div class="card" style="background:#fff;margin-bottom:11px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:11px">
+        <div><div style="font-size:15px;font-weight:800">🏭 New Jersey</div><div class="muted" style="font-size:10px">Warehouse propio · 3 job(s) activo(s)</div></div>
+        <div><span class="btn dark" style="margin-right:6px">+ Job a este warehouse</span><span class="btn">Editar capacidad</span></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10.5px;margin-bottom:6px"><b style="color:#EF9F27">78% ocupado</b><span class="muted">7,800 usado · 2,200 libre · 10,000 CF total</span></div>
+      <div class="occ" style="height:14px"><div style="width:78%;height:14px;background:#EF9F27"></div></div>
+    </div>
+    <div class="shot" style="margin:0;box-shadow:none">
+      <table class="t">
+        <thead><tr><th>Job #</th><th>Cliente</th><th>Lot #</th><th>Sticker</th><th>Volumen</th><th>Driver</th><th>FADD</th><th>Estado</th></tr></thead>
+        <tbody>
+          <tr><td><span class="jobn">FV8127071</span></td><td>Robert Hillman</td><td class="mono">PV0701</td><td><span class="swatch" style="background:#185FA5"></span>Azul</td><td>800 CF</td><td>Carlos Chacon</td><td><span class="pill2 f-3"><i></i>2 días</span></td><td><span class="pill2 s-sto"><i></i>In storage</span></td></tr>
+          <tr><td><span class="jobn">A1824731</span></td><td>Anita M. Aloi</td><td class="mono">487611</td><td><span class="swatch" style="background:#3B6D11"></span>Verde</td><td>1,051 CF</td><td>Lorenzo A.</td><td><span class="pill2 f-ok"><i></i>11 días</span></td><td><span class="pill2 s-sto"><i></i>In storage</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div class="cap">Cada warehouse muestra su ocupación (verde &lt;70%, ámbar 70-90%, rojo &gt;90%) y la tabla de jobs que tiene adentro.</div>
+
+<div class="two avoid" style="margin-top:14px">
+  <div class="card"><h3>Storage Units</h3>
+    <p style="font-size:11px;margin:0 0 6px">Adentro, dos sub-pestañas:</p>
+    <ul style="margin:0">
+      <li><b>Unidades</b> — los lockers físicos con su barra de <b>ocupación</b>. Si falta, tocá <b>“Set capacity”</b>.</li>
+      <li><b>Jobs en unidades</b> — qué hay guardado en cada locker (una fila por unidad).</li>
+    </ul>
+  </div>
+  <div class="card"><h3>Cargar / importar</h3>
+    <p style="font-size:11px;margin:0"><b>“+ Unidad”</b> para una unidad nueva. También podés <b>Importar desde WhatsApp</b> pegando el mensaje o subiendo el .zip del chat. El <b>gate code</b> se copia con un clic.</p>
+  </div>
+</div>
+
+<!-- ============ 6 BROKERS / DRIVERS ============ -->
+<h1 class="sec"><span class="num">6</span>Brokers &amp; Drivers</h1>
+<div class="two">
+  <div class="card"><h3>🤝 Brokers</h3>
+    <p style="font-size:11px">Lista de brokers con contacto, teléfono y email. Por cada uno ves <b>cuántos jobs</b> tiene y el <b>balance pendiente</b>. Podés <b>agregar, editar o eliminar</b>. Al cargar un job, elegís el broker de la lista.</p>
+  </div>
+  <div class="card"><h3>🧑‍✈️ Drivers</h3>
+    <p style="font-size:11px">Lista de choferes. Se cargan <b>solos</b> a medida que los asignás en los jobs. Ves cuántos jobs <b>activos</b> y <b>entregados</b> tiene cada uno.</p>
+  </div>
+</div>
+
+<!-- ============ 7 BILLING ============ -->
+<h1 class="sec"><span class="num">7</span>Billing — cobro de storage al cliente</h1>
+<p class="lead">Algunos clientes pagan un mensual por guardar su mercadería (se negocia caso por caso). El sistema lo maneja solo.</p>
+
+<div class="shot">
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app — Billing</span></div>
+  <div class="main" style="background:#fafafa">
+    <div class="phead"><h2>Billing</h2></div>
+    <div class="psub">Cobro de storage a clientes</div>
+    <div class="metrics" style="grid-template-columns:repeat(4,1fr)">
+      <div class="mc"><div class="l">Total pendiente</div><div class="n" style="color:#A32D2D">$2,450</div></div>
+      <div class="mc"><div class="l">Overdue</div><div class="n" style="color:#A32D2D">2 · $600</div></div>
+      <div class="mc"><div class="l">Vence esta semana</div><div class="n" style="color:#C2410C">3 · $900</div></div>
+      <div class="mc"><div class="l">Cobrado este mes</div><div class="n" style="color:#1A8A4E">$1,800</div></div>
+    </div>
+    <div class="subtabs"><span class="on">Todos</span><span>Pendientes</span><span>Overdue</span><span>Pagados</span></div>
+    <div class="shot" style="margin:0;box-shadow:none">
+      <table class="t">
+        <thead><tr><th>Estado</th><th>Cliente</th><th>Job #</th><th>Storage</th><th>Días</th><th>Período</th><th>Monto</th><th>Acciones</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill2 f-over"><i></i>Overdue</span></td><td>Robert Hillman</td><td class="mono">FV8127071</td><td>Warehouse NJ</td><td>62 días</td><td>05-01 → 05-31</td><td><b>$300</b></td><td><span class="miniadv">Marcar pagado</span> <span class="act g">💬</span></td></tr>
+          <tr><td><span class="pill2 f-7"><i></i>Pending</span></td><td>Mary C Holby</td><td class="mono">A1826407</td><td>Ez Storage</td><td>21 días</td><td>06-10 → 07-10</td><td><b>$150</b></td><td><span class="miniadv">Marcar pagado</span> <span class="act g">💬</span></td></tr>
+          <tr><td><span class="pill2 s-del"><i></i>Paid</span></td><td>Nola Doak</td><td class="mono">HV4613605</td><td>In Better Hands</td><td>40 días</td><td>05-15 → 06-14</td><td><b>$200</b></td><td class="muted" style="font-size:9px">Pagado 06-12</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div class="cap">La página Billing: el sistema genera solo el cobro de cada ciclo de 30 días y marca como Overdue lo vencido.</div>
+
+<div class="two avoid" style="margin-top:14px">
+  <div class="card"><h3>Activarlo en el job</h3>
+    <p style="font-size:11px;margin:0">En el formulario, sección <b>Billing de storage</b>: tildá <b>“Cobrar al cliente”</b>, cargá la <b>tarifa mensual</b>, elegí si el <b>1.er mes es gratis</b> y revisá la <b>fecha de inicio</b> (se calcula sola, pero es editable).</p>
+  </div>
+  <div class="card"><h3>Cobrar y recordar</h3>
+    <p style="font-size:11px;margin:0"><b>Marcar pagado</b> registra la fecha. <b>💬 Recordatorio</b> abre WhatsApp con un mensaje al cliente listo para enviar. Lo vencido pasa a <b>Overdue</b> automáticamente.</p>
+  </div>
+</div>
+
+<!-- ============ 8 TIPS + GLOSARIO ============ -->
+<h1 class="sec"><span class="num">8</span>Reglas de oro &amp; glosario</h1>
+
+<div class="card avoid" style="background:#0f172a;color:#fff;border:none;margin-bottom:16px">
+  <h3 style="color:#fff;margin-bottom:8px">🎯 Las 4 reglas del día</h3>
+  <div style="font-size:11.5px;line-height:1.7">
+    <div>1. Mirá <b style="color:#7FB2E6">Dispatching</b> y atacá el <b style="color:#ff9b9b">FADD en rojo/naranja primero</b>.</div>
+    <div>2. Que <b>ningún pickup/delivery de hoy quede sin chofer</b>.</div>
+    <div>3. Avisá al chofer siempre con el botón <b style="color:#8fd08f">💬 WhatsApp</b> del job (ya va con todos los datos).</div>
+    <div>4. <b>Avanzá el estado</b> apenas pasa cada etapa, así el tablero refleja la realidad.</div>
+  </div>
+</div>
+
+<h3>Glosario rápido</h3>
+<table class="g">
+  <tr><th>Término</th><th>Qué significa</th></tr>
+  <tr><td>FADD</td><td>First Available Delivery Date — primera fecha posible de entrega.</td></tr>
+  <tr><td>CF</td><td>Cubic Feet — volumen en pies cúbicos.</td></tr>
+  <tr><td>Lot #</td><td>Número de lote del sticker de la mercadería.</td></tr>
+  <tr><td>Sticker</td><td>Color / etiqueta que identifica la carga.</td></tr>
+  <tr><td>Full / Direct / Broker</td><td>Tipos de job: con storage / directo / solo entrega.</td></tr>
+  <tr><td>Broker</td><td>Empresa para la que se hace el trabajo (Allied, Atlas…).</td></tr>
+  <tr><td>Balance</td><td>Plata a cobrar (en el pickup o en el delivery).</td></tr>
+  <tr><td>Billing</td><td>Cobro mensual al cliente por guardar su mercadería.</td></tr>
+  <tr><td>Gate code</td><td>Código para entrar a la unidad de storage.</td></tr>
+</table>
+
+<div style="margin-top:26px;text-align:center;color:#aaa;font-size:11px;border-top:1px solid #eee;padding-top:14px">
+  No Borders Moving &amp; Storage · Operations CRM · Guía de uso interna · Cualquier duda, escribile al encargado 🚚
+</div>
+
+</body>
+</html>
