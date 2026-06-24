@@ -851,7 +851,7 @@ export default function App() {
   const [billingMissing, setBillingMissing] = useState(false);
   const [billingLoaded, setBillingLoaded] = useState(false);
   const [billing, setBilling] = useState([]);
-  const [storageTab, setStorageTab] = useState("rented");   // rented | warehouses
+  const [storageTab, setStorageTab] = useState("units");    // units | unit_jobs | <warehouse name>
   const [billingTab, setBillingTab] = useState("all");       // all | pending | overdue | paid
   const [capTarget, setCapTarget] = useState(null);          // { kind, id?, name?, value }
   const [brokers, setBrokers] = useState([]);
@@ -1119,6 +1119,26 @@ export default function App() {
     for (const r of records) if (r.space_type === "warehouse" && r.brand) m[r.brand] = r;
     return m;
   }, [records]);
+
+  // Active jobs stored in rented units — one row per (job, unit) so you see what's
+  // inside each unit. Filtered by the storage search box, sorted by company/unit.
+  const unitJobRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return jobs
+      .filter(j => !j.date_out && j.storage_id)
+      .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
+      .filter(j => {
+        if (!q) return true;
+        const s = j.storage || {};
+        const hay = [j.job_number, j.customer, j.driver, j.lot_number, j.sticker_color, s.brand, s.unit, s.address, s.state, s.zip].join(" ").toLowerCase();
+        return hay.includes(q);
+      })
+      .sort((a, b) => {
+        const ab = (a.storage?.brand || "").localeCompare(b.storage?.brand || "");
+        if (ab !== 0) return ab;
+        return (a.storage?.unit || "").localeCompare(b.storage?.unit || "");
+      });
+  }, [jobs, storageById, search]);
 
   // Derived situation: Close is manual; otherwise Open if it has active jobs, else Empty.
   const sit = useCallback(
@@ -2167,11 +2187,63 @@ export default function App() {
 
       {page === "storage" && (
         <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-          {[["rented","Unidades alquiladas"], ...WAREHOUSES.map(w => [w, `🏭 ${w}`])].map(([t,l]) => (
+          {[["units","Unidades"],["unit_jobs","Jobs en unidades"], ...WAREHOUSES.map(w => [w, `🏭 ${w}`])].map(([t,l]) => (
             <button key={t} onClick={() => setStorageTab(t)}
               style={{ fontSize:13, fontWeight: storageTab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: storageTab === t ? "#111" : "#999", borderBottom: storageTab === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
           ))}
         </div>
+      )}
+
+      {/* JOBS EN UNIDADES — active jobs stored in rented units, one row per unit */}
+      {page === "storage" && storageTab === "unit_jobs" && (
+        <>
+          <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar por job #, cliente, driver, empresa, unidad..."
+              style={{ ...inp, flex:1, minWidth:180 }} />
+          </div>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                    {["Empresa","Unidad","Ubicación","Job #","Cliente","Volumen","Lot #","Sticker","Driver","FADD","Estado",""].map((h,i) => (
+                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {unitJobRows.length === 0 ? (
+                    <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs activos en unidades alquiladas.</td></tr>
+                  ) : unitJobRows.map(j => {
+                    const s = j.storage || {};
+                    return (
+                      <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                        <td style={{ padding:"12px", fontWeight:600 }}>{s.brand || "—"}</td>
+                        <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12 }}>{s.unit || "—"}</td>
+                        <td style={{ padding:"12px", fontSize:12, color:"#555" }}>{[s.address, s.state, s.zip].filter(Boolean).join(", ") || "—"}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                        </td>
+                        <td style={{ padding:"12px" }}>{j.customer || "—"}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{j.volume || "—"}</td>
+                        <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{j.lot_number || "—"}</td>
+                        <td style={{ padding:"12px" }}><Sticker color={j.sticker_color} /></td>
+                        <td style={{ padding:"12px" }}>{j.driver || "—"}</td>
+                        <td style={{ padding:"12px" }}><FaddBadge fadd={j.fadd} /></td>
+                        <td style={{ padding:"12px" }}><StatusBadge status={j.status} /></td>
+                        <td style={{ padding:"12px", textAlign:"right" }}>
+                          <span onClick={() => { setJobDetailKey(null); setDetailId(j.storage_id); }} style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline", whiteSpace:"nowrap" }}>Ver unidad</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{unitJobRows.length} job(s) en unidades</div>
+          </div>
+        </>
       )}
 
       {/* WAREHOUSE (owned) — one tab per warehouse: occupancy header + jobs table */}
@@ -2264,7 +2336,7 @@ export default function App() {
         </div>
       )}
 
-      {((page === "storage" && storageTab === "rented") || page === "jobs") && (<>
+      {((page === "storage" && storageTab === "units") || page === "jobs") && (<>
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder={page === "storage" ? "Buscar empresa, ubicación, zip, unidad..." : "Buscar por job #, cliente, driver, zip, ubicación..."}
