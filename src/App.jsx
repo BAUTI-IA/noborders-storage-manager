@@ -128,6 +128,31 @@ function FaddBadge({ fadd }) {
   );
 }
 
+// Inline FADD: a "+ FADD" button when unset (quick date picker), or the badge
+// (clickable to change) when set. Saves to all parts of the job.
+function FaddCell({ group, onSet }) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <input type="date" autoFocus defaultValue={group.fadd || ""}
+        onChange={e => { if (e.target.value) onSet(group, e.target.value); setEditing(false); }}
+        onBlur={() => setEditing(false)}
+        style={{ fontSize:12, padding:"4px 6px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none" }} />
+    );
+  }
+  if (!group.fadd) {
+    return (
+      <button onClick={() => setEditing(true)}
+        style={{ fontSize:11, fontWeight:600, padding:"3px 11px", borderRadius:20, border:"1px dashed #ccc", background:"#fff", color:"#888", cursor:"pointer", whiteSpace:"nowrap" }}>
+        + FADD
+      </button>
+    );
+  }
+  return (
+    <span onClick={() => setEditing(true)} style={{ cursor:"pointer" }} title="Cambiar FADD"><FaddBadge fadd={group.fadd} /></span>
+  );
+}
+
 // Sticker color: stored as free text, with a color swatch for the known names.
 const STICKER_COLORS = ["Rojo","Azul","Verde","Amarillo","Naranja","Rosa","Violeta","Blanco","Negro","Gris","Marrón"];
 const COLOR_MAP = { rojo:"#e24b4a", red:"#e24b4a", azul:"#185FA5", blue:"#185FA5", verde:"#3B6D11", green:"#3B6D11", amarillo:"#EAB308", yellow:"#EAB308", naranja:"#EA7C27", orange:"#EA7C27", rosa:"#EC4899", pink:"#EC4899", violeta:"#7C3AED", purple:"#7C3AED", blanco:"#FFFFFF", white:"#FFFFFF", negro:"#111111", black:"#111111", gris:"#888888", gray:"#888888", "marrón":"#92400E", marron:"#92400E", brown:"#92400E" };
@@ -911,6 +936,13 @@ export default function App() {
     loadJobs();
   }
 
+  // Quick-set the FADD on every part of a job (from the Dispatching table).
+  async function setJobFadd(group, dateStr) {
+    if (faddColMissing || !group?.parts?.length) return;
+    await supabase.from("storage_jobs").update({ fadd: dateStr || null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", group.parts.map(p => p.id));
+    loadJobs();
+  }
+
   async function deleteRecord(id) {
     if (!window.confirm("Eliminar este storage?")) return;
     await supabase.from("storages").delete().eq("id", id);
@@ -1228,7 +1260,7 @@ export default function App() {
                   const noSticker = !g.sticker_color;
                   return (
                   <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
-                    <td style={{ padding:"12px" }}><FaddBadge fadd={g.fadd} /></td>
+                    <td style={{ padding:"12px" }}><FaddCell group={g} onSet={setJobFadd} /></td>
                     <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                       <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
                         {noSticker && <span title="Sticker not assigned" style={{ cursor:"help" }}>⚠️</span>}
