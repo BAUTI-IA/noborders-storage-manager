@@ -42,7 +42,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", pickup_balance:"", delivery_balance:"", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", pickup_balance:"", delivery_balance:"", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -237,6 +237,69 @@ alter table public.storage_jobs
 do $$ begin
   alter publication supabase_realtime add table public.brokers;
 exception when others then null; end $$;`;
+// Storage occupancy + client storage billing (CRM v3). Probed via storage_billing
+// table + storages.space_type + storage_jobs.billing_active.
+const BILLING_SQL = `alter table public.storages
+  add column if not exists space_type text,
+  add column if not exists total_capacity_cf numeric;
+
+alter table public.storage_jobs
+  add column if not exists client_monthly_rate numeric,
+  add column if not exists first_month_free boolean default false,
+  add column if not exists billing_start_date date,
+  add column if not exists billing_active boolean default false;
+
+create table if not exists public.storage_billing (
+  id bigint generated always as identity primary key,
+  job_id bigint references public.storage_jobs(id) on delete cascade,
+  billing_period_start date,
+  billing_period_end date,
+  amount numeric,
+  status text default 'pending',
+  paid_date date,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.storage_billing enable row level security;
+drop policy if exists "storage_billing_all" on public.storage_billing;
+create policy "storage_billing_all" on public.storage_billing for all to anon, authenticated using (true) with check (true);
+
+do $$ begin
+  alter publication supabase_realtime add table public.storage_billing;
+exception when others then null; end $$;`;
+
+// Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
+// so pull the first number for occupancy math.
+const parseCf = (v) => { if (!v) return 0; const m = String(v).match(/[\d,.]+/); return m ? Number(m[0].replace(/,/g, "")) || 0 : 0; };
+// Occupancy colors: green <70%, amber 70–90%, red >90%.
+const occColor = (pct) => pct > 90 ? "#E24B4A" : pct >= 70 ? "#EF9F27" : "#639922";
+function OccupancyBar({ used, total, height = 8 }) {
+  if (!total || total <= 0) return null;
+  const pct = Math.min(100, Math.round((used / total) * 100));
+  return (
+    <div style={{ minWidth:90 }}>
+      <div style={{ background:"#f0f0f0", borderRadius:6, height, overflow:"hidden" }}>
+        <div style={{ background:occColor(pct), height, width:`${pct}%`, transition:"width .4s" }} />
+      </div>
+      <div style={{ fontSize:10, color:"#888", marginTop:3, whiteSpace:"nowrap" }}>{pct}% · {Math.round(used).toLocaleString()}/{Math.round(total).toLocaleString()} CF</div>
+    </div>
+  );
+}
+
+const BILLING_STATUS = {
+  pending: { l:"Pending", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
+  overdue: { l:"Overdue", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+  paid:    { l:"Paid", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+};
+function BillingBadge({ status }) {
+  const c = BILLING_STATUS[status] || BILLING_STATUS.pending;
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
+}
+function billingReminderLink(b) {
+  const txt = `Hi ${b.customer || "there"}, this is a reminder that your storage fee of $${Number(b.amount || 0).toLocaleString()} for job ${b.job_number || "-"} is due on ${b.billing_period_end || "-"}. Please contact us to arrange payment. Thank you - No Borders Moving`;
+  return "https://wa.me/?text=" + encodeURIComponent(txt);
+}
+
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
 const STATUSES = [
@@ -693,6 +756,7 @@ const NAV = [
     { id:"trucks", label:"Trucks", icon:"🚛" },
   ]},
   { section:"Business", items:[
+    { id:"billing", label:"Billing", icon:"💵" },
     { id:"analytics", label:"Analytics", icon:"📊" },
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
@@ -738,6 +802,7 @@ const PAGE_META = {
   brokers:     { title:"Brokers", sub:"Brokers y balances pendientes" },
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
+  billing:     { title:"Billing", sub:"Cobro de storage a clientes" },
   analytics:   { title:"Analytics", sub:"Métricas y recomendaciones con IA" },
   settings:    { title:"Settings", sub:"Configuración de la operación" },
 };
@@ -783,12 +848,19 @@ export default function App() {
   const [faddColMissing, setFaddColMissing] = useState(false);
   const [jobColsMissing, setJobColsMissing] = useState(false);
   const [crmV2Missing, setCrmV2Missing] = useState(false);
+  const [billingMissing, setBillingMissing] = useState(false);
+  const [billingLoaded, setBillingLoaded] = useState(false);
+  const [billing, setBilling] = useState([]);
+  const [storageTab, setStorageTab] = useState("rented");   // rented | warehouses
+  const [billingTab, setBillingTab] = useState("all");       // all | pending | overdue | paid
+  const [capTarget, setCapTarget] = useState(null);          // { kind, id?, name?, value }
   const [brokers, setBrokers] = useState([]);
   const [showBrokerModal, setShowBrokerModal] = useState(false);
   const [brokerForm, setBrokerForm] = useState(EMPTY_BROKER);
   const [editingBrokerId, setEditingBrokerId] = useState(null);
   const [brokerSaving, setBrokerSaving] = useState(false);
   const fileRef = useRef();
+  const autoGenRef = useRef(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -811,6 +883,11 @@ export default function App() {
   const loadBrokers = useCallback(async () => {
     const { data, error } = await supabase.from("brokers").select("*").order("name", { ascending: true });
     if (!error) setBrokers(data || []);
+  }, []);
+
+  const loadBilling = useCallback(async () => {
+    const { data, error } = await supabase.from("storage_billing").select("*").order("billing_period_end", { ascending: true });
+    if (!error) { setBilling(data || []); setBillingLoaded(true); }
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -926,6 +1003,72 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session, crmV2Missing, loadBrokers]);
 
+  // Probe the billing table + occupancy/billing columns (CRM v3).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: tErr } = await supabase.from("storage_billing").select("id").limit(1);
+      const { error: sErr } = await supabase.from("storages").select("space_type").limit(1);
+      const { error: jErr } = await supabase.from("storage_jobs").select("billing_active").limit(1);
+      if (cancelled) return;
+      if (!tErr && !sErr && !jErr) { loadBilling(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: BILLING_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadBilling();
+      else setBillingMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadBilling]);
+
+  useEffect(() => {
+    if (!session || billingMissing) return;
+    const channel = supabase.channel("billing-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "storage_billing" }, () => loadBilling())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, billingMissing, loadBilling]);
+
+  // Auto-generate billing: one pending record per active billing-active job for the
+  // current 30-day period, and flip past-due pending records to overdue. Idempotent
+  // (dedupes by job + period); converges once realtime reloads with nothing to do.
+  useEffect(() => {
+    if (!session || billingMissing || !billingLoaded || autoGenRef.current) return;
+    const td = today();
+    const groups = new Map();
+    for (const j of jobs) {
+      if (j.date_out || j.status === "cancelled") continue;
+      const k = jobKey(j);
+      if (!groups.has(k)) groups.set(k, j);
+    }
+    const toInsert = [];
+    for (const rep of groups.values()) {
+      if (!rep.billing_active) continue;
+      const rate = Number(rep.client_monthly_rate);
+      if (!rate || isNaN(rate)) continue;
+      const start = rep.billing_start_date || (rep.first_month_free ? (rep.date_in ? addDaysStr(rep.date_in, 30) : null) : rep.date_in);
+      if (!start || start > td) continue;
+      let periodStart = start;
+      while (addDaysStr(periodStart, 30) <= td) periodStart = addDaysStr(periodStart, 30);
+      const periodEnd = addDaysStr(periodStart, 30);
+      if (!billing.some(b => b.job_id === rep.id && b.billing_period_start === periodStart))
+        toInsert.push({ job_id: rep.id, billing_period_start: periodStart, billing_period_end: periodEnd, amount: rate, status: "pending" });
+    }
+    const toOverdue = billing.filter(b => b.status === "pending" && b.billing_period_end && b.billing_period_end < td).map(b => b.id);
+    if (!toInsert.length && !toOverdue.length) return;
+    autoGenRef.current = true;
+    (async () => {
+      if (toInsert.length) await supabase.from("storage_billing").insert(toInsert);
+      if (toOverdue.length) await supabase.from("storage_billing").update({ status: "overdue" }).in("id", toOverdue);
+      await loadBilling();
+      autoGenRef.current = false;
+    })();
+  }, [session, billingMissing, billingLoaded, jobs, billing, loadBilling]);
+
   useEffect(() => {
     if (!session) return;
     loadData();
@@ -958,6 +1101,24 @@ export default function App() {
     for (const j of jobs) if (!j.date_out && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + 1;
     return m;
   }, [jobs]);
+
+  // CF currently stored per rented unit and per owned warehouse (active jobs only).
+  const usedCfByStorage = useMemo(() => {
+    const m = {};
+    for (const j of jobs) if (!j.date_out && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + parseCf(j.volume);
+    return m;
+  }, [jobs]);
+  const usedCfByWarehouse = useMemo(() => {
+    const m = {};
+    for (const j of jobs) if (!j.date_out && j.warehouse) m[j.warehouse] = (m[j.warehouse] || 0) + parseCf(j.volume);
+    return m;
+  }, [jobs]);
+  // Warehouse capacity is held in a storages row (space_type='warehouse', brand=name).
+  const warehouseMeta = useMemo(() => {
+    const m = {};
+    for (const r of records) if (r.space_type === "warehouse" && r.brand) m[r.brand] = r;
+    return m;
+  }, [records]);
 
   // Derived situation: Close is manual; otherwise Open if it has active jobs, else Empty.
   const sit = useCallback(
@@ -1015,6 +1176,7 @@ export default function App() {
   const unitRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const data = records.filter(r => {
+      if (r.space_type === "warehouse") return false;   // warehouses live in their own tab
       if (!q) return true;
       const hay = [r.brand, r.state, r.zip, r.address, r.unit, r.gate_code].join(" ").toLowerCase();
       return hay.includes(q);
@@ -1145,6 +1307,42 @@ export default function App() {
     return [...map.values()];
   }, [jobs]);
 
+  // Billing rows enriched with client/job/location info for the Billing table.
+  const billingRows = useMemo(() => {
+    const byId = {}; for (const j of jobs) byId[j.id] = j;
+    return billing.map(b => {
+      const j = byId[b.job_id];
+      const s = j ? storageById[j.storage_id] : null;
+      const loc = j && j.warehouse ? `Warehouse ${j.warehouse}`
+        : (s ? [s.brand, s.unit && "U"+s.unit].filter(Boolean).join(" ") : "—");
+      const dateIn = j?.date_in || null;
+      const daysIn = dateIn ? Math.max(0, Math.round((startOfToday() - new Date(dateIn + "T00:00:00")) / ONE_DAY)) : null;
+      return { ...b, customer: j?.customer || "—", job_number: j?.job_number || "—", location: loc, date_in: dateIn, daysIn };
+    });
+  }, [billing, jobs, storageById]);
+
+  const billingMetrics = useMemo(() => {
+    const td = today();
+    const monthPrefix = td.slice(0, 7);
+    const num = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
+    let pending = 0, overdueSum = 0, overdueCount = 0, weekSum = 0, weekCount = 0, collected = 0;
+    for (const b of billing) {
+      const amt = num(b.amount);
+      if (b.status === "pending") {
+        pending += amt;
+        const d = b.billing_period_end ? Math.round((new Date(b.billing_period_end + "T00:00:00") - startOfToday()) / ONE_DAY) : null;
+        if (d !== null && d >= 0 && d <= 7) { weekSum += amt; weekCount++; }
+      } else if (b.status === "overdue") {
+        pending += amt; overdueSum += amt; overdueCount++;
+      } else if (b.status === "paid" && b.paid_date && b.paid_date.slice(0, 7) === monthPrefix) {
+        collected += amt;
+      }
+    }
+    return { pending, overdueSum, overdueCount, weekSum, weekCount, collected };
+  }, [billing]);
+
+  const billingOverdueCount = useMemo(() => billing.filter(b => b.status === "overdue").length, [billing]);
+
   const detail = records.find(r => r.id === detailId);
 
   // All parts (units) of the job currently open in the job-detail modal.
@@ -1153,7 +1351,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -1175,6 +1373,7 @@ export default function App() {
   }
 
   function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
+  function openAddJobWarehouse(name) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, warehouses: [name] }); setJobErr(null); setShowAddJob(true); }
   function openEditJob(jd) {
     setEditingJobKey(jd.key);
     setJobForm({
@@ -1186,7 +1385,9 @@ export default function App() {
       job_type: jd.job_type || "full", status: jd.status || "scheduled",
       broker_id: jd.broker_id || "", pickup_balance: jd.pickup_balance ?? "", delivery_balance: jd.delivery_balance ?? "",
       pickup_date: jd.pickup_date || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
-      delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "", notes: jd.notes || "",
+      delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "",
+      billing_active: !!jd.billing_active, client_monthly_rate: jd.client_monthly_rate ?? "", first_month_free: !!jd.first_month_free, billing_start_date: jd.billing_start_date || "",
+      notes: jd.notes || "",
     });
     setJobErr(null); setJobDetailKey(null); setShowAddJob(true);
   }
@@ -1229,6 +1430,14 @@ export default function App() {
       fields.broker_id = jobForm.broker_id ? Number(jobForm.broker_id) : null;
       fields.pickup_balance = jobForm.pickup_balance !== "" ? Number(jobForm.pickup_balance) : null;
       fields.delivery_balance = jobForm.delivery_balance !== "" ? Number(jobForm.delivery_balance) : null;
+    }
+    if (!billingMissing) {
+      fields.billing_active = !!jobForm.billing_active;
+      fields.client_monthly_rate = jobForm.client_monthly_rate !== "" ? Number(jobForm.client_monthly_rate) : null;
+      fields.first_month_free = !!jobForm.first_month_free;
+      // Auto-calc billing start: first_month_free → date_in + 30, else date_in. Editable.
+      const di = jobForm.date_in || today();
+      fields.billing_start_date = jobForm.billing_start_date || (jobForm.first_month_free ? addDaysStr(di, 30) : di);
     }
 
     if (editingJobKey) {
@@ -1301,6 +1510,25 @@ export default function App() {
     if (!window.confirm(`Eliminar el broker "${b.name}"? Los jobs asociados quedan sin broker.`)) return;
     await supabase.from("brokers").delete().eq("id", b.id);
     loadBrokers();
+  }
+
+  // ── Capacity & billing handlers ──
+  function openCapacity(target) { setCapTarget(target); }
+  async function saveCapacity() {
+    if (!capTarget) return;
+    const val = capTarget.value !== "" ? Number(capTarget.value) : null;
+    if (capTarget.kind === "unit") {
+      await supabase.from("storages").update({ total_capacity_cf: val, space_type: "rented", updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", capTarget.id);
+    } else if (capTarget.kind === "warehouse") {
+      const existing = warehouseMeta[capTarget.name];
+      if (existing) await supabase.from("storages").update({ total_capacity_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", existing.id);
+      else await supabase.from("storages").insert([{ brand: capTarget.name, space_type: "warehouse", situation: "Open", total_capacity_cf: val, created_by: userEmail }]);
+    }
+    setCapTarget(null);
+  }
+  async function markBillingPaid(b) {
+    await supabase.from("storage_billing").update({ status: "paid", paid_date: today() }).eq("id", b.id);
+    loadBilling();
   }
 
   // Per-broker stats: active jobs count + pending balance (distinct jobs).
@@ -1477,6 +1705,13 @@ export default function App() {
         </div>
       )}
 
+      {billingMissing && page !== "billing" && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span>Para Billing y la ocupación de storage (capacidad CF), corré el SQL de configuración una sola vez en Supabase.</span>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+        </div>
+      )}
+
       {page === "storage" && duePaymentsSoon.length > 0 && (
         <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D" }}>
           <strong>⚠️ {duePaymentsSoon.length} pago(s) vencen en 3 días o menos:</strong>
@@ -1502,6 +1737,7 @@ export default function App() {
               { label:"En storage", value:dispatchMetrics.inStorage, color:"#7C3AED" },
               { label:"Balance pickup pend.", value:"$"+dispatchMetrics.puBal.toLocaleString(), color:"#1A8A4E" },
               { label:"Balance delivery pend.", value:"$"+dispatchMetrics.delBal.toLocaleString(), color:"#1A8A4E" },
+              { label:"Billing overdue", value:billingOverdueCount, color:"#A32D2D" },
             ].map(m => (
               <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                 <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
@@ -1720,6 +1956,78 @@ export default function App() {
         </div>
       )}
 
+      {/* ───────────────────────── BILLING ───────────────────────── */}
+      {page === "billing" && (
+        <>
+          {billingMissing && (
+            <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <span>Para el módulo de billing, corré el SQL de configuración una sola vez en Supabase.</span>
+              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+            </div>
+          )}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
+            {[
+              { label:"Total pendiente", value:"$"+billingMetrics.pending.toLocaleString(), color:"#A32D2D" },
+              { label:"Overdue", value:`${billingMetrics.overdueCount} · $${billingMetrics.overdueSum.toLocaleString()}`, color:"#A32D2D" },
+              { label:"Vence esta semana", value:`${billingMetrics.weekCount} · $${billingMetrics.weekSum.toLocaleString()}`, color:"#C2410C" },
+              { label:"Cobrado este mes", value:"$"+billingMetrics.collected.toLocaleString(), color:"#1A8A4E" },
+            ].map(m => (
+              <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
+                <div style={{ fontSize:20, fontWeight:700, color:m.color }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
+            {[["all","Todos"],["pending","Pendientes"],["overdue","Overdue"],["paid","Pagados"]].map(([t,l]) => (
+              <button key={t} onClick={() => setBillingTab(t)}
+                style={{ fontSize:13, fontWeight: billingTab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: billingTab === t ? "#111" : "#999", borderBottom: billingTab === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
+            ))}
+          </div>
+
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                    {["Estado","Cliente","Job #","Storage","Días en storage","Período","Monto","Acciones"].map((h,i) => (
+                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const rows = billingRows.filter(b => billingTab === "all" || b.status === billingTab);
+                    if (rows.length === 0) return <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{billingMissing ? "Corré el SQL para activar billing." : "Sin registros de billing."}</td></tr>;
+                    return rows.map(b => (
+                      <tr key={b.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                        <td style={{ padding:"12px" }}><BillingBadge status={b.status} /></td>
+                        <td style={{ padding:"12px" }}>{b.customer}</td>
+                        <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{b.job_number}</td>
+                        <td style={{ padding:"12px", fontSize:12, color:"#555" }}>{b.location}</td>
+                        <td style={{ padding:"12px" }}>{b.daysIn != null ? `${b.daysIn} días` : "—"}</td>
+                        <td style={{ padding:"12px", fontSize:12, color:"#555", whiteSpace:"nowrap" }}>{b.billing_period_start || "—"} → {b.billing_period_end || "—"}</td>
+                        <td style={{ padding:"12px", fontWeight:600 }}>${Number(b.amount || 0).toLocaleString()}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                            {b.status !== "paid"
+                              ? <Btn onClick={() => markBillingPaid(b)} style={{ padding:"4px 9px", fontSize:11 }}>Marcar pagado</Btn>
+                              : <span style={{ fontSize:11, color:"#888" }}>{b.paid_date ? `Pagado ${b.paid_date}` : "Pagado"}</span>}
+                            {b.status !== "paid" && <a href={billingReminderLink(b)} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 Recordatorio</a>}
+                          </div>
+                        </td>
+                      </tr>
+                    ));
+                  })()}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{billingRows.filter(b => billingTab === "all" || b.status === billingTab).length} registro(s)</div>
+          </div>
+        </>
+      )}
+
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
       {page === "analytics" && (
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:20 }}>
@@ -1857,6 +2165,76 @@ export default function App() {
       <datalist id="sticker-colors-list">{STICKER_COLORS.map(c => <option key={c} value={c} />)}</datalist>
       <datalist id="sizes-list">{sizes.map(s => <option key={s} value={s} />)}</datalist>
 
+      {page === "storage" && (
+        <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
+          {[["rented","Unidades alquiladas"],["warehouses","Warehouses propios"]].map(([t,l]) => (
+            <button key={t} onClick={() => setStorageTab(t)}
+              style={{ fontSize:13, fontWeight: storageTab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: storageTab === t ? "#111" : "#999", borderBottom: storageTab === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
+          ))}
+        </div>
+      )}
+
+      {/* WAREHOUSES (owned) — card layout with occupancy */}
+      {page === "storage" && storageTab === "warehouses" && (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))", gap:14 }}>
+          {WAREHOUSES.map(name => {
+            const meta = warehouseMeta[name];
+            const cap = meta && meta.total_capacity_cf != null ? Number(meta.total_capacity_cf) : null;
+            const used = usedCfByWarehouse[name] || 0;
+            const free = cap != null ? Math.max(0, cap - used) : null;
+            const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0;
+            const inside = jobs.filter(j => !j.date_out && j.warehouse === name);
+            const byJob = []; const seen = new Set();
+            for (const j of inside) { const k = jobKey(j); if (!seen.has(k)) { seen.add(k); byJob.push(j); } }
+            return (
+              <div key={name} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+                  <div>
+                    <div style={{ fontSize:16, fontWeight:700 }}>🏭 {name}</div>
+                    <div style={{ fontSize:12, color:"#999" }}>Warehouse propio</div>
+                  </div>
+                  <span style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>{byJob.length} job(s)</span>
+                </div>
+                {cap != null ? (
+                  <div style={{ marginBottom:14 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:5 }}>
+                      <span style={{ fontWeight:600, color:occColor(pct) }}>{pct}% ocupado</span>
+                      <span style={{ color:"#888" }}>{Math.round(used).toLocaleString()} usado · {Math.round(free).toLocaleString()} libre · {cap.toLocaleString()} CF</span>
+                    </div>
+                    <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}>
+                      <div style={{ background:occColor(pct), height:12, width:`${pct}%`, transition:"width .4s" }} />
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginBottom:14, fontSize:13, color:"#999" }}>Capacidad sin configurar · {Math.round(used).toLocaleString()} CF en uso</div>
+                )}
+                <div style={{ borderTop:"1px solid #f3f3f3", paddingTop:10, marginBottom:12 }}>
+                  {byJob.length === 0 ? (
+                    <div style={{ fontSize:12, color:"#bbb" }}>Sin jobs activos en este warehouse.</div>
+                  ) : (
+                    <div style={{ display:"flex", flexDirection:"column", gap:7, maxHeight:200, overflowY:"auto" }}>
+                      {byJob.map(j => (
+                        <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12 }}>
+                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                          <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}{j.driver ? ` · ${j.driver}` : ""}</span>
+                          {j.volume && <span style={{ color:"#888" }}>{parseCf(j.volume).toLocaleString()} CF</span>}
+                          {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc", flexShrink:0 }} title={j.sticker_color} />}
+                          {j.fadd && <span title="FADD" style={{ color:"#C2410C", whiteSpace:"nowrap" }}>{j.fadd}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <Btn primary disabled={!dbReady} onClick={() => openAddJobWarehouse(name)} style={{ padding:"6px 12px", fontSize:12 }}>+ Job</Btn>
+                  <Btn onClick={() => openCapacity({ kind:"warehouse", name, value: cap != null ? String(cap) : "" })} style={{ padding:"6px 12px", fontSize:12 }}>Editar capacidad</Btn>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {page === "jobs" && (
         <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
           {[["active","Activos"],["delivered","Entregados"],
@@ -1866,7 +2244,7 @@ export default function App() {
         </div>
       )}
 
-      {(page === "storage" || page === "jobs") && (<>
+      {((page === "storage" && storageTab === "rented") || page === "jobs") && (<>
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder={page === "storage" ? "Buscar empresa, ubicación, zip, unidad..." : "Buscar por job #, cliente, driver, zip, ubicación..."}
@@ -1891,20 +2269,22 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout:"fixed" }}>
               <colgroup>
                 <col style={{width:120}}/><col style={{width:55}}/><col style={{width:70}}/><col style={{width:150}}/>
-                <col style={{width:65}}/><col style={{width:110}}/><col style={{width:100}}/><col style={{width:85}}/><col style={{width:75}}/><col style={{width:80}}/>
+                <col style={{width:65}}/><col style={{width:110}}/><col style={{width:100}}/><col style={{width:85}}/><col style={{width:75}}/><col style={{width:80}}/><col style={{width:140}}/>
               </colgroup>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Apertura","Payment","Jobs activos","Situacion"].map(h => (
+                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Apertura","Payment","Jobs activos","Situacion","Ocupación"].map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {unitRows.length === 0 ? (
-                  <tr><td colSpan={10} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
+                  <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
                 ) : unitRows.map(r => {
                   const n = activeJobsByStorage[r.id] || 0;
+                  const cap = r.total_capacity_cf != null ? Number(r.total_capacity_cf) : null;
+                  const used = usedCfByStorage[r.id] || 0;
                   return (
                     <tr key={r.id} onClick={() => setDetailId(r.id)}
                       style={{ borderBottom:"1px solid #fafafa", cursor:"pointer" }}
@@ -1927,6 +2307,10 @@ export default function App() {
                         <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: n>0?"#EAF3DE":"#f5f5f5", color: n>0?"#3B6D11":"#bbb" }}>{n}</span>
                       </td>
                       <td style={{ padding:"10px 12px" }}><Badge situation={sit(r)} /></td>
+                      <td style={{ padding:"10px 12px" }} onClick={e => e.stopPropagation()}>
+                        {cap != null ? <OccupancyBar used={used} total={cap} />
+                          : <Btn onClick={() => openCapacity({ kind:"unit", id:r.id, value:"" })} style={{ padding:"4px 9px", fontSize:11 }}>Set capacity</Btn>}
+                      </td>
                     </tr>
                   );
                 })}
@@ -2048,6 +2432,11 @@ export default function App() {
               <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ Ver ruta storage → delivery en Google Maps</a>
             </div>
           )}
+          <EditRow label="Billing al cliente">
+            {jobDetail.billing_active
+              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Activo · {money(jobDetail.client_monthly_rate) || "$0"}/mes{jobDetail.first_month_free ? " · 1er mes gratis" : ""}{jobDetail.billing_start_date ? ` · desde ${jobDetail.billing_start_date}` : ""}</span>
+              : <span style={{ color:"#bbb" }}>No se cobra storage</span>}
+          </EditRow>
           <EditRow label="Notas"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
           </>
           ); })()}
@@ -2206,9 +2595,9 @@ export default function App() {
                 );
               })}
               <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Unidades alquiladas</div>
-              {records.length === 0 ? (
+              {records.filter(r => r.space_type !== "warehouse").length === 0 ? (
                 <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No hay unidades cargadas todavía.</div>
-              ) : records.map(r => {
+              ) : records.filter(r => r.space_type !== "warehouse").map(r => {
                 const checked = jobForm.storage_ids.includes(r.id);
                 return (
                   <label key={r.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
@@ -2271,7 +2660,45 @@ export default function App() {
             <Field label="Balance a cobrar en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={e => setJobForm(f => ({...f, delivery_balance:e.target.value}))} placeholder="0" /></Field>
             <Field label="Notas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
           </div>
+
+          <SectionLabel>Billing de storage al cliente</SectionLabel>
+          <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, cursor:"pointer", padding:"4px 0" }}>
+            <input type="checkbox" checked={!!jobForm.billing_active} onChange={e => setJobForm(f => ({...f, billing_active:e.target.checked}))} />
+            <span>Cobrar a este cliente por guardar (cada 30 días)</span>
+          </label>
+          {jobForm.billing_active && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
+              <Field label="Tarifa mensual ($)"><input style={inp} type="number" value={jobForm.client_monthly_rate} onChange={e => setJobForm(f => ({...f, client_monthly_rate:e.target.value}))} placeholder="ej: 150" /></Field>
+              <Field label="¿Primer mes gratis?">
+                <select style={inp} value={jobForm.first_month_free ? "yes" : "no"} onChange={e => setJobForm(f => ({...f, first_month_free: e.target.value === "yes"}))}>
+                  <option value="no">No</option>
+                  <option value="yes">Sí — empieza a cobrar a los 30 días</option>
+                </select>
+              </Field>
+              <Field label="Inicio de billing (auto, editable)" full>
+                <input style={inp} type="date"
+                  value={jobForm.billing_start_date || (jobForm.date_in ? (jobForm.first_month_free ? addDaysStr(jobForm.date_in, 30) : jobForm.date_in) : "")}
+                  onChange={e => setJobForm(f => ({...f, billing_start_date:e.target.value}))} />
+              </Field>
+            </div>
+          )}
           {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
+        </Modal>
+      )}
+
+      {capTarget && (
+        <Modal title={capTarget.kind === "warehouse" ? `Capacidad — ${capTarget.name}` : "Capacidad de la unidad"} onClose={() => setCapTarget(null)}
+          footer={<>
+            <Btn onClick={() => setCapTarget(null)}>Cancelar</Btn>
+            <Btn primary onClick={saveCapacity}>Guardar</Btn>
+          </>}>
+          <Field label="Capacidad total (CF)">
+            <input style={inp} type="number" autoFocus value={capTarget.value}
+              onChange={e => setCapTarget(t => ({ ...t, value:e.target.value }))}
+              onKeyDown={e => { if (e.key === "Enter") saveCapacity(); }}
+              placeholder="ej: 10000" />
+          </Field>
+          <p style={{ fontSize:12, color:"#999", marginTop:8 }}>Capacidad en pies cúbicos. La ocupación se calcula con el volumen (CF) de los jobs activos.</p>
         </Modal>
       )}
 
@@ -2332,7 +2759,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
