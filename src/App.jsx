@@ -602,6 +602,23 @@ const Field = ({ label, children, full }) => (
   </div>
 );
 
+// Collapsible titled section for the job form. Responsive grids stack on mobile.
+function FormSection({ title, defaultOpen = true, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ borderTop:"1px solid #f0f0f0", marginTop:12, paddingTop:4 }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"8px 0", textAlign:"left" }}>
+        <span style={{ fontSize:11, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.07em" }}>{title}</span>
+        <span style={{ flex:1 }} />
+        <span style={{ color:"#bbb", fontSize:11, transform: open ? "rotate(90deg)" : "none", transition:"transform .15s" }}>▸</span>
+      </button>
+      {open && <div style={{ paddingBottom:6 }}>{children}</div>}
+    </div>
+  );
+}
+const fgrid = { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10 };
+
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 
 function Btn({ onClick, primary, danger, disabled, children, style }) {
@@ -3819,176 +3836,225 @@ export default function App() {
             <Btn onClick={() => setShowAddJob(false)}>Cancelar</Btn>
             <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : (editingJobKey ? "Guardar cambios" : "Guardar job")}</Btn>
           </>}>
-          <Field label={`Dónde se guarda — opcional, podés elegir varias${(jobForm.storage_ids.length + jobForm.warehouses.length) ? ` (${jobForm.storage_ids.length + jobForm.warehouses.length})` : ""}`} full>
-            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:220, overflowY:"auto", background:"#fff" }}>
-              {(() => { const none = jobForm.storage_ids.length === 0 && jobForm.warehouses.length === 0; return (
-                <label onClick={() => setJobForm(f => ({ ...f, storage_ids: [], warehouses: [] }))}
-                  style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: none ? "#f0fdf4" : "#fff" }}>
-                  <input type="radio" readOnly checked={none} />
-                  <span style={{ color: none ? "#111" : "#888" }}>— Sin asignar —</span>
+          {(() => {
+            const t = jobForm.job_type;
+            const u = (k) => (e) => setJobForm(f => ({ ...f, [k]: e.target.value }));
+            const uUp = (k) => (e) => setJobForm(f => ({ ...f, [k]: e.target.value.toUpperCase() }));
+
+            const basicInfo = (
+              <FormSection title="Información básica">
+                <div style={fgrid}>
+                  <Field label="Job # *"><input style={inp} value={jobForm.job_number} onChange={u("job_number")} placeholder="B8417142" /></Field>
+                  <Field label="Tipo de job *">
+                    <select style={inp} value={jobForm.job_type} onChange={u("job_type")}>
+                      {JOB_TYPES.map(x => <option key={x.v} value={x.v}>{x.l}{x.v==="full"?" (pickup → storage → delivery)":x.v==="direct"?" (pickup → delivery)":" (solo delivery)"}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Broker">
+                    <select style={inp} value={jobForm.broker_id} onChange={u("broker_id")}>
+                      <option value="">— Sin broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Cliente *"><input style={inp} value={jobForm.customer} onChange={u("customer")} placeholder="Nombre del cliente" /></Field>
+                  <Field label="Teléfono del cliente"><input style={inp} value={jobForm.client_phone} onChange={u("client_phone")} placeholder="(555) 123-4567" /></Field>
+                  <Field label="Email del cliente"><input style={inp} value={jobForm.client_email} onChange={u("client_email")} placeholder="cliente@email.com" /></Field>
+                  <Field label="Rep (interno)"><input style={inp} value={jobForm.rep} onChange={u("rep")} placeholder="Rep" /></Field>
+                  <Field label="Estado">
+                    <select style={inp} value={jobForm.status} onChange={u("status")}>{STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}</select>
+                  </Field>
+                </div>
+                <div style={{ marginTop:10 }}>
+                  <label style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Driver{(jobForm.driver_ids?.length) ? ` (${jobForm.driver_ids.length})` : ""}</label>
+                  {driversList.length === 0 ? (
+                    <input style={{ ...inp, marginTop:4 }} list="drivers-list" value={jobForm.driver} onChange={u("driver")} placeholder="Cargá drivers en la sección Drivers para multi-asignar" />
+                  ) : (
+                    <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:130, overflowY:"auto", background:"#fff", marginTop:4 }}>
+                      {driversList.filter(d => d.active !== false).map(d => {
+                        const checked = Array.isArray(jobForm.driver_ids) && jobForm.driver_ids.includes(d.id);
+                        return (
+                          <label key={d.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleJobDriver(d.id)} />
+                            <span>🧑‍✈️ {d.name}{d.truck_id ? ` · ${d.truck_id}` : ""}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </FormSection>
+            );
+
+            const pickup = (
+              <FormSection title="Pick up">
+                <div style={fgrid}>
+                  <Field label="Pick up from"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={u("pickup_date_from")} /></Field>
+                  <Field label="Pick up to (opcional)"><input style={inp} type="date" value={jobForm.pickup_date_to} onChange={u("pickup_date_to")} /></Field>
+                  <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Dirección de pickup" /></Field>
+                  <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="Ciudad" /></Field>
+                  <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
+                  <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={u("pickup_zip")} placeholder="10001" /></Field>
+                  <Field label="Extra stops" full><input style={inp} value={jobForm.extra_stops} onChange={u("extra_stops")} placeholder="paradas adicionales" /></Field>
+                </div>
+              </FormSection>
+            );
+
+            const delivery = (
+              <FormSection title="Delivery">
+                <div style={fgrid}>
+                  <Field label="FADD *"><input style={inp} type="date" value={jobForm.fadd} onChange={u("fadd")} /></Field>
+                  <Field label="Delivery date"><input style={inp} type="date" value={jobForm.delivery_date} onChange={u("delivery_date")} /></Field>
+                  <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Dirección de entrega" /></Field>
+                  <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="Ciudad" /></Field>
+                  <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
+                  <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={u("delivery_zip")} placeholder="07030" /></Field>
+                </div>
+              </FormSection>
+            );
+
+            const load = (
+              <FormSection title="Load / Carga">
+                <div style={fgrid}>
+                  <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={u("volume")} placeholder="ej: 1200" /></Field>
+                  <Field label="Color del sticker">
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
+                      <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={u("sticker_color")} placeholder="Rojo, Azul..." />
+                    </div>
+                  </Field>
+                  <Field label="Lot number"><input style={inp} value={jobForm.lot_number} onChange={u("lot_number")} placeholder="LOT-4821" /></Field>
+                  <Field label="Carrier notes" full><input style={inp} value={jobForm.carrier_notes} onChange={u("carrier_notes")} placeholder="Notas para el carrier/driver" /></Field>
+                  <Field label="Notas internas" full><input style={inp} value={jobForm.notes} onChange={u("notes")} placeholder="Notas del job" /></Field>
+                </div>
+              </FormSection>
+            );
+
+            const financialsFull = (
+              <FormSection title="Financiero">
+                <div style={fgrid}>
+                  <Field label="Estimate ($)"><input style={inp} type="number" value={jobForm.estimate} onChange={u("estimate")} placeholder="0" /></Field>
+                  <Field label="Deposit ($)"><input style={inp} type="number" value={jobForm.deposit} onChange={u("deposit")} placeholder="0" /></Field>
+                  <Field label="Balance en pickup ($)"><input style={inp} type="number" value={jobForm.pickup_balance} onChange={u("pickup_balance")} placeholder="0" /></Field>
+                  <Field label="Balance en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={u("delivery_balance")} placeholder="0" /></Field>
+                  <Field label="Precio / CF ($)"><input style={inp} type="number" value={jobForm.price_per_cf} onChange={u("price_per_cf")} placeholder="0.65" /></Field>
+                  <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={jobForm.fuel_surcharge_pct} onChange={u("fuel_surcharge_pct")} placeholder="5" /></Field>
+                </div>
+              </FormSection>
+            );
+
+            const carrierTotal = parseCf(jobForm.volume) * numv(jobForm.carrier_rate_per_cf);
+            const financialsBroker = (
+              <FormSection title="Financiero (broker delivery)">
+                <div style={fgrid}>
+                  <Field label="BOL balance a cobrar al cliente ($)"><input style={inp} type="number" value={jobForm.bol_balance} onChange={u("bol_balance")} placeholder="0" /></Field>
+                  <Field label="Carrier rate / CF ($)"><input style={inp} type="number" value={jobForm.carrier_rate_per_cf} onChange={u("carrier_rate_per_cf")} placeholder="0.55" /></Field>
+                  <Field label="Carrier total (CF × rate)"><div style={{ ...inp, background:"#fafafa", fontWeight:700 }}>{money(carrierTotal) || "$0"}</div></Field>
+                  {!settlementsMissing && (
+                    <Field label="Closing sheet" full>
+                      <select style={inp} value={jobForm.closing_sheet_id === "" || jobForm.closing_sheet_id == null ? "" : String(jobForm.closing_sheet_id)} onChange={e => setJobForm(f => ({...f, closing_sheet_id: e.target.value === "" ? "" : (e.target.value === "__new__" ? "__new__" : Number(e.target.value))}))}>
+                        <option value="">— Sin closing sheet —</option>
+                        {(() => { const cur = jobForm.closing_sheet_id; const linked = cur && cur !== "__new__" ? closingSheets.find(s => s.id === Number(cur)) : null; return (linked && linked.status !== "open") ? <option value={String(linked.id)}>#{linked.closing_sheet_number || linked.id} ({linked.status})</option> : null; })()}
+                        {closingSheets.filter(s => s.status === "open").map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "sin broker"}</option>)}
+                        <option value="__new__">➕ Crear nuevo closing sheet</option>
+                      </select>
+                    </Field>
+                  )}
+                  <Field label="BOL cobrado ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={u("bol_collected")} placeholder="0" /></Field>
+                  <Field label="Método de pago"><select style={inp} value={jobForm.bol_payment_method} onChange={u("bol_payment_method")}><option value="">—</option>{PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}</select></Field>
+                  <Field label="Fecha de cobro"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={u("bol_collected_date")} /></Field>
+                </div>
+              </FormSection>
+            );
+
+            const storageBlock = (
+              <FormSection title={`Storage (opcional)${(jobForm.storage_ids.length + jobForm.warehouses.length) ? ` · ${jobForm.storage_ids.length + jobForm.warehouses.length}` : ""}`} defaultOpen={false}>
+                <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:200, overflowY:"auto", background:"#fff" }}>
+                  {(() => { const none = jobForm.storage_ids.length === 0 && jobForm.warehouses.length === 0; return (
+                    <label onClick={() => setJobForm(f => ({ ...f, storage_ids: [], warehouses: [] }))}
+                      style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: none ? "#f0fdf4" : "#fff" }}>
+                      <input type="radio" readOnly checked={none} />
+                      <span style={{ color: none ? "#111" : "#888" }}>— Sin asignar —</span>
+                    </label>
+                  ); })()}
+                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Warehouses propios</div>
+                  {WAREHOUSES.map(w => {
+                    const checked = jobForm.warehouses.includes(w);
+                    return (
+                      <label key={w} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleJobWarehouse(w)} /><span>🏭 Warehouse {w}</span>
+                      </label>
+                    );
+                  })}
+                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Unidades alquiladas</div>
+                  {records.filter(r => r.space_type !== "warehouse").length === 0 ? (
+                    <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No hay unidades cargadas todavía.</div>
+                  ) : records.filter(r => r.space_type !== "warehouse").map(r => {
+                    const checked = jobForm.storage_ids.includes(r.id);
+                    return (
+                      <label key={r.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleJobUnit(r.id)} />
+                        <span>{[r.brand, r.unit && `Unidad ${r.unit}`, r.state].filter(Boolean).join(" · ") || `Unidad #${r.id}`}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <Field label="Date in (a storage)"><input style={{ ...inp, marginTop:8, maxWidth:200 }} type="date" value={jobForm.date_in} onChange={u("date_in")} /></Field>
+              </FormSection>
+            );
+
+            const billingBlock = (
+              <FormSection title="Storage billing al cliente (opcional)" defaultOpen={false}>
+                <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, cursor:"pointer", padding:"4px 0" }}>
+                  <input type="checkbox" checked={!!jobForm.billing_active} onChange={e => setJobForm(f => ({...f, billing_active:e.target.checked}))} />
+                  <span>Cobrar a este cliente por guardar (cada 30 días)</span>
                 </label>
-              ); })()}
-              <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Warehouses propios</div>
-              {WAREHOUSES.map(w => {
-                const checked = jobForm.warehouses.includes(w);
-                return (
-                  <label key={w} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleJobWarehouse(w)} />
-                    <span>🏭 Warehouse {w}</span>
-                  </label>
-                );
-              })}
-              <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Unidades alquiladas</div>
-              {records.filter(r => r.space_type !== "warehouse").length === 0 ? (
-                <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No hay unidades cargadas todavía.</div>
-              ) : records.filter(r => r.space_type !== "warehouse").map(r => {
-                const checked = jobForm.storage_ids.includes(r.id);
-                return (
-                  <label key={r.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleJobUnit(r.id)} />
-                    <span>{[r.brand, r.unit && `Unidad ${r.unit}`, r.state].filter(Boolean).join(" · ") || `Unidad #${r.id}`}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </Field>
-          <SectionLabel>1 · Información básica</SectionLabel>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Job #"><input style={inp} value={jobForm.job_number} onChange={e => setJobForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
-            <Field label="Cliente"><input style={inp} value={jobForm.customer} onChange={e => setJobForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
-            <Field label="Tipo de job">
-              <select style={inp} value={jobForm.job_type} onChange={e => setJobForm(f => ({...f, job_type:e.target.value}))}>
-                {JOB_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}{t.v==="full"?" (pickup → storage → delivery)":t.v==="direct"?" (pickup → delivery)":" (solo delivery)"}</option>)}
-              </select>
-            </Field>
-            <Field label="Estado">
-              <select style={inp} value={jobForm.status} onChange={e => setJobForm(f => ({...f, status:e.target.value}))}>
-                {STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
-              </select>
-            </Field>
-            <Field label="Broker">
-              <select style={inp} value={jobForm.broker_id} onChange={e => setJobForm(f => ({...f, broker_id:e.target.value}))}>
-                <option value="">— Sin broker —</option>
-                {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Rep (interno)"><input style={inp} value={jobForm.rep} onChange={e => setJobForm(f => ({...f, rep:e.target.value}))} placeholder="Rep que maneja el job" /></Field>
-            <Field label="Teléfono del cliente"><input style={inp} value={jobForm.client_phone} onChange={e => setJobForm(f => ({...f, client_phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
-            <Field label="Email del cliente"><input style={inp} value={jobForm.client_email} onChange={e => setJobForm(f => ({...f, client_email:e.target.value}))} placeholder="cliente@email.com" /></Field>
-          </div>
+                {jobForm.billing_active && (
+                  <div style={{ ...fgrid, marginTop:8 }}>
+                    <Field label="Tarifa mensual ($)"><input style={inp} type="number" value={jobForm.client_monthly_rate} onChange={u("client_monthly_rate")} placeholder="ej: 150" /></Field>
+                    <Field label="¿Primer mes gratis?">
+                      <select style={inp} value={jobForm.first_month_free ? "yes" : "no"} onChange={e => setJobForm(f => ({...f, first_month_free: e.target.value === "yes"}))}>
+                        <option value="no">No</option><option value="yes">Sí — cobra a los 30 días</option>
+                      </select>
+                    </Field>
+                    <Field label="Inicio de billing (auto, editable)" full>
+                      <input style={inp} type="date" value={jobForm.billing_start_date || (jobForm.date_in ? (jobForm.first_month_free ? addDaysStr(jobForm.date_in, 30) : jobForm.date_in) : "")} onChange={u("billing_start_date")} />
+                    </Field>
+                  </div>
+                )}
+              </FormSection>
+            );
 
-          <SectionLabel>2 · Pick up</SectionLabel>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Pick up from"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={e => setJobForm(f => ({...f, pickup_date_from:e.target.value}))} /></Field>
-            <Field label="Pick up to (opcional)"><input style={inp} type="date" value={jobForm.pickup_date_to} onChange={e => setJobForm(f => ({...f, pickup_date_to:e.target.value}))} /></Field>
-            <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={e => setJobForm(f => ({...f, pickup_address:e.target.value}))} placeholder="Dirección de pickup" /></Field>
-            <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={e => setJobForm(f => ({...f, pickup_city:e.target.value}))} placeholder="Ciudad" /></Field>
-            <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={e => setJobForm(f => ({...f, pickup_state:e.target.value.toUpperCase()}))} placeholder="NY" /></Field>
-            <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={e => setJobForm(f => ({...f, pickup_zip:e.target.value}))} placeholder="ej: 10001" /></Field>
-            <Field label="Extra stops (paradas adicionales)" full><input style={inp} value={jobForm.extra_stops} onChange={e => setJobForm(f => ({...f, extra_stops:e.target.value}))} placeholder="ej: 123 Main St, Town" /></Field>
-          </div>
+            const directPickDeliver = (
+              <FormSection title="Pick up + Delivery (mismo día)">
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:14 }}>
+                  <div>
+                    <div style={{ fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Pick up</div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      <Field label="Pickup date"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={u("pickup_date_from")} /></Field>
+                      <Field label="Pickup address"><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Dirección de pickup" /></Field>
+                      <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="Ciudad" /></Field>
+                      <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Delivery</div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      <Field label="FADD *"><input style={inp} type="date" value={jobForm.fadd} onChange={u("fadd")} /></Field>
+                      <Field label="Delivery address"><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Dirección de entrega" /></Field>
+                      <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="Ciudad" /></Field>
+                      <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
+                    </div>
+                  </div>
+                </div>
+              </FormSection>
+            );
 
-          <SectionLabel>3 · Delivery</SectionLabel>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={e => setJobForm(f => ({...f, delivery_address:e.target.value}))} placeholder="Dirección de entrega" /></Field>
-            <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={e => setJobForm(f => ({...f, delivery_city:e.target.value}))} placeholder="Ciudad" /></Field>
-            <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={e => setJobForm(f => ({...f, delivery_state:e.target.value.toUpperCase()}))} placeholder="NJ" /></Field>
-            <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={e => setJobForm(f => ({...f, delivery_zip:e.target.value}))} placeholder="ej: 07030" /></Field>
-            <Field label="Delivery date"><input style={inp} type="date" value={jobForm.delivery_date} onChange={e => setJobForm(f => ({...f, delivery_date:e.target.value}))} /></Field>
-            <Field label="FADD — First Available Delivery Date"><input style={inp} type="date" value={jobForm.fadd} onChange={e => setJobForm(f => ({...f, fadd:e.target.value}))} /></Field>
-          </div>
-
-          <SectionLabel>4 · Financiero</SectionLabel>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
-            <Field label="Precio / CF ($)"><input style={inp} type="number" value={jobForm.price_per_cf} onChange={e => setJobForm(f => ({...f, price_per_cf:e.target.value}))} placeholder="ej: 0.65" /></Field>
-            <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={jobForm.fuel_surcharge_pct} onChange={e => setJobForm(f => ({...f, fuel_surcharge_pct:e.target.value}))} placeholder="ej: 5" /></Field>
-            <Field label="Estimate ($)"><input style={inp} type="number" value={jobForm.estimate} onChange={e => setJobForm(f => ({...f, estimate:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Deposit ($)"><input style={inp} type="number" value={jobForm.deposit} onChange={e => setJobForm(f => ({...f, deposit:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Balance en pickup ($)"><input style={inp} type="number" value={jobForm.pickup_balance} onChange={e => setJobForm(f => ({...f, pickup_balance:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Balance en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={e => setJobForm(f => ({...f, delivery_balance:e.target.value}))} placeholder="0" /></Field>
-          </div>
-
-          <SectionLabel>5 · Carga física</SectionLabel>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200" /></Field>
-            <Field label="Color del sticker">
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
-                <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={e => setJobForm(f => ({...f, sticker_color:e.target.value}))} placeholder="Rojo, Azul..." />
-              </div>
-            </Field>
-            <Field label="Lot number (del sticker)"><input style={inp} value={jobForm.lot_number} onChange={e => setJobForm(f => ({...f, lot_number:e.target.value}))} placeholder="ej: LOT-4821" /></Field>
-            <Field label="Date in (a storage)"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
-            <Field label="Carrier notes" full><input style={inp} value={jobForm.carrier_notes} onChange={e => setJobForm(f => ({...f, carrier_notes:e.target.value}))} placeholder="Notas para el carrier/driver" /></Field>
-            <Field label="Notas internas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
-          </div>
-
-          <SectionLabel>6 · Asignación de driver{(jobForm.driver_ids?.length) ? ` (${jobForm.driver_ids.length})` : ""}</SectionLabel>
-          {driversList.length === 0 ? (
-            <Field label="Driver (texto libre)"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Cargá drivers en la sección Drivers para multi-asignar" /></Field>
-          ) : (
-            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:160, overflowY:"auto", background:"#fff" }}>
-              {driversList.filter(d => d.active !== false).map(d => {
-                const checked = Array.isArray(jobForm.driver_ids) && jobForm.driver_ids.includes(d.id);
-                return (
-                  <label key={d.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleJobDriver(d.id)} />
-                    <span>🧑‍✈️ {d.name}{d.truck_id ? ` · ${d.truck_id}` : ""}</span>
-                  </label>
-                );
-              })}
-            </div>
-          )}
-
-          <SectionLabel>7 · Billing de storage al cliente</SectionLabel>
-          <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, cursor:"pointer", padding:"4px 0" }}>
-            <input type="checkbox" checked={!!jobForm.billing_active} onChange={e => setJobForm(f => ({...f, billing_active:e.target.checked}))} />
-            <span>Cobrar a este cliente por guardar (cada 30 días)</span>
-          </label>
-          {jobForm.billing_active && (
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
-              <Field label="Tarifa mensual ($)"><input style={inp} type="number" value={jobForm.client_monthly_rate} onChange={e => setJobForm(f => ({...f, client_monthly_rate:e.target.value}))} placeholder="ej: 150" /></Field>
-              <Field label="¿Primer mes gratis?">
-                <select style={inp} value={jobForm.first_month_free ? "yes" : "no"} onChange={e => setJobForm(f => ({...f, first_month_free: e.target.value === "yes"}))}>
-                  <option value="no">No</option>
-                  <option value="yes">Sí — empieza a cobrar a los 30 días</option>
-                </select>
-              </Field>
-              <Field label="Inicio de billing (auto, editable)" full>
-                <input style={inp} type="date"
-                  value={jobForm.billing_start_date || (jobForm.date_in ? (jobForm.first_month_free ? addDaysStr(jobForm.date_in, 30) : jobForm.date_in) : "")}
-                  onChange={e => setJobForm(f => ({...f, billing_start_date:e.target.value}))} />
-              </Field>
-            </div>
-          )}
-          <SectionLabel>8 · Carrier Settlement{jobForm.job_type === "broker_delivery" ? " (requerido para broker delivery)" : ""}</SectionLabel>
-          {settlementsMissing ? (
-            <div style={{ fontSize:12, color:"#999" }}>Activá el módulo de Settlements para vincular closing sheets.</div>
-          ) : (() => {
-            const cur = jobForm.closing_sheet_id;
-            const linked = cur && cur !== "__new__" ? closingSheets.find(s => s.id === Number(cur)) : null;
-            const openSheets = closingSheets.filter(s => s.status === "open");
             return (
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                <Field label="Closing sheet" full>
-                  <select style={inp} value={cur === "" || cur == null ? "" : String(cur)} onChange={e => setJobForm(f => ({...f, closing_sheet_id: e.target.value === "" ? "" : (e.target.value === "__new__" ? "__new__" : Number(e.target.value))}))}>
-                    <option value="">— Sin closing sheet —</option>
-                    {linked && linked.status !== "open" && <option value={String(linked.id)}>#{linked.closing_sheet_number || linked.id} ({linked.status})</option>}
-                    {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "sin broker"}</option>)}
-                    <option value="__new__">➕ Crear nuevo closing sheet</option>
-                  </select>
-                </Field>
-                <Field label="Carrier rate / CF ($)"><input style={inp} type="number" value={jobForm.carrier_rate_per_cf} onChange={e => setJobForm(f => ({...f, carrier_rate_per_cf:e.target.value}))} placeholder="ej: 0.55" /></Field>
-                <Field label="BOL balance a cobrar ($)"><input style={inp} type="number" value={jobForm.bol_balance} onChange={e => setJobForm(f => ({...f, bol_balance:e.target.value}))} placeholder="0" /></Field>
-                <Field label="BOL cobrado ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={e => setJobForm(f => ({...f, bol_collected:e.target.value}))} placeholder="0" /></Field>
-                <Field label="Método de pago">
-                  <select style={inp} value={jobForm.bol_payment_method} onChange={e => setJobForm(f => ({...f, bol_payment_method:e.target.value}))}>
-                    <option value="">—</option>{PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
-                  </select>
-                </Field>
-                <Field label="Fecha de cobro"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={e => setJobForm(f => ({...f, bol_collected_date:e.target.value}))} /></Field>
-                <Field label="Notas de pago" full><input style={inp} value={jobForm.bol_payment_notes} onChange={e => setJobForm(f => ({...f, bol_payment_notes:e.target.value}))} placeholder="ej: $500 cash + $300 Zelle" /></Field>
-              </div>
+              <>
+                {basicInfo}
+                {t === "broker_delivery" && <>{delivery}{load}{financialsBroker}{storageBlock}</>}
+                {t === "full" && <>{pickup}{delivery}{load}{financialsFull}{storageBlock}{billingBlock}</>}
+                {t === "direct" && <>{directPickDeliver}{load}{financialsFull}</>}
+              </>
             );
           })()}
           {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
