@@ -56,6 +56,90 @@ function TripBadge({ status }) {
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
 }
 const TRIP_ACTIVE = (s) => s === "loading" || s === "in_transit";
+
+// ── Extras & Commissions ──
+const EXTRA_TYPES = [
+  { v:"extra_cf", l:"Extra CF" },
+  { v:"shuttle", l:"Shuttle" },
+  { v:"long_carry", l:"Long carry" },
+  { v:"stairs", l:"Stairs" },
+  { v:"packing", l:"Packing" },
+  { v:"flight_charge", l:"Flight charge" },
+  { v:"other", l:"Other" },
+];
+const extraTypeLabel = (v) => EXTRA_TYPES.find(t => t.v === v)?.l || v;
+const GEN_BY = [
+  { v:"driver_only", l:"Driver only" },
+  { v:"driver_and_rep", l:"Driver + Rep" },
+  { v:"rep_only", l:"Rep only" },
+];
+const genByLabel = (v) => GEN_BY.find(g => g.v === v)?.l || v;
+// Long carry / stairs are always driver-only (driver 50% / company 50%).
+const EXTRA_LOCKED_DRIVER = (t) => t === "long_carry" || t === "stairs";
+// Commission % auto-fill rules. Returns { driver, rep } percentages; always editable after.
+function commissionDefaults(extraType, generatedBy) {
+  if (extraType === "long_carry" || extraType === "stairs") return { driver:50, rep:0 };
+  if (extraType === "shuttle") {
+    if (generatedBy === "driver_only") return { driver:10, rep:0 };
+    if (generatedBy === "driver_and_rep") return { driver:7, rep:3 };
+    if (generatedBy === "rep_only") return { driver:0, rep:5 };
+  }
+  // extra_cf, packing, flight_charge, other
+  if (generatedBy === "driver_only") return { driver:10, rep:0 };
+  if (generatedBy === "driver_and_rep") return { driver:7, rep:3 };
+  if (generatedBy === "rep_only") return { driver:0, rep:10 };
+  return { driver:0, rep:0 };
+}
+const EMPTY_EMPLOYEE = { name:"", role:"", phone:"", email:"", active:true };
+
+// One row of the per-job extras matrix. A row is "active" when an extra exists for
+// this (job, type, driver). Editing amount/% persists on blur; selects persist on change.
+function ExtraRow({ type, extra, driverId, employees, onActivate, onPatch, onToggle, onDelete }) {
+  const active = !!extra && extra.active !== false;
+  const locked = EXTRA_LOCKED_DRIVER(type);
+  const [amount, setAmount] = useState(extra?.amount ?? "");
+  const [dPct, setDPct] = useState(extra?.driver_commission_pct ?? "");
+  const [rPct, setRPct] = useState(extra?.rep_commission_pct ?? "");
+  const [desc, setDesc] = useState(extra?.description ?? "");
+  useEffect(() => {
+    setAmount(extra?.amount ?? ""); setDPct(extra?.driver_commission_pct ?? "");
+    setRPct(extra?.rep_commission_pct ?? ""); setDesc(extra?.description ?? "");
+  }, [extra?.id, extra?.amount, extra?.driver_commission_pct, extra?.rep_commission_pct, extra?.description]);
+  const gen = extra?.generated_by || "driver_only";
+  const cell = { padding:"5px 6px", fontSize:12, verticalAlign:"middle" };
+  const miniInp = { fontSize:12, padding:"4px 6px", borderRadius:6, border:"1px solid #e5e5e5", width:62, outline:"none" };
+  const dc = numv(amount) * numv(dPct) / 100;
+  const rc = numv(amount) * numv(rPct) / 100;
+  return (
+    <tr style={{ borderBottom:"1px solid #f6f6f6", background: active ? "#fff" : "#fcfcfc" }}>
+      <td style={{ ...cell, textAlign:"center" }}>
+        <input type="checkbox" checked={active}
+          onChange={e => { if (e.target.checked) { extra ? onToggle(extra, true) : onActivate(type); } else if (extra) onToggle(extra, false); }} />
+      </td>
+      <td style={{ ...cell, fontWeight:600, whiteSpace:"nowrap" }}>
+        {extraTypeLabel(type)}
+        {type === "other" && active && <input value={desc} onChange={e => setDesc(e.target.value)} onBlur={() => onPatch(extra, { description: desc })} placeholder="Detalle" style={{ ...miniInp, width:120, marginLeft:6 }} />}
+      </td>
+      <td style={cell}>{active ? <input value={amount} onChange={e => setAmount(e.target.value)} onBlur={() => onPatch(extra, { amount })} placeholder="$" style={{ ...miniInp, width:78 }} /> : <span style={{ color:"#ccc" }}>—</span>}</td>
+      <td style={cell}>{active ? (
+        <select value={gen} disabled={locked} onChange={e => onPatch(extra, { generated_by: e.target.value })} style={{ ...miniInp, width:108, opacity: locked ? 0.6 : 1 }}>
+          {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
+        </select>
+      ) : <span style={{ color:"#ccc" }}>—</span>}</td>
+      <td style={cell}>{active && gen !== "driver_only" ? (
+        <select value={extra?.rep_id || ""} onChange={e => onPatch(extra, { rep_id: e.target.value || null })} style={{ ...miniInp, width:108 }}>
+          <option value="">— Rep —</option>
+          {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
+        </select>
+      ) : <span style={{ color:"#ccc" }}>—</span>}</td>
+      <td style={cell}>{active ? <input value={dPct} onChange={e => setDPct(e.target.value)} onBlur={() => onPatch(extra, { driver_commission_pct: dPct })} style={miniInp} /> : null}</td>
+      <td style={cell}>{active ? <input value={rPct} onChange={e => setRPct(e.target.value)} onBlur={() => onPatch(extra, { rep_commission_pct: rPct })} style={miniInp} /> : null}</td>
+      <td style={{ ...cell, color:"#1A8A4E", fontWeight:700, whiteSpace:"nowrap" }}>{active ? (money(dc) || "$0") : ""}</td>
+      <td style={{ ...cell, color:"#185FA5", fontWeight:700, whiteSpace:"nowrap" }}>{active ? (money(rc) || "$0") : ""}</td>
+      <td style={{ ...cell, textAlign:"center" }}>{active && extra ? <button onClick={() => onDelete(extra)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, lineHeight:1 }}>×</button> : null}</td>
+    </tr>
+  );
+}
 const EMPTY_CS = { closing_sheet_number:"", broker_id:"", driver_id:"", load_date:"", status:"open", charge_per_pad:"7", trip_cost:"", labor_charges:"", other_fees:"", other_fees_description:"", notes:"", document_url:"", job_keys:[] };
 const CS_STATUS = {
   open:     { l:"Open", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },
@@ -466,6 +550,45 @@ alter table public.storage_jobs
 
 do $$ begin alter publication supabase_realtime add table public.trucks; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.trips; exception when others then null; end $$;`;
+
+// Extras & Commissions: employees (reps) + per-job extras with commission split.
+const EXTRAS_SQL = `create table if not exists public.employees (
+  id bigint generated always as identity primary key,
+  name text,
+  role text,
+  phone text,
+  email text,
+  active boolean default true,
+  created_at timestamptz default now()
+);
+alter table public.employees enable row level security;
+drop policy if exists "employees_all" on public.employees;
+create policy "employees_all" on public.employees for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.job_extras (
+  id bigint generated always as identity primary key,
+  job_id bigint references public.storage_jobs(id) on delete cascade,
+  extra_type text,
+  description text,
+  amount numeric,
+  generated_by text default 'driver_only',
+  driver_id bigint references public.drivers(id),
+  rep_id bigint references public.employees(id),
+  driver_commission_pct numeric,
+  rep_commission_pct numeric,
+  driver_commission_amount numeric,
+  rep_commission_amount numeric,
+  company_amount numeric,
+  active boolean default true,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.job_extras enable row level security;
+drop policy if exists "job_extras_all" on public.job_extras;
+create policy "job_extras_all" on public.job_extras for all to anon, authenticated using (true) with check (true);
+
+do $$ begin alter publication supabase_realtime add table public.employees; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.job_extras; exception when others then null; end $$;`;
 
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
@@ -1041,6 +1164,7 @@ const NAV = [
     { id:"brokers", label:"Brokers", icon:"🏦" },
     { id:"billing", label:"Billing", icon:"🧾" },
     { id:"settlements", label:"Settlements", icon:"📑" },
+    { id:"extras", label:"Extras", icon:"➕" },
     { id:"clientes", label:"Clientes", icon:"👥" },
   ]},
   { section:"Fleet", items:[
@@ -1096,6 +1220,7 @@ const PAGE_META = {
   brokers:     { title:"Brokers", sub:"Brokers y balances pendientes" },
   billing:     { title:"Billing", sub:"Cobro de storage a clientes" },
   settlements: { title:"Carrier Settlements", sub:"Closing sheets de broker deliveries" },
+  extras:      { title:"Extras & Comisiones", sub:"Extras por job y comisiones de driver/rep" },
   clientes:    { title:"Clientes", sub:"Clientes y sus trabajos" },
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
@@ -1195,6 +1320,18 @@ export default function App() {
   const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
   const [editingTruckId, setEditingTruckId] = useState(null);
   const [truckSaving, setTruckSaving] = useState(false);
+  // Extras & commissions
+  const [extrasMissing, setExtrasMissing] = useState(false);
+  const [jobExtras, setJobExtras] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [exDriver, setExDriver] = useState("");           // filter: driver id
+  const [exRep, setExRep] = useState("");                 // filter: rep id
+  const [exMonth, setExMonth] = useState(today().slice(0, 7)); // "YYYY-MM"
+  const [exType, setExType] = useState("");               // filter: extra type
+  const [showEmpModal, setShowEmpModal] = useState(false);
+  const [empForm, setEmpForm] = useState(EMPTY_EMPLOYEE);
+  const [empSaving, setEmpSaving] = useState(false);
+  const [quickExtra, setQuickExtra] = useState(null);     // job-detail quick-add form
   const fileRef = useRef();
   const autoGenRef = useRef(false);
   const tripCompleteRef = useRef(false);
@@ -1244,6 +1381,14 @@ export default function App() {
   const loadTrucks = useCallback(async () => {
     const { data, error } = await supabase.from("trucks").select("*").order("name", { ascending: true });
     if (!error) setTrucksList(data || []);
+  }, []);
+  const loadExtras = useCallback(async () => {
+    const { data, error } = await supabase.from("job_extras").select("*").order("created_at", { ascending: false });
+    if (!error) setJobExtras(data || []);
+  }, []);
+  const loadEmployees = useCallback(async () => {
+    const { data, error } = await supabase.from("employees").select("*").order("name", { ascending: true });
+    if (!error) setEmployees(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -1447,6 +1592,36 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, tripsMissing, loadTrips, loadTrucks]);
+
+  // Probe the Extras & Commissions module (job_extras + employees tables).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: eErr } = await supabase.from("job_extras").select("id").limit(1);
+      const { error: empErr } = await supabase.from("employees").select("id").limit(1);
+      if (cancelled) return;
+      if (!eErr && !empErr) { loadExtras(); loadEmployees(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: EXTRAS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { loadExtras(); loadEmployees(); }
+      else setExtrasMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadExtras, loadEmployees]);
+
+  useEffect(() => {
+    if (!session || extrasMissing) return;
+    const channel = supabase.channel("extras-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_extras" }, () => loadExtras())
+      .on("postgres_changes", { event: "*", schema: "public", table: "employees" }, () => loadEmployees())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, extrasMissing, loadExtras, loadEmployees]);
 
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
@@ -1962,6 +2137,47 @@ export default function App() {
     })();
   }, [session, tripsMissing, trips, jobs, tripCalc, loadTrips]);
 
+  // ── Extras & commissions derived data ──
+  const empById = useMemo(() => { const m = {}; for (const e of employees) m[e.id] = e; return m; }, [employees]);
+  const jobKeyByRowId = useMemo(() => { const m = {}; for (const j of jobs) m[j.id] = jobKey(j); return m; }, [jobs]);
+  // Distinct-by-jobKey job groups (light) for the extras module, with a representative
+  // row id (smallest) used as the FK target when creating extras.
+  const extraJobGroups = useMemo(() => {
+    const m = new Map();
+    for (const j of jobs) {
+      const k = jobKey(j);
+      if (!m.has(k)) m.set(k, { key:k, job_number:j.job_number, customer:j.customer, broker_id:j.broker_id, rep:j.rep, date_in:j.date_in, created_at:j.created_at, driver_ids: Array.isArray(j.driver_ids) ? j.driver_ids : [], ids:[] });
+      const g = m.get(k);
+      g.ids.push(j.id);
+      if (!g.date_in && j.date_in) g.date_in = j.date_in;
+    }
+    for (const g of m.values()) g.repId = Math.min(...g.ids);
+    return m;
+  }, [jobs]);
+  const groupMonth = useCallback((g) => (g.date_in || g.created_at || "").slice(0, 7), []);
+  const extrasByJobKey = useMemo(() => {
+    const m = {};
+    for (const e of jobExtras) { const k = jobKeyByRowId[e.job_id]; if (!k) continue; (m[k] = m[k] || []).push(e); }
+    return m;
+  }, [jobExtras, jobKeyByRowId]);
+  const jobKeysWithExtras = useMemo(() => {
+    const s = new Set();
+    for (const e of jobExtras) { if (e.active === false) continue; const k = jobKeyByRowId[e.job_id]; if (k) s.add(k); }
+    return s;
+  }, [jobExtras, jobKeyByRowId]);
+  const extraMetrics = useMemo(() => {
+    let total = 0, driverComm = 0, repComm = 0, company = 0;
+    for (const e of jobExtras) {
+      if (e.active === false) continue;
+      const k = jobKeyByRowId[e.job_id]; const g = k ? extraJobGroups.get(k) : null;
+      const mo = g ? groupMonth(g) : (e.created_at || "").slice(0, 7);
+      if (exMonth && mo !== exMonth) continue;
+      total += numv(e.amount); driverComm += numv(e.driver_commission_amount);
+      repComm += numv(e.rep_commission_amount); company += numv(e.company_amount);
+    }
+    return { total, driverComm, repComm, company };
+  }, [jobExtras, jobKeyByRowId, extraJobGroups, groupMonth, exMonth]);
+
   const detail = records.find(r => r.id === detailId);
 
   // All parts (units) of the job currently open in the job-detail modal.
@@ -2396,6 +2612,103 @@ export default function App() {
     await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     loadJobs();
   }
+  // ── Extras & commissions handlers ──
+  // Build a job_extras payload from amount + percentages (computes split amounts).
+  function extraPayload(o) {
+    const a = numv(o.amount);
+    const dPct = (o.driver_commission_pct === "" || o.driver_commission_pct == null) ? null : numv(o.driver_commission_pct);
+    const rPct = (o.rep_commission_pct === "" || o.rep_commission_pct == null) ? null : numv(o.rep_commission_pct);
+    const dc = a * numv(dPct) / 100, rc = a * numv(rPct) / 100;
+    return {
+      extra_type: o.extra_type, description: o.description || null,
+      amount: (o.amount === "" || o.amount == null) ? null : a,
+      generated_by: o.generated_by || "driver_only",
+      driver_id: o.driver_id || null,
+      rep_id: (o.generated_by === "driver_only") ? null : (o.rep_id || null),
+      driver_commission_pct: dPct, rep_commission_pct: rPct,
+      driver_commission_amount: dc, rep_commission_amount: rc,
+      company_amount: a - dc - rc, active: o.active !== false,
+      notes: o.notes || null,
+    };
+  }
+  // Create an extra of a given type for a (job, driver). Pcts auto-fill from rules.
+  async function activateExtra(jobId, driverId, type) {
+    const gen = "driver_only";
+    const d = commissionDefaults(type, gen);
+    await supabase.from("job_extras").insert([{ job_id: jobId, ...extraPayload({ extra_type:type, amount:"", generated_by:gen, driver_id:driverId, driver_commission_pct:d.driver, rep_commission_pct:d.rep, active:true }) }]);
+    loadExtras();
+  }
+  // Patch an existing extra; changing generated_by re-applies the default %s.
+  async function patchExtra(extra, fields) {
+    const merged = { ...extra, ...fields };
+    if ("generated_by" in fields) {
+      const d = commissionDefaults(merged.extra_type, merged.generated_by);
+      merged.driver_commission_pct = d.driver; merged.rep_commission_pct = d.rep;
+      if (merged.generated_by === "driver_only") merged.rep_id = null;
+    }
+    await supabase.from("job_extras").update(extraPayload(merged)).eq("id", extra.id);
+    loadExtras();
+  }
+  async function toggleExtraActive(extra, active) {
+    await supabase.from("job_extras").update({ active }).eq("id", extra.id);
+    loadExtras();
+  }
+  async function deleteExtra(extra) {
+    await supabase.from("job_extras").delete().eq("id", extra.id);
+    loadExtras();
+  }
+  async function saveQuickExtra() {
+    const q = quickExtra; if (!q || !q.jobId) return;
+    await supabase.from("job_extras").insert([{ job_id: q.jobId, ...extraPayload(q) }]);
+    setQuickExtra(null); loadExtras();
+  }
+  // ── Employees (reps) CRUD ──
+  async function saveEmployee() {
+    if (!empForm.name.trim()) return;
+    setEmpSaving(true);
+    await supabase.from("employees").insert([{ name:empForm.name.trim(), role:empForm.role||null, phone:empForm.phone||null, email:empForm.email||null, active:true }]);
+    setEmpSaving(false); setEmpForm(EMPTY_EMPLOYEE); loadEmployees();
+  }
+  async function deleteEmployee(em) {
+    if (!window.confirm(`Eliminar a "${em.name}"?`)) return;
+    await supabase.from("employees").delete().eq("id", em.id); loadEmployees();
+  }
+  // Per-driver export: build a plain-text payment summary, copy to clipboard.
+  function driverExtrasReport(driverName, monthLabel, jobsData) {
+    const lines = [`EXTRAS & COMISIONES — ${driverName}`, monthLabel, ""];
+    let totAmt = 0, totComm = 0;
+    for (const jd of jobsData) {
+      lines.push(`Job ${jd.job_number || "—"} · ${jd.customer || ""}`.trim());
+      for (const e of jd.extras) {
+        totAmt += numv(e.amount); totComm += numv(e.driver_commission_amount);
+        lines.push(`   ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}: $${numv(e.amount).toLocaleString()}  →  comisión driver $${numv(e.driver_commission_amount).toLocaleString()} (${numv(e.driver_commission_pct)}%)`);
+      }
+    }
+    lines.push("", `TOTAL EXTRAS: $${totAmt.toLocaleString()}`, `TOTAL COMISIÓN DRIVER: $${totComm.toLocaleString()}`);
+    return lines.join("\n");
+  }
+  async function copyDriverExtras(driverName, monthLabel, jobsData) {
+    const txt = driverExtrasReport(driverName, monthLabel, jobsData);
+    try { await navigator.clipboard.writeText(txt); window.alert("Resumen copiado al portapapeles."); }
+    catch { window.prompt("Copiá el resumen:", txt); }
+  }
+  function printDriverExtras(driverName, monthLabel, jobsData) {
+    let totAmt = 0, totComm = 0;
+    const rows = jobsData.flatMap(jd => jd.extras.map(e => {
+      totAmt += numv(e.amount); totComm += numv(e.driver_commission_amount);
+      return `<tr><td>${jd.job_number || "—"}</td><td>${jd.customer || ""}</td><td>${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}</td><td style="text-align:right">$${numv(e.amount).toLocaleString()}</td><td style="text-align:right">${numv(e.driver_commission_pct)}%</td><td style="text-align:right">$${numv(e.driver_commission_amount).toLocaleString()}</td></tr>`;
+    })).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Extras ${driverName}</title>
+      <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
+      <body><h1>Extras & Comisiones — ${driverName}</h1><div class="sub">${monthLabel}</div>
+      <table><thead><tr><th>Job #</th><th>Cliente</th><th>Extra</th><th style="text-align:right">Monto</th><th style="text-align:right">%</th><th style="text-align:right">Comisión</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#999">Sin extras</td></tr>'}</tbody>
+      <tfoot><tr><td colspan="3">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
+      <script>window.onload=function(){window.print();}</script></body></html>`;
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(html); w.document.close(); }
+  }
+
   async function savePayment() {
     if (!payModal) return;
     const ids = jobs.filter(j => jobKey(j) === payModal.jobKey).map(j => j.id);
@@ -2603,6 +2916,7 @@ export default function App() {
           {page === "settlements" && !csDetailId && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
           {page === "trips" && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Camión</Btn>}
+          {page === "extras" && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Empleados</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
         </div>
       </div>
@@ -2756,6 +3070,9 @@ export default function App() {
                           <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(ver)"}</button>
                           {g.job_type === "broker_delivery" && (g.status === "delivered" || g.parts?.some(p => p.date_out)) && numv(g.bol_collected) < numv(g.bol_balance) && numv(g.bol_balance) > 0 && (
                             <span title="Cobro BOL pendiente" style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Cobro pendiente</span>
+                          )}
+                          {jobKeysWithExtras.has(g.key) && (
+                            <span title="Tiene extras registrados" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>
                           )}
                         </span>
                       </td>
@@ -3442,6 +3759,132 @@ export default function App() {
                   </table>
                 </div>
                 <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{shown.length} trip(s)</div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+
+      {/* ───────────────────────── EXTRAS & COMMISSIONS ───────────────────────── */}
+      {page === "extras" && (() => {
+        const monthLabel = (() => { const [y, m] = exMonth.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : exMonth; })();
+        const typesToShow = exType ? EXTRA_TYPES.filter(t => t.v === exType) : EXTRA_TYPES;
+        const driverIds = exDriver ? [Number(exDriver)] : driversList.map(d => d.id);
+        const groupsArr = [...extraJobGroups.values()].filter(g => groupMonth(g) === exMonth);
+        const sections = driverIds.map(did => {
+          const driver = driverById[did];
+          if (!driver) return null;
+          const jobsForDriver = [];
+          for (const g of groupsArr) {
+            const exsAll = (extrasByJobKey[g.key] || []).filter(e => e.driver_id === did);
+            const assigned = (g.driver_ids || []).includes(did);
+            if (exRep && !exsAll.some(e => String(e.rep_id) === String(exRep))) continue;
+            if (exType && !exsAll.some(e => e.extra_type === exType && e.active !== false)) continue;
+            if (!assigned && !exsAll.length) continue;
+            const byType = {};
+            for (const e of exsAll) { if (!byType[e.extra_type]) byType[e.extra_type] = e; }
+            jobsForDriver.push({ g, byType, exsAll });
+          }
+          jobsForDriver.sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
+          let totalAmt = 0, totalComm = 0;
+          for (const jd of jobsForDriver) for (const e of jd.exsAll) if (e.active !== false) { totalAmt += numv(e.amount); totalComm += numv(e.driver_commission_amount); }
+          return { driver, did, jobsForDriver, totalAmt, totalComm };
+        }).filter(Boolean).filter(s => s.jobsForDriver.length);
+        const mhead = { padding:"6px 6px", textAlign:"left", fontWeight:600, fontSize:10, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
+        return (
+          <>
+            {extrasMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>Para Extras & Comisiones (job_extras + empleados/reps), corré el SQL de configuración una sola vez en Supabase.</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:10, marginBottom:16 }}>
+              {[
+                { label:`Extras (${monthLabel})`, value:"$"+Math.round(extraMetrics.total).toLocaleString(), color:"#111" },
+                { label:"Comisiones driver", value:"$"+Math.round(extraMetrics.driverComm).toLocaleString(), color:"#1A8A4E" },
+                { label:"Comisiones rep", value:"$"+Math.round(extraMetrics.repComm).toLocaleString(), color:"#185FA5" },
+                { label:"Para la empresa", value:"$"+Math.round(extraMetrics.company).toLocaleString(), color:"#EF9F27" },
+              ].map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:20, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+              <select value={exDriver} onChange={e => setExDriver(e.target.value)} style={{ ...inp, width:"auto", minWidth:150 }}>
+                <option value="">Todos los drivers</option>
+                {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              <select value={exRep} onChange={e => setExRep(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
+                <option value="">Todos los reps</option>
+                {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
+              </select>
+              <input type="month" value={exMonth} onChange={e => setExMonth(e.target.value)} style={{ ...inp, width:"auto" }} />
+              <select value={exType} onChange={e => setExType(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
+                <option value="">Todos los tipos</option>
+                {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
+              </select>
+            </div>
+
+            {extrasMissing ? null : driversList.length === 0 ? (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay drivers todavía. Cargá drivers y asignalos a jobs.</div>
+            ) : sections.length === 0 ? (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin extras ni jobs asignados para {monthLabel} con estos filtros.</div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+                {sections.map(sec => {
+                  const jobsData = sec.jobsForDriver.map(jd => ({ job_number: jd.g.job_number, customer: jd.g.customer, extras: jd.exsAll.filter(e => e.active !== false) }));
+                  return (
+                    <div key={sec.did} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:"1px solid #f0f0f0", flexWrap:"wrap", background:"#fafafa" }}>
+                        <span style={{ fontSize:15, fontWeight:700 }}>🧑‍✈️ {sec.driver.name}</span>
+                        <span style={{ flex:1 }} />
+                        <span style={{ fontSize:12, color:"#666" }}>Extras: <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
+                        <span style={{ fontSize:12, color:"#1A8A4E" }}>Comisión: <b>${Math.round(sec.totalComm).toLocaleString()}</b></span>
+                        <Btn onClick={() => copyDriverExtras(sec.driver.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>📋 Copiar</Btn>
+                        <Btn onClick={() => printDriverExtras(sec.driver.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>🖨️ PDF</Btn>
+                      </div>
+                      <div style={{ padding:"6px 12px 12px" }}>
+                        {sec.jobsForDriver.map(jd => (
+                          <div key={jd.g.key} style={{ marginTop:12 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4, paddingLeft:2 }}>
+                              <button onClick={() => setJobDetailKey(jd.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{jd.g.job_number || "(ver)"}</button>
+                              <span style={{ fontSize:13 }}>{jd.g.customer || "—"}</span>
+                              {brokerName(jd.g.broker_id) && <span style={{ fontSize:11, color:"#888" }}>· {brokerName(jd.g.broker_id)}</span>}
+                              {jd.g.date_in && <span style={{ fontSize:11, color:"#aaa" }}>· {jd.g.date_in}</span>}
+                            </div>
+                            <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
+                              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                                <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
+                                  {["", "Tipo", "Monto", "Generado por", "Rep", "Driver %", "Rep %", "Com. driver", "Com. rep", ""].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                </tr></thead>
+                                <tbody>
+                                  {typesToShow.map(t => {
+                                    const extra = jd.byType[t.v] || null;
+                                    return <ExtraRow key={t.v} type={t.v} extra={extra} driverId={sec.did} employees={employees}
+                                      onActivate={(type) => activateExtra(jd.g.repId, sec.did, type)}
+                                      onPatch={patchExtra} onToggle={toggleExtraActive} onDelete={deleteExtra} />;
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                        <div style={{ marginTop:14, borderTop:"2px solid #eee" }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:600, color:"#444" }}>
+                            <span>TOTAL EXTRAS</span><span>${Math.round(sec.totalAmt).toLocaleString()}</span>
+                          </div>
+                          <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:700, background:"#FEF9C3", borderRadius:8 }}>
+                            <span>COMISIÓN {sec.driver.name}</span><span style={{ color:"#1A8A4E" }}>${Math.round(sec.totalComm).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </>
@@ -4194,6 +4637,38 @@ export default function App() {
             </>
           )}
 
+          {!extrasMissing && (() => {
+            const exs = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false);
+            const repId = Math.min(...jobDetail.parts.map(p => p.id));
+            const firstDriver = Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? jobDetail.driver_ids[0] : "";
+            const totAmt = exs.reduce((s, e) => s + numv(e.amount), 0);
+            return (
+              <>
+                <SectionLabel>Extras {exs.length ? `(${exs.length})` : ""}</SectionLabel>
+                {exs.length === 0
+                  ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin extras en este job.</div>
+                  : exs.map(e => (
+                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
+                        <span style={{ fontWeight:600 }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</span>
+                        <span style={{ color:"#111", fontWeight:600 }}>{money(e.amount) || "$0"}</span>
+                        <span style={{ fontSize:11, color:"#888" }}>{genByLabel(e.generated_by)}</span>
+                        {driverById[e.driver_id]?.name && <span style={{ fontSize:11, color:"#888" }}>🧑‍✈️ {driverById[e.driver_id].name}</span>}
+                        {empById[e.rep_id]?.name && <span style={{ fontSize:11, color:"#888" }}>👤 {empById[e.rep_id].name}</span>}
+                        <span style={{ flex:1 }} />
+                        <span style={{ fontSize:12, color:"#1A8A4E", fontWeight:600 }}>D {money(e.driver_commission_amount) || "$0"}</span>
+                        <span style={{ fontSize:12, color:"#185FA5", fontWeight:600 }}>R {money(e.rep_commission_amount) || "$0"}</span>
+                        <button onClick={() => deleteExtra(e)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
+                      </div>
+                    ))}
+                <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8 }}>
+                  {exs.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total extras: <b>${Math.round(totAmt).toLocaleString()}</b></span>}
+                  <span style={{ flex:1 }} />
+                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar extra</Btn>
+                </div>
+              </>
+            );
+          })()}
+
           <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {jobDetail.parts.map(p => {
@@ -4644,7 +5119,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, EXTRAS_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -4717,6 +5192,83 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {showEmpModal && (
+        <Modal title="Reps / Empleados" onClose={() => setShowEmpModal(false)}
+          footer={<Btn onClick={() => setShowEmpModal(false)}>Cerrar</Btn>}>
+          <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:14 }}>
+            {employees.length === 0 ? <div style={{ fontSize:13, color:"#bbb" }}>Todavía no hay empleados cargados.</div>
+              : employees.map(em => (
+                <div key={em.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
+                  <span style={{ fontWeight:600 }}>{em.name}</span>
+                  {em.role && <span style={{ fontSize:11, color:"#888" }}>· {em.role}</span>}
+                  <span style={{ flex:1 }} />
+                  <button onClick={() => deleteEmployee(em)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
+                </div>
+              ))}
+          </div>
+          <SectionLabel>Agregar empleado</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Nombre *"><input style={inp} value={empForm.name} onChange={e => setEmpForm(f => ({...f, name:e.target.value}))} placeholder="Nombre" /></Field>
+            <Field label="Rol"><input style={inp} value={empForm.role} onChange={e => setEmpForm(f => ({...f, role:e.target.value}))} placeholder="Sales rep / Manager" /></Field>
+            <Field label="Teléfono"><input style={inp} value={empForm.phone} onChange={e => setEmpForm(f => ({...f, phone:e.target.value}))} placeholder="Teléfono" /></Field>
+            <Field label="Email"><input style={inp} value={empForm.email} onChange={e => setEmpForm(f => ({...f, email:e.target.value}))} placeholder="Email" /></Field>
+          </div>
+          <div style={{ marginTop:12 }}><Btn primary disabled={empSaving || !empForm.name.trim()} onClick={saveEmployee}>{empSaving ? "Guardando..." : "+ Agregar"}</Btn></div>
+        </Modal>
+      )}
+
+      {quickExtra && (() => {
+        const locked = EXTRA_LOCKED_DRIVER(quickExtra.extra_type);
+        const setQ = (fields) => setQuickExtra(q => ({ ...q, ...fields }));
+        // Re-apply default %s whenever type or generated_by changes.
+        const onType = (v) => { const gen = EXTRA_LOCKED_DRIVER(v) ? "driver_only" : quickExtra.generated_by; const d = commissionDefaults(v, gen); setQ({ extra_type:v, generated_by:gen, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: gen === "driver_only" ? "" : quickExtra.rep_id }); };
+        const onGen = (v) => { const d = commissionDefaults(quickExtra.extra_type, v); setQ({ generated_by:v, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: v === "driver_only" ? "" : quickExtra.rep_id }); };
+        const a = numv(quickExtra.amount), dc = a * numv(quickExtra.driver_commission_pct) / 100, rc = a * numv(quickExtra.rep_commission_pct) / 100;
+        return (
+          <Modal title="Agregar extra" onClose={() => setQuickExtra(null)}
+            footer={<>
+              <Btn onClick={() => setQuickExtra(null)}>Cancelar</Btn>
+              <Btn primary onClick={saveQuickExtra}>Guardar extra</Btn>
+            </>}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <Field label="Tipo">
+                <select style={inp} value={quickExtra.extra_type} onChange={e => onType(e.target.value)}>
+                  {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Monto ($)"><input style={inp} type="number" value={quickExtra.amount} onChange={e => setQ({ amount:e.target.value })} placeholder="0" /></Field>
+              {quickExtra.extra_type === "other" && <Field label="Descripción" full><input style={inp} value={quickExtra.description} onChange={e => setQ({ description:e.target.value })} placeholder="Detalle del extra" /></Field>}
+              <Field label="Generado por">
+                <select style={inp} value={quickExtra.generated_by} disabled={locked} onChange={e => onGen(e.target.value)}>
+                  {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Driver">
+                <select style={inp} value={quickExtra.driver_id} onChange={e => setQ({ driver_id:e.target.value })}>
+                  <option value="">— Driver —</option>
+                  {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </Field>
+              {quickExtra.generated_by !== "driver_only" && (
+                <Field label="Rep">
+                  <select style={inp} value={quickExtra.rep_id} onChange={e => setQ({ rep_id:e.target.value })}>
+                    <option value="">— Rep —</option>
+                    {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
+                  </select>
+                </Field>
+              )}
+              <Field label="Driver %"><input style={inp} type="number" value={quickExtra.driver_commission_pct} onChange={e => setQ({ driver_commission_pct:e.target.value })} /></Field>
+              <Field label="Rep %"><input style={inp} type="number" value={quickExtra.rep_commission_pct} onChange={e => setQ({ rep_commission_pct:e.target.value })} /></Field>
+            </div>
+            <div style={{ display:"flex", gap:16, marginTop:12, fontSize:13, flexWrap:"wrap" }}>
+              <span>Comisión driver: <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
+              <span>Comisión rep: <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
+              <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(a - dc - rc) || "$0"}</b></span>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {showTripModal && (() => {
         // Live capacity as jobs are added (using the form's selected jobs).
