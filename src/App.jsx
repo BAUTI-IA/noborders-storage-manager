@@ -3398,6 +3398,7 @@ export default function App() {
           {page === "storage" && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
           {page === "storage" && storageTab === "storage_units" && <Btn primary disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
           {page === "storage" && <Btn onClick={openAdd}>+ Unidad</Btn>}
+          {page === "storage" && storageTab === "storage_units" && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
           {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
           {page === "settlements" && !csDetailId && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
