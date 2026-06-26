@@ -1334,9 +1334,11 @@ export default function App() {
   const [exRep, setExRep] = useState("");                 // filter: rep id
   const [exMonth, setExMonth] = useState(today().slice(0, 7)); // "YYYY-MM"
   const [exType, setExType] = useState("");               // filter: extra type
+  const [extrasTab, setExtrasTab] = useState("drivers");  // drivers | reps
   const [showEmpModal, setShowEmpModal] = useState(false);
   const [empForm, setEmpForm] = useState(EMPTY_EMPLOYEE);
   const [empSaving, setEmpSaving] = useState(false);
+  const [empDetailId, setEmpDetailId] = useState(null);   // rep profile open in the employees modal
   const [quickExtra, setQuickExtra] = useState(null);     // job-detail quick-add form
   const fileRef = useRef();
   const autoGenRef = useRef(false);
@@ -2714,6 +2716,41 @@ export default function App() {
     const w = window.open("", "_blank");
     if (w) { w.document.write(html); w.document.close(); }
   }
+  // Per-rep export: rows carry the assigned driver + rep commission.
+  function repExtrasReport(repName, monthLabel, jobsData) {
+    const lines = [`COMISIONES REP — ${repName}`, monthLabel, ""];
+    let totAmt = 0, totComm = 0;
+    for (const jd of jobsData) {
+      lines.push(`Job ${jd.job_number || "—"} · ${jd.customer || ""}${jd.driverName ? ` · 🧑‍✈️ ${jd.driverName}` : ""}`.trim());
+      for (const e of jd.extras) {
+        totAmt += numv(e.amount); totComm += numv(e.rep_commission_amount);
+        lines.push(`   ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}: $${numv(e.amount).toLocaleString()}  →  comisión rep $${numv(e.rep_commission_amount).toLocaleString()} (${numv(e.rep_commission_pct)}%)`);
+      }
+    }
+    lines.push("", `TOTAL EXTRAS: $${totAmt.toLocaleString()}`, `TOTAL COMISIÓN REP: $${totComm.toLocaleString()}`);
+    return lines.join("\n");
+  }
+  async function copyRepExtras(repName, monthLabel, jobsData) {
+    const txt = repExtrasReport(repName, monthLabel, jobsData);
+    try { await navigator.clipboard.writeText(txt); window.alert("Resumen copiado al portapapeles."); }
+    catch { window.prompt("Copiá el resumen:", txt); }
+  }
+  function printRepExtras(repName, monthLabel, jobsData) {
+    let totAmt = 0, totComm = 0;
+    const rows = jobsData.flatMap(jd => jd.extras.map(e => {
+      totAmt += numv(e.amount); totComm += numv(e.rep_commission_amount);
+      return `<tr><td>${jd.job_number || "—"}</td><td>${jd.customer || ""}</td><td>${jd.driverName || ""}</td><td>${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}</td><td style="text-align:right">$${numv(e.amount).toLocaleString()}</td><td style="text-align:right">${numv(e.rep_commission_pct)}%</td><td style="text-align:right">$${numv(e.rep_commission_amount).toLocaleString()}</td></tr>`;
+    })).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comisiones ${repName}</title>
+      <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
+      <body><h1>Comisiones Rep — ${repName}</h1><div class="sub">${monthLabel}</div>
+      <table><thead><tr><th>Job #</th><th>Cliente</th><th>Driver</th><th>Extra</th><th style="text-align:right">Monto</th><th style="text-align:right">%</th><th style="text-align:right">Comisión</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#999">Sin extras</td></tr>'}</tbody>
+      <tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
+      <script>window.onload=function(){window.print();}</script></body></html>`;
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(html); w.document.close(); }
+  }
 
   async function savePayment() {
     if (!payModal) return;
@@ -3796,6 +3833,22 @@ export default function App() {
           for (const jd of jobsForDriver) for (const e of jd.exsAll) if (e.active !== false) { totalAmt += numv(e.amount); totalComm += numv(e.driver_commission_amount); }
           return { driver, did, jobsForDriver, totalAmt, totalComm };
         }).filter(Boolean).filter(s => s.jobsForDriver.length);
+        // Rep / back-office view: group by rep employee → jobs they were involved in.
+        const repIds = exRep ? [Number(exRep)] : employees.map(em => em.id);
+        const repSections = repIds.map(rid => {
+          const emp = empById[rid];
+          if (!emp) return null;
+          const jobsForRep = [];
+          for (const g of groupsArr) {
+            const exs = (extrasByJobKey[g.key] || []).filter(e => e.active !== false && String(e.rep_id) === String(rid)
+              && (!exType || e.extra_type === exType) && (!exDriver || String(e.driver_id) === String(exDriver)));
+            if (exs.length) jobsForRep.push({ g, extras: exs });
+          }
+          jobsForRep.sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
+          let totalAmt = 0, totalComm = 0;
+          for (const jf of jobsForRep) for (const e of jf.extras) { totalAmt += numv(e.amount); totalComm += numv(e.rep_commission_amount); }
+          return { emp, rid, jobsForRep, totalAmt, totalComm };
+        }).filter(Boolean).filter(s => s.jobsForRep.length);
         const mhead = { padding:"6px 6px", textAlign:"left", fontWeight:600, fontSize:10, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
         return (
           <>
@@ -3835,7 +3888,78 @@ export default function App() {
               </select>
             </div>
 
-            {extrasMissing ? null : driversList.length === 0 ? (
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
+              {[["drivers","🧑‍✈️ Drivers"],["reps","👤 Reps / Back office"]].map(([v,l]) => (
+                <button key={v} onClick={() => setExtrasTab(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: extrasTab===v?"#fff":"none", color: extrasTab===v?"#111":"#888", fontWeight: extrasTab===v?600:400, boxShadow: extrasTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+              ))}
+            </div>
+
+            {extrasMissing ? null : extrasTab === "reps" ? (
+              employees.length === 0 ? (
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay reps cargados. Agregalos con “Reps / Empleados”.</div>
+              ) : repSections.length === 0 ? (
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Ningún rep tiene extras para {monthLabel} con estos filtros.</div>
+              ) : (
+                <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+                  {repSections.map(sec => {
+                    const jobsData = sec.jobsForRep.map(jf => ({ job_number: jf.g.job_number, customer: jf.g.customer, driverName: driverById[jf.extras[0]?.driver_id]?.name || "", extras: jf.extras }));
+                    return (
+                      <div key={sec.rid} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:"1px solid #f0f0f0", flexWrap:"wrap", background:"#fafafa" }}>
+                          <span style={{ fontSize:15, fontWeight:700 }}>👤 {sec.emp.name}</span>
+                          {sec.emp.role && <span style={{ fontSize:11, color:"#888" }}>{sec.emp.role}</span>}
+                          <span style={{ flex:1 }} />
+                          <span style={{ fontSize:12, color:"#666" }}>Extras: <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
+                          <span style={{ fontSize:12, color:"#185FA5" }}>Comisión: <b>${Math.round(sec.totalComm).toLocaleString()}</b></span>
+                          <Btn onClick={() => copyRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>📋 Copiar</Btn>
+                          <Btn onClick={() => printRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>🖨️ PDF</Btn>
+                        </div>
+                        <div style={{ padding:"6px 12px 12px" }}>
+                          {sec.jobsForRep.map(jf => (
+                            <div key={jf.g.key} style={{ marginTop:12 }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4, paddingLeft:2 }}>
+                                <button onClick={() => setJobDetailKey(jf.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{jf.g.job_number || "(ver)"}</button>
+                                <span style={{ fontSize:13 }}>{jf.g.customer || "—"}</span>
+                                {brokerName(jf.g.broker_id) && <span style={{ fontSize:11, color:"#888" }}>· {brokerName(jf.g.broker_id)}</span>}
+                                {jf.g.date_in && <span style={{ fontSize:11, color:"#aaa" }}>· {jf.g.date_in}</span>}
+                                {driverById[jf.extras[0]?.driver_id]?.name && <span style={{ fontSize:11, color:"#888" }}>· 🧑‍✈️ {driverById[jf.extras[0].driver_id].name}</span>}
+                              </div>
+                              <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
+                                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                                  <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
+                                    {["Tipo", "Monto", "Generado por", "Driver", "Rep %", "Com. rep"].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                  </tr></thead>
+                                  <tbody>
+                                    {jf.extras.map(e => (
+                                      <tr key={e.id} style={{ borderBottom:"1px solid #f6f6f6" }}>
+                                        <td style={{ padding:"6px 6px", fontSize:12, fontWeight:600, whiteSpace:"nowrap" }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</td>
+                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{money(e.amount) || "$0"}</td>
+                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{genByLabel(e.generated_by)}</td>
+                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{driverById[e.driver_id]?.name || "—"}</td>
+                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{numv(e.rep_commission_pct)}%</td>
+                                        <td style={{ padding:"6px 6px", fontSize:12, color:"#185FA5", fontWeight:700, whiteSpace:"nowrap" }}>{money(e.rep_commission_amount) || "$0"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ))}
+                          <div style={{ marginTop:14, borderTop:"2px solid #eee" }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:600, color:"#444" }}>
+                              <span>TOTAL EXTRAS</span><span>${Math.round(sec.totalAmt).toLocaleString()}</span>
+                            </div>
+                            <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:700, background:"#FEF9C3", borderRadius:8 }}>
+                              <span>COMISIÓN {sec.emp.name}</span><span style={{ color:"#185FA5" }}>${Math.round(sec.totalComm).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : extrasMissing ? null : driversList.length === 0 ? (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay drivers todavía. Cargá drivers y asignalos a jobs.</div>
             ) : sections.length === 0 ? (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin extras ni jobs asignados para {monthLabel} con estos filtros.</div>
@@ -5200,19 +5324,63 @@ export default function App() {
       )}
 
       {showEmpModal && (
-        <Modal title="Reps / Empleados" onClose={() => setShowEmpModal(false)}
-          footer={<Btn onClick={() => setShowEmpModal(false)}>Cerrar</Btn>}>
+        <Modal title="Reps / Empleados" onClose={() => { setShowEmpModal(false); setEmpDetailId(null); }}
+          footer={<Btn onClick={() => { setShowEmpModal(false); setEmpDetailId(null); }}>Cerrar</Btn>}>
           <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:14 }}>
             {employees.length === 0 ? <div style={{ fontSize:13, color:"#bbb" }}>Todavía no hay empleados cargados.</div>
               : employees.map(em => (
                 <div key={em.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
-                  <span style={{ fontWeight:600 }}>{em.name}</span>
+                  <button onClick={() => setEmpDetailId(id => id === em.id ? null : em.id)} style={{ fontWeight:600, background:"none", border:"none", padding:0, cursor:"pointer", color: empDetailId === em.id ? "#185FA5" : "#111", textDecoration:"underline" }}>{em.name}</button>
                   {em.role && <span style={{ fontSize:11, color:"#888" }}>· {em.role}</span>}
                   <span style={{ flex:1 }} />
                   <button onClick={() => deleteEmployee(em)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
                 </div>
               ))}
           </div>
+          {empDetailId && (() => {
+            const emp = empById[empDetailId];
+            const mine = jobExtras.filter(e => e.active !== false && String(e.rep_id) === String(empDetailId));
+            const byMonth = {}; const history = [];
+            for (const e of mine) {
+              const k = jobKeyByRowId[e.job_id]; const g = k ? extraJobGroups.get(k) : null;
+              const mo = g ? groupMonth(g) : (e.created_at || "").slice(0, 7);
+              if (!byMonth[mo]) byMonth[mo] = { amount:0, comm:0 };
+              byMonth[mo].amount += numv(e.amount); byMonth[mo].comm += numv(e.rep_commission_amount);
+              history.push({ e, g, mo });
+            }
+            const months = Object.keys(byMonth).sort().reverse();
+            history.sort((a, b) => (b.mo).localeCompare(a.mo) || (b.g?.job_number || "").localeCompare(a.g?.job_number || ""));
+            const moLabel = (mo) => { const [y, m] = mo.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : mo; };
+            return (
+              <div style={{ background:"#F8FAFC", border:"1px solid #e8eef4", borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
+                <div style={{ fontSize:13, fontWeight:700, marginBottom:8 }}>Perfil de {emp?.name} · comisiones</div>
+                {months.length === 0 ? <div style={{ fontSize:12, color:"#999" }}>Sin extras registrados todavía.</div> : (<>
+                  <SectionLabel>Comisión por mes</SectionLabel>
+                  <div style={{ display:"flex", flexDirection:"column", gap:3, marginBottom:8 }}>
+                    {months.map(mo => (
+                      <div key={mo} style={{ display:"flex", justifyContent:"space-between", fontSize:12.5, padding:"3px 0" }}>
+                        <span>{moLabel(mo)}</span>
+                        <span style={{ color:"#888" }}>extras ${Math.round(byMonth[mo].amount).toLocaleString()} · <b style={{ color:"#185FA5" }}>comisión ${Math.round(byMonth[mo].comm).toLocaleString()}</b></span>
+                      </div>
+                    ))}
+                  </div>
+                  <SectionLabel>Historial de extras ({history.length})</SectionLabel>
+                  <div style={{ maxHeight:200, overflowY:"auto" }}>
+                    {history.map(({ e, g, mo }) => (
+                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, padding:"4px 0", borderBottom:"1px solid #eef2f6", flexWrap:"wrap" }}>
+                        <button onClick={() => { setShowEmpModal(false); setEmpDetailId(null); if (g) setJobDetailKey(g.key); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g?.job_number || "(ver)"}</button>
+                        <span>{extraTypeLabel(e.extra_type)}</span>
+                        <span style={{ color:"#888" }}>{moLabel(mo)}</span>
+                        <span style={{ flex:1 }} />
+                        <span>{money(e.amount) || "$0"}</span>
+                        <span style={{ color:"#185FA5", fontWeight:700 }}>{money(e.rep_commission_amount) || "$0"}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>)}
+              </div>
+            );
+          })()}
           <SectionLabel>Agregar empleado</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Nombre *"><input style={inp} value={empForm.name} onChange={e => setEmpForm(f => ({...f, name:e.target.value}))} placeholder="Nombre" /></Field>
