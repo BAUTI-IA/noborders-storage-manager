@@ -1338,6 +1338,10 @@ export default function App() {
   const [jobSaving, setJobSaving] = useState(false);
   const [jobErr, setJobErr] = useState(null);
   const [editingJobKey, setEditingJobKey] = useState(null);
+  // Warehouse "+ Job" picker: choose an existing job to add here, or create a new one.
+  const [whPicker, setWhPicker] = useState(null); // { name } | null
+  const [whPickerKey, setWhPickerKey] = useState(""); // selected existing job key
+  const [whPickerSaving, setWhPickerSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importTab, setImportTab] = useState("paste");
   const [pasteText, setPasteText] = useState("");
@@ -2415,6 +2419,25 @@ export default function App() {
 
   function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
   function openAddJobWarehouse(name) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, warehouses: [name] }); setJobErr(null); setShowAddJob(true); }
+  // Warehouse "+ Job": open a small picker first — add an existing job or create a new one.
+  function openWarehouseJobPicker(name) { setWhPickerKey(""); setWhPicker({ name }); }
+  // Add an already-existing job (by group key) to a warehouse: clone a template part as a new row.
+  async function addExistingJobToWarehouse(key, name) {
+    const parts = jobs.filter(j => jobKey(j) === key);
+    if (!parts.length) { setWhPicker(null); return; }
+    if (parts.some(p => p.warehouse === name)) { showToast(`Ese job ya está en ${name}`); setWhPicker(null); return; }
+    const tmpl = parts[0];
+    // Drop row-specific / server-managed fields; keep all job-level columns intact.
+    const { id, storage_id, warehouse, created_at, updated_at, date_out, ...rest } = tmpl;
+    const row = { ...rest, storage_id: null, warehouse: name, date_out: null, created_by: userEmail };
+    setWhPickerSaving(true);
+    const { error } = await supabase.from("storage_jobs").insert([row]);
+    setWhPickerSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setWhPicker(null);
+    showToast(`Job ${tmpl.job_number || ""} agregado a ${name}`.replace(/\s+/g, " ").trim());
+    loadJobs();
+  }
   function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr, pickup_date_from: dateStr }); setJobErr(null); setShowAddJob(true); }
   function showToast(msg) {
     setToast(msg);
@@ -4964,7 +4987,7 @@ export default function App() {
                   <div style={{ fontSize:12, color:"#999" }}>Warehouse propio · {byJob.length} job(s) activo(s)</div>
                 </div>
                 <div style={{ display:"flex", gap:8 }}>
-                  <Btn primary disabled={!dbReady} onClick={() => openAddJobWarehouse(name)} style={{ padding:"7px 14px" }}>+ Job a este warehouse</Btn>
+                  <Btn primary disabled={!dbReady} onClick={() => openWarehouseJobPicker(name)} style={{ padding:"7px 14px" }}>+ Job a este warehouse</Btn>
                   <Btn onClick={() => openCapacity({ kind:"warehouse", name, value: cap != null ? String(cap) : "" })} style={{ padding:"7px 14px" }}>Editar capacidad</Btn>
                 </div>
               </div>
@@ -5493,6 +5516,50 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {whPicker && (() => {
+        const name = whPicker.name;
+        // Active jobs not already sitting in this warehouse, newest first.
+        const groups = new Map();
+        for (const j of jobs) {
+          if (j.date_out) continue;
+          const k = jobKey(j);
+          if (!groups.has(k)) groups.set(k, { key:k, job_number:j.job_number, customer:j.customer, date_in:j.date_in, inHere:false });
+          if (j.warehouse === name) groups.get(k).inHere = true;
+        }
+        const candidates = [...groups.values()].filter(g => !g.inHere)
+          .sort((a, b) => (b.date_in || "").localeCompare(a.date_in || ""));
+        return (
+          <Modal title={`+ Job a ${name}`} onClose={() => setWhPicker(null)}
+            footer={<>
+              <Btn onClick={() => setWhPicker(null)}>Cancelar</Btn>
+              <Btn primary disabled={!whPickerKey || whPickerSaving} onClick={() => addExistingJobToWarehouse(whPickerKey, name)}>
+                {whPickerSaving ? "Agregando..." : `Agregar a ${name}`}
+              </Btn>
+            </>}>
+            <div style={{ fontSize:13, color:"#666", marginBottom:14 }}>
+              Agregá un job existente a <b>{name}</b>, o creá uno nuevo si todavía no existe.
+            </div>
+            <Field label="Job existente">
+              <select style={inp} value={whPickerKey} onChange={e => setWhPickerKey(e.target.value)}>
+                <option value="">— Seleccionar job —</option>
+                {candidates.map(g => (
+                  <option key={g.key} value={g.key}>{[g.job_number || "(sin #)", g.customer].filter(Boolean).join(" — ")}</option>
+                ))}
+              </select>
+            </Field>
+            {candidates.length === 0 && (
+              <div style={{ fontSize:12, color:"#999", marginTop:8 }}>No hay otros jobs activos disponibles para agregar.</div>
+            )}
+            <div style={{ display:"flex", alignItems:"center", gap:10, margin:"16px 0 4px" }}>
+              <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
+              <span style={{ fontSize:11, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.05em" }}>o</span>
+              <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
+            </div>
+            <Btn onClick={() => { setWhPicker(null); openAddJobWarehouse(name); }} style={{ width:"100%", padding:"9px 14px" }}>+ Crear nuevo job</Btn>
+          </Modal>
+        );
+      })()}
 
       {showAddJob && (
         <Modal title={editingJobKey ? "Editar job" : "Nuevo job"} onClose={() => setShowAddJob(false)}
