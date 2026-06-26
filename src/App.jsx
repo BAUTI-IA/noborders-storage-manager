@@ -80,7 +80,7 @@ function sheetCalc(sheet, jobsIn) {
   const net = netCarrier - bolCollected;            // >0 broker owes us, <0 we owe broker
   return { carrierFee, bolBalance, bolCollected, totalCf, padsMissing, padsCharge, deductions, netCarrier, pending, net, jobCount: jobsIn.length };
 }
-const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -1752,7 +1752,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -1793,6 +1793,7 @@ export default function App() {
       pickup_date: jd.pickup_date || "", pickup_date_from: jd.pickup_date_from || jd.pickup_date || "", pickup_date_to: jd.pickup_date_to || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
       delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "",
       billing_active: !!jd.billing_active, client_monthly_rate: jd.client_monthly_rate ?? "", first_month_free: !!jd.first_month_free, billing_start_date: jd.billing_start_date || "",
+      closing_sheet_id: jd.closing_sheet_id ?? "", carrier_rate_per_cf: jd.carrier_rate_per_cf ?? "", bol_balance: jd.bol_balance ?? "", bol_collected: jd.bol_collected ?? "", bol_payment_method: jd.bol_payment_method || "", bol_payment_notes: jd.bol_payment_notes || "", bol_collected_date: jd.bol_collected_date || "",
       notes: jd.notes || "",
     });
     setJobErr(null); setJobDetailKey(null); setShowAddJob(true);
@@ -1864,6 +1865,23 @@ export default function App() {
       const names = ids.map(id => driversList.find(d => d.id === id)?.name).filter(Boolean);
       if (names.length) fields.driver = names.join(", ");
     }
+    if (!settlementsMissing) {
+      // Resolve the closing sheet link: "__new__" creates a fresh open sheet for this broker.
+      let csId = null;
+      if (jobForm.closing_sheet_id === "__new__") {
+        const { data } = await supabase.from("closing_sheets").insert([{ broker_id: jobForm.broker_id ? Number(jobForm.broker_id) : null, load_date: today(), status: "open" }]).select("id").single();
+        csId = data?.id || null;
+      } else if (jobForm.closing_sheet_id !== "" && jobForm.closing_sheet_id != null) {
+        csId = Number(jobForm.closing_sheet_id);
+      }
+      fields.closing_sheet_id = csId;
+      fields.carrier_rate_per_cf = jobForm.carrier_rate_per_cf !== "" ? Number(jobForm.carrier_rate_per_cf) : null;
+      fields.bol_balance = jobForm.bol_balance !== "" ? Number(jobForm.bol_balance) : null;
+      fields.bol_collected = jobForm.bol_collected !== "" ? Number(jobForm.bol_collected) : 0;
+      fields.bol_payment_method = jobForm.bol_payment_method || null;
+      fields.bol_payment_notes = jobForm.bol_payment_notes || null;
+      fields.bol_collected_date = jobForm.bol_collected_date || null;
+    }
 
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
     if (editingJobKey) {
@@ -1914,6 +1932,7 @@ export default function App() {
     }
     setShowAddJob(false);
     loadJobs();
+    if (!settlementsMissing) loadClosingSheets();
   }
 
   // Advance a job to its next status across all its parts. Reaching "delivered"
@@ -2053,6 +2072,11 @@ export default function App() {
     if (!ids.length) return;
     await supabase.from("storage_jobs").update({ [field]: value === "" ? null : value, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     loadJobs();
+  }
+  // Create a fresh open closing sheet for a job's broker and link the job to it.
+  async function addJobToNewSheet(jobKeyStr, brokerId) {
+    const { data } = await supabase.from("closing_sheets").insert([{ broker_id: brokerId || null, load_date: today(), status: "open" }]).select("id").single();
+    if (data?.id) { await updateJobBol(jobKeyStr, "closing_sheet_id", data.id); loadClosingSheets(); }
   }
   async function savePayment() {
     if (!payModal) return;
@@ -3602,6 +3626,58 @@ export default function App() {
           </>
           ); })()}
 
+          {!settlementsMissing && (
+            <>
+              <SectionLabel>Carrier Settlement</SectionLabel>
+              {(() => {
+                const linkedId = jobDetail.closing_sheet_id;
+                const linked = linkedId ? closingSheets.find(s => s.id === Number(linkedId)) : null;
+                const openSheets = closingSheets.filter(s => s.status === "open");
+                const selStyle = { fontSize:12, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff" };
+                const onMove = (v) => {
+                  if (!v) return;
+                  if (v === "__unlink") updateJobBol(jobDetail.key, "closing_sheet_id", "");
+                  else if (v === "__new") addJobToNewSheet(jobDetail.key, jobDetail.broker_id);
+                  else updateJobBol(jobDetail.key, "closing_sheet_id", Number(v));
+                };
+                return (
+                  <EditRow label="Closing sheet">
+                    {linked ? (
+                      <span style={{ display:"inline-flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                        <button onClick={() => { setJobDetailKey(null); setPage("settlements"); setCsDetailId(linked.id); }} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>#{linked.closing_sheet_number || linked.id}</button>
+                        <CSBadge status={linked.status} />
+                        <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
+                          <option value="">Mover…</option>
+                          {openSheets.filter(s => s.id !== linked.id).map(s => <option key={s.id} value={String(s.id)}>→ #{s.closing_sheet_number || s.id}</option>)}
+                          <option value="__new">→ ➕ Nuevo</option>
+                          <option value="__unlink">Quitar del closing sheet</option>
+                        </select>
+                      </span>
+                    ) : (
+                      <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
+                        <option value="">+ Agregar a closing sheet…</option>
+                        {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "sin broker"}</option>)}
+                        <option value="__new">➕ Crear nuevo</option>
+                      </select>
+                    )}
+                  </EditRow>
+                );
+              })()}
+              {(() => { const P = jobDetail.parts; return (<>
+                <EditRow label="Carrier rate / CF"><InlineField value={jobDetail.carrier_rate_per_cf} onSave={(v) => updateJobField(P, "carrier_rate_per_cf", v === "" ? null : Number(v))} display={money(jobDetail.carrier_rate_per_cf)} /></EditRow>
+                <EditRow label="Carrier fee (auto)"><span style={{ fontWeight:600 }}>{money(parseCf(jobDetail.volume) * numv(jobDetail.carrier_rate_per_cf)) || "$0"}</span></EditRow>
+                <EditRow label="BOL balance a cobrar"><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(P, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></EditRow>
+                <EditRow label="BOL cobrado">
+                  <span style={{ display:"inline-flex", alignItems:"center", gap:10 }}>
+                    <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
+                    {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
+                    <Btn onClick={() => setPayModal({ jobKey:jobDetail.key, amount: jobDetail.bol_collected ?? "", method: jobDetail.bol_payment_method || "cash", date: jobDetail.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"3px 9px", fontSize:11 }}>Record payment</Btn>
+                  </span>
+                </EditRow>
+              </>); })()}
+            </>
+          )}
+
           <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {jobDetail.parts.map(p => {
@@ -3885,6 +3961,36 @@ export default function App() {
               </Field>
             </div>
           )}
+          <SectionLabel>8 · Carrier Settlement{jobForm.job_type === "broker_delivery" ? " (requerido para broker delivery)" : ""}</SectionLabel>
+          {settlementsMissing ? (
+            <div style={{ fontSize:12, color:"#999" }}>Activá el módulo de Settlements para vincular closing sheets.</div>
+          ) : (() => {
+            const cur = jobForm.closing_sheet_id;
+            const linked = cur && cur !== "__new__" ? closingSheets.find(s => s.id === Number(cur)) : null;
+            const openSheets = closingSheets.filter(s => s.status === "open");
+            return (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                <Field label="Closing sheet" full>
+                  <select style={inp} value={cur === "" || cur == null ? "" : String(cur)} onChange={e => setJobForm(f => ({...f, closing_sheet_id: e.target.value === "" ? "" : (e.target.value === "__new__" ? "__new__" : Number(e.target.value))}))}>
+                    <option value="">— Sin closing sheet —</option>
+                    {linked && linked.status !== "open" && <option value={String(linked.id)}>#{linked.closing_sheet_number || linked.id} ({linked.status})</option>}
+                    {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "sin broker"}</option>)}
+                    <option value="__new__">➕ Crear nuevo closing sheet</option>
+                  </select>
+                </Field>
+                <Field label="Carrier rate / CF ($)"><input style={inp} type="number" value={jobForm.carrier_rate_per_cf} onChange={e => setJobForm(f => ({...f, carrier_rate_per_cf:e.target.value}))} placeholder="ej: 0.55" /></Field>
+                <Field label="BOL balance a cobrar ($)"><input style={inp} type="number" value={jobForm.bol_balance} onChange={e => setJobForm(f => ({...f, bol_balance:e.target.value}))} placeholder="0" /></Field>
+                <Field label="BOL cobrado ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={e => setJobForm(f => ({...f, bol_collected:e.target.value}))} placeholder="0" /></Field>
+                <Field label="Método de pago">
+                  <select style={inp} value={jobForm.bol_payment_method} onChange={e => setJobForm(f => ({...f, bol_payment_method:e.target.value}))}>
+                    <option value="">—</option>{PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
+                  </select>
+                </Field>
+                <Field label="Fecha de cobro"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={e => setJobForm(f => ({...f, bol_collected_date:e.target.value}))} /></Field>
+                <Field label="Notas de pago" full><input style={inp} value={jobForm.bol_payment_notes} onChange={e => setJobForm(f => ({...f, bol_payment_notes:e.target.value}))} placeholder="ej: $500 cash + $300 Zelle" /></Field>
+              </div>
+            );
+          })()}
           {jobErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{jobErr}</div>}
         </Modal>
       )}
