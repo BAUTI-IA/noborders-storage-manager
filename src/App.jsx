@@ -42,7 +42,8 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_JOB = { storage_ids:[], warehouses:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", pickup_balance:"", delivery_balance:"", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", notes:"" };
+const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -268,6 +269,39 @@ do $$ begin
   alter publication supabase_realtime add table public.storage_billing;
 exception when others then null; end $$;`;
 
+// CRM v3: extra job fields (rep, financials, contacts, multi-driver) + drivers table.
+const CRM_V3_SQL = `alter table public.storage_jobs
+  add column if not exists rep text,
+  add column if not exists extra_stops text,
+  add column if not exists price_per_cf numeric,
+  add column if not exists fuel_surcharge_pct numeric,
+  add column if not exists estimate numeric,
+  add column if not exists deposit numeric,
+  add column if not exists carrier_notes text,
+  add column if not exists client_phone text,
+  add column if not exists client_email text,
+  add column if not exists driver_ids bigint[];
+
+alter table public.storages add column if not exists payment_due_date date;
+
+create table if not exists public.drivers (
+  id bigint generated always as identity primary key,
+  name text,
+  phone text,
+  whatsapp_group_link text,
+  truck_id text,
+  notes text,
+  active boolean default true,
+  created_at timestamptz default now()
+);
+alter table public.drivers enable row level security;
+drop policy if exists "drivers_all" on public.drivers;
+create policy "drivers_all" on public.drivers for all to anon, authenticated using (true) with check (true);
+
+do $$ begin
+  alter publication supabase_realtime add table public.drivers;
+exception when others then null; end $$;`;
+
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
 const parseCf = (v) => { if (!v) return 0; const m = String(v).match(/[\d,.]+/); return m ? Number(m[0].replace(/,/g, "")) || 0 : 0; };
@@ -303,12 +337,14 @@ function billingReminderLink(b) {
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
 const STATUSES = [
-  { v:"scheduled", l:"Scheduled", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },
-  { v:"picked_up", l:"Picked up", bg:"#FDE3CF", text:"#C2410C", dot:"#EA580C" },
-  { v:"in_storage", l:"In storage", bg:"#EDE9FE", text:"#6D28D9", dot:"#7C3AED" },
-  { v:"out_for_delivery", l:"Out for delivery", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
-  { v:"delivered", l:"Delivered", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
-  { v:"cancelled", l:"Cancelled", bg:"#f1f1f1", text:"#888", dot:"#bbb" },
+  { v:"scheduled", l:"Scheduled", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },        // blue
+  { v:"picked_up", l:"Picked up", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },         // amber
+  { v:"in_storage", l:"In storage", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },        // green
+  { v:"out_for_delivery", l:"Out for delivery", bg:"#EDE9FE", text:"#6D28D9", dot:"#7C3AED" }, // purple
+  { v:"delivered", l:"Delivered", bg:"#f1f1f1", text:"#888", dot:"#bbb" },                // gray
+  { v:"cancelled", l:"Cancelled", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },          // red
+  { v:"on_hold", l:"On hold", bg:"#FEF9C3", text:"#854D0E", dot:"#FACC15" },              // yellow
+  { v:"redispatched", l:"Redispatched", bg:"#FDE3CF", text:"#C2410C", dot:"#EA580C" },    // orange
 ];
 const statusMeta = (v) => STATUSES.find(s => s.v === v) || STATUSES[0];
 function StatusBadge({ status }) {
@@ -330,22 +366,51 @@ function nextStatus(g) {
   return null;
 }
 const money = (v) => (v || v === 0) && !isNaN(Number(v)) ? `$${Number(v).toLocaleString()}` : null;
-function waLink(g, storeLabel, brokerName) {
-  const pickup = [[g.pickup_address, g.pickup_city, g.pickup_state].filter(Boolean).join(", "), g.pickup_date].filter(Boolean).join(" - ");
+
+// ── Calendar helpers (Sunday-start) ──
+function weekDays(anchorStr) {
+  const d = new Date(anchorStr + "T00:00:00");
+  const start = new Date(d); start.setDate(d.getDate() - d.getDay());
+  return Array.from({ length: 7 }, (_, i) => { const x = new Date(start); x.setDate(start.getDate() + i); return fmtDateLocal(x); });
+}
+function monthGrid(anchorStr) {
+  const d = new Date(anchorStr + "T00:00:00");
+  const first = new Date(d.getFullYear(), d.getMonth(), 1);
+  const gridStart = new Date(first); gridStart.setDate(1 - first.getDay());
+  return Array.from({ length: 42 }, (_, i) => { const x = new Date(gridStart); x.setDate(gridStart.getDate() + i); return { date: fmtDateLocal(x), inMonth: x.getMonth() === d.getMonth() }; });
+}
+function shiftDate(anchorStr, days) { const x = new Date(anchorStr + "T00:00:00"); x.setDate(x.getDate() + days); return fmtDateLocal(x); }
+const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const DOW_ES = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+function calEventColor(g) {
+  const s = g.status || "scheduled";
+  if (s === "cancelled") return { bg:"#FCEBEB", text:"#A32D2D", bar:"#E24B4A" };       // red
+  if (s === "delivered") return { bg:"#E6F1FB", text:"#185FA5", bar:"#378ADD" };       // blue
+  if (s === "on_hold" || s === "redispatched") return { bg:"#FEF9C3", text:"#854D0E", bar:"#FACC15" }; // yellow
+  if (g.job_type === "full" && g.pickup_state && g.delivery_state && g.pickup_state !== g.delivery_state)
+    return { bg:"#EDE9FE", text:"#6D28D9", bar:"#7C3AED" };                            // purple (long haul)
+  return { bg:"#EAF3DE", text:"#3B6D11", bar:"#639922" };                              // green (active)
+}
+function waLink(g, storeLabel, brokerName, groupLink) {
+  const pickup = [g.pickup_address, g.pickup_city, g.pickup_state, g.pickup_zip].filter(Boolean).join(", ");
   const delivery = [g.delivery_address, g.delivery_city, g.delivery_state].filter(Boolean).join(", ");
   const txt = [
     `Job: ${g.job_number || "-"}`,
-    `Customer: ${g.customer || "-"}`,
-    `Broker: ${brokerName || "-"}`,
+    `Customer: ${g.customer || "-"} | Ph: ${g.client_phone || "-"}`,
+    `Broker: ${brokerName || "-"} | Rep: ${g.rep || "-"}`,
     `Pick up: ${pickup || "-"}`,
+    `Extra stops: ${g.extra_stops || "-"}`,
     `Delivery: ${delivery || "-"}`,
     `FADD: ${g.fadd || "-"}`,
-    `Volume: ${g.volume || "-"} CF`,
+    `Volume: ${g.volume || "-"} CF | Price/CF: ${money(g.price_per_cf) || "-"}`,
     `Sticker: ${g.sticker_color || "-"} - Lot ${g.lot_number || "-"}`,
     `Storage: ${storeLabel || "-"}`,
-    `Pick up balance: ${money(g.pickup_balance) || "$0"}`,
-    `Delivery balance: ${money(g.delivery_balance) || "$0"}`,
+    `Due at pick up: ${money(g.pickup_balance) || "$0"}`,
+    `Due at delivery: ${money(g.delivery_balance) || "$0"}`,
+    `Carrier notes: ${g.carrier_notes || "-"}`,
   ].join("\n");
+  // If we have the driver group's chat link, the message can't be auto-injected into a
+  // group invite, so fall back to wa.me share which lets the dispatcher pick the group.
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
 
@@ -747,23 +812,27 @@ function JobHistory({ storageId, jobs, dbReady, onSetup, onChange }) {
 const NAV = [
   { section:"Operations", items:[
     { id:"dispatching", label:"Dispatching", icon:"🚚" },
-    { id:"storage", label:"Storage", icon:"📦" },
-    { id:"jobs", label:"Jobs", icon:"📋" },
-    { id:"brokers", label:"Brokers", icon:"🤝" },
+    { id:"calendario", label:"Calendario", icon:"📅" },
+    { id:"storage", label:"Storage", icon:"🏬" },
+    { id:"jobs", label:"Jobs", icon:"💼" },
+  ]},
+  { section:"Finanzas", items:[
+    { id:"brokers", label:"Brokers", icon:"🏦" },
+    { id:"billing", label:"Billing", icon:"🧾" },
+    { id:"clientes", label:"Clientes", icon:"👥" },
   ]},
   { section:"Fleet", items:[
-    { id:"drivers", label:"Drivers", icon:"🧑‍✈️" },
+    { id:"drivers", label:"Drivers", icon:"🪪" },
     { id:"trucks", label:"Trucks", icon:"🚛" },
   ]},
   { section:"Business", items:[
-    { id:"billing", label:"Billing", icon:"💵" },
     { id:"analytics", label:"Analytics", icon:"📊" },
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
 ];
-function Sidebar({ page, setPage, onSignOut, alertCount }) {
+function Sidebar({ page, setPage, onSignOut, badges = {} }) {
   return (
-    <div style={{ width:200, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
+    <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
       <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3" }}>
         <div style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.01em", lineHeight:1.2 }}>No Borders Moving</div>
         <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
@@ -774,13 +843,14 @@ function Sidebar({ page, setPage, onSignOut, alertCount }) {
             <div style={{ fontSize:10, fontWeight:600, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.07em", padding:"6px 10px 4px" }}>{group.section}</div>
             {group.items.map(it => {
               const active = page === it.id;
+              const badge = badges[it.id] || 0;
               return (
                 <button key={it.id} onClick={() => setPage(it.id)}
                   style={{ width:"100%", display:"flex", alignItems:"center", gap:9, padding:"8px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:13.5, fontWeight: active?600:500, textAlign:"left", marginBottom:2, background: active?"#111":"transparent", color: active?"#fff":"#444" }}>
                   <span style={{ fontSize:14 }}>{it.icon}</span>
                   <span style={{ flex:1 }}>{it.label}</span>
-                  {it.id === "dispatching" && alertCount > 0 && (
-                    <span style={{ background: active?"#fff":"#E24B4A", color: active?"#111":"#fff", fontSize:10, fontWeight:700, borderRadius:10, padding:"1px 6px" }}>{alertCount}</span>
+                  {badge > 0 && (
+                    <span style={{ background: active?"#fff":"#E24B4A", color: active?"#111":"#fff", fontSize:10, fontWeight:700, borderRadius:10, padding:"1px 6px" }}>{badge}</span>
                   )}
                 </button>
               );
@@ -797,12 +867,14 @@ function Sidebar({ page, setPage, onSignOut, alertCount }) {
 
 const PAGE_META = {
   dispatching: { title:"Dispatching", sub:"Despacho de pickups y deliveries" },
+  calendario:  { title:"Calendario", sub:"Pick ups programados" },
   storage:     { title:"Storage", sub:"Unidades físicas y ocupación" },
   jobs:        { title:"Jobs", sub:"Todos los trabajos con detalle completo" },
   brokers:     { title:"Brokers", sub:"Brokers y balances pendientes" },
+  billing:     { title:"Billing", sub:"Cobro de storage a clientes" },
+  clientes:    { title:"Clientes", sub:"Clientes y sus trabajos" },
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
-  billing:     { title:"Billing", sub:"Cobro de storage a clientes" },
   analytics:   { title:"Analytics", sub:"Métricas y recomendaciones con IA" },
   settings:    { title:"Settings", sub:"Configuración de la operación" },
 };
@@ -860,6 +932,18 @@ export default function App() {
   const [brokerForm, setBrokerForm] = useState(EMPTY_BROKER);
   const [editingBrokerId, setEditingBrokerId] = useState(null);
   const [brokerSaving, setBrokerSaving] = useState(false);
+  // CRM v3: drivers table, calendar, clientes
+  const [crmV3Missing, setCrmV3Missing] = useState(false);
+  const [driversList, setDriversList] = useState([]);
+  const [showDriverModal, setShowDriverModal] = useState(false);
+  const [driverForm, setDriverForm] = useState(EMPTY_DRIVER);
+  const [editingDriverId, setEditingDriverId] = useState(null);
+  const [driverSaving, setDriverSaving] = useState(false);
+  const [brokerDetailId, setBrokerDetailId] = useState(null);
+  const [driverDetailId, setDriverDetailId] = useState(null);
+  const [clientDetail, setClientDetail] = useState(null);
+  const [calView, setCalView] = useState("week");      // week | month
+  const [calAnchor, setCalAnchor] = useState(today());  // ISO date inside the visible range
   const fileRef = useRef();
   const autoGenRef = useRef(false);
 
@@ -889,6 +973,11 @@ export default function App() {
   const loadBilling = useCallback(async () => {
     const { data, error } = await supabase.from("storage_billing").select("*").order("billing_period_end", { ascending: true });
     if (!error) { setBilling(data || []); setBillingLoaded(true); }
+  }, []);
+
+  const loadDrivers = useCallback(async () => {
+    const { data, error } = await supabase.from("drivers").select("*").order("name", { ascending: true });
+    if (!error) setDriversList(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -1004,6 +1093,35 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session, crmV2Missing, loadBrokers]);
 
+  // Probe the CRM v3 extras (drivers table + rep column on storage_jobs).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: dErr } = await supabase.from("drivers").select("id").limit(1);
+      const { error: rErr } = await supabase.from("storage_jobs").select("rep").limit(1);
+      if (cancelled) return;
+      if (!dErr && !rErr) { loadDrivers(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: CRM_V3_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadDrivers();
+      else setCrmV3Missing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadDrivers]);
+
+  useEffect(() => {
+    if (!session || crmV3Missing) return;
+    const channel = supabase.channel("drivers-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "drivers" }, () => loadDrivers())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, crmV3Missing, loadDrivers]);
+
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
     if (!session) return;
@@ -1092,6 +1210,19 @@ export default function App() {
   }, [records]);
 
   const drivers = useMemo(() => [...new Set(jobs.map(j => j.driver).filter(Boolean))].sort(), [jobs]);
+  const driverById = useMemo(() => { const m = {}; for (const d of driversList) m[d.id] = d; return m; }, [driversList]);
+  // A job's driver names: prefer the drivers-table ids, fall back to the legacy text field.
+  const jobDriverNames = useCallback((g) => {
+    const ids = Array.isArray(g?.driver_ids) ? g.driver_ids : [];
+    const names = ids.map(id => driverById[id]?.name).filter(Boolean);
+    if (names.length) return names.join(", ");
+    return g?.driver || "";
+  }, [driverById]);
+  const jobGroupLink = useCallback((g) => {
+    const ids = Array.isArray(g?.driver_ids) ? g.driver_ids : [];
+    for (const id of ids) { const l = driverById[id]?.whatsapp_group_link; if (l) return l; }
+    return "";
+  }, [driverById]);
   const brokerById = useMemo(() => { const m = {}; for (const b of brokers) m[b.id] = b; return m; }, [brokers]);
   const brokerName = useCallback((id) => (id && brokerById[id]?.name) || "", [brokerById]);
   const brands = useMemo(() => [...new Set(records.map(r => r.brand).filter(Boolean))].sort(), [records]);
@@ -1171,7 +1302,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -1272,7 +1403,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     let arr = [...map.values()];
@@ -1280,6 +1411,7 @@ export default function App() {
     if (dispatchFilter === "pickups_today") arr = arr.filter(g => g.pickup_date === td);
     else if (dispatchFilter === "deliveries_today") arr = arr.filter(g => g.delivery_date === td);
     else if (dispatchFilter === "in_storage") arr = arr.filter(g => (g.status || "scheduled") === "in_storage");
+    else if (dispatchFilter === "on_hold") arr = arr.filter(g => (g.status || "scheduled") === "on_hold");
     else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
     // Most urgent FADD first; jobs with no FADD sink to the bottom.
     arr.sort((a, b) => {
@@ -1288,6 +1420,19 @@ export default function App() {
     });
     return arr;
   }, [jobs, storageById, search, driverFilter, dispatchFilter]);
+
+  // Calendar: pickups (jobs with a pickup_date) grouped by job, indexed by date.
+  const pickupEvents = useMemo(() => {
+    const map = new Map();
+    const byDate = {};
+    for (const j of jobs) {
+      if (!j.pickup_date) continue;
+      const k = jobKey(j);
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, pickup_date:j.pickup_date, pickup_state:j.pickup_state, delivery_state:j.delivery_state });
+    }
+    for (const g of map.values()) { (byDate[g.pickup_date] = byDate[g.pickup_date] || []).push(g); }
+    return byDate;
+  }, [jobs]);
 
   // Top-bar metrics for the Dispatching page (distinct active jobs).
   const dispatchMetrics = useMemo(() => {
@@ -1364,6 +1509,35 @@ export default function App() {
 
   const billingOverdueCount = useMemo(() => billing.filter(b => b.status === "overdue").length, [billing]);
 
+  // Clients derived from jobs, grouped by customer name.
+  const clients = useMemo(() => {
+    const num = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
+    const m = new Map();
+    const seenJob = new Set();
+    for (const j of jobs) {
+      const name = (j.customer || "").trim();
+      if (!name) continue;
+      const k = name.toLowerCase();
+      if (!m.has(k)) m.set(k, { name, phone:"", email:"", jobs:new Set(), active:new Set(), balance:0 });
+      const c = m.get(k);
+      if (j.client_phone && !c.phone) c.phone = j.client_phone;
+      if (j.client_email && !c.email) c.email = j.client_email;
+      const jk = jobKey(j);
+      c.jobs.add(jk);
+      if (!j.date_out && j.status !== "cancelled") c.active.add(jk);
+      const bk = k + "|" + jk;
+      if (!seenJob.has(bk)) { seenJob.add(bk); if (!j.date_out) c.balance += num(j.pickup_balance) + num(j.delivery_balance); }
+    }
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [jobs]);
+
+  // Sidebar alert badges.
+  const sidebarBadges = useMemo(() => ({
+    dispatching: faddStats.overdue,
+    billing: billingOverdueCount,
+    storage: urgentPayments,
+  }), [faddStats.overdue, billingOverdueCount, urgentPayments]);
+
   const detail = records.find(r => r.id === detailId);
 
   // All parts (units) of the job currently open in the job-detail modal.
@@ -1372,7 +1546,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -1395,16 +1569,21 @@ export default function App() {
 
   function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
   function openAddJobWarehouse(name) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, warehouses: [name] }); setJobErr(null); setShowAddJob(true); }
+  function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr }); setJobErr(null); setShowAddJob(true); }
   function openEditJob(jd) {
     setEditingJobKey(jd.key);
     setJobForm({
       storage_ids: [...new Set(jd.parts.filter(p => p.storage_id).map(p => p.storage_id))],
       warehouses: [...new Set(jd.parts.filter(p => p.warehouse).map(p => p.warehouse))],
+      driver_ids: Array.isArray(jd.driver_ids) ? jd.driver_ids : [],
       job_number: jd.job_number || "", customer: jd.customer || "", driver: jd.driver || "",
       date_in: jd.date_in || "", fadd: jd.fadd || "", volume: jd.volume || "", lot_number: jd.lot_number || "",
       sticker_color: jd.sticker_color || "",
       job_type: jd.job_type || "full", status: jd.status || "scheduled",
-      broker_id: jd.broker_id || "", pickup_balance: jd.pickup_balance ?? "", delivery_balance: jd.delivery_balance ?? "",
+      broker_id: jd.broker_id || "", rep: jd.rep || "", client_phone: jd.client_phone || "", client_email: jd.client_email || "",
+      extra_stops: jd.extra_stops || "", price_per_cf: jd.price_per_cf ?? "", fuel_surcharge_pct: jd.fuel_surcharge_pct ?? "", estimate: jd.estimate ?? "", deposit: jd.deposit ?? "",
+      carrier_notes: jd.carrier_notes || "",
+      pickup_balance: jd.pickup_balance ?? "", delivery_balance: jd.delivery_balance ?? "",
       pickup_date: jd.pickup_date || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
       delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "",
       billing_active: !!jd.billing_active, client_monthly_rate: jd.client_monthly_rate ?? "", first_month_free: !!jd.first_month_free, billing_start_date: jd.billing_start_date || "",
@@ -1459,6 +1638,22 @@ export default function App() {
       // Auto-calc billing start: first_month_free → date_in + 30, else date_in. Editable.
       const di = jobForm.date_in || today();
       fields.billing_start_date = jobForm.billing_start_date || (jobForm.first_month_free ? addDaysStr(di, 30) : di);
+    }
+    if (!crmV3Missing) {
+      fields.rep = jobForm.rep || null;
+      fields.client_phone = jobForm.client_phone || null;
+      fields.client_email = jobForm.client_email || null;
+      fields.extra_stops = jobForm.extra_stops || null;
+      fields.carrier_notes = jobForm.carrier_notes || null;
+      fields.price_per_cf = jobForm.price_per_cf !== "" ? Number(jobForm.price_per_cf) : null;
+      fields.fuel_surcharge_pct = jobForm.fuel_surcharge_pct !== "" ? Number(jobForm.fuel_surcharge_pct) : null;
+      fields.estimate = jobForm.estimate !== "" ? Number(jobForm.estimate) : null;
+      fields.deposit = jobForm.deposit !== "" ? Number(jobForm.deposit) : null;
+      const ids = Array.isArray(jobForm.driver_ids) ? jobForm.driver_ids.map(Number) : [];
+      fields.driver_ids = ids;
+      // Mirror driver names into the legacy text field for display/search/back-compat.
+      const names = ids.map(id => driversList.find(d => d.id === id)?.name).filter(Boolean);
+      if (names.length) fields.driver = names.join(", ");
     }
 
     if (editingJobKey) {
@@ -1531,6 +1726,31 @@ export default function App() {
     if (!window.confirm(`Eliminar el broker "${b.name}"? Los jobs asociados quedan sin broker.`)) return;
     await supabase.from("brokers").delete().eq("id", b.id);
     loadBrokers();
+  }
+
+  // ── Drivers CRUD ──
+  function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
+  function openEditDriver(d) {
+    setEditingDriverId(d.id);
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", notes:d.notes||"", active: d.active !== false });
+    setShowDriverModal(true);
+  }
+  async function saveDriver() {
+    if (!driverForm.name.trim()) return;
+    setDriverSaving(true);
+    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, notes:driverForm.notes||null, active: !!driverForm.active };
+    if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
+    else await supabase.from("drivers").insert([payload]);
+    setDriverSaving(false); setShowDriverModal(false);
+    loadDrivers();
+  }
+  async function deleteDriver(d) {
+    if (!window.confirm(`Eliminar el driver "${d.name}"?`)) return;
+    await supabase.from("drivers").delete().eq("id", d.id);
+    loadDrivers();
+  }
+  function toggleJobDriver(id) {
+    setJobForm(f => { const cur = Array.isArray(f.driver_ids) ? f.driver_ids : []; return { ...f, driver_ids: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id] }; });
   }
 
   // ── Capacity & billing handlers ──
@@ -1671,7 +1891,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} alertCount={dispatchAlerts.length} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadges} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
@@ -1687,7 +1907,9 @@ export default function App() {
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           {page === "storage" && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
           {page === "storage" && <Btn onClick={openAdd}>+ Unidad</Btn>}
-          {(page === "dispatching" || page === "jobs") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
+          {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
+          {page === "brokers" && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
+          {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
         </div>
       </div>
 
@@ -1729,6 +1951,13 @@ export default function App() {
       {billingMissing && page !== "billing" && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span>Para Billing y la ocupación de storage (capacidad CF), corré el SQL de configuración una sola vez en Supabase.</span>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+        </div>
+      )}
+
+      {crmV3Missing && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span>Para Drivers, multi-asignación, rep y los campos financieros nuevos, corré el SQL de configuración una sola vez en Supabase.</span>
           <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
         </div>
       )}
@@ -1784,7 +2013,7 @@ export default function App() {
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","Todos"],["pickups_today","Pick ups hoy"],["deliveries_today","Deliveries hoy"],["in_storage","En storage"],["nofadd","Sin FADD"]].map(([t,l]) => (
+            {[["all","Todos"],["pickups_today","Pick ups hoy"],["deliveries_today","Deliveries hoy"],["in_storage","En storage"],["on_hold","On hold"],["nofadd","Sin FADD"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -1805,14 +2034,14 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Estado","Job #","Tipo","Broker","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Bal. pickup","Bal. delivery","Storage","Acciones"].map((h, i) => (
+                    {["Estado","Job #","Tipo","Broker","Rep","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Bal. pickup","Bal. delivery","Storage","Acciones"].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {dispatchGroups.length === 0 ? (
-                    <tr><td colSpan={15} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
+                    <tr><td colSpan={16} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
                   ) : dispatchGroups.map(g => {
                     const stores = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
                     const storeLabel = stores.join(" · ");
@@ -1831,6 +2060,7 @@ export default function App() {
                       </td>
                       <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
                       <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>{brokerName(g.broker_id) || "—"}</td>
+                      <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>{g.rep || "—"}</td>
                       <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
                       <td style={{ padding:"12px" }}><FaddCell group={g} onSet={setJobFadd} /></td>
                       <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
@@ -1846,7 +2076,7 @@ export default function App() {
                         <Sticker color={g.sticker_color} />
                         {g.lot_number && <div style={{ fontFamily:"monospace", fontSize:11, color:"#888", marginTop:2 }}>{g.lot_number}</div>}
                       </td>
-                      <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
+                      <td style={{ padding:"12px" }}>{jobDriverNames(g)||"—"}</td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.pickup_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.pickup_balance) || "—"}</td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.delivery_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.delivery_balance) || "—"}</td>
                       <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
@@ -1855,7 +2085,7 @@ export default function App() {
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                         <div style={{ display:"flex", flexDirection:"column", gap:5, alignItems:"flex-start" }}>
                           {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Ruta</a>}
-                          <a href={waLink(g, storeLabel, brokerName(g.broker_id))} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
+                          <a href={waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g))} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
                           {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
                         </div>
                       </td>
@@ -1869,6 +2099,91 @@ export default function App() {
           </div>
         </>
       )}
+
+      {/* ───────────────────────── CALENDARIO ───────────────────────── */}
+      {page === "calendario" && (() => {
+        const range = calView === "week" ? weekDays(calAnchor) : null;
+        const grid = calView === "month" ? monthGrid(calAnchor) : null;
+        const anchorD = new Date(calAnchor + "T00:00:00");
+        const title = calView === "week"
+          ? (() => { const w = weekDays(calAnchor); return `${w[0]} → ${w[6]}`; })()
+          : `${MONTHS_ES[anchorD.getMonth()]} ${anchorD.getFullYear()}`;
+        const step = calView === "week" ? 7 : 30;
+        const Event = ({ g }) => {
+          const c = calEventColor(g);
+          const route = [g.pickup_state, g.delivery_state].filter(Boolean).join(" to ");
+          const drv = jobDriverNames(g);
+          return (
+            <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
+              style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${c.bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
+              <div style={{ fontWeight:700, fontFamily:"monospace" }}>{g.job_number || "(job)"}</div>
+              {route && <div>{route}</div>}
+              {drv && <div style={{ opacity:0.85 }}>🧑‍✈️ {drv}</div>}
+            </div>
+          );
+        };
+        return (
+          <>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+              <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, -step))}>←</Btn>
+              <Btn onClick={() => setCalAnchor(today())}>Hoy</Btn>
+              <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, step))}>→</Btn>
+              <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
+              <span style={{ flex:1 }} />
+              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+                {[["week","Semana"],["month","Mes"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setCalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: calView===v?"#fff":"none", color: calView===v?"#111":"#888", fontWeight: calView===v?600:400, boxShadow: calView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap", fontSize:11, color:"#666" }}>
+              {[["#639922","Activo"],["#FACC15","On hold / Redispatch"],["#E24B4A","Cancelado"],["#7C3AED","Long haul"],["#378ADD","Entregado"]].map(([c,l]) => (
+                <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
+              ))}
+            </div>
+
+            {calView === "week" ? (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
+                {range.map(ds => {
+                  const d = new Date(ds + "T00:00:00");
+                  const evs = pickupEvents[ds] || [];
+                  const isToday = ds === today();
+                  return (
+                    <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday?"#378ADD":"#efefef"}`, borderRadius:10, minHeight:160, display:"flex", flexDirection:"column" }}>
+                      <div onClick={() => openAddJobDate(ds)} title="Crear pick up" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <span style={{ fontSize:11, fontWeight:600 }}>{DOW_ES[d.getDay()]} {d.getDate()}</span>
+                        <span style={{ color:"#bbb", fontSize:13 }}>+</span>
+                      </div>
+                      <div style={{ padding:7, flex:1 }}>{evs.map(g => <Event key={g.key} g={g} />)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+                  {DOW_ES.map(d => <div key={d} style={{ padding:"8px 6px", textAlign:"center", fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", borderBottom:"1px solid #efefef" }}>{d}</div>)}
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+                  {grid.map(({ date, inMonth }) => {
+                    const d = new Date(date + "T00:00:00");
+                    const evs = pickupEvents[date] || [];
+                    const isToday = date === today();
+                    return (
+                      <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth?"#fff":"#fafafa", opacity: inMonth?1:0.6 }}>
+                        <div onClick={() => openAddJobDate(date)} style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
+                        {evs.slice(0,3).map(g => <Event key={g.key} g={g} />)}
+                        {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} más</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* ───────────────────────── BROKERS ───────────────────────── */}
       {page === "brokers" && (
@@ -1894,7 +2209,7 @@ export default function App() {
                     const count = st.jobs.size;
                     return (
                       <tr key={b.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                        <td style={{ padding:"12px", fontWeight:600 }}>{b.name}</td>
+                        <td style={{ padding:"12px", fontWeight:600 }}><button onClick={() => setBrokerDetailId(b.id)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#111", fontWeight:600, textDecoration:"underline" }}>{b.name}</button></td>
                         <td style={{ padding:"12px" }}>{b.contact_name||"—"}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{b.contact_phone ? <a href={`tel:${b.contact_phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{b.contact_phone}</a> : "—"}</td>
                         <td style={{ padding:"12px" }}>{b.contact_email ? <a href={`mailto:${b.contact_email}`} style={{ color:"#185FA5", textDecoration:"none" }}>{b.contact_email}</a> : "—"}</td>
@@ -1918,31 +2233,74 @@ export default function App() {
       {/* ───────────────────────── DRIVERS ───────────────────────── */}
       {page === "drivers" && (
         <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-            <thead>
-              <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                {["Driver","Jobs activos","Entregados"].map(h => (
-                  <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {drivers.length === 0 ? (
-                <tr><td colSpan={3} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Todavía no hay drivers cargados.</td></tr>
-              ) : drivers.map(d => {
-                const active = new Set(jobs.filter(j => j.driver === d && !j.date_out).map(jobKey)).size;
-                const done = new Set(jobs.filter(j => j.driver === d && j.date_out).map(jobKey)).size;
-                return (
-                  <tr key={d} style={{ borderBottom:"1px solid #fafafa" }}>
-                    <td style={{ padding:"12px", fontWeight:600 }}>{d}</td>
-                    <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: active>0?"#EAF3DE":"#f5f5f5", color: active>0?"#3B6D11":"#bbb" }}>{active}</span></td>
-                    <td style={{ padding:"12px", color:"#888" }}>{done}</td>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                  {["Driver","Teléfono","Grupo WhatsApp","Jobs activos","Estado",""].map((h,i) => (
+                    <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {driversList.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV3Missing ? "Corré el SQL de configuración para activar drivers." : "Sin drivers. Agregá uno con “+ Driver”."}</td></tr>
+                ) : driversList.map(d => {
+                  const act = new Set(jobs.filter(j => !j.date_out && j.status !== "cancelled" && ((Array.isArray(j.driver_ids) && j.driver_ids.includes(d.id)) || (j.driver && d.name && j.driver.includes(d.name)))).map(jobKey)).size;
+                  return (
+                    <tr key={d.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                      <td style={{ padding:"12px", fontWeight:600 }}>
+                        <button onClick={() => setDriverDetailId(d.id)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#111", fontWeight:600, textDecoration:"underline" }}>{d.name}</button>
+                      </td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{d.phone ? <a href={`tel:${d.phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{d.phone}</a> : "—"}</td>
+                      <td style={{ padding:"12px" }}>{d.whatsapp_group_link ? <a href={d.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Abrir grupo ↗</a> : "—"}</td>
+                      <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: act>0?"#EAF3DE":"#f5f5f5", color: act>0?"#3B6D11":"#bbb" }}>{act}</span></td>
+                      <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: d.active!==false?"#EAF3DE":"#f1f1f1", color: d.active!==false?"#3B6D11":"#888" }}>{d.active!==false?"Activo":"Inactivo"}</span></td>
+                      <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                        <Btn onClick={() => openEditDriver(d)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
+                        <Btn danger onClick={() => deleteDriver(d)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{driversList.length} driver(s)</div>
+        </div>
+      )}
+
+      {/* ───────────────────────── CLIENTES ───────────────────────── */}
+      {page === "clientes" && (
+        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                  {["Cliente","Teléfono","Email","Jobs activos","Total jobs","Balance pendiente"].map((h,i) => (
+                    <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {clients.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin clientes todavía.</td></tr>
+                ) : clients.map(c => (
+                  <tr key={c.name} style={{ borderBottom:"1px solid #fafafa" }}>
+                    <td style={{ padding:"12px", fontWeight:600 }}>
+                      <button onClick={() => setClientDetail(c.name)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#111", fontWeight:600, textDecoration:"underline" }}>{c.name}</button>
+                    </td>
+                    <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{c.phone ? <a href={`tel:${c.phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{c.phone}</a> : "—"}</td>
+                    <td style={{ padding:"12px" }}>{c.email ? <a href={`mailto:${c.email}`} style={{ color:"#185FA5", textDecoration:"none" }}>{c.email}</a> : "—"}</td>
+                    <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: c.active.size>0?"#EAF3DE":"#f5f5f5", color: c.active.size>0?"#3B6D11":"#bbb" }}>{c.active.size}</span></td>
+                    <td style={{ padding:"12px", color:"#888" }}>{c.jobs.size}</td>
+                    <td style={{ padding:"12px", fontWeight:600, color: c.balance>0?"#1A8A4E":"#bbb", whiteSpace:"nowrap" }}>${c.balance.toLocaleString()}</td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{drivers.length} driver(s). Se cargan automáticamente desde los jobs.</div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{clients.length} cliente(s)</div>
         </div>
       )}
 
@@ -2168,6 +2526,108 @@ export default function App() {
                     <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
                       <div style={{ background:"#185FA5", borderRadius:6, height:8, width:`${(cost/max)*100}%`, transition:"width .4s" }} />
                     </div>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+
+          {/* CRM charts: revenue by broker + jobs by status */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Revenue por broker</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Estimate total de jobs por broker</div>
+              {(() => {
+                const num = v => (v && !isNaN(Number(v))) ? Number(v) : 0;
+                const map = new Map(); const seen = new Set();
+                for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); if (!j.broker_id) continue; map.set(j.broker_id, (map.get(j.broker_id)||0) + (num(j.estimate) || num(j.pickup_balance)+num(j.delivery_balance))); }
+                const sorted = [...map.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10);
+                const max = sorted[0]?.[1] || 1;
+                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Cargá brokers y estimates para ver esto</p>;
+                return sorted.map(([bid,val]) => (
+                  <div key={bid} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:5 }}>
+                      <span style={{ fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"65%" }}>{brokerName(bid) || `#${bid}`}</span>
+                      <span style={{ color:"#888" }}>${val.toLocaleString()}</span>
+                    </div>
+                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}><div style={{ background:"#185FA5", borderRadius:6, height:8, width:`${(val/max)*100}%` }} /></div>
+                  </div>
+                ));
+              })()}
+            </div>
+
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Jobs por estado</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Distribución de jobs activos e históricos</div>
+              {(() => {
+                const counts = {}; const seen = new Set();
+                for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const s = j.status || "scheduled"; counts[s] = (counts[s]||0)+1; }
+                const total = Object.values(counts).reduce((a,b)=>a+b,0);
+                if (!total) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Sin jobs</p>;
+                let acc = 0; const segs = [];
+                for (const st of STATUSES) { const c = counts[st.v]||0; if (!c) continue; const from = acc/total*360; acc += c; const to = acc/total*360; segs.push(`${st.dot} ${from}deg ${to}deg`); }
+                return (
+                  <div style={{ display:"flex", alignItems:"center", gap:18 }}>
+                    <div style={{ width:120, height:120, borderRadius:"50%", flexShrink:0, background:`conic-gradient(${segs.join(",")})`, position:"relative" }}>
+                      <div style={{ position:"absolute", inset:18, background:"#fff", borderRadius:"50%", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+                        <div style={{ fontSize:22, fontWeight:800 }}>{total}</div><div style={{ fontSize:10, color:"#aaa" }}>jobs</div>
+                      </div>
+                    </div>
+                    <div style={{ flex:1 }}>
+                      {STATUSES.filter(st => counts[st.v]).map(st => (
+                        <div key={st.v} style={{ display:"flex", alignItems:"center", gap:7, fontSize:12, marginBottom:5 }}>
+                          <span style={{ width:9, height:9, borderRadius:2, background:st.dot }} />
+                          <span style={{ flex:1 }}>{st.l}</span>
+                          <span style={{ color:"#888", fontWeight:600 }}>{counts[st.v]}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* CRM charts: CF per month + top drivers */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>CF movidos por mes</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Volumen total (pies cúbicos) por mes</div>
+              {(() => {
+                const by = {}; const seen = new Set();
+                for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const d = j.pickup_date || j.date_in; if (!d) continue; const m = d.slice(0,7); by[m] = (by[m]||0) + parseCf(j.volume); }
+                const months = Object.keys(by).sort().slice(-8);
+                const max = Math.max(...months.map(m=>by[m]), 1);
+                if (!months.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Sin datos de volumen</p>;
+                return (
+                  <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:140 }}>
+                    {months.map(m => (
+                      <div key={m} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:5 }}>
+                        <div style={{ fontSize:9, color:"#888" }}>{Math.round(by[m]).toLocaleString()}</div>
+                        <div style={{ width:"100%", background:"#3B6D11", borderRadius:"4px 4px 0 0", height:`${Math.max(4,(by[m]/max)*110)}px` }} />
+                        <div style={{ fontSize:9, color:"#aaa" }}>{m.slice(5)}/{m.slice(2,4)}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Top drivers</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Por jobs entregados</div>
+              {(() => {
+                const counts = {}; const seen = new Set();
+                for (const j of jobs) { if (!j.date_out) continue; const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const names = (jobDriverNames(j) || "").split(",").map(s=>s.trim()).filter(Boolean); for (const n of names) counts[n] = (counts[n]||0)+1; }
+                const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+                const max = sorted[0]?.[1] || 1;
+                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Sin entregas todavía</p>;
+                return sorted.map(([name,c]) => (
+                  <div key={name} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:5 }}>
+                      <span style={{ fontWeight:500 }}>{name}</span><span style={{ color:"#888" }}>{c}</span>
+                    </div>
+                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}><div style={{ background:"#7C3AED", borderRadius:6, height:8, width:`${(c/max)*100}%` }} /></div>
                   </div>
                 ));
               })()}
@@ -2489,6 +2949,8 @@ export default function App() {
         <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
           footer={<>
             <Btn onClick={() => openEditJob(jobDetail)}>Editar</Btn>
+            <Btn onClick={() => window.open(waLink(jobDetail, (jobDetail.parts||[]).map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean).join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail)), "_blank")}>💬 WhatsApp</Btn>
+            {nextStatus(jobDetail) && <Btn onClick={() => advanceStatus(jobDetail)}>→ {statusMeta(nextStatus(jobDetail)).l}</Btn>}
             {jobDetail.parts.some(p => !p.date_out) && (
               <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Marcar todo entregado</Btn>
             )}
@@ -2711,7 +3173,8 @@ export default function App() {
               })}
             </div>
           </Field>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
+          <SectionLabel>1 · Información básica</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Job #"><input style={inp} value={jobForm.job_number} onChange={e => setJobForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
             <Field label="Cliente"><input style={inp} value={jobForm.customer} onChange={e => setJobForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
             <Field label="Tipo de job">
@@ -2730,41 +3193,74 @@ export default function App() {
                 {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
             </Field>
-            <Field label="Driver"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Elegí o escribí un driver" /></Field>
-            <Field label="FADD — First Available Delivery Date"><input style={inp} type="date" value={jobForm.fadd} onChange={e => setJobForm(f => ({...f, fadd:e.target.value}))} /></Field>
-            <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200 cu ft / 5 pallets" /></Field>
-            <Field label="Lot number (del sticker)"><input style={inp} value={jobForm.lot_number} onChange={e => setJobForm(f => ({...f, lot_number:e.target.value}))} placeholder="ej: LOT-4821" /></Field>
-            <Field label="Color del sticker">
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
-                <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={e => setJobForm(f => ({...f, sticker_color:e.target.value}))} placeholder="Rojo, Azul..." />
-              </div>
-            </Field>
-            <Field label="Date in (a storage)"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
+            <Field label="Rep (interno)"><input style={inp} value={jobForm.rep} onChange={e => setJobForm(f => ({...f, rep:e.target.value}))} placeholder="Rep que maneja el job" /></Field>
+            <Field label="Teléfono del cliente"><input style={inp} value={jobForm.client_phone} onChange={e => setJobForm(f => ({...f, client_phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
+            <Field label="Email del cliente"><input style={inp} value={jobForm.client_email} onChange={e => setJobForm(f => ({...f, client_email:e.target.value}))} placeholder="cliente@email.com" /></Field>
           </div>
 
-          <SectionLabel>Pickup</SectionLabel>
+          <SectionLabel>2 · Pick up</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Pickup date"><input style={inp} type="date" value={jobForm.pickup_date} onChange={e => setJobForm(f => ({...f, pickup_date:e.target.value}))} /></Field>
             <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={e => setJobForm(f => ({...f, pickup_address:e.target.value}))} placeholder="Dirección de pickup" /></Field>
             <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={e => setJobForm(f => ({...f, pickup_city:e.target.value}))} placeholder="Ciudad" /></Field>
             <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={e => setJobForm(f => ({...f, pickup_state:e.target.value.toUpperCase()}))} placeholder="NY" /></Field>
             <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={e => setJobForm(f => ({...f, pickup_zip:e.target.value}))} placeholder="ej: 10001" /></Field>
-            <Field label="Balance a cobrar en pickup ($)"><input style={inp} type="number" value={jobForm.pickup_balance} onChange={e => setJobForm(f => ({...f, pickup_balance:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Extra stops (paradas adicionales)" full><input style={inp} value={jobForm.extra_stops} onChange={e => setJobForm(f => ({...f, extra_stops:e.target.value}))} placeholder="ej: 123 Main St, Town" /></Field>
           </div>
 
-          <SectionLabel>Delivery</SectionLabel>
+          <SectionLabel>3 · Delivery</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Delivery date"><input style={inp} type="date" value={jobForm.delivery_date} onChange={e => setJobForm(f => ({...f, delivery_date:e.target.value}))} /></Field>
             <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={e => setJobForm(f => ({...f, delivery_address:e.target.value}))} placeholder="Dirección de entrega" /></Field>
             <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={e => setJobForm(f => ({...f, delivery_city:e.target.value}))} placeholder="Ciudad" /></Field>
             <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={e => setJobForm(f => ({...f, delivery_state:e.target.value.toUpperCase()}))} placeholder="NJ" /></Field>
             <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={e => setJobForm(f => ({...f, delivery_zip:e.target.value}))} placeholder="ej: 07030" /></Field>
-            <Field label="Balance a cobrar en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={e => setJobForm(f => ({...f, delivery_balance:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Notas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+            <Field label="Delivery date"><input style={inp} type="date" value={jobForm.delivery_date} onChange={e => setJobForm(f => ({...f, delivery_date:e.target.value}))} /></Field>
+            <Field label="FADD — First Available Delivery Date"><input style={inp} type="date" value={jobForm.fadd} onChange={e => setJobForm(f => ({...f, fadd:e.target.value}))} /></Field>
           </div>
 
-          <SectionLabel>Billing de storage al cliente</SectionLabel>
+          <SectionLabel>4 · Financiero</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+            <Field label="Precio / CF ($)"><input style={inp} type="number" value={jobForm.price_per_cf} onChange={e => setJobForm(f => ({...f, price_per_cf:e.target.value}))} placeholder="ej: 0.65" /></Field>
+            <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={jobForm.fuel_surcharge_pct} onChange={e => setJobForm(f => ({...f, fuel_surcharge_pct:e.target.value}))} placeholder="ej: 5" /></Field>
+            <Field label="Estimate ($)"><input style={inp} type="number" value={jobForm.estimate} onChange={e => setJobForm(f => ({...f, estimate:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Deposit ($)"><input style={inp} type="number" value={jobForm.deposit} onChange={e => setJobForm(f => ({...f, deposit:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Balance en pickup ($)"><input style={inp} type="number" value={jobForm.pickup_balance} onChange={e => setJobForm(f => ({...f, pickup_balance:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Balance en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={e => setJobForm(f => ({...f, delivery_balance:e.target.value}))} placeholder="0" /></Field>
+          </div>
+
+          <SectionLabel>5 · Carga física</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={e => setJobForm(f => ({...f, volume:e.target.value}))} placeholder="ej: 1200" /></Field>
+            <Field label="Color del sticker">
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
+                <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={e => setJobForm(f => ({...f, sticker_color:e.target.value}))} placeholder="Rojo, Azul..." />
+              </div>
+            </Field>
+            <Field label="Lot number (del sticker)"><input style={inp} value={jobForm.lot_number} onChange={e => setJobForm(f => ({...f, lot_number:e.target.value}))} placeholder="ej: LOT-4821" /></Field>
+            <Field label="Date in (a storage)"><input style={inp} type="date" value={jobForm.date_in} onChange={e => setJobForm(f => ({...f, date_in:e.target.value}))} /></Field>
+            <Field label="Carrier notes" full><input style={inp} value={jobForm.carrier_notes} onChange={e => setJobForm(f => ({...f, carrier_notes:e.target.value}))} placeholder="Notas para el carrier/driver" /></Field>
+            <Field label="Notas internas" full><input style={inp} value={jobForm.notes} onChange={e => setJobForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+          </div>
+
+          <SectionLabel>6 · Asignación de driver{(jobForm.driver_ids?.length) ? ` (${jobForm.driver_ids.length})` : ""}</SectionLabel>
+          {driversList.length === 0 ? (
+            <Field label="Driver (texto libre)"><input style={inp} list="drivers-list" value={jobForm.driver} onChange={e => setJobForm(f => ({...f, driver:e.target.value}))} placeholder="Cargá drivers en la sección Drivers para multi-asignar" /></Field>
+          ) : (
+            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:160, overflowY:"auto", background:"#fff" }}>
+              {driversList.filter(d => d.active !== false).map(d => {
+                const checked = Array.isArray(jobForm.driver_ids) && jobForm.driver_ids.includes(d.id);
+                return (
+                  <label key={d.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleJobDriver(d.id)} />
+                    <span>🧑‍✈️ {d.name}{d.truck_id ? ` · ${d.truck_id}` : ""}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          <SectionLabel>7 · Billing de storage al cliente</SectionLabel>
           <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, cursor:"pointer", padding:"4px 0" }}>
             <input type="checkbox" checked={!!jobForm.billing_active} onChange={e => setJobForm(f => ({...f, billing_active:e.target.checked}))} />
             <span>Cobrar a este cliente por guardar (cada 30 días)</span>
@@ -2862,7 +3358,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -2896,6 +3392,79 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {showDriverModal && (
+        <Modal title={editingDriverId ? "Editar driver" : "Nuevo driver"} onClose={() => setShowDriverModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowDriverModal(false)}>Cancelar</Btn>
+            <Btn primary disabled={driverSaving || !driverForm.name.trim()} onClick={saveDriver}>{driverSaving ? "Guardando..." : "Guardar"}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Nombre" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Nombre del chofer" /></Field>
+            <Field label="Teléfono"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
+            <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="ej: T-12" /></Field>
+            <Field label="Link del grupo de WhatsApp" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
+            <Field label="Notas" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+            <Field label="Estado">
+              <select style={inp} value={driverForm.active ? "yes" : "no"} onChange={e => setDriverForm(f => ({...f, active: e.target.value === "yes"}))}>
+                <option value="yes">Activo</option><option value="no">Inactivo</option>
+              </select>
+            </Field>
+          </div>
+        </Modal>
+      )}
+
+      {(() => {
+        // Shared job-list panel for broker / driver / client detail modals.
+        const JobsPanel = ({ predicate }) => {
+          const map = new Map();
+          for (const j of jobs) { if (!predicate(j)) continue; const k = jobKey(j); if (!map.has(k)) map.set(k, j); }
+          const rows = [...map.values()];
+          if (!rows.length) return <div style={{ fontSize:13, color:"#bbb", padding:"10px 0" }}>Sin jobs.</div>;
+          return (
+            <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:8 }}>
+              {rows.map(j => (
+                <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, borderBottom:"1px solid #f4f4f4", paddingBottom:6 }}>
+                  <button onClick={() => { setBrokerDetailId(null); setDriverDetailId(null); setClientDetail(null); setJobDetailKey(jobKey(j)); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                  <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+                  <StatusBadge status={j.status} />
+                  {j.fadd && <span style={{ fontSize:11, color:"#888" }}>{j.fadd}</span>}
+                </div>
+              ))}
+            </div>
+          );
+        };
+        const brokerD = brokers.find(b => b.id === brokerDetailId);
+        const driverD = driversList.find(d => d.id === driverDetailId);
+        return (
+          <>
+            {brokerD && (
+              <Modal title={`Broker · ${brokerD.name}`} onClose={() => setBrokerDetailId(null)} footer={<Btn primary onClick={() => setBrokerDetailId(null)}>Cerrar</Btn>}>
+                <DetailRow label="Contacto" value={brokerD.contact_name} />
+                <DetailRow label="Teléfono" value={brokerD.contact_phone} />
+                <DetailRow label="Email" value={brokerD.contact_email} />
+                <SectionLabel>Jobs del broker</SectionLabel>
+                <JobsPanel predicate={j => j.broker_id === brokerD.id} />
+              </Modal>
+            )}
+            {driverD && (
+              <Modal title={`Driver · ${driverD.name}`} onClose={() => setDriverDetailId(null)} footer={<Btn primary onClick={() => setDriverDetailId(null)}>Cerrar</Btn>}>
+                <DetailRow label="Teléfono" value={driverD.phone} />
+                <DetailRow label="Truck" value={driverD.truck_id} />
+                {driverD.whatsapp_group_link && <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}><span style={{ color:"#888", minWidth:150 }}>Grupo WhatsApp</span><a href={driverD.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Abrir grupo ↗</a></div>}
+                <SectionLabel>Historial de jobs</SectionLabel>
+                <JobsPanel predicate={j => (Array.isArray(j.driver_ids) && j.driver_ids.includes(driverD.id)) || (j.driver && driverD.name && j.driver.includes(driverD.name))} />
+              </Modal>
+            )}
+            {clientDetail && (
+              <Modal title={`Cliente · ${clientDetail}`} onClose={() => setClientDetail(null)} footer={<Btn primary onClick={() => setClientDetail(null)}>Cerrar</Btn>}>
+                <SectionLabel>Jobs del cliente</SectionLabel>
+                <JobsPanel predicate={j => (j.customer || "").trim().toLowerCase() === clientDetail.trim().toLowerCase()} />
+              </Modal>
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }
