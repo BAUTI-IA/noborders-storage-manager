@@ -43,6 +43,43 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
+const EMPTY_CS = { closing_sheet_number:"", broker_id:"", driver_id:"", load_date:"", status:"open", pads_sent:"", pads_received:"", charge_per_pad:"7", trip_cost:"", labor_charges:"", other_fees:"", other_fees_description:"", notes:"", document_url:"", job_keys:[] };
+const CS_STATUS = {
+  open:     { l:"Open", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },
+  settled:  { l:"Settled", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  disputed: { l:"Disputed", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+};
+function CSBadge({ status }) {
+  const c = CS_STATUS[status] || CS_STATUS.open;
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
+}
+const PAY_METHODS = [{ v:"cash", l:"Cash" }, { v:"check", l:"Check" }, { v:"zelle", l:"Zelle" }, { v:"venmo", l:"Venmo" }, { v:"mixed", l:"Mixed" }];
+const numv = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
+// Collection status for a BOL job: complete / partial / pending.
+function collectionStatus(j) {
+  const bal = numv(j.bol_balance), col = numv(j.bol_collected);
+  if (bal > 0 && col >= bal) return { key:"complete", l:"Cobrado", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
+  if (col > 0) return { key:"partial", l:"Parcial", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" };
+  return { key:"pending", l:"Pendiente", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" };
+}
+// All settlement math for a closing sheet given its (deduped-by-job) job rows.
+function sheetCalc(sheet, jobsIn) {
+  let carrierFee = 0, bolBalance = 0, bolCollected = 0, totalCf = 0;
+  for (const j of jobsIn) {
+    const cf = parseCf(j.volume);
+    totalCf += cf;
+    carrierFee += cf * numv(j.carrier_rate_per_cf);
+    bolBalance += numv(j.bol_balance);
+    bolCollected += numv(j.bol_collected);
+  }
+  const padsMissing = Math.max(0, numv(sheet?.pads_sent) - numv(sheet?.pads_received));
+  const padsCharge = padsMissing * (sheet?.charge_per_pad != null ? numv(sheet.charge_per_pad) : 7);
+  const deductions = numv(sheet?.trip_cost) + numv(sheet?.labor_charges) + numv(sheet?.other_fees) + padsCharge;
+  const netCarrier = carrierFee - deductions;       // what the broker owes us
+  const pending = Math.max(0, bolBalance - bolCollected);
+  const net = netCarrier - bolCollected;            // >0 broker owes us, <0 we owe broker
+  return { carrierFee, bolBalance, bolCollected, totalCf, padsMissing, padsCharge, deductions, netCarrier, pending, net, jobCount: jobsIn.length };
+}
 const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
@@ -304,6 +341,55 @@ do $$ begin
   alter publication supabase_realtime add table public.drivers;
 exception when others then null; end $$;`;
 
+// Carrier Settlements: closing sheets + BOL collection fields + a public docs bucket.
+const SETTLEMENTS_SQL = `create table if not exists public.closing_sheets (
+  id bigint generated always as identity primary key,
+  closing_sheet_number text,
+  broker_id bigint references public.brokers(id),
+  driver_id bigint references public.drivers(id),
+  load_date date,
+  status text default 'open',
+  broker_payment_received boolean default false,
+  broker_payment_date date,
+  broker_payment_amount numeric,
+  pads_sent integer default 0,
+  pads_received integer default 0,
+  charge_per_pad numeric default 7,
+  trip_cost numeric default 0,
+  labor_charges numeric default 0,
+  other_fees numeric default 0,
+  other_fees_description text,
+  document_url text,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.closing_sheets enable row level security;
+drop policy if exists "closing_sheets_all" on public.closing_sheets;
+create policy "closing_sheets_all" on public.closing_sheets for all to anon, authenticated using (true) with check (true);
+
+alter table public.storage_jobs
+  add column if not exists closing_sheet_id bigint references public.closing_sheets(id),
+  add column if not exists carrier_rate_per_cf numeric,
+  add column if not exists bol_balance numeric,
+  add column if not exists bol_collected numeric default 0,
+  add column if not exists bol_payment_method text,
+  add column if not exists bol_payment_notes text,
+  add column if not exists bol_collected_date date;
+
+insert into storage.buckets (id, name, public)
+  values ('closing-sheet-docs', 'closing-sheet-docs', true)
+  on conflict (id) do update set public = true;
+drop policy if exists "csdocs_read" on storage.objects;
+create policy "csdocs_read" on storage.objects for select to anon, authenticated using (bucket_id = 'closing-sheet-docs');
+drop policy if exists "csdocs_write" on storage.objects;
+create policy "csdocs_write" on storage.objects for insert to anon, authenticated with check (bucket_id = 'closing-sheet-docs');
+drop policy if exists "csdocs_update" on storage.objects;
+create policy "csdocs_update" on storage.objects for update to anon, authenticated using (bucket_id = 'closing-sheet-docs');
+
+do $$ begin
+  alter publication supabase_realtime add table public.closing_sheets;
+exception when others then null; end $$;`;
+
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
 const parseCf = (v) => { if (!v) return 0; const m = String(v).match(/[\d,.]+/); return m ? Number(m[0].replace(/,/g, "")) || 0 : 0; };
@@ -333,6 +419,25 @@ function BillingBadge({ status }) {
 }
 function billingReminderLink(b) {
   const txt = `Hi ${b.customer || "there"}, this is a reminder that your storage fee of $${Number(b.amount || 0).toLocaleString()} for job ${b.job_number || "-"} is due on ${b.billing_period_end || "-"}. Please contact us to arrange payment. Thank you - No Borders Moving`;
+  return "https://wa.me/?text=" + encodeURIComponent(txt);
+}
+function settlementWaLink(sheet, calc, brokerName, driverName) {
+  const m = (n) => `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const netResult = calc.net >= 0 ? `Broker te debe ${m(calc.net)}` : `Le debés al broker ${m(-calc.net)}`;
+  const txt = [
+    `Closing Sheet #${sheet.closing_sheet_number || "-"} — ${brokerName || "-"}`,
+    `Load date: ${sheet.load_date || "-"} | Driver: ${driverName || "-"}`,
+    `Jobs: ${calc.jobCount} | Total CF: ${Math.round(calc.totalCf)}`,
+    ``,
+    `Carrier fee: ${m(calc.carrierFee)}`,
+    `Deductions: -${m(calc.deductions)}`,
+    `Net owed to us: ${m(calc.netCarrier)}`,
+    ``,
+    `BOL collected from clients: ${m(calc.bolCollected)}`,
+    `Pending collections: ${m(calc.pending)}`,
+    ``,
+    `Settlement: ${netResult}`,
+  ].join("\n");
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
 
@@ -821,6 +926,7 @@ const NAV = [
   { section:"Finanzas", items:[
     { id:"brokers", label:"Brokers", icon:"🏦" },
     { id:"billing", label:"Billing", icon:"🧾" },
+    { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"clientes", label:"Clientes", icon:"👥" },
   ]},
   { section:"Fleet", items:[
@@ -874,6 +980,7 @@ const PAGE_META = {
   jobs:        { title:"Jobs", sub:"Todos los trabajos con detalle completo" },
   brokers:     { title:"Brokers", sub:"Brokers y balances pendientes" },
   billing:     { title:"Billing", sub:"Cobro de storage a clientes" },
+  settlements: { title:"Carrier Settlements", sub:"Closing sheets de broker deliveries" },
   clientes:    { title:"Clientes", sub:"Clientes y sus trabajos" },
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
@@ -944,6 +1051,18 @@ export default function App() {
   const [brokerDetailId, setBrokerDetailId] = useState(null);
   const [driverDetailId, setDriverDetailId] = useState(null);
   const [clientDetail, setClientDetail] = useState(null);
+  // Carrier settlements
+  const [settlementsMissing, setSettlementsMissing] = useState(false);
+  const [closingSheets, setClosingSheets] = useState([]);
+  const [csTab, setCsTab] = useState("open");          // open | settled | disputed | all
+  const [csDetailId, setCsDetailId] = useState(null);  // open closing-sheet detail page
+  const [showCsModal, setShowCsModal] = useState(false);
+  const [csForm, setCsForm] = useState(EMPTY_CS);
+  const [editingCsId, setEditingCsId] = useState(null);
+  const [csSaving, setCsSaving] = useState(false);
+  const [csJobSearch, setCsJobSearch] = useState("");
+  const [payModal, setPayModal] = useState(null);      // { job, amount, method, date, notes, entries:[] }
+  const [docUploading, setDocUploading] = useState(false);
   const [calView, setCalView] = useState("week");      // week | month
   const [calAnchor, setCalAnchor] = useState(today());  // ISO date inside the visible range
   const fileRef = useRef();
@@ -980,6 +1099,11 @@ export default function App() {
   const loadDrivers = useCallback(async () => {
     const { data, error } = await supabase.from("drivers").select("*").order("name", { ascending: true });
     if (!error) setDriversList(data || []);
+  }, []);
+
+  const loadClosingSheets = useCallback(async () => {
+    const { data, error } = await supabase.from("closing_sheets").select("*").order("created_at", { ascending: false });
+    if (!error) setClosingSheets(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -1123,6 +1247,35 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, crmV3Missing, loadDrivers]);
+
+  // Probe the Carrier Settlements module (closing_sheets table + BOL columns).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: tErr } = await supabase.from("closing_sheets").select("id").limit(1);
+      const { error: jErr } = await supabase.from("storage_jobs").select("bol_balance").limit(1);
+      if (cancelled) return;
+      if (!tErr && !jErr) { loadClosingSheets(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: SETTLEMENTS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadClosingSheets();
+      else setSettlementsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadClosingSheets]);
+
+  useEffect(() => {
+    if (!session || settlementsMissing) return;
+    const channel = supabase.channel("closing-sheets-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "closing_sheets" }, () => loadClosingSheets())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, settlementsMissing, loadClosingSheets]);
 
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
@@ -1304,7 +1457,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -1389,7 +1542,8 @@ export default function App() {
   const dispatchGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
     const parts = jobs
-      .filter(j => !j.date_out && j.status !== "cancelled")
+      .filter(j => (!j.date_out && j.status !== "cancelled")
+        || (j.job_type === "broker_delivery" && numv(j.bol_balance) > 0 && numv(j.bol_collected) < numv(j.bol_balance))) // keep broker deliveries with pending BOL visible
       .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
       .filter(j => {
         if (driverFilter && j.driver !== driverFilter) return false;
@@ -1405,7 +1559,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     let arr = [...map.values()];
@@ -1546,6 +1700,49 @@ export default function App() {
     billing: billingOverdueCount,
     storage: urgentPayments,
   }), [faddStats.overdue, billingOverdueCount, urgentPayments]);
+
+  // ── Carrier settlements derived data ──
+  const sheetById = useMemo(() => { const m = {}; for (const s of closingSheets) m[s.id] = s; return m; }, [closingSheets]);
+  // Distinct-by-job storage_jobs rows assigned to each closing sheet.
+  const jobsBySheet = useMemo(() => {
+    const m = {};
+    const seen = new Set();
+    for (const j of jobs) {
+      if (!j.closing_sheet_id) continue;
+      const k = j.closing_sheet_id + "|" + jobKey(j);
+      if (seen.has(k)) continue; seen.add(k);
+      (m[j.closing_sheet_id] = m[j.closing_sheet_id] || []).push(j);
+    }
+    return m;
+  }, [jobs]);
+  const sheetCalcById = useMemo(() => {
+    const m = {};
+    for (const s of closingSheets) m[s.id] = sheetCalc(s, jobsBySheet[s.id] || []);
+    return m;
+  }, [closingSheets, jobsBySheet]);
+  const settlementMetrics = useMemo(() => {
+    let openCount = 0, owesUs = 0, weOwe = 0, pendingBol = 0, padsValue = 0;
+    for (const s of closingSheets) {
+      const c = sheetCalcById[s.id] || {};
+      if (s.status === "open") { openCount++; pendingBol += c.pending || 0; padsValue += c.padsCharge || 0; }
+      if (s.status !== "settled") { if ((c.net || 0) > 0) owesUs += c.net; else weOwe += -(c.net || 0); }
+    }
+    return { openCount, owesUs, weOwe, pendingBol, padsValue };
+  }, [closingSheets, sheetCalcById]);
+  // Per-broker settlement rollup (non-settled sheets).
+  const brokerSettleStats = useMemo(() => {
+    const m = {};
+    for (const s of closingSheets) {
+      const c = sheetCalcById[s.id] || {};
+      if (!s.broker_id) continue;
+      if (!m[s.broker_id]) m[s.broker_id] = { open:0, owesUs:0, weOwe:0 };
+      if (s.status === "open") m[s.broker_id].open++;
+      if (s.status !== "settled") { if ((c.net||0) > 0) m[s.broker_id].owesUs += c.net; else m[s.broker_id].weOwe += -(c.net||0); }
+    }
+    return m;
+  }, [closingSheets, sheetCalcById]);
+
+  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0 }), [sidebarBadges, settlementMetrics.openCount]);
 
   const detail = records.find(r => r.id === detailId);
 
@@ -1781,6 +1978,139 @@ export default function App() {
     setJobForm(f => { const cur = Array.isArray(f.driver_ids) ? f.driver_ids : []; return { ...f, driver_ids: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id] }; });
   }
 
+  // ── Carrier settlements handlers ──
+  function openAddCs() {
+    setEditingCsId(null); setCsForm(EMPTY_CS); setCsJobSearch(""); setShowCsModal(true);
+  }
+  function openEditCs(s) {
+    setEditingCsId(s.id);
+    const assigned = [...new Set(jobs.filter(j => j.closing_sheet_id === s.id).map(jobKey))];
+    setCsForm({
+      closing_sheet_number: s.closing_sheet_number || "", broker_id: s.broker_id || "", driver_id: s.driver_id || "",
+      load_date: s.load_date || "", status: s.status || "open",
+      pads_sent: s.pads_sent ?? "", pads_received: s.pads_received ?? "", charge_per_pad: s.charge_per_pad ?? "7",
+      trip_cost: s.trip_cost ?? "", labor_charges: s.labor_charges ?? "", other_fees: s.other_fees ?? "", other_fees_description: s.other_fees_description || "",
+      notes: s.notes || "", document_url: s.document_url || "", job_keys: assigned,
+    });
+    setCsJobSearch(""); setShowCsModal(true);
+  }
+  function csToggleJob(k) {
+    setCsForm(f => ({ ...f, job_keys: f.job_keys.includes(k) ? f.job_keys.filter(x => x !== k) : [...f.job_keys, k] }));
+  }
+  async function saveCs() {
+    setCsSaving(true);
+    const payload = {
+      closing_sheet_number: csForm.closing_sheet_number || null,
+      broker_id: csForm.broker_id ? Number(csForm.broker_id) : null,
+      driver_id: csForm.driver_id ? Number(csForm.driver_id) : null,
+      load_date: csForm.load_date || null,
+      status: csForm.status || "open",
+      pads_sent: csForm.pads_sent !== "" ? parseInt(csForm.pads_sent) : 0,
+      pads_received: csForm.pads_received !== "" ? parseInt(csForm.pads_received) : 0,
+      charge_per_pad: csForm.charge_per_pad !== "" ? Number(csForm.charge_per_pad) : 7,
+      trip_cost: csForm.trip_cost !== "" ? Number(csForm.trip_cost) : 0,
+      labor_charges: csForm.labor_charges !== "" ? Number(csForm.labor_charges) : 0,
+      other_fees: csForm.other_fees !== "" ? Number(csForm.other_fees) : 0,
+      other_fees_description: csForm.other_fees_description || null,
+      notes: csForm.notes || null,
+      document_url: csForm.document_url || null,
+    };
+    let sheetId = editingCsId;
+    let error = null;
+    if (editingCsId) {
+      ({ error } = await supabase.from("closing_sheets").update(payload).eq("id", editingCsId));
+    } else {
+      const { data, error: insErr } = await supabase.from("closing_sheets").insert([payload]).select("id").single();
+      error = insErr; sheetId = data?.id;
+    }
+    if (!error && sheetId) {
+      // Reconcile job assignment: set closing_sheet_id on selected jobs, clear de-selected.
+      const wanted = new Set(csForm.job_keys);
+      const toSet = jobs.filter(j => wanted.has(jobKey(j)) && j.closing_sheet_id !== sheetId).map(j => j.id);
+      const toClear = jobs.filter(j => j.closing_sheet_id === sheetId && !wanted.has(jobKey(j))).map(j => j.id);
+      if (toSet.length) await supabase.from("storage_jobs").update({ closing_sheet_id: sheetId, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toSet);
+      if (toClear.length) await supabase.from("storage_jobs").update({ closing_sheet_id: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
+    }
+    setCsSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowCsModal(false);
+    loadClosingSheets(); loadJobs();
+    if (sheetId && !editingCsId) setCsDetailId(sheetId);
+  }
+  async function setCsStatus(s, status) {
+    await supabase.from("closing_sheets").update({ status }).eq("id", s.id);
+    loadClosingSheets();
+  }
+  async function deleteCs(s) {
+    if (!window.confirm(`Eliminar el closing sheet #${s.closing_sheet_number || s.id}? Los jobs quedan sin asignar.`)) return;
+    await supabase.from("storage_jobs").update({ closing_sheet_id: null }).eq("closing_sheet_id", s.id);
+    await supabase.from("closing_sheets").delete().eq("id", s.id);
+    setCsDetailId(null); loadClosingSheets(); loadJobs();
+  }
+  // Inline-edit a per-job settlement field (carrier_rate_per_cf, bol_balance, volume) on all its parts.
+  async function updateJobBol(jobKeyStr, field, value) {
+    const ids = jobs.filter(j => jobKey(j) === jobKeyStr).map(j => j.id);
+    if (!ids.length) return;
+    await supabase.from("storage_jobs").update({ [field]: value === "" ? null : value, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    loadJobs();
+  }
+  async function savePayment() {
+    if (!payModal) return;
+    const ids = jobs.filter(j => jobKey(j) === payModal.jobKey).map(j => j.id);
+    if (!ids.length) { setPayModal(null); return; }
+    let amount, method, notes;
+    if (payModal.method === "mixed") {
+      const entries = (payModal.entries || []).filter(e => e.amount !== "");
+      amount = entries.reduce((s, e) => s + numv(e.amount), 0);
+      method = "mixed";
+      notes = entries.map(e => `${PAY_METHODS.find(m=>m.v===e.method)?.l || e.method}: $${numv(e.amount).toLocaleString()}`).join(" + ") + (payModal.notes ? ` · ${payModal.notes}` : "");
+    } else {
+      amount = numv(payModal.amount); method = payModal.method; notes = payModal.notes || null;
+    }
+    await supabase.from("storage_jobs").update({
+      bol_collected: amount, bol_payment_method: method, bol_payment_notes: notes || null,
+      bol_collected_date: payModal.date || today(), updated_by: userEmail, updated_at: new Date().toISOString(),
+    }).in("id", ids);
+    setPayModal(null);
+    loadJobs();
+  }
+  async function uploadCsDoc(file, sheet) {
+    if (!file) return;
+    setDocUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const path = `cs-${sheet?.id || "new"}-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("closing-sheet-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) { window.alert("Error al subir: " + error.message); setDocUploading(false); return; }
+      const { data } = supabase.storage.from("closing-sheet-docs").getPublicUrl(path);
+      const url = data?.publicUrl || "";
+      if (sheet?.id) { await supabase.from("closing_sheets").update({ document_url: url }).eq("id", sheet.id); loadClosingSheets(); }
+      else { setCsForm(f => ({ ...f, document_url: url })); }
+    } catch (e) { window.alert("Error: " + e.message); }
+    setDocUploading(false);
+  }
+  function exportCsPdf(sheet, calc, brokerNm, driverNm, jobsIn) {
+    const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
+    const rows = jobsIn.map(j => `<tr><td>${j.job_number||"-"}</td><td>${j.customer||"-"}</td><td>${Math.round(parseCf(j.volume))} CF</td><td>${m(numv(j.carrier_rate_per_cf))}</td><td>${m(parseCf(j.volume)*numv(j.carrier_rate_per_cf))}</td><td>${m(numv(j.bol_balance))}</td><td>${m(numv(j.bol_collected))}</td></tr>`).join("");
+    const net = calc.net >= 0 ? `Broker te debe ${m(calc.net)}` : `Le debés al broker ${m(-calc.net)}`;
+    const html = `<html><head><meta charset="utf-8"><title>CS ${sheet.closing_sheet_number||""}</title>
+      <style>body{font-family:system-ui,sans-serif;padding:30px;color:#111}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f5f5f5}.box{border:1px solid #ddd;border-radius:8px;padding:12px;margin-top:10px}.r{display:flex;justify-content:space-between;font-size:13px;margin:3px 0}</style></head>
+      <body><h1>Closing Sheet #${sheet.closing_sheet_number||"-"}</h1>
+      <div>Broker: <b>${brokerNm||"-"}</b> · Driver: ${driverNm||"-"} · Load date: ${sheet.load_date||"-"} · Status: ${sheet.status}</div>
+      <table><thead><tr><th>Job #</th><th>Cliente</th><th>CF</th><th>Rate/CF</th><th>Carrier fee</th><th>BOL balance</th><th>Collected</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="box"><div class="r"><span>Carrier fee subtotal</span><b>${m(calc.carrierFee)}</b></div>
+      <div class="r"><span>− Trip cost</span><span>${m(numv(sheet.trip_cost))}</span></div>
+      <div class="r"><span>− Labor</span><span>${m(numv(sheet.labor_charges))}</span></div>
+      <div class="r"><span>− Other fees</span><span>${m(numv(sheet.other_fees))}</span></div>
+      <div class="r"><span>− Pads (${calc.padsMissing})</span><span>${m(calc.padsCharge)}</span></div>
+      <div class="r" style="border-top:1px solid #ddd;padding-top:6px;margin-top:6px"><span><b>Broker te debe</b></span><b>${m(calc.netCarrier)}</b></div></div>
+      <div class="box"><div class="r"><span>BOL cobrado a clientes</span><b>${m(calc.bolCollected)}</b></div><div class="r"><span>Pendiente de cobro</span><span>${m(calc.pending)}</span></div></div>
+      <div class="box" style="text-align:center;font-size:16px;font-weight:700">${net}</div>
+      </body></html>`;
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); }
+  }
+
   // ── Capacity & billing handlers ──
   function openCapacity(target) { setCapTarget(target); }
   async function saveCapacity() {
@@ -1919,7 +2249,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadges} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
@@ -1937,6 +2267,7 @@ export default function App() {
           {page === "storage" && <Btn onClick={openAdd}>+ Unidad</Btn>}
           {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
+          {page === "settlements" && !csDetailId && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
         </div>
       </div>
@@ -2081,9 +2412,12 @@ export default function App() {
                     <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
                       <td style={{ padding:"12px" }}><StatusBadge status={g.status} /></td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
                           {!g.sticker_color && <span title="Sticker sin asignar" style={{ cursor:"help" }}>⚠️</span>}
                           <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(ver)"}</button>
+                          {g.job_type === "broker_delivery" && (g.status === "delivered" || g.parts?.some(p => p.date_out)) && numv(g.bol_collected) < numv(g.bol_balance) && numv(g.bol_balance) > 0 && (
+                            <span title="Cobro BOL pendiente" style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Cobro pendiente</span>
+                          )}
                         </span>
                       </td>
                       <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
@@ -2224,25 +2558,30 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Broker","Contacto","Teléfono","Email","Jobs","Balance pendiente",""].map((h, i) => (
+                    {["Broker","Contacto","Teléfono","Jobs","Balance pend.","CS abiertos","Nos debe","Le debemos","Net","" ].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {brokers.length === 0 ? (
-                    <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV2Missing ? "Corré el SQL de configuración para activar brokers." : "Sin brokers cargados."}</td></tr>
+                    <tr><td colSpan={10} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV2Missing ? "Corré el SQL de configuración para activar brokers." : "Sin brokers cargados."}</td></tr>
                   ) : brokers.map(b => {
                     const st = brokerStats[b.id] || { jobs:new Set(), balance:0 };
                     const count = st.jobs.size;
+                    const ss = brokerSettleStats[b.id] || { open:0, owesUs:0, weOwe:0 };
+                    const net = ss.owesUs - ss.weOwe;
                     return (
                       <tr key={b.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ padding:"12px", fontWeight:600 }}><button onClick={() => setBrokerDetailId(b.id)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#111", fontWeight:600, textDecoration:"underline" }}>{b.name}</button></td>
                         <td style={{ padding:"12px" }}>{b.contact_name||"—"}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{b.contact_phone ? <a href={`tel:${b.contact_phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{b.contact_phone}</a> : "—"}</td>
-                        <td style={{ padding:"12px" }}>{b.contact_email ? <a href={`mailto:${b.contact_email}`} style={{ color:"#185FA5", textDecoration:"none" }}>{b.contact_email}</a> : "—"}</td>
                         <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: count>0?"#EAF3DE":"#f5f5f5", color: count>0?"#3B6D11":"#bbb" }}>{count}</span></td>
                         <td style={{ padding:"12px", fontWeight:600, color: st.balance>0 ? "#1A8A4E" : "#bbb", whiteSpace:"nowrap" }}>${st.balance.toLocaleString()}</td>
+                        <td style={{ padding:"12px" }}>{ss.open || "—"}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap", color: ss.owesUs>0?"#1A8A4E":"#bbb" }}>${Math.round(ss.owesUs).toLocaleString()}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap", color: ss.weOwe>0?"#A32D2D":"#bbb" }}>${Math.round(ss.weOwe).toLocaleString()}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:700, color: net>=0?"#1A8A4E":"#A32D2D" }}>{net>=0?`+$${Math.round(net).toLocaleString()}`:`−$${Math.round(-net).toLocaleString()}`}</td>
                         <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                           <Btn onClick={() => openEditBroker(b)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
                           <Btn danger onClick={() => deleteBroker(b)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
@@ -2331,6 +2670,234 @@ export default function App() {
           <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{clients.length} cliente(s)</div>
         </div>
       )}
+
+      {/* ───────────────────────── SETTLEMENTS (list) ───────────────────────── */}
+      {page === "settlements" && !csDetailId && (
+        <>
+          {settlementsMissing && (
+            <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <span>Para Carrier Settlements (closing sheets + cobros BOL + subida de documentos), corré el SQL de configuración una sola vez en Supabase.</span>
+              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+            </div>
+          )}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
+            {[
+              { label:"Closing sheets abiertos", value:settlementMetrics.openCount, color:"#185FA5" },
+              { label:"Broker nos debe", value:"$"+Math.round(settlementMetrics.owesUs).toLocaleString(), color:"#1A8A4E" },
+              { label:"Le debemos a brokers", value:"$"+Math.round(settlementMetrics.weOwe).toLocaleString(), color:"#A32D2D" },
+              { label:"Cobros BOL pendientes", value:"$"+Math.round(settlementMetrics.pendingBol).toLocaleString(), color:"#C2410C" },
+              { label:"Pads pendientes ($)", value:"$"+Math.round(settlementMetrics.padsValue).toLocaleString(), color:"#92760B" },
+            ].map(m => (
+              <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{m.label}</div>
+                <div style={{ fontSize:20, fontWeight:800, color:m.color, marginTop:3 }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
+            {[["open","Open"],["settled","Settled"],["disputed","Disputed"],["all","All"]].map(([t,l]) => (
+              <button key={t} onClick={() => setCsTab(t)} style={{ fontSize:13, fontWeight: csTab===t?600:400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: csTab===t?"#111":"#999", borderBottom: csTab===t?"2px solid #111":"2px solid transparent" }}>{l}</button>
+            ))}
+          </div>
+
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                    {["CS #","Broker","Driver","Load date","Jobs","Total CF","Carrier fee","BOL cobrado","Net settlement","Estado","Acciones"].map((h,i) => (
+                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {closingSheets.filter(s => csTab==="all" || s.status===csTab).length === 0 ? (
+                    <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{settlementsMissing ? "Corré el SQL para activar settlements." : "Sin closing sheets. Creá uno con “+ Closing sheet”."}</td></tr>
+                  ) : closingSheets.filter(s => csTab==="all" || s.status===csTab).map(s => {
+                    const c = sheetCalcById[s.id] || {};
+                    const ageDays = s.created_at ? Math.round((startOfToday() - new Date(s.created_at)) / ONE_DAY) : 0;
+                    const stale = s.status === "open" && ageDays >= 30;
+                    return (
+                      <tr key={s.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                          <button onClick={() => setCsDetailId(s.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{s.closing_sheet_number || `#${s.id}`}</button>
+                          {stale && <span title={`Abierto hace ${ageDays} días`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:10, padding:"1px 6px" }}>⚠ {ageDays}d</span>}
+                        </td>
+                        <td style={{ padding:"12px" }}>{brokerName(s.broker_id) || "—"}</td>
+                        <td style={{ padding:"12px" }}>{driverById[s.driver_id]?.name || "—"}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{s.load_date || "—"}</td>
+                        <td style={{ padding:"12px" }}>{c.jobCount || 0}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{Math.round(c.totalCf || 0).toLocaleString()} CF</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>${Math.round(c.carrierFee || 0).toLocaleString()}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>${Math.round(c.bolCollected || 0).toLocaleString()}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:700, color: (c.net||0) >= 0 ? "#1A8A4E" : "#A32D2D" }}>{(c.net||0) >= 0 ? `+$${Math.round(c.net||0).toLocaleString()}` : `−$${Math.round(-(c.net||0)).toLocaleString()}`}</td>
+                        <td style={{ padding:"12px" }}><CSBadge status={s.status} /></td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
+                          <Btn onClick={() => setCsDetailId(s.id)} style={{ padding:"4px 10px", fontSize:12 }}>Ver</Btn>
+                          {s.status !== "settled" && <Btn onClick={() => setCsStatus(s, "settled")} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Settled</Btn>}
+                          {s.status !== "disputed" && <Btn danger onClick={() => setCsStatus(s, "disputed")} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Dispute</Btn>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{closingSheets.filter(s => csTab==="all" || s.status===csTab).length} closing sheet(s)</div>
+          </div>
+        </>
+      )}
+
+      {/* ───────────────────────── SETTLEMENTS (detail) ───────────────────────── */}
+      {page === "settlements" && csDetailId && (() => {
+        const s = sheetById[csDetailId];
+        if (!s) return <div style={{ color:"#bbb" }}>Closing sheet no encontrado. <button onClick={() => setCsDetailId(null)} style={{ color:"#185FA5", background:"none", border:"none", cursor:"pointer" }}>Volver</button></div>;
+        const jobsIn = jobsBySheet[csDetailId] || [];
+        const c = sheetCalc(s, jobsIn);
+        const brokerNm = brokerName(s.broker_id);
+        const driverNm = driverById[s.driver_id]?.name || "";
+        const isImg = s.document_url && /\.(jpe?g|png|gif|webp|heic)$/i.test(s.document_url);
+        const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
+        const ageDays = s.created_at ? Math.round((startOfToday() - new Date(s.created_at)) / ONE_DAY) : 0;
+        return (
+          <>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+              <Btn onClick={() => setCsDetailId(null)}>← Volver</Btn>
+              <span style={{ flex:1 }} />
+              <Btn onClick={() => exportCsPdf(s, c, brokerNm, driverNm, jobsIn)}>📄 Export PDF</Btn>
+              <a href={settlementWaLink(s, c, brokerNm, driverNm)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn>💬 WhatsApp broker</Btn></a>
+              <Btn onClick={() => openEditCs(s)}>Editar</Btn>
+              {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark settled</Btn>}
+            </div>
+
+            {s.status === "open" && ageDays >= 30 && (
+              <div style={{ background:"#FEF3C7", border:"1px solid #EAB308", borderRadius:10, padding:"9px 13px", marginBottom:14, fontSize:13, color:"#92760B" }}>⚠️ Este closing sheet está abierto hace {ageDays} días.</div>
+            )}
+
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 280px", gap:14, marginBottom:14 }}>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                  <span style={{ fontSize:20, fontWeight:800, fontFamily:"monospace" }}>#{s.closing_sheet_number || s.id}</span>
+                  <CSBadge status={s.status} />
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:12 }}>
+                  <DetailRow label="Broker" value={brokerNm} />
+                  <DetailRow label="Driver" value={driverNm} />
+                  <DetailRow label="Load date" value={s.load_date} />
+                  <DetailRow label="Jobs · CF" value={`${c.jobCount} · ${Math.round(c.totalCf)} CF`} />
+                </div>
+                <div style={{ marginTop:12 }}>
+                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Notas</div>
+                  <textarea defaultValue={s.notes || ""} onBlur={e => { if ((e.target.value||"") !== (s.notes||"")) supabase.from("closing_sheets").update({ notes: e.target.value || null }).eq("id", s.id).then(loadClosingSheets); }}
+                    placeholder="Notas del closing sheet..." style={{ ...inp, minHeight:60, resize:"vertical", fontFamily:"inherit" }} />
+                </div>
+              </div>
+
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:8 }}>Documento original</div>
+                <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:10, padding:"14px", textAlign:"center", cursor:"pointer", background:"#fafafa" }}
+                  onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, s); }}>
+                  <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], s)} />
+                  {docUploading ? <div style={{ fontSize:12, color:"#888" }}>Subiendo…</div>
+                    : s.document_url ? (
+                      isImg ? <img src={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
+                        : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Ver documento (PDF)</a></div>
+                    ) : <div style={{ fontSize:12, color:"#999" }}>Arrastrá o hacé clic para subir foto/PDF del closing sheet</div>}
+                </label>
+                {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>Clic en el área para reemplazar</div>}
+              </div>
+            </div>
+
+            {/* Jobs table */}
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", marginBottom:14 }}>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Job #","Cliente","From → To","CF","Rate/CF","Carrier fee","BOL balance","Cobrado","Método","Cobro","Acciones"].map((h,i) => (
+                        <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {jobsIn.length === 0 ? (
+                      <tr><td colSpan={11} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin jobs asignados. Usá “Editar” para agregar jobs.</td></tr>
+                    ) : jobsIn.map(j => {
+                      const k = jobKey(j);
+                      const cs = collectionStatus(j);
+                      const fee = parseCf(j.volume) * numv(j.carrier_rate_per_cf);
+                      const route = [[j.pickup_city, j.pickup_state].filter(Boolean).join(" "), [j.delivery_city, j.delivery_state].filter(Boolean).join(" ")].filter(Boolean).join(" → ");
+                      return (
+                        <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><button onClick={() => setJobDetailKey(k)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button></td>
+                          <td style={{ padding:"10px 12px" }}>{j.customer || "—"}</td>
+                          <td style={{ padding:"10px 12px", fontSize:12, color:"#555" }}>{route || "—"}</td>
+                          <td style={{ padding:"10px 12px" }}><input defaultValue={parseCf(j.volume) || ""} onBlur={e => { if (e.target.value !== String(parseCf(j.volume))) updateJobBol(k, "volume", e.target.value); }} style={{ ...inp, width:64, padding:"5px 7px" }} /></td>
+                          <td style={{ padding:"10px 12px" }}><input defaultValue={j.carrier_rate_per_cf ?? ""} onBlur={e => { if ((e.target.value||"") !== String(j.carrier_rate_per_cf ?? "")) updateJobBol(k, "carrier_rate_per_cf", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={{ ...inp, width:64, padding:"5px 7px" }} /></td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600 }}>${Math.round(fee).toLocaleString()}</td>
+                          <td style={{ padding:"10px 12px" }}><input defaultValue={j.bol_balance ?? ""} onBlur={e => { if ((e.target.value||"") !== String(j.bol_balance ?? "")) updateJobBol(k, "bol_balance", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={{ ...inp, width:72, padding:"5px 7px" }} /></td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600, color:"#1A8A4E" }}>{money(j.bol_collected) || "$0"}</td>
+                          <td style={{ padding:"10px 12px", fontSize:12 }}>{j.bol_payment_method ? (PAY_METHODS.find(p=>p.v===j.bol_payment_method)?.l || j.bol_payment_method) : "—"}</td>
+                          <td style={{ padding:"10px 12px" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span></td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><Btn onClick={() => setPayModal({ jobKey:k, amount: j.bol_collected ?? "", method: j.bol_payment_method || "cash", date: j.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"4px 9px", fontSize:11 }}>Record payment</Btn></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Pads + Deductions + Settlement */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Pads</div>
+                <div className="r" style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Enviados</span><b>{numv(s.pads_sent)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Recibidos</span><b>{numv(s.pads_received)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Faltantes</span><b style={{ color: c.padsMissing>0?"#C2410C":"#111" }}>{c.padsMissing}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Cargo por pad</span><b>{m(s.charge_per_pad != null ? s.charge_per_pad : 7)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total pads charge</span><b>{m(c.padsCharge)}</b></div>
+              </div>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Deducciones del broker</div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Trip cost</span><b>{m(s.trip_cost)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Labor</span><b>{m(s.labor_charges)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Other fees{s.other_fees_description ? ` (${s.other_fees_description})` : ""}</span><b>{m(s.other_fees)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total deducciones</span><b>{m(c.deductions)}</b></div>
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Broker nos debe</div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Carrier fee subtotal</span><b>{m(c.carrierFee)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Trip cost</span><span>{m(s.trip_cost)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Labor</span><span>{m(s.labor_charges)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Other fees</span><span>{m(s.other_fees)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Pads charge</span><span>{m(c.padsCharge)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total broker nos debe</span><span>{m(c.netCarrier)}</span></div>
+              </div>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Cobrado a clientes (BOL)</div>
+                {jobsIn.map(j => (
+                  <div key={j.id} style={{ display:"flex", justifyContent:"space-between", fontSize:12, margin:"4px 0", color:"#555" }}><span style={{ fontFamily:"monospace" }}>{j.job_number || "-"}</span><span>{money(j.bol_collected) || "$0"} / {money(j.bol_balance) || "$0"}</span></div>
+                ))}
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total cobrado</span><span>{m(c.bolCollected)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:4, color:"#C2410C" }}><span>Pendiente</span><span>{m(c.pending)}</span></div>
+              </div>
+            </div>
+
+            <div style={{ background: c.net >= 0 ? "#EAF3DE" : "#FCEBEB", border:`1px solid ${c.net >= 0 ? "#639922" : "#E24B4A"}`, borderRadius:12, padding:"18px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+              <div>
+                <div style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.05em", color: c.net >= 0 ? "#3B6D11" : "#A32D2D" }}>Resultado neto</div>
+                <div style={{ fontSize:22, fontWeight:800, color: c.net >= 0 ? "#3B6D11" : "#A32D2D", marginTop:3 }}>{c.net >= 0 ? `Broker te debe ${m(c.net)}` : `Le debés al broker ${m(-c.net)}`}</div>
+              </div>
+              {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark as settled</Btn>}
+            </div>
+          </>
+        );
+      })()}
 
       {/* ───────────────────────── TRUCKS ───────────────────────── */}
       {page === "trucks" && (
@@ -3395,7 +3962,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -3450,6 +4017,126 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {showCsModal && (
+        <Modal title={editingCsId ? "Editar closing sheet" : "Nuevo closing sheet"} onClose={() => setShowCsModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowCsModal(false)}>Cancelar</Btn>
+            <Btn primary disabled={csSaving} onClick={saveCs}>{csSaving ? "Guardando..." : (editingCsId ? "Guardar cambios" : "Crear")}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="CS number"><input style={inp} value={csForm.closing_sheet_number} onChange={e => setCsForm(f => ({...f, closing_sheet_number:e.target.value}))} placeholder="CS-1024" /></Field>
+            <Field label="Load date"><input style={inp} type="date" value={csForm.load_date} onChange={e => setCsForm(f => ({...f, load_date:e.target.value}))} /></Field>
+            <Field label="Broker">
+              <select style={inp} value={csForm.broker_id} onChange={e => setCsForm(f => ({...f, broker_id:e.target.value}))}>
+                <option value="">— Sin broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Driver">
+              <select style={inp} value={csForm.driver_id} onChange={e => setCsForm(f => ({...f, driver_id:e.target.value}))}>
+                <option value="">— Sin driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Estado">
+              <select style={inp} value={csForm.status} onChange={e => setCsForm(f => ({...f, status:e.target.value}))}>
+                <option value="open">Open</option><option value="settled">Settled</option><option value="disputed">Disputed</option>
+              </select>
+            </Field>
+          </div>
+
+          <SectionLabel>Documento (foto o PDF)</SectionLabel>
+          <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:10, padding:"12px", textAlign:"center", cursor:"pointer", background:"#fafafa" }}
+            onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, null); }}>
+            <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], null)} />
+            {docUploading ? <span style={{ fontSize:12, color:"#888" }}>Subiendo…</span>
+              : csForm.document_url ? <span style={{ fontSize:12, color:"#3B6D11" }}>✓ Documento cargado — clic para reemplazar</span>
+              : <span style={{ fontSize:12, color:"#999" }}>Arrastrá o hacé clic para subir</span>}
+          </label>
+
+          <SectionLabel>Jobs en este closing sheet{csForm.job_keys.length ? ` (${csForm.job_keys.length})` : ""}</SectionLabel>
+          <input style={{ ...inp, marginBottom:8 }} value={csJobSearch} onChange={e => setCsJobSearch(e.target.value)} placeholder="Buscar job # o cliente para agregar..." />
+          <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:180, overflowY:"auto", background:"#fff" }}>
+            {(() => {
+              const q = csJobSearch.trim().toLowerCase();
+              const seen = new Set(); const rows = [];
+              for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k);
+                const inOther = j.closing_sheet_id && j.closing_sheet_id !== editingCsId;
+                const hay = [j.job_number, j.customer, j.driver].join(" ").toLowerCase();
+                if (q && !hay.includes(q)) continue;
+                if (!q && !csForm.job_keys.includes(k)) continue; // when not searching, show only selected
+                rows.push({ j, k, inOther });
+              }
+              if (!rows.length) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>{q ? "Sin resultados." : "Buscá un job para agregarlo."}</div>;
+              return rows.slice(0, 60).map(({ j, k, inOther }) => {
+                const checked = csForm.job_keys.includes(k);
+                return (
+                  <label key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor: inOther?"not-allowed":"pointer", borderBottom:"1px solid #f5f5f5", background: checked?"#f0fdf4":"#fff", opacity: inOther?0.5:1 }}>
+                    <input type="checkbox" disabled={inOther} checked={checked} onChange={() => csToggleJob(k)} />
+                    <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
+                    <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+                    {inOther && <span style={{ fontSize:10, color:"#999" }}>en otro CS</span>}
+                  </label>
+                );
+              });
+            })()}
+          </div>
+
+          <SectionLabel>Pads</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+            <Field label="Pads enviados"><input style={inp} type="number" value={csForm.pads_sent} onChange={e => setCsForm(f => ({...f, pads_sent:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Pads recibidos"><input style={inp} type="number" value={csForm.pads_received} onChange={e => setCsForm(f => ({...f, pads_received:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Cargo por pad ($)"><input style={inp} type="number" value={csForm.charge_per_pad} onChange={e => setCsForm(f => ({...f, charge_per_pad:e.target.value}))} placeholder="7" /></Field>
+          </div>
+
+          <SectionLabel>Deducciones del broker</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Trip cost ($)"><input style={inp} type="number" value={csForm.trip_cost} onChange={e => setCsForm(f => ({...f, trip_cost:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Labor charges ($)"><input style={inp} type="number" value={csForm.labor_charges} onChange={e => setCsForm(f => ({...f, labor_charges:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Other fees ($)"><input style={inp} type="number" value={csForm.other_fees} onChange={e => setCsForm(f => ({...f, other_fees:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Descripción other fees"><input style={inp} value={csForm.other_fees_description} onChange={e => setCsForm(f => ({...f, other_fees_description:e.target.value}))} placeholder="ej: detention" /></Field>
+            <Field label="Notas" full><input style={inp} value={csForm.notes} onChange={e => setCsForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+          </div>
+          {editingCsId && <div style={{ marginTop:12 }}><Btn danger onClick={() => { setShowCsModal(false); deleteCs(closingSheets.find(x=>x.id===editingCsId)); }}>Eliminar closing sheet</Btn></div>}
+        </Modal>
+      )}
+
+      {payModal && (() => {
+        const isMixed = payModal.method === "mixed";
+        const mixedTotal = (payModal.entries || []).reduce((s,e)=>s+numv(e.amount),0);
+        return (
+        <Modal title="Registrar cobro (BOL)" onClose={() => setPayModal(null)}
+          footer={<>
+            <Btn onClick={() => setPayModal(null)}>Cancelar</Btn>
+            <Btn primary onClick={savePayment}>Guardar cobro</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Método de pago">
+              <select style={inp} value={payModal.method} onChange={e => setPayModal(p => ({...p, method:e.target.value}))}>
+                {PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
+              </select>
+            </Field>
+            <Field label="Fecha de cobro"><input style={inp} type="date" value={payModal.date} onChange={e => setPayModal(p => ({...p, date:e.target.value}))} /></Field>
+            {!isMixed && <Field label="Monto cobrado ($)" full><input style={inp} type="number" value={payModal.amount} onChange={e => setPayModal(p => ({...p, amount:e.target.value}))} placeholder="0" /></Field>}
+          </div>
+          {isMixed && (
+            <div style={{ marginTop:10 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Entradas (mixed) · total ${mixedTotal.toLocaleString()}</div>
+              {(payModal.entries || []).map((e, i) => (
+                <div key={i} style={{ display:"flex", gap:8, marginBottom:6 }}>
+                  <select style={{ ...inp, flex:1 }} value={e.method} onChange={ev => setPayModal(p => ({...p, entries: p.entries.map((x,xi)=>xi===i?{...x, method:ev.target.value}:x)}))}>
+                    {PAY_METHODS.filter(m=>m.v!=="mixed").map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
+                  </select>
+                  <input style={{ ...inp, width:120 }} type="number" value={e.amount} placeholder="$" onChange={ev => setPayModal(p => ({...p, entries: p.entries.map((x,xi)=>xi===i?{...x, amount:ev.target.value}:x)}))} />
+                  <Btn onClick={() => setPayModal(p => ({...p, entries: p.entries.filter((_,xi)=>xi!==i)}))} style={{ padding:"6px 10px" }}>×</Btn>
+                </div>
+              ))}
+              <Btn onClick={() => setPayModal(p => ({...p, entries:[...(p.entries||[]), { method:"cash", amount:"" }]}))} style={{ padding:"5px 11px", fontSize:12 }}>+ Agregar entrada</Btn>
+            </div>
+          )}
+          <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Notas del cobro" /></Field>
+        </Modal>
+        );
+      })()}
 
       {(() => {
         // Shared job-list panel for broker / driver / client detail modals.
