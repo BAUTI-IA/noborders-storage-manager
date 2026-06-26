@@ -1150,15 +1150,45 @@ function JobCard({ job, onDeliver }) {
   );
 }
 
-function JobHistory({ storageId, jobs, dbReady, onSetup, onChange }) {
+function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup, onChange }) {
   const EMPTY = { job_number:"", customer:"", driver:"", date_in:"", notes:"" };
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
   const [showDelivered, setShowDelivered] = useState(false);
+  const [mode, setMode] = useState("existing"); // existing | new
+  const [pickKey, setPickKey] = useState("");
 
   const active = jobs.filter(j => !j.date_out);
   const delivered = jobs.filter(j => j.date_out);
+
+  // Active jobs not already in this unit — pick one to attach without retyping.
+  const candidates = useMemo(() => {
+    const groups = new Map();
+    for (const j of allJobs) {
+      if (j.date_out) continue;
+      const k = jobKey(j);
+      if (!groups.has(k)) groups.set(k, { key:k, job_number:j.job_number, customer:j.customer, date_in:j.date_in, here:false });
+      if (String(j.storage_id) === String(storageId)) groups.get(k).here = true;
+    }
+    return [...groups.values()].filter(g => !g.here).sort((a, b) => (b.date_in || "").localeCompare(a.date_in || ""));
+  }, [allJobs, storageId]);
+
+  // Attach an already-existing job to this unit by cloning a template part.
+  async function addExistingJob() {
+    const parts = allJobs.filter(j => jobKey(j) === pickKey);
+    if (!parts.length) return;
+    if (parts.some(p => String(p.storage_id) === String(storageId))) { setErr("Ese job ya está en esta unidad."); return; }
+    setSaving(true); setErr(null);
+    const tmpl = parts[0];
+    const { id, storage_id, warehouse, created_at, updated_at, date_out, ...rest } = tmpl;
+    const row = { ...rest, storage_id: storageId, warehouse: null, date_out: null, created_by: userEmail || null };
+    const { error } = await supabase.from("storage_jobs").insert([row]);
+    setSaving(false);
+    if (error) { setErr(error.message); return; }
+    setPickKey("");
+    onChange && onChange();
+  }
 
   async function addJob() {
     if (!form.job_number && !form.customer && !form.driver) { setErr("Completá al menos job, cliente o driver."); return; }
@@ -1218,18 +1248,44 @@ function JobHistory({ storageId, jobs, dbReady, onSetup, onChange }) {
       </div>
 
       <div style={{ background:"#fafafa", border:"1px solid #f0f0f0", borderRadius:10, padding:"12px" }}>
-        <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Agregar job</div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-          <Field label="Job #"><input style={inp} value={form.job_number} onChange={e => setForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
-          <Field label="Date in"><input style={inp} type="date" value={form.date_in} onChange={e => setForm(f => ({...f, date_in:e.target.value}))} /></Field>
-          <Field label="Cliente"><input style={inp} value={form.customer} onChange={e => setForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
-          <Field label="Driver"><input style={inp} value={form.driver} onChange={e => setForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
-          <Field label="Notas" full><input style={inp} value={form.notes} onChange={e => setForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:10 }}>
+          <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Agregar job</span>
+          <div style={{ display:"inline-flex", background:"#fff", border:"1px solid #e5e5e5", borderRadius:8, padding:2 }}>
+            {[["existing","Existente"],["new","Crear nuevo"]].map(([m,l]) => (
+              <button key={m} onClick={() => { setMode(m); setErr(null); }} type="button"
+                style={{ fontSize:12, fontWeight: mode===m?600:500, padding:"4px 10px", borderRadius:6, border:"none", cursor:"pointer", background: mode===m?"#111":"transparent", color: mode===m?"#fff":"#666" }}>{l}</button>
+            ))}
+          </div>
         </div>
-        {err && <div style={{ fontSize:12, color:"#b91c1c", marginTop:8 }}>{err}</div>}
-        <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
-          <Btn primary disabled={saving} onClick={addJob}>{saving ? "Agregando..." : "+ Agregar job"}</Btn>
-        </div>
+        {mode === "existing" ? (
+          <>
+            <Field label="Job existente">
+              <select style={inp} value={pickKey} onChange={e => { setPickKey(e.target.value); setErr(null); }}>
+                <option value="">— Seleccionar job —</option>
+                {candidates.map(g => <option key={g.key} value={g.key}>{[g.job_number || "(sin #)", g.customer].filter(Boolean).join(" — ")}</option>)}
+              </select>
+            </Field>
+            {candidates.length === 0 && <div style={{ fontSize:12, color:"#999", marginTop:6 }}>No hay otros jobs activos disponibles. Usá "Crear nuevo".</div>}
+            {err && <div style={{ fontSize:12, color:"#b91c1c", marginTop:8 }}>{err}</div>}
+            <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
+              <Btn primary disabled={saving || !pickKey} onClick={addExistingJob}>{saving ? "Agregando..." : "+ Agregar a esta unidad"}</Btn>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+              <Field label="Job #"><input style={inp} value={form.job_number} onChange={e => setForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
+              <Field label="Date in"><input style={inp} type="date" value={form.date_in} onChange={e => setForm(f => ({...f, date_in:e.target.value}))} /></Field>
+              <Field label="Cliente"><input style={inp} value={form.customer} onChange={e => setForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
+              <Field label="Driver"><input style={inp} value={form.driver} onChange={e => setForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
+              <Field label="Notas" full><input style={inp} value={form.notes} onChange={e => setForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+            </div>
+            {err && <div style={{ fontSize:12, color:"#b91c1c", marginTop:8 }}>{err}</div>}
+            <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
+              <Btn primary disabled={saving} onClick={addJob}>{saving ? "Agregando..." : "+ Agregar job"}</Btn>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1342,6 +1398,11 @@ export default function App() {
   const [whPicker, setWhPicker] = useState(null); // { name } | null
   const [whPickerKey, setWhPickerKey] = useState(""); // selected existing job key
   const [whPickerSaving, setWhPickerSaving] = useState(false);
+  // Top-level "+ Job a unidad" picker: choose a unit + an existing job (or create new).
+  const [unitJobPicker, setUnitJobPicker] = useState(false);
+  const [ujUnitId, setUjUnitId] = useState("");
+  const [ujKey, setUjKey] = useState("");
+  const [ujSaving, setUjSaving] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importTab, setImportTab] = useState("paste");
   const [pasteText, setPasteText] = useState("");
@@ -2438,6 +2499,24 @@ export default function App() {
     showToast(`Job ${tmpl.job_number || ""} agregado a ${name}`.replace(/\s+/g, " ").trim());
     loadJobs();
   }
+  // Top-level: open the "add a job to a unit" picker.
+  function openUnitJobPicker() { setUjUnitId(""); setUjKey(""); setUnitJobPicker(true); }
+  // Attach an existing job to a unit (by group key) — clone a template part as a new row.
+  async function addExistingJobToUnit(key, storageId) {
+    const parts = jobs.filter(j => jobKey(j) === key);
+    if (!parts.length || !storageId) { setUnitJobPicker(false); return; }
+    if (parts.some(p => String(p.storage_id) === String(storageId))) { showToast("Ese job ya está en esa unidad"); setUnitJobPicker(false); return; }
+    const tmpl = parts[0];
+    const { id, storage_id, warehouse, created_at, updated_at, date_out, ...rest } = tmpl;
+    const row = { ...rest, storage_id: Number(storageId), warehouse: null, date_out: null, created_by: userEmail };
+    setUjSaving(true);
+    const { error } = await supabase.from("storage_jobs").insert([row]);
+    setUjSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setUnitJobPicker(false);
+    showToast(`Job ${tmpl.job_number || ""} agregado a la unidad`.replace(/\s+/g, " ").trim());
+    loadJobs();
+  }
   function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr, pickup_date_from: dateStr }); setJobErr(null); setShowAddJob(true); }
   function showToast(msg) {
     setToast(msg);
@@ -3317,6 +3396,7 @@ export default function App() {
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           {page === "storage" && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
+          {page === "storage" && storageTab === "storage_units" && <Btn primary disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
           {page === "storage" && <Btn onClick={openAdd}>+ Unidad</Btn>}
           {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
@@ -5476,6 +5556,8 @@ export default function App() {
           <JobHistory
             storageId={detail.id}
             jobs={jobs.filter(j => j.storage_id === detail.id)}
+            allJobs={jobs}
+            userEmail={userEmail}
             dbReady={dbReady}
             onSetup={() => setShowSetup(true)}
             onChange={loadJobs}
@@ -5516,6 +5598,62 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {unitJobPicker && (() => {
+        // Units the job can be attached to (physical lockers, not warehouses).
+        const units = records.filter(r => r.space_type !== "warehouse")
+          .sort((a, b) => (a.brand || "").localeCompare(b.brand || ""));
+        const unitLabel = (r) => [r.brand || "Unidad", r.unit && `#${r.unit}`, r.state].filter(Boolean).join(" · ");
+        // Active jobs not already in the chosen unit.
+        let candidates = [];
+        if (ujUnitId) {
+          const groups = new Map();
+          for (const j of jobs) {
+            if (j.date_out) continue;
+            const k = jobKey(j);
+            if (!groups.has(k)) groups.set(k, { key:k, job_number:j.job_number, customer:j.customer, date_in:j.date_in, here:false });
+            if (String(j.storage_id) === String(ujUnitId)) groups.get(k).here = true;
+          }
+          candidates = [...groups.values()].filter(g => !g.here).sort((a, b) => (b.date_in || "").localeCompare(a.date_in || ""));
+        }
+        return (
+          <Modal title="+ Job a una unidad" onClose={() => setUnitJobPicker(false)}
+            footer={<>
+              <Btn onClick={() => setUnitJobPicker(false)}>Cancelar</Btn>
+              <Btn primary disabled={!ujUnitId || !ujKey || ujSaving} onClick={() => addExistingJobToUnit(ujKey, ujUnitId)}>
+                {ujSaving ? "Agregando..." : "Agregar a la unidad"}
+              </Btn>
+            </>}>
+            <div style={{ fontSize:13, color:"#666", marginBottom:14 }}>
+              Elegí una unidad y agregá un job existente, o creá uno nuevo.
+            </div>
+            <Field label="Unidad">
+              <select style={inp} value={ujUnitId} onChange={e => { setUjUnitId(e.target.value); setUjKey(""); }}>
+                <option value="">— Seleccionar unidad —</option>
+                {units.map(r => <option key={r.id} value={r.id}>{unitLabel(r)}</option>)}
+              </select>
+            </Field>
+            <div style={{ height:10 }} />
+            <Field label="Job existente">
+              <select style={inp} value={ujKey} disabled={!ujUnitId} onChange={e => setUjKey(e.target.value)}>
+                <option value="">{ujUnitId ? "— Seleccionar job —" : "Elegí una unidad primero"}</option>
+                {candidates.map(g => <option key={g.key} value={g.key}>{[g.job_number || "(sin #)", g.customer].filter(Boolean).join(" — ")}</option>)}
+              </select>
+            </Field>
+            {ujUnitId && candidates.length === 0 && (
+              <div style={{ fontSize:12, color:"#999", marginTop:8 }}>No hay jobs activos disponibles para esta unidad.</div>
+            )}
+            <div style={{ display:"flex", alignItems:"center", gap:10, margin:"16px 0 4px" }}>
+              <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
+              <span style={{ fontSize:11, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.05em" }}>o</span>
+              <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
+            </div>
+            <Btn disabled={!ujUnitId} onClick={() => { const sid = Number(ujUnitId); setUnitJobPicker(false); openAddJob(sid); }} style={{ width:"100%", padding:"9px 14px" }}>
+              + Crear nuevo job {ujUnitId ? "" : "(elegí una unidad)"}
+            </Btn>
+          </Modal>
+        );
+      })()}
 
       {whPicker && (() => {
         const name = whPicker.name;
