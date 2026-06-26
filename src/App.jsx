@@ -94,7 +94,7 @@ const EMPTY_EMPLOYEE = { name:"", role:"", phone:"", email:"", active:true };
 
 // One row of the per-job extras matrix. A row is "active" when an extra exists for
 // this (job, type, driver). Editing amount/% persists on blur; selects persist on change.
-function ExtraRow({ type, extra, driverId, employees, onActivate, onPatch, onToggle, onDelete }) {
+function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPatch, onToggle, onDelete }) {
   const active = !!extra && extra.active !== false;
   const locked = EXTRA_LOCKED_DRIVER(type);
   const [amount, setAmount] = useState(extra?.amount ?? "");
@@ -122,13 +122,19 @@ function ExtraRow({ type, extra, driverId, employees, onActivate, onPatch, onTog
       </td>
       <td style={cell}>{active ? <input value={amount} onChange={e => setAmount(e.target.value)} onBlur={() => onPatch(extra, { amount })} placeholder="$" style={{ ...miniInp, width:78 }} /> : <span style={{ color:"#ccc" }}>—</span>}</td>
       <td style={cell}>{active ? (
+        <select value={extra?.driver_id || ""} onChange={e => onPatch(extra, { driver_id: e.target.value || null })} style={{ ...miniInp, width:112, borderColor: extra?.driver_id ? "#e5e5e5" : "#fca5a5" }}>
+          <option value="">— Select —</option>
+          {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      ) : <span style={{ color:"#ccc" }}>—</span>}</td>
+      <td style={cell}>{active ? (
         <select value={gen} disabled={locked} onChange={e => onPatch(extra, { generated_by: e.target.value })} style={{ ...miniInp, width:108, opacity: locked ? 0.6 : 1 }}>
           {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
         </select>
       ) : <span style={{ color:"#ccc" }}>—</span>}</td>
       <td style={cell}>{active && gen !== "driver_only" ? (
-        <select value={extra?.rep_id || ""} onChange={e => onPatch(extra, { rep_id: e.target.value || null })} style={{ ...miniInp, width:108 }}>
-          <option value="">— Rep —</option>
+        <select value={extra?.rep_id || ""} onChange={e => onPatch(extra, { rep_id: e.target.value || null })} style={{ ...miniInp, width:112 }}>
+          <option value="">— Select —</option>
           {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
         </select>
       ) : <span style={{ color:"#ccc" }}>—</span>}</td>
@@ -3859,12 +3865,12 @@ export default function App() {
                             <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
                               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                                 <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                  {["", "Tipo", "Monto", "Generado por", "Rep", "Driver %", "Rep %", "Com. driver", "Com. rep", ""].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                  {["", "Tipo", "Monto", "Driver", "Generado por", "Rep", "Driver %", "Rep %", "Com. driver", "Com. rep", ""].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
                                 </tr></thead>
                                 <tbody>
                                   {typesToShow.map(t => {
                                     const extra = jd.byType[t.v] || null;
-                                    return <ExtraRow key={t.v} type={t.v} extra={extra} driverId={sec.did} employees={employees}
+                                    return <ExtraRow key={t.v} type={t.v} extra={extra} driverId={sec.did} drivers={driversList} employees={employees}
                                       onActivate={(type) => activateExtra(jd.g.repId, sec.did, type)}
                                       onPatch={patchExtra} onToggle={toggleExtraActive} onDelete={deleteExtra} />;
                                   })}
@@ -5229,7 +5235,7 @@ export default function App() {
           <Modal title="Agregar extra" onClose={() => setQuickExtra(null)}
             footer={<>
               <Btn onClick={() => setQuickExtra(null)}>Cancelar</Btn>
-              <Btn primary onClick={saveQuickExtra}>Guardar extra</Btn>
+              <Btn primary disabled={!quickExtra.driver_id} onClick={saveQuickExtra}>Guardar extra</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               <Field label="Tipo">
@@ -5244,16 +5250,16 @@ export default function App() {
                   {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
                 </select>
               </Field>
-              <Field label="Driver">
-                <select style={inp} value={quickExtra.driver_id} onChange={e => setQ({ driver_id:e.target.value })}>
-                  <option value="">— Driver —</option>
+              <Field label="Driver *">
+                <select style={{ ...inp, borderColor: quickExtra.driver_id ? "#e5e5e5" : "#fca5a5" }} value={quickExtra.driver_id} onChange={e => setQ({ driver_id:e.target.value })}>
+                  <option value="">— Select —</option>
                   {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </Field>
               {quickExtra.generated_by !== "driver_only" && (
                 <Field label="Rep">
                   <select style={inp} value={quickExtra.rep_id} onChange={e => setQ({ rep_id:e.target.value })}>
-                    <option value="">— Rep —</option>
+                    <option value="">— Select —</option>
                     {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
                   </select>
                 </Field>
