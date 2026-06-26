@@ -5213,7 +5213,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Lot #","Sticker","Volumen","Empresa","Ubicación","Zip","Driver","Map", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                  {["Job #","Cliente","Tipo","Estado","FADD","Volumen","Ubicación","Driver","Ruta", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                   <th style={{ width:150 }} />
@@ -5223,9 +5223,8 @@ export default function App() {
                 {jobGroups.length === 0 ? (
                   <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
                 ) : jobGroups.map(g => {
-                  const empresas = [...new Set(g.parts.map(p => p.storage?.brand).filter(Boolean))];
-                  const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : p.storage?.address).filter(Boolean))];
-                  const zips = [...new Set(g.parts.map(p => p.storage?.zip).filter(Boolean))];
+                  // Where the goods currently sit: warehouse name, or storage brand + state.
+                  const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.state].filter(Boolean).join(" · ")).filter(Boolean))];
                   const mapHref = routeUrl(g);
                   return (
                   <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
@@ -5236,14 +5235,13 @@ export default function App() {
                       </button>
                     </td>
                     <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
-                    <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{g.lot_number||"—"}</td>
-                    <td style={{ padding:"12px" }}><Sticker color={g.sticker_color} /></td>
-                    <td style={{ padding:"12px" }}>{g.volume||"—"}</td>
-                    <td style={{ padding:"12px", fontWeight:500 }}>{empresas.length ? empresas.join(", ") : "—"}</td>
+                    <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
+                    <td style={{ padding:"12px" }}><StatusBadge status={g.status} /></td>
+                    <td style={{ padding:"12px" }}><FaddBadge fadd={g.fadd} /></td>
+                    <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{g.volume||"—"}</td>
                     <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
                       {locs.length ? locs.map((a, i) => <div key={i} style={{ marginBottom: i < locs.length-1 ? 3 : 0 }}>{a}</div>) : "—"}
                     </td>
-                    <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{zips.length ? zips.join(", ") : "—"}</td>
                     <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
                     <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                       {mapHref ? <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:13 }}>🗺️ Ruta</a> : "—"}
