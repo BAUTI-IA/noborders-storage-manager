@@ -3396,7 +3396,6 @@ export default function App() {
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           {page === "storage" && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
-          {page === "storage" && storageTab === "storage_units" && <Btn primary disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
           {page === "storage" && <Btn onClick={openAdd}>+ Unidad</Btn>}
           {page === "storage" && storageTab === "storage_units" && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
           {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
