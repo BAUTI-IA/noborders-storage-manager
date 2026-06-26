@@ -2766,6 +2766,52 @@ export default function App() {
     return { activeCount, cfTransit, bolTransit, deliveredToday };
   }, [trips, jobs, tripCalc]);
 
+  // ── Legal & Compliance derived data (declared before sidebarBadgesPlus, which reads it) ──
+  const companyById = useMemo(() => { const m = {}; for (const c of companies) m[c.id] = c; return m; }, [companies]);
+  // Display name for a doc's entity (company/truck/driver).
+  const entityName = useCallback((type, id) => {
+    if (type === "company") return companyById[id]?.name || "—";
+    if (type === "truck") { const t = truckById[id]; return t ? (t.name || `Camión #${id}`) : "—"; }
+    if (type === "driver") return driverById[id]?.name || "—";
+    return "—";
+  }, [companyById, truckById, driverById]);
+  // Docs grouped by `${entity_type}:${entity_id}` for the card grids.
+  const docsByEntity = useMemo(() => {
+    const m = {};
+    for (const d of complianceDocs) { const k = `${d.entity_type}:${d.entity_id}`; (m[k] = m[k] || []).push(d); }
+    return m;
+  }, [complianceDocs]);
+  // The latest (newest) doc of a given type for an entity (what each grid cell shows).
+  const docFor = useCallback((type, id, docType) => {
+    const arr = (docsByEntity[`${type}:${id}`] || []).filter(d => d.document_type === docType);
+    if (!arr.length) return null;
+    return arr.sort((a, b) => (b.issue_date || b.created_at || "").localeCompare(a.issue_date || a.created_at || ""))[0];
+  }, [docsByEntity]);
+  // Worst status among an entity's docs, for the card header badge.
+  const entityStatus = useCallback((type, id) => {
+    const arr = docsByEntity[`${type}:${id}`] || [];
+    let worst = "active";
+    for (const d of arr) { const s = docStatus(d); if (s === "expired") return "expired"; if (s === "expiring_soon") worst = "expiring_soon"; }
+    return arr.length ? worst : "none";
+  }, [docsByEntity]);
+  const complianceMetrics = useMemo(() => {
+    let expired = 0, expiringSoon = 0, upToDate = 0;
+    for (const d of complianceDocs) { const s = docStatus(d); if (s === "expired") expired++; else if (s === "expiring_soon") expiringSoon++; else if (s === "active") upToDate++; }
+    return { activeCompanies: companies.filter(c => c.active !== false).length, expired, expiringSoon, upToDate };
+  }, [complianceDocs, companies]);
+  // Docs expired or expiring within 7 days → alert banner + sidebar badge.
+  const complianceAlerts = useMemo(() => {
+    const rows = [];
+    for (const d of complianceDocs) {
+      const s = docStatus(d);
+      const days = docDaysToExpiry(d);
+      if (s === "expired" || (s === "expiring_soon" && days !== null && days <= 7)) {
+        rows.push({ doc: d, status: s, days, name: entityName(d.entity_type, d.entity_id) });
+      }
+    }
+    return rows.sort((a, b) => (a.days ?? 0) - (b.days ?? 0));
+  }, [complianceDocs, entityName]);
+
   const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length]);
 
   // Auto-complete a trip once all its jobs are delivered.
@@ -2873,51 +2919,6 @@ export default function App() {
     return Object.values(m).sort((a, b) => b.total - a.total);
   }, [paymentRows]);
 
-  // ── Legal & Compliance derived data ──
-  const companyById = useMemo(() => { const m = {}; for (const c of companies) m[c.id] = c; return m; }, [companies]);
-  // Display name for a doc's entity (company/truck/driver).
-  const entityName = useCallback((type, id) => {
-    if (type === "company") return companyById[id]?.name || "—";
-    if (type === "truck") { const t = truckById[id]; return t ? (t.name || `Camión #${id}`) : "—"; }
-    if (type === "driver") return driverById[id]?.name || "—";
-    return "—";
-  }, [companyById, truckById, driverById]);
-  // Docs grouped by `${entity_type}:${entity_id}` for the card grids.
-  const docsByEntity = useMemo(() => {
-    const m = {};
-    for (const d of complianceDocs) { const k = `${d.entity_type}:${d.entity_id}`; (m[k] = m[k] || []).push(d); }
-    return m;
-  }, [complianceDocs]);
-  // The latest (newest) doc of a given type for an entity (what each grid cell shows).
-  const docFor = useCallback((type, id, docType) => {
-    const arr = (docsByEntity[`${type}:${id}`] || []).filter(d => d.document_type === docType);
-    if (!arr.length) return null;
-    return arr.sort((a, b) => (b.issue_date || b.created_at || "").localeCompare(a.issue_date || a.created_at || ""))[0];
-  }, [docsByEntity]);
-  // Worst status among an entity's docs, for the card header badge.
-  const entityStatus = useCallback((type, id) => {
-    const arr = docsByEntity[`${type}:${id}`] || [];
-    let worst = "active";
-    for (const d of arr) { const s = docStatus(d); if (s === "expired") return "expired"; if (s === "expiring_soon") worst = "expiring_soon"; }
-    return arr.length ? worst : "none";
-  }, [docsByEntity]);
-  const complianceMetrics = useMemo(() => {
-    let expired = 0, expiringSoon = 0, upToDate = 0;
-    for (const d of complianceDocs) { const s = docStatus(d); if (s === "expired") expired++; else if (s === "expiring_soon") expiringSoon++; else if (s === "active") upToDate++; }
-    return { activeCompanies: companies.filter(c => c.active !== false).length, expired, expiringSoon, upToDate };
-  }, [complianceDocs, companies]);
-  // Docs expired or expiring within 7 days → alert banner + sidebar badge.
-  const complianceAlerts = useMemo(() => {
-    const rows = [];
-    for (const d of complianceDocs) {
-      const s = docStatus(d);
-      const days = docDaysToExpiry(d);
-      if (s === "expired" || (s === "expiring_soon" && days !== null && days <= 7)) {
-        rows.push({ doc: d, status: s, days, name: entityName(d.entity_type, d.entity_id) });
-      }
-    }
-    return rows.sort((a, b) => (a.days ?? 0) - (b.days ?? 0));
-  }, [complianceDocs, entityName]);
 
   const detail = records.find(r => r.id === detailId);
 
