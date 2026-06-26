@@ -209,6 +209,35 @@ function sheetCalc(sheet, jobsIn) {
   const net = netCarrier - bolCollected;            // >0 broker owes us, <0 we owe broker
   return { carrierFee, bolBalance, bolCollected, totalCf, padsSent, padsReturned, padsMissing, padsCharge, deductions, netCarrier, pending, net, jobCount: jobsIn.length };
 }
+// ── Payments module: money in, who holds it, what's banked ──
+const EMPTY_PAY_ACCOUNT = { name:"", bank_name:"", account_type:"", account_last4:"", notes:"", active:true };
+const PAY_CONCEPTS = [
+  { v:"job", l:"Job", bg:"#E6F1FB", text:"#185FA5" },
+  { v:"extra", l:"Extra", bg:"#EDE9FE", text:"#6D28D9" },
+  { v:"cc_fee", l:"CC Fee", bg:"#F3E8FF", text:"#7C3AED" },
+  { v:"storage", l:"Storage", bg:"#EAF3DE", text:"#3B6D11" },
+  { v:"other", l:"Other", bg:"#F1F1F1", text:"#666" },
+];
+const payConceptLabel = (v) => PAY_CONCEPTS.find(c => c.v === v)?.l || v;
+function ConceptBadge({ concept }) {
+  const c = PAY_CONCEPTS.find(x => x.v === concept) || PAY_CONCEPTS[4];
+  return <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}>{c.l}</span>;
+}
+// Distinct color per payment method for quick scanning.
+const PAY_METHOD_META = { cash:"#1A8A4E", check:"#185FA5", money_order:"#0E7490", zelle:"#7C3AED", venmo:"#3D95CE", credit_card:"#EA7C27", paypal:"#172C70", cashapp:"#00B844", wire_transfer:"#92400E", apple_pay:"#111111" };
+function PaymentMethodBadge({ method }) {
+  if (!method) return <span style={{ color:"#bbb" }}>—</span>;
+  const hex = PAY_METHOD_META[method] || "#666";
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10.5, fontWeight:600, padding:"2px 8px", borderRadius:20, background:hex+"1a", color:hex, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:hex }} />{payMethodLabel(method)}</span>;
+}
+// Cash, check and money order are physically held; everything else is digital.
+const PHYSICAL_METHODS = ["cash", "check", "money_order"];
+const isPhysical = (m) => PHYSICAL_METHODS.includes(m);
+const isDigitalMethod = (m) => !!m && !PHYSICAL_METHODS.includes(m);
+const paymentNet = (p) => numv(p.amount) - numv(p.discount);
+const daysSince = (dateStr) => { if (!dateStr) return 0; const d = new Date(dateStr + "T00:00:00"); return Math.floor((Date.now() - d.getTime()) / 86400000); };
+const EMPTY_PAYMENT = { job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"", discount:"", discount_reason:"", received:false, received_date:"", received_by:"", cash_with_whom:"", banked:false, banked_date:"", bank_account:"", notes:"" };
+
 const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
@@ -595,6 +624,52 @@ create policy "job_extras_all" on public.job_extras for all to anon, authenticat
 
 do $$ begin alter publication supabase_realtime add table public.employees; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.job_extras; exception when others then null; end $$;`;
+
+// Payments: every dollar in, who holds it, what's banked + bank accounts.
+const PAYMENTS_SQL = `create table if not exists public.payment_accounts (
+  id bigint generated always as identity primary key,
+  name text,
+  bank_name text,
+  account_type text,
+  account_last4 text,
+  notes text,
+  active boolean default true,
+  created_at timestamptz default now()
+);
+alter table public.payment_accounts enable row level security;
+drop policy if exists "payment_accounts_all" on public.payment_accounts;
+create policy "payment_accounts_all" on public.payment_accounts for all to anon, authenticated using (true) with check (true);
+insert into public.payment_accounts (name)
+  select v from (values ('Main Account'), ('Operations Account')) as t(v)
+  where not exists (select 1 from public.payment_accounts);
+
+create table if not exists public.payments (
+  id bigint generated always as identity primary key,
+  job_id bigint references public.storage_jobs(id) on delete set null,
+  payment_date date,
+  amount numeric,
+  concept text default 'job',
+  method text,
+  method_id text,
+  check_type text,
+  discount numeric default 0,
+  discount_reason text,
+  received boolean default false,
+  received_date date,
+  received_by text,
+  cash_with_whom text,
+  banked boolean default false,
+  banked_date date,
+  bank_account text,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.payments enable row level security;
+drop policy if exists "payments_all" on public.payments;
+create policy "payments_all" on public.payments for all to anon, authenticated using (true) with check (true);
+
+do $$ begin alter publication supabase_realtime add table public.payment_accounts; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.payments; exception when others then null; end $$;`;
 
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
@@ -1171,6 +1246,7 @@ const NAV = [
     { id:"billing", label:"Billing", icon:"🧾" },
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
+    { id:"payments", label:"Payments", icon:"💰" },
     { id:"clientes", label:"Clientes", icon:"👥" },
   ]},
   { section:"Fleet", items:[
@@ -1227,6 +1303,7 @@ const PAGE_META = {
   billing:     { title:"Billing", sub:"Cobro de storage a clientes" },
   settlements: { title:"Carrier Settlements", sub:"Closing sheets de broker deliveries" },
   extras:      { title:"Extras & Comisiones", sub:"Extras por job y comisiones de driver/rep" },
+  payments:    { title:"Payments", sub:"Cobros, efectivo en circulación y depósitos" },
   clientes:    { title:"Clientes", sub:"Clientes y sus trabajos" },
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
@@ -1340,6 +1417,16 @@ export default function App() {
   const [empSaving, setEmpSaving] = useState(false);
   const [empDetailId, setEmpDetailId] = useState(null);   // rep profile open in the employees modal
   const [quickExtra, setQuickExtra] = useState(null);     // job-detail quick-add form
+  // Payments
+  const [paymentsMissing, setPaymentsMissing] = useState(false);
+  const [payments, setPayments] = useState([]);
+  const [payAccounts, setPayAccounts] = useState([]);
+  const [payTab, setPayTab] = useState("all");            // all | pending | received | circulation | banked
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [payForm, setPayForm] = useState(EMPTY_PAYMENT);
+  const [editingPayId, setEditingPayId] = useState(null);
+  const [paySaving, setPaySaving] = useState(false);
+  const [payJobSearch, setPayJobSearch] = useState("");   // job search inside the payment form
   const fileRef = useRef();
   const autoGenRef = useRef(false);
   const tripCompleteRef = useRef(false);
@@ -1397,6 +1484,14 @@ export default function App() {
   const loadEmployees = useCallback(async () => {
     const { data, error } = await supabase.from("employees").select("*").order("name", { ascending: true });
     if (!error) setEmployees(data || []);
+  }, []);
+  const loadPayments = useCallback(async () => {
+    const { data, error } = await supabase.from("payments").select("*").order("payment_date", { ascending: false });
+    if (!error) setPayments(data || []);
+  }, []);
+  const loadPayAccounts = useCallback(async () => {
+    const { data, error } = await supabase.from("payment_accounts").select("*").order("name", { ascending: true });
+    if (!error) setPayAccounts(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -1630,6 +1725,36 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, extrasMissing, loadExtras, loadEmployees]);
+
+  // Probe the Payments module (payments + payment_accounts tables).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: pErr } = await supabase.from("payments").select("id").limit(1);
+      const { error: aErr } = await supabase.from("payment_accounts").select("id").limit(1);
+      if (cancelled) return;
+      if (!pErr && !aErr) { loadPayments(); loadPayAccounts(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: PAYMENTS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { loadPayments(); loadPayAccounts(); }
+      else setPaymentsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadPayments, loadPayAccounts]);
+
+  useEffect(() => {
+    if (!session || paymentsMissing) return;
+    const channel = supabase.channel("payments-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "payments" }, () => loadPayments())
+      .on("postgres_changes", { event: "*", schema: "public", table: "payment_accounts" }, () => loadPayAccounts())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, paymentsMissing, loadPayments, loadPayAccounts]);
 
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
@@ -2154,14 +2279,17 @@ export default function App() {
     const m = new Map();
     for (const j of jobs) {
       const k = jobKey(j);
-      if (!m.has(k)) m.set(k, { key:k, job_number:j.job_number, customer:j.customer, broker_id:j.broker_id, rep:j.rep, date_in:j.date_in, created_at:j.created_at, driver_ids: Array.isArray(j.driver_ids) ? j.driver_ids : [], ids:[] });
+      if (!m.has(k)) m.set(k, { key:k, job_number:j.job_number, customer:j.customer, broker_id:j.broker_id, rep:j.rep, date_in:j.date_in, created_at:j.created_at, driver_ids: Array.isArray(j.driver_ids) ? j.driver_ids : [], status:j.status, job_type:j.job_type, pickup_balance:j.pickup_balance, delivery_balance:j.delivery_balance, bol_balance:j.bol_balance, delivery_date:j.delivery_date, pickup_date:j.pickup_date_from || j.pickup_date, anyDelivered:false, ids:[] });
       const g = m.get(k);
       g.ids.push(j.id);
       if (!g.date_in && j.date_in) g.date_in = j.date_in;
+      if (j.date_out || j.status === "delivered") g.anyDelivered = true;
     }
     for (const g of m.values()) g.repId = Math.min(...g.ids);
     return m;
   }, [jobs]);
+  // Expected to be collected for a job = pickup + delivery balances (+ broker BOL balance).
+  const jobExpected = useCallback((g) => g ? numv(g.pickup_balance) + numv(g.delivery_balance) + numv(g.bol_balance) : 0, []);
   const groupMonth = useCallback((g) => (g.date_in || g.created_at || "").slice(0, 7), []);
   const extrasByJobKey = useMemo(() => {
     const m = {};
@@ -2185,6 +2313,54 @@ export default function App() {
     }
     return { total, driverComm, repComm, company };
   }, [jobExtras, jobKeyByRowId, extraJobGroups, groupMonth, exMonth]);
+
+  // ── Payments derived data ──
+  const paymentsByJobKey = useMemo(() => {
+    const m = {};
+    for (const p of payments) { const k = jobKeyByRowId[p.job_id]; if (!k) continue; (m[k] = m[k] || []).push(p); }
+    return m;
+  }, [payments, jobKeyByRowId]);
+  // Net received per job (only payments flagged received), for outstanding-balance math.
+  const jobReceivedByKey = useMemo(() => {
+    const m = {};
+    for (const p of payments) { if (!p.received) continue; const k = jobKeyByRowId[p.job_id]; if (!k) continue; m[k] = (m[k] || 0) + paymentNet(p); }
+    return m;
+  }, [payments, jobKeyByRowId]);
+  // Enrich each payment with its job group for table/grouping/search.
+  const paymentRows = useMemo(() => payments.map(p => {
+    const k = jobKeyByRowId[p.job_id];
+    const g = k ? extraJobGroups.get(k) : null;
+    return { ...p, _key:k, _g:g, _net: paymentNet(p) };
+  }), [payments, jobKeyByRowId, extraJobGroups]);
+  const paymentMetrics = useMemo(() => {
+    const mo = today().slice(0, 7);
+    let expected = 0, received = 0, inCirc = 0, banked = 0, ccFees = 0;
+    for (const g of extraJobGroups.values()) { if (g.status !== "cancelled") expected += jobExpected(g); }
+    for (const p of payments) {
+      const net = paymentNet(p);
+      if (p.received && (p.received_date || p.payment_date || "").slice(0, 7) === mo) received += net;
+      if (isPhysical(p.method) && p.received && !p.banked) inCirc += net;
+      if (p.banked && (p.banked_date || "").slice(0, 7) === mo) banked += net;
+      if (p.concept === "cc_fee" && (p.payment_date || "").slice(0, 7) === mo) ccFees += numv(p.amount);
+    }
+    return { expected, received, inCirc, banked, pending: Math.max(0, expected - received), ccFees };
+  }, [payments, extraJobGroups, jobExpected]);
+  // Cash physically held but not yet banked, that's been sitting >7 days.
+  const stalePayments = useMemo(() => paymentRows
+    .filter(p => isPhysical(p.method) && p.received && !p.banked && daysSince(p.received_date || p.payment_date) > 7)
+    .sort((a, b) => daysSince(b.received_date || b.payment_date) - daysSince(a.received_date || a.payment_date)),
+  [paymentRows]);
+  // "In circulation" grouped by the person physically holding the money.
+  const circulation = useMemo(() => {
+    const m = {};
+    for (const p of paymentRows) {
+      if (!(isPhysical(p.method) && p.received && !p.banked)) continue;
+      const who = ((p.cash_with_whom || p.received_by || "").trim()) || "— Sin asignar —";
+      if (!m[who]) m[who] = { name:who, total:0, cash:0, check:0, money_order:0, items:[] };
+      m[who].total += p._net; m[who][p.method] = (m[who][p.method] || 0) + p._net; m[who].items.push(p);
+    }
+    return Object.values(m).sort((a, b) => b.total - a.total);
+  }, [paymentRows]);
 
   const detail = records.find(r => r.id === detailId);
 
@@ -2752,6 +2928,77 @@ export default function App() {
     if (w) { w.document.write(html); w.document.close(); }
   }
 
+  // ── Payments handlers ──
+  function openAddPayment(prefill = {}) {
+    setEditingPayId(null);
+    setPayForm({ ...EMPTY_PAYMENT, payment_date: today(), received: true, received_date: today(), ...prefill });
+    setPayJobSearch(""); setShowPayModal(true);
+  }
+  function openEditPayment(p) {
+    setEditingPayId(p.id);
+    setPayForm({
+      job_id: p.job_id || "", payment_date: p.payment_date || "", amount: p.amount ?? "", concept: p.concept || "job",
+      method: p.method || "cash", method_id: p.method_id || "", check_type: p.check_type || "",
+      discount: p.discount ?? "", discount_reason: p.discount_reason || "",
+      received: !!p.received, received_date: p.received_date || "", received_by: p.received_by || "",
+      cash_with_whom: p.cash_with_whom || "", banked: !!p.banked, banked_date: p.banked_date || "",
+      bank_account: p.bank_account || "", notes: p.notes || "",
+    });
+    setPayJobSearch(""); setShowPayModal(true);
+  }
+  function payPayload(f) {
+    const digital = isDigitalMethod(f.method);
+    const received = digital ? true : !!f.received;       // digital payments arrive already received
+    const banked = digital ? true : !!f.banked;           // ...and auto-banked
+    return {
+      job_id: f.job_id ? Number(f.job_id) : null,
+      payment_date: f.payment_date || null,
+      amount: f.amount === "" ? null : numv(f.amount),
+      concept: f.concept || "job",
+      method: f.method || null,
+      method_id: f.method_id || null,
+      check_type: (f.method === "check" || f.method === "money_order") ? (f.check_type || null) : null,
+      discount: f.discount === "" ? 0 : numv(f.discount),
+      discount_reason: f.discount_reason || null,
+      received, received_date: received ? (f.received_date || today()) : null,
+      received_by: f.received_by || null,
+      cash_with_whom: (!digital && isPhysical(f.method) && !banked) ? (f.cash_with_whom || null) : null,
+      banked, banked_date: banked ? (f.banked_date || today()) : null,
+      bank_account: banked ? (f.bank_account || null) : null,
+      notes: f.notes || null,
+    };
+  }
+  async function savePaymentRow() {
+    setPaySaving(true);
+    const payload = payPayload(payForm);
+    let error = null;
+    if (editingPayId) ({ error } = await supabase.from("payments").update(payload).eq("id", editingPayId));
+    else ({ error } = await supabase.from("payments").insert([payload]));
+    setPaySaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowPayModal(false); loadPayments();
+  }
+  async function deletePaymentRow(p) {
+    if (!window.confirm("¿Eliminar este pago?")) return;
+    await supabase.from("payments").delete().eq("id", p.id); loadPayments();
+  }
+  async function togglePayReceived(p) {
+    const received = !p.received;
+    await supabase.from("payments").update({ received, received_date: received ? (p.received_date || today()) : null }).eq("id", p.id);
+    loadPayments();
+  }
+  async function togglePayBanked(p) {
+    if (!p.received) return;  // can't bank what isn't received
+    const banked = !p.banked;
+    await supabase.from("payments").update({ banked, banked_date: banked ? (p.banked_date || today()) : null, cash_with_whom: banked ? null : p.cash_with_whom }).eq("id", p.id);
+    loadPayments();
+  }
+  function requestDepositWa(person) {
+    const lines = person.items.map(p => `• Job ${p._g?.job_number || p.job_id || "—"} — $${p._net.toLocaleString()} (${payMethodLabel(p.method)})`).join("\n");
+    const txt = `Hi ${person.name}, you currently have $${Math.round(person.total).toLocaleString()} in circulation:\n${lines}\nPlease deposit or deliver by end of week. Thank you.`;
+    window.open("https://wa.me/?text=" + encodeURIComponent(txt), "_blank");
+  }
+
   async function savePayment() {
     if (!payModal) return;
     const ids = jobs.filter(j => jobKey(j) === payModal.jobKey).map(j => j.id);
@@ -2960,6 +3207,7 @@ export default function App() {
           {page === "trips" && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Camión</Btn>}
           {page === "extras" && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Empleados</Btn>}
+          {page === "payments" && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Pago</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
         </div>
       </div>
@@ -3117,6 +3365,14 @@ export default function App() {
                           {jobKeysWithExtras.has(g.key) && (
                             <span title="Tiene extras registrados" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>
                           )}
+                          {!paymentsMissing && (() => {
+                            const outstanding = numv(g.pickup_balance) + numv(g.delivery_balance) + numv(g.bol_balance) - (jobReceivedByKey[g.key] || 0);
+                            if (outstanding <= 0) return null;
+                            const delivered = g.status === "delivered" || g.parts?.some(p => p.date_out);
+                            return delivered
+                              ? <span title={`Entregado sin cobrar · faltan $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#B91C1C", background:"#FEE2E2", borderRadius:10, padding:"1px 6px" }}>Sin cobrar</span>
+                              : <span title={`Balance pendiente · $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Balance pendiente</span>;
+                          })()}
                         </span>
                       </td>
                       <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
@@ -4021,6 +4277,174 @@ export default function App() {
         );
       })()}
 
+      {/* ───────────────────────── PAYMENTS ───────────────────────── */}
+      {page === "payments" && (() => {
+        const m = paymentMetrics;
+        const tabFilter = (p) => payTab === "pending" ? !p.received : payTab === "received" ? p.received : payTab === "banked" ? p.banked : true;
+        const rows = paymentRows.filter(tabFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        // Weekly window (Mon–Sun) for the cash-flow summary.
+        const td = today(); const dd = new Date(td + "T00:00:00"); const dow = dd.getDay();
+        const mon = new Date(dd); mon.setDate(dd.getDate() - ((dow + 6) % 7));
+        const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+        const wkStart = fmtDateLocal(mon), wkEnd = fmtDateLocal(sun);
+        const inWeek = (s) => s && s >= wkStart && s <= wkEnd;
+        let expWeek = 0, recvWeek = 0, bankWeek = 0;
+        for (const g of extraJobGroups.values()) { if (g.status !== "cancelled" && (inWeek(g.delivery_date) || inWeek(g.pickup_date))) expWeek += jobExpected(g); }
+        for (const p of payments) {
+          if (p.received && inWeek(p.received_date || p.payment_date)) recvWeek += paymentNet(p);
+          if (p.banked && inWeek(p.banked_date)) bankWeek += paymentNet(p);
+        }
+        const metricDefs = [
+          { label:"Esperado este mes", value:"$"+Math.round(m.expected).toLocaleString(), color:"#666" },
+          { label:"Recibido este mes", value:"$"+Math.round(m.received).toLocaleString(), color:"#1A8A4E" },
+          { label:"En circulación (sin depositar)", value:"$"+Math.round(m.inCirc).toLocaleString(), color:"#E24B4A" },
+          { label:"Depositado este mes", value:"$"+Math.round(m.banked).toLocaleString(), color:"#185FA5" },
+          { label:"Pendiente de cobro", value:"$"+Math.round(m.pending).toLocaleString(), color:"#EF9F27" },
+          { label:"CC fees cobrados", value:"$"+Math.round(m.ccFees).toLocaleString(), color:"#7C3AED" },
+        ];
+        const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
+        const td2 = { padding:"9px 10px", fontSize:12.5, verticalAlign:"middle" };
+        const Toggle = ({ on, onClick, disabled }) => (
+          <button onClick={onClick} disabled={disabled} style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, border:"none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, background: on ? "#EAF3DE" : "#F1F1F1", color: on ? "#3B6D11" : "#999" }}>{on ? "Sí" : "No"}</button>
+        );
+        return (
+          <>
+            {paymentsMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>Para Payments (cobros, circulación y depósitos), corré el SQL de configuración una sola vez en Supabase.</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10, marginBottom:16 }}>
+              {metricDefs.map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:19, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {stalePayments.length > 0 && (
+              <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
+                <div style={{ fontSize:13, fontWeight:700, color:"#A32D2D", marginBottom:6 }}>⚠️ Recibido sin depositar hace +7 días ({stalePayments.length})</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                  {stalePayments.map(p => (
+                    <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#7A2222", flexWrap:"wrap" }}>
+                      <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#A32D2D", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || ("#"+(p.job_id||"—"))}</button>
+                      <span style={{ fontWeight:700 }}>${p._net.toLocaleString()}</span>
+                      <span>· {payMethodLabel(p.method)}</span>
+                      <span>· {(p.cash_with_whom || p.received_by || "—")}</span>
+                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{daysSince(p.received_date || p.payment_date)} días</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
+              {[["all","Todos"],["pending","Pendientes"],["received","Recibidos"],["circulation","En circulación"],["banked","Depositados"]].map(([v,l]) => (
+                <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+              ))}
+            </div>
+
+            {paymentsMissing ? null : payTab === "circulation" ? (
+              circulation.length === 0 ? (
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay efectivo/cheques en circulación. Todo depositado. 🎉</div>
+              ) : (
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(330px,1fr))", gap:14 }}>
+                  {circulation.map(person => (
+                    <div key={person.name} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                        <span style={{ fontSize:15, fontWeight:700 }}>👤 {person.name}</span>
+                        <span style={{ flex:1 }} />
+                        <span style={{ fontSize:18, fontWeight:800, color:"#E24B4A" }}>${Math.round(person.total).toLocaleString()}</span>
+                      </div>
+                      <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 }}>
+                        {person.cash > 0 && <span style={{ fontSize:11, background:"#EAF3DE", color:"#3B6D11", borderRadius:20, padding:"2px 9px", fontWeight:600 }}>Cash ${Math.round(person.cash).toLocaleString()}</span>}
+                        {person.check > 0 && <span style={{ fontSize:11, background:"#E6F1FB", color:"#185FA5", borderRadius:20, padding:"2px 9px", fontWeight:600 }}>Checks ${Math.round(person.check).toLocaleString()}</span>}
+                        {person.money_order > 0 && <span style={{ fontSize:11, background:"#E0F2F4", color:"#0E7490", borderRadius:20, padding:"2px 9px", fontWeight:600 }}>Money orders ${Math.round(person.money_order).toLocaleString()}</span>}
+                      </div>
+                      <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden", marginBottom:10 }}>
+                        {person.items.map(p => (
+                          <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
+                            <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
+                            <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{p._g?.customer || "—"}</span>
+                            <PaymentMethodBadge method={p.method} />
+                            <span style={{ fontWeight:700 }}>${p._net.toLocaleString()}</span>
+                            <span style={{ color:"#999", whiteSpace:"nowrap" }}>{daysSince(p.received_date || p.payment_date)}d</span>
+                          </div>
+                        ))}
+                      </div>
+                      <a href={"https://wa.me/?text=" + encodeURIComponent(`Hi ${person.name}, you currently have $${Math.round(person.total).toLocaleString()} in circulation:\n` + person.items.map(p => `• Job ${p._g?.job_number || p.job_id || "—"} — $${p._net.toLocaleString()} (${payMethodLabel(p.method)})`).join("\n") + `\nPlease deposit or deliver by end of week. Thank you.`)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Pedir depósito</Btn></a>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Job #","Cliente","Broker","Driver","Concepto","Método","Monto","Desc.","Neto","Fecha","Recibido","Recibido por","Quién tiene","Depositado","Fecha dep.","Cuenta","Acciones"].map((h, i) => <th key={i} style={th}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {rows.length === 0 ? (
+                        <tr><td colSpan={17} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin pagos en este filtro.</td></tr>
+                      ) : rows.map(p => (
+                        <tr key={p.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"middle" }}>
+                          <td style={td2}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
+                          <td style={td2}>{p._g?.customer || "—"}</td>
+                          <td style={td2}>{brokerName(p._g?.broker_id) || "—"}</td>
+                          <td style={td2}>{p._g ? (jobDriverNames(p._g) || "—") : "—"}</td>
+                          <td style={td2}><ConceptBadge concept={p.concept} /></td>
+                          <td style={td2}><PaymentMethodBadge method={p.method} />{p.method_id && <div style={{ fontSize:10, color:"#999", marginTop:2, fontFamily:"monospace" }}>{p.method_id}</div>}</td>
+                          <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:600 }}>{money(p.amount) || "$0"}</td>
+                          <td style={{ ...td2, whiteSpace:"nowrap", color: numv(p.discount) ? "#E24B4A" : "#ccc" }}>{numv(p.discount) ? "-"+money(p.discount) : "—"}</td>
+                          <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
+                          <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.payment_date || "—"}</td>
+                          <td style={td2}><Toggle on={!!p.received} onClick={() => togglePayReceived(p)} /></td>
+                          <td style={td2}>{p.received_by || "—"}</td>
+                          <td style={td2}>{!p.banked && isPhysical(p.method) ? (p.cash_with_whom || "—") : "—"}</td>
+                          <td style={td2}><Toggle on={!!p.banked} disabled={!p.received} onClick={() => togglePayBanked(p)} /></td>
+                          <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.banked_date || "—"}</td>
+                          <td style={td2}>{p.bank_account || "—"}</td>
+                          <td style={{ ...td2, whiteSpace:"nowrap" }}>
+                            <button onClick={() => openEditPayment(p)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+                            <button onClick={() => deletePaymentRow(p)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{rows.length} pago(s)</div>
+              </div>
+            )}
+
+            {!paymentsMissing && (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px", marginTop:18 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Cash flow semanal</div>
+                <div style={{ fontSize:11, color:"#aaa", marginBottom:12 }}>{wkStart} → {wkEnd}</div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10 }}>
+                  {[
+                    { l:"Esperado esta semana", v:expWeek, c:"#666" },
+                    { l:"Recibido esta semana", v:recvWeek, c:"#1A8A4E" },
+                    { l:"En circulación (total)", v:m.inCirc, c:"#E24B4A" },
+                    { l:"Depositado esta semana", v:bankWeek, c:"#185FA5" },
+                    { l:"Proyección si se deposita todo", v:m.banked + m.inCirc, c:"#7C3AED" },
+                  ].map(x => (
+                    <div key={x.l} style={{ border:"1px solid #f0f0f0", borderRadius:8, padding:"10px 12px" }}>
+                      <div style={{ fontSize:10.5, color:"#999", fontWeight:500 }}>{x.l}</div>
+                      <div style={{ fontSize:16, fontWeight:800, color:x.c, marginTop:2 }}>${Math.round(x.v).toLocaleString()}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+
       {/* ───────────────────────── SETTINGS ───────────────────────── */}
       {page === "settings" && (
         <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:640 }}>
@@ -4799,6 +5223,44 @@ export default function App() {
             );
           })()}
 
+          {!paymentsMissing && (() => {
+            const ps = (paymentsByJobKey[jobDetail.key] || []).slice().sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+            const expected = numv(jobDetail.pickup_balance) + numv(jobDetail.delivery_balance) + numv(jobDetail.bol_balance);
+            const received = ps.filter(p => p.received).reduce((s, p) => s + paymentNet(p), 0);
+            const outstanding = expected - received;
+            const repId = Math.min(...jobDetail.parts.map(p => p.id));
+            const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
+            return (
+              <>
+                <SectionLabel>Pagos {ps.length ? `(${ps.length})` : ""}</SectionLabel>
+                <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13, marginBottom:6 }}>
+                  <span>Esperado: <b>${Math.round(expected).toLocaleString()}</b></span>
+                  <span>Recibido: <b style={{ color:"#1A8A4E" }}>${Math.round(received).toLocaleString()}</b></span>
+                  <span>Saldo: <b style={{ color: outstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</b></span>
+                </div>
+                {ps.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos registrados.</div>
+                  : ps.map(p => (
+                      <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
+                        <ConceptBadge concept={p.concept} />
+                        <PaymentMethodBadge method={p.method} />
+                        <b>{money(paymentNet(p)) || "$0"}</b>
+                        <span style={{ fontSize:11, color:"#888" }}>{p.payment_date || "—"}</span>
+                        {p.received
+                          ? (p.banked
+                              ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px" }}>Depositado</span>
+                              : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:20, padding:"1px 7px" }}>En circulación{p.cash_with_whom ? ` · ${p.cash_with_whom}` : ""}</span>)
+                          : <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 7px" }}>Pendiente</span>}
+                        <span style={{ flex:1 }} />
+                        <button onClick={() => openEditPayment(p)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>
+                      </div>
+                    ))}
+                <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
+                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar pago</Btn>
+                </div>
+              </>
+            );
+          })()}
+
           <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {jobDetail.parts.map(p => {
@@ -5249,7 +5711,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, EXTRAS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, EXTRAS_SQL, PAYMENTS_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -5440,6 +5902,127 @@ export default function App() {
               <span>Comisión rep: <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
               <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(a - dc - rc) || "$0"}</b></span>
             </div>
+          </Modal>
+        );
+      })()}
+
+      {showPayModal && (() => {
+        const groups = [...extraJobGroups.values()];
+        const q = payJobSearch.trim().toLowerCase();
+        const matches = (q ? groups.filter(g => (g.job_number || "").toLowerCase().includes(q) || (g.customer || "").toLowerCase().includes(q)) : groups).slice(0, 40);
+        const selectedG = payForm.job_id ? groups.find(g => String(g.repId) === String(payForm.job_id) || g.ids.includes(Number(payForm.job_id))) : null;
+        const digital = isDigitalMethod(payForm.method);
+        const physical = isPhysical(payForm.method);
+        const isCheckOrMo = payForm.method === "check" || payForm.method === "money_order";
+        const setF = (fields) => setPayForm(f => ({ ...f, ...fields }));
+        const net = numv(payForm.amount) - numv(payForm.discount);
+        const whoList = [...driversList.map(d => d.name), ...employees.map(e => e.name)].filter(Boolean);
+        return (
+          <Modal title={editingPayId ? "Editar pago" : "Nuevo pago"} onClose={() => setShowPayModal(false)}
+            footer={<>
+              <Btn onClick={() => setShowPayModal(false)}>Cancelar</Btn>
+              <Btn primary disabled={paySaving || payForm.amount === ""} onClick={savePaymentRow}>{paySaving ? "Guardando..." : (editingPayId ? "Guardar cambios" : "Crear pago")}</Btn>
+            </>}>
+            <Field label="Job">
+              {selectedG ? (
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                  <span style={{ fontFamily:"monospace", fontWeight:700 }}>{selectedG.job_number || "(sin #)"}</span>
+                  <span style={{ fontSize:12, color:"#666" }}>{selectedG.customer || "—"}</span>
+                  <button onClick={() => setF({ job_id:"" })} style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:12, textDecoration:"underline" }}>cambiar</button>
+                </div>
+              ) : (
+                <>
+                  <input style={inp} value={payJobSearch} onChange={e => setPayJobSearch(e.target.value)} placeholder="Buscar por job # o cliente…" />
+                  {q && (
+                    <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:160, overflowY:"auto" }}>
+                      {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>Sin resultados.</div>
+                        : matches.map(g => (
+                          <button key={g.key} onClick={() => { setF({ job_id: g.repId }); setPayJobSearch(""); }} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
+                            <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(sin #)"}</span> · {g.customer || "—"}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </Field>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
+              <Field label="Fecha de pago"><input style={inp} type="date" value={payForm.payment_date} onChange={e => setF({ payment_date:e.target.value })} /></Field>
+              <Field label="Monto ($) *"><input style={inp} type="number" value={payForm.amount} onChange={e => setF({ amount:e.target.value })} placeholder="0" /></Field>
+              <Field label="Concepto">
+                <select style={inp} value={payForm.concept} onChange={e => setF({ concept:e.target.value })}>
+                  {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Método">
+                <select style={inp} value={payForm.method} onChange={e => setF({ method:e.target.value })}>
+                  {PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
+                </select>
+              </Field>
+              {isCheckOrMo && <Field label="Método ID (n° cheque / transacción)"><input style={inp} value={payForm.method_id} onChange={e => setF({ method_id:e.target.value })} placeholder="N° cheque / ID" /></Field>}
+              {isCheckOrMo && <Field label="Tipo de cheque">
+                <select style={inp} value={payForm.check_type} onChange={e => setF({ check_type:e.target.value })}>
+                  <option value="">— Select —</option>
+                  <option value="personal">Personal</option>
+                  <option value="cashier">Cashier</option>
+                  <option value="business">Business</option>
+                </select>
+              </Field>}
+              <Field label="Descuento ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>
+              <Field label="Razón del descuento"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>
+            </div>
+
+            <div style={{ marginTop:10, padding:"10px 12px", background:"#fafafa", borderRadius:8 }}>
+              <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer" }}>
+                <input type="checkbox" checked={digital ? true : payForm.received} disabled={digital} onChange={e => setF({ received:e.target.checked })} />
+                <b>Recibido</b>{digital && <span style={{ fontSize:11, color:"#888" }}>(automático en pagos digitales)</span>}
+              </label>
+              {(digital || payForm.received) && (
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
+                  <Field label="Recibido por">
+                    <input style={inp} list="who-list" value={payForm.received_by} onChange={e => setF({ received_by:e.target.value })} placeholder="Driver / rep" />
+                  </Field>
+                  <Field label="Fecha recibido"><input style={inp} type="date" value={payForm.received_date} onChange={e => setF({ received_date:e.target.value })} /></Field>
+                </div>
+              )}
+            </div>
+
+            {physical && (
+              <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF8F0", borderRadius:8, border:"1px solid #FAE6CF" }}>
+                <Field label="¿Quién tiene el dinero?">
+                  <input style={inp} list="who-list" value={payForm.cash_with_whom} onChange={e => setF({ cash_with_whom:e.target.value })} placeholder="Persona que tiene cash/cheque" />
+                </Field>
+                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", marginTop:10 }}>
+                  <input type="checkbox" checked={payForm.banked} onChange={e => setF({ banked:e.target.checked })} />
+                  <b>Depositado</b>
+                </label>
+                {payForm.banked && (
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
+                    <Field label="Fecha depósito"><input style={inp} type="date" value={payForm.banked_date} onChange={e => setF({ banked_date:e.target.value })} /></Field>
+                    <Field label="Cuenta bancaria">
+                      <select style={inp} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
+                        <option value="">— Select —</option>
+                        {payAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                )}
+              </div>
+            )}
+            {digital && (
+              <div style={{ marginTop:10, padding:"8px 12px", background:"#E6F1FB", borderRadius:8, fontSize:12.5, color:"#185FA5" }}>
+                💳 Pago digital — se marca como depositado automáticamente.
+                <div style={{ marginTop:6 }}>
+                  <select style={{ ...inp, width:"auto" }} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
+                    <option value="">— Cuenta (opcional) —</option>
+                    {payAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
+            <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
+            <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Neto: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
+            <datalist id="who-list">{whoList.map((n, i) => <option key={i} value={n} />)}</datalist>
           </Modal>
         );
       })()}
@@ -5677,6 +6260,33 @@ export default function App() {
                 <DetailRow label="Teléfono" value={driverD.phone} />
                 <DetailRow label="Truck" value={driverD.truck_id} />
                 {driverD.whatsapp_group_link && <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}><span style={{ color:"#888", minWidth:150 }}>Grupo WhatsApp</span><a href={driverD.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Abrir grupo ↗</a></div>}
+                {!paymentsMissing && (() => {
+                  const mine = paymentRows.filter(p => [p.cash_with_whom, p.received_by].some(v => (v || "").trim() && (v || "").trim() === driverD.name));
+                  const holding = mine.filter(p => isPhysical(p.method) && p.received && !p.banked);
+                  const heldTotal = holding.reduce((s, p) => s + p._net, 0);
+                  const history = mine.filter(p => p.received).sort((a, b) => (b.received_date || b.payment_date || "").localeCompare(a.received_date || a.payment_date || ""));
+                  return (
+                    <>
+                      <SectionLabel>En circulación</SectionLabel>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6 }}>
+                        <span>Tiene en mano: <b style={{ color: heldTotal > 0 ? "#E24B4A" : "#1A8A4E", fontSize:15 }}>${Math.round(heldTotal).toLocaleString()}</b></span>
+                        {heldTotal > 0 && <span style={{ fontSize:11, color:"#888" }}>({holding.length} pago{holding.length !== 1 ? "s" : ""} sin depositar)</span>}
+                      </div>
+                      <SectionLabel>Historial de pagos recibidos</SectionLabel>
+                      {history.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos recibidos.</div>
+                        : <div style={{ maxHeight:200, overflowY:"auto" }}>{history.map(p => (
+                            <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f4f4f4", fontSize:12.5, flexWrap:"wrap" }}>
+                              <button onClick={() => { setDriverDetailId(null); if (p._key) setJobDetailKey(p._key); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
+                              <PaymentMethodBadge method={p.method} />
+                              <b>${p._net.toLocaleString()}</b>
+                              <span style={{ color:"#888" }}>recibido {p.received_date || p.payment_date || "—"}</span>
+                              <span style={{ flex:1 }} />
+                              {p.banked ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5" }}>depositado {p.banked_date || ""}</span> : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C" }}>sin depositar</span>}
+                            </div>
+                          ))}</div>}
+                    </>
+                  );
+                })()}
                 <SectionLabel>Historial de jobs</SectionLabel>
                 <JobsPanel predicate={j => (Array.isArray(j.driver_ids) && j.driver_ids.includes(driverD.id)) || (j.driver && driverD.name && j.driver.includes(driverD.name))} />
               </Modal>
