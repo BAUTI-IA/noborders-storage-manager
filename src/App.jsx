@@ -2089,12 +2089,11 @@ export default function App() {
   // You search a job number and instantly see all the places WHERE it is.
   const jobGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const wh = tab.startsWith("wh:") ? tab.slice(3) : null;
     const parts = jobs
       .filter(j => {
-        if (wh) return !j.date_out && j.warehouse === wh;          // active jobs in this warehouse
-        if (tab === "delivered") return j.date_out;
-        return !j.date_out;                                        // "active" (includes warehouse jobs)
+        if (tab === "delivered") return j.date_out;                // delivered → out of storage
+        if (tab === "active") return !j.date_out;                  // all active (any status)
+        return !j.date_out && (j.status || "scheduled") === tab;   // a specific status tab
       })
       .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
       .filter(j => {
@@ -2130,6 +2129,19 @@ export default function App() {
     }
     return arr;
   }, [jobs, storageById, tab, search, driverFilter, sortBy]);
+
+  // Distinct job counts per Jobs sub-tab (status pipeline), for the tab badges.
+  const jobTabCounts = useMemo(() => {
+    const sets = { active:new Set(), delivered:new Set(), scheduled:new Set(), in_storage:new Set(), out_for_delivery:new Set() };
+    for (const j of jobs) {
+      const k = jobKey(j);
+      if (j.date_out) { sets.delivered.add(k); continue; }
+      sets.active.add(k);
+      const s = j.status || "scheduled";
+      if (sets[s]) sets[s].add(k);
+    }
+    return Object.fromEntries(Object.entries(sets).map(([k, v]) => [k, v.size]));
+  }, [jobs]);
 
   // Units view: manage the physical lockers themselves.
   const unitRows = useMemo(() => {
@@ -5258,10 +5270,14 @@ export default function App() {
 
       {page === "jobs" && (
         <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-          {[["active","Activos"],["delivered","Entregados"],
-            ...WAREHOUSES.map(w => [`wh:${w}`, `Warehouse ${w}`])].map(([t,l]) => (
-            <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{l}</button>
-          ))}
+          {[["active","Activos"],["scheduled","Programados"],["in_storage","En storage"],["out_for_delivery","En entrega"],["delivered","Entregados"]].map(([t,l]) => {
+            const n = jobTabCounts[t] || 0;
+            return (
+              <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>
+                {l}{n > 0 && <span style={{ marginLeft:6, fontSize:11, fontWeight:600, color: tab===t?"#111":"#bbb" }}>{n}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -5349,7 +5365,7 @@ export default function App() {
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : "Sin jobs activos. Cargá uno con \"+ Nuevo job\"."}</td></tr>
+                  <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : tab==="active" ? "Sin jobs activos. Cargá uno con \"+ Nuevo job\"." : "Sin jobs en este estado."}</td></tr>
                 ) : jobGroups.map(g => {
                   // Where the goods currently sit: warehouse name, or storage brand + state.
                   const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.state].filter(Boolean).join(" · ")).filter(Boolean))];
