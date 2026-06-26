@@ -236,7 +236,7 @@ const isPhysical = (m) => PHYSICAL_METHODS.includes(m);
 const isDigitalMethod = (m) => !!m && !PHYSICAL_METHODS.includes(m);
 const paymentNet = (p) => numv(p.amount) - numv(p.discount);
 const daysSince = (dateStr) => { if (!dateStr) return 0; const d = new Date(dateStr + "T00:00:00"); return Math.floor((Date.now() - d.getTime()) / 86400000); };
-const EMPTY_PAYMENT = { job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"", discount:"", discount_reason:"", received:false, received_date:"", received_by:"", cash_with_whom:"", banked:false, banked_date:"", bank_account:"", notes:"" };
+const EMPTY_PAYMENT = { job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"", discount:"", discount_reason:"", received:false, received_date:"", received_by:"", cash_with_whom:"", banked:false, banked_date:"", bank_account:"", payment_stage:"", notes:"" };
 
 const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", notes:"" };
 
@@ -661,9 +661,11 @@ create table if not exists public.payments (
   banked boolean default false,
   banked_date date,
   bank_account text,
+  payment_stage text,
   notes text,
   created_at timestamptz default now()
 );
+alter table public.payments add column if not exists payment_stage text;
 alter table public.payments enable row level security;
 drop policy if exists "payments_all" on public.payments;
 create policy "payments_all" on public.payments for all to anon, authenticated using (true) with check (true);
@@ -1419,6 +1421,7 @@ export default function App() {
   const [quickExtra, setQuickExtra] = useState(null);     // job-detail quick-add form
   // Payments
   const [paymentsMissing, setPaymentsMissing] = useState(false);
+  const [payStageMissing, setPayStageMissing] = useState(false);
   const [payments, setPayments] = useState([]);
   const [payAccounts, setPayAccounts] = useState([]);
   const [payTab, setPayTab] = useState("all");            // all | pending | received | circulation | banked
@@ -1755,6 +1758,23 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, paymentsMissing, loadPayments, loadPayAccounts]);
+
+  // Probe the payment_stage column (added after the initial Payments release).
+  useEffect(() => {
+    if (!session || paymentsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("payments").select("payment_stage").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.payments add column if not exists payment_stage text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setPayStageMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, paymentsMissing]);
 
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
@@ -2942,15 +2962,27 @@ export default function App() {
       discount: p.discount ?? "", discount_reason: p.discount_reason || "",
       received: !!p.received, received_date: p.received_date || "", received_by: p.received_by || "",
       cash_with_whom: p.cash_with_whom || "", banked: !!p.banked, banked_date: p.banked_date || "",
-      bank_account: p.bank_account || "", notes: p.notes || "",
+      bank_account: p.bank_account || "", payment_stage: p.payment_stage || "", notes: p.notes || "",
     });
     setPayJobSearch(""); setShowPayModal(true);
+  }
+  // The driver name assigned to a job (by job_id row), used to default who holds the cash.
+  function jobDriverNameFor(jobId) {
+    if (!jobId) return "";
+    const k = jobKeyByRowId[Number(jobId)];
+    const row = k ? jobs.find(j => jobKey(j) === k) : null;
+    if (!row) return "";
+    return (Array.isArray(row.driver_ids) && row.driver_ids.length ? driverById[row.driver_ids[0]]?.name : "") || row.driver || "";
   }
   function payPayload(f) {
     const digital = isDigitalMethod(f.method);
     const received = digital ? true : !!f.received;       // digital payments arrive already received
     const banked = digital ? true : !!f.banked;           // ...and auto-banked
-    return {
+    // Cash/check/money order not yet banked → goes into circulation under whoever holds it
+    // (default to the job's assigned driver when not set).
+    let cww = f.cash_with_whom;
+    if (isPhysical(f.method) && !banked && !cww) cww = jobDriverNameFor(f.job_id);
+    const payload = {
       job_id: f.job_id ? Number(f.job_id) : null,
       payment_date: f.payment_date || null,
       amount: f.amount === "" ? null : numv(f.amount),
@@ -2962,11 +2994,13 @@ export default function App() {
       discount_reason: f.discount_reason || null,
       received, received_date: received ? (f.received_date || today()) : null,
       received_by: f.received_by || null,
-      cash_with_whom: (!digital && isPhysical(f.method) && !banked) ? (f.cash_with_whom || null) : null,
+      cash_with_whom: (isPhysical(f.method) && !banked) ? (cww || null) : null,
       banked, banked_date: banked ? (f.banked_date || today()) : null,
       bank_account: banked ? (f.bank_account || null) : null,
       notes: f.notes || null,
     };
+    if (!payStageMissing) payload.payment_stage = f.payment_stage || null;
+    return payload;
   }
   async function savePaymentRow() {
     setPaySaving(true);
@@ -2974,9 +3008,40 @@ export default function App() {
     let error = null;
     if (editingPayId) ({ error } = await supabase.from("payments").update(payload).eq("id", editingPayId));
     else ({ error } = await supabase.from("payments").insert([payload]));
+    // Two-way sync: a "job" payment mirrors bol_collected on the storage_job.
+    if (!error && payForm.concept === "job" && payForm.job_id) {
+      const k = jobKeyByRowId[Number(payForm.job_id)];
+      const idsToSync = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+      if (idsToSync.length) {
+        await supabase.from("storage_jobs").update({ bol_collected: numv(payForm.amount), bol_payment_method: payForm.method || null, bol_collected_date: payForm.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", idsToSync);
+      }
+    }
     setPaySaving(false);
     if (error) { window.alert(error.message); return; }
-    setShowPayModal(false); loadPayments();
+    setShowPayModal(false); loadPayments(); loadJobs();
+  }
+  // Mirror a job's recorded collection into the payments table (concept = "job"),
+  // creating or updating a single canonical row. Called from the Settlement flow.
+  async function upsertJobPayment(jobKeyStr, { amount, method, date }) {
+    const rows = jobs.filter(j => jobKey(j) === jobKeyStr);
+    if (!rows.length || numv(amount) <= 0) return;
+    const repId = Math.min(...rows.map(r => r.id));
+    const f = rows[0];
+    const driverName = (Array.isArray(f.driver_ids) && f.driver_ids.length ? driverById[f.driver_ids[0]]?.name : "") || f.driver || "";
+    const digital = isDigitalMethod(method);
+    const banked = digital;
+    const d = date || today();
+    const payload = {
+      job_id: repId, amount: numv(amount), concept: "job", method: method || null,
+      payment_date: d, received: true, received_date: d,
+      banked, banked_date: banked ? d : null,
+      cash_with_whom: (isPhysical(method) && !banked) ? (driverName || null) : null,
+    };
+    const rowIds = new Set(rows.map(r => r.id));
+    const existing = payments.find(p => p.concept === "job" && rowIds.has(p.job_id));
+    if (existing) await supabase.from("payments").update(payload).eq("id", existing.id);
+    else await supabase.from("payments").insert([payload]);
+    loadPayments();
   }
   async function deletePaymentRow(p) {
     if (!window.confirm("¿Eliminar este pago?")) return;
@@ -3007,6 +3072,8 @@ export default function App() {
       bol_collected: numv(payModal.amount), bol_payment_method: payModal.method || null, bol_payment_notes: payModal.notes || null,
       bol_collected_date: payModal.date || today(), updated_by: userEmail, updated_at: new Date().toISOString(),
     }).in("id", ids);
+    // Two-way sync: mirror this collection into the Payments table.
+    if (!paymentsMissing) await upsertJobPayment(payModal.jobKey, { amount: payModal.amount, method: payModal.method, date: payModal.date });
     setPayModal(null);
     loadJobs();
   }
@@ -5970,6 +6037,14 @@ export default function App() {
               </Field>}
               <Field label="Descuento ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>
               <Field label="Razón del descuento"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>
+              {!payStageMissing && <Field label="Etapa del pago">
+                <select style={inp} value={payForm.payment_stage} onChange={e => setF({ payment_stage:e.target.value })}>
+                  <option value="">— Select —</option>
+                  <option value="pickup">At pick up</option>
+                  <option value="delivery">At delivery</option>
+                  <option value="other">Other</option>
+                </select>
+              </Field>}
             </div>
 
             <div style={{ marginTop:10, padding:"10px 12px", background:"#fafafa", borderRadius:8 }}>
