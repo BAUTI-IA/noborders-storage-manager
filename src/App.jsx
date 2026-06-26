@@ -1430,9 +1430,11 @@ export default function App() {
   const [editingPayId, setEditingPayId] = useState(null);
   const [paySaving, setPaySaving] = useState(false);
   const [payJobSearch, setPayJobSearch] = useState("");   // job search inside the payment form
+  const [toast, setToast] = useState(null);               // brief success notification
   const fileRef = useRef();
   const autoGenRef = useRef(false);
   const tripCompleteRef = useRef(false);
+  const toastRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -2414,6 +2416,31 @@ export default function App() {
   function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
   function openAddJobWarehouse(name) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, warehouses: [name] }); setJobErr(null); setShowAddJob(true); }
   function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr, pickup_date_from: dateStr }); setJobErr(null); setShowAddJob(true); }
+  function showToast(msg) {
+    setToast(msg);
+    if (toastRef.current) clearTimeout(toastRef.current);
+    toastRef.current = setTimeout(() => setToast(null), 2800);
+  }
+  // Delete a whole job (all its rows) plus its extras/payments; unlink closing sheets.
+  async function deleteJob(g) {
+    const ids = (g.parts && g.parts.length ? g.parts.map(p => p.id) : jobs.filter(j => jobKey(j) === g.key).map(j => j.id));
+    if (!ids.length) return;
+    if (!window.confirm(`¿Seguro que querés eliminar el job ${g.job_number || "(sin #)"} — ${g.customer || "sin cliente"}? Esta acción no se puede deshacer.`)) return;
+    // Clean up related records first (FKs cascade for extras/billing, but be explicit).
+    if (!extrasMissing) await supabase.from("job_extras").delete().in("job_id", ids);
+    if (!paymentsMissing) await supabase.from("payments").delete().in("job_id", ids);
+    await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids);
+    const { error } = await supabase.from("storage_jobs").delete().in("id", ids);
+    if (error) { window.alert(error.message); return; }
+    // Instant UI update, then refresh related data.
+    setJobs(prev => prev.filter(j => !ids.includes(j.id)));
+    if (jobDetailKey === g.key) setJobDetailKey(null);
+    showToast(`Job ${g.job_number || ""} eliminado`.replace(/\s+/g, " ").trim());
+    loadJobs();
+    if (!extrasMissing) loadExtras();
+    if (!paymentsMissing) loadPayments();
+    if (!settlementsMissing) loadClosingSheets();
+  }
   function openEditJob(jd) {
     setEditingJobKey(jd.key);
     setJobForm({
@@ -3476,6 +3503,7 @@ export default function App() {
                           {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Ruta</a>}
                           <a href={waHref} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
                           {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
+                          <button onClick={() => deleteJob(g)} title="Eliminar job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:14, padding:0, alignSelf:"flex-start" }}>🗑 Eliminar</button>
                         </div>
                       </td>
                     </tr>
@@ -5120,13 +5148,15 @@ export default function App() {
                     {tab === "delivered" ? (
                       <>
                         <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
-                        <td style={{ padding:"12px", textAlign:"right" }}>
+                        <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                           <Btn onClick={() => undeliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Desentregar</Btn>
+                          <button onClick={() => deleteJob(g)} title="Eliminar job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
                         </td>
                       </>
                     ) : (
-                      <td style={{ padding:"12px", textAlign:"right" }}>
+                      <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                         <Btn onClick={() => deliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Marcar entregado</Btn>
+                        <button onClick={() => deleteJob(g)} title="Eliminar job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
                       </td>
                     )}
                   </tr>
@@ -5148,6 +5178,7 @@ export default function App() {
         <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
           footer={<>
             <Btn onClick={() => openEditJob(jobDetail)}>Editar</Btn>
+            <Btn danger onClick={() => deleteJob(jobDetail)}>🗑 Eliminar job</Btn>
             <Btn onClick={() => window.open(waLink(jobDetail, (jobDetail.parts||[]).map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean).join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail)), "_blank")}>💬 WhatsApp</Btn>
             {nextStatus(jobDetail) && <Btn onClick={() => advanceStatus(jobDetail)}>→ {statusMeta(nextStatus(jobDetail)).l}</Btn>}
             {jobDetail.parts.some(p => !p.date_out) && (
@@ -6375,6 +6406,12 @@ export default function App() {
           </>
         );
       })()}
+
+      {toast && (
+        <div style={{ position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)", zIndex:100, background:"#111", color:"#fff", fontSize:13.5, fontWeight:600, padding:"11px 20px", borderRadius:10, boxShadow:"0 6px 24px rgba(0,0,0,0.25)", display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ color:"#7ED957" }}>✓</span>{toast}
+        </div>
+      )}
     </div>
   );
 }
