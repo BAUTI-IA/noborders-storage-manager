@@ -43,6 +43,19 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
+const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true };
+const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[] };
+const TRIP_STATUS = {
+  loading:    { l:"Loading", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
+  in_transit: { l:"In transit", bg:"#EDE9FE", text:"#6D28D9", dot:"#7C3AED" },
+  completed:  { l:"Completed", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  cancelled:  { l:"Cancelled", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+};
+function TripBadge({ status }) {
+  const c = TRIP_STATUS[status] || TRIP_STATUS.loading;
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
+}
+const TRIP_ACTIVE = (s) => s === "loading" || s === "in_transit";
 const EMPTY_CS = { closing_sheet_number:"", broker_id:"", driver_id:"", load_date:"", status:"open", charge_per_pad:"7", trip_cost:"", labor_charges:"", other_fees:"", other_fees_description:"", notes:"", document_url:"", job_keys:[] };
 const CS_STATUS = {
   open:     { l:"Open", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },
@@ -418,6 +431,42 @@ do $$ begin
   alter publication supabase_realtime add table public.closing_sheets;
 exception when others then null; end $$;`;
 
+// Trips / Live Load: trucks + trips tables + trip link columns on storage_jobs.
+const TRIPS_SQL = `create table if not exists public.trucks (
+  id bigint generated always as identity primary key,
+  name text,
+  plate text,
+  capacity_cf numeric,
+  notes text,
+  active boolean default true,
+  created_at timestamptz default now()
+);
+alter table public.trucks add column if not exists capacity_cf numeric;
+alter table public.trucks enable row level security;
+drop policy if exists "trucks_all" on public.trucks;
+create policy "trucks_all" on public.trucks for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.trips (
+  id bigint generated always as identity primary key,
+  trip_number text,
+  truck_id bigint references public.trucks(id),
+  driver_id bigint references public.drivers(id),
+  departure_date date,
+  status text default 'loading',
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.trips enable row level security;
+drop policy if exists "trips_all" on public.trips;
+create policy "trips_all" on public.trips for all to anon, authenticated using (true) with check (true);
+
+alter table public.storage_jobs
+  add column if not exists trip_id bigint references public.trips(id),
+  add column if not exists trip_stop_order integer;
+
+do $$ begin alter publication supabase_realtime add table public.trucks; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.trips; exception when others then null; end $$;`;
+
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
 const parseCf = (v) => { if (!v) return 0; const m = String(v).match(/[\d,.]+/); return m ? Number(m[0].replace(/,/g, "")) || 0 : 0; };
@@ -468,6 +517,26 @@ function settlementWaLink(sheet, calc, brokerName, driverName) {
   ].join("\n");
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
+// Full trip manifest to the driver's WhatsApp group (jobsIn already ordered by stop).
+function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, totalBol) {
+  const lines = [
+    `TRIP #${trip.trip_number || "-"} — ${truckName || "-"}`,
+    `Driver: ${driverName || "-"} | Departure: ${trip.departure_date || "-"}`,
+    `Total load: ${Math.round(totalCf || 0)} CF (${occPct != null ? occPct + "% capacity" : "—"})`,
+    `Total to collect: $${Math.round(totalBol || 0).toLocaleString()}`,
+    ``,
+    `STOPS:`,
+  ];
+  jobsIn.forEach((j, i) => {
+    lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}`);
+    lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
+    lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(parseCf(j.volume))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
+    lines.push(`   Balance to collect: $${numv(j.bol_balance).toLocaleString()}`);
+    lines.push("");
+  });
+  return lines.join("\n");
+}
+const tripManifestLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripManifestText(...args));
 
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
@@ -977,6 +1046,7 @@ const NAV = [
   { section:"Fleet", items:[
     { id:"drivers", label:"Drivers", icon:"🪪" },
     { id:"trucks", label:"Trucks", icon:"🚛" },
+    { id:"trips", label:"Trips / Live Load", icon:"🛣️" },
   ]},
   { section:"Business", items:[
     { id:"analytics", label:"Analytics", icon:"📊" },
@@ -1029,6 +1099,7 @@ const PAGE_META = {
   clientes:    { title:"Clientes", sub:"Clientes y sus trabajos" },
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
+  trips:       { title:"Trips / Live Load", sub:"Carga en vivo por camión" },
   analytics:   { title:"Analytics", sub:"Métricas y recomendaciones con IA" },
   settings:    { title:"Settings", sub:"Configuración de la operación" },
 };
@@ -1110,8 +1181,23 @@ export default function App() {
   const [docUploading, setDocUploading] = useState(false);
   const [calView, setCalView] = useState("week");      // week | month
   const [calAnchor, setCalAnchor] = useState(today());  // ISO date inside the visible range
+  // Trips / Live Load + trucks
+  const [tripsMissing, setTripsMissing] = useState(false);
+  const [trips, setTrips] = useState([]);
+  const [trucksList, setTrucksList] = useState([]);
+  const [tripsView, setTripsView] = useState("active");  // active | all
+  const [showTripModal, setShowTripModal] = useState(false);
+  const [tripForm, setTripForm] = useState(EMPTY_TRIP);
+  const [editingTripId, setEditingTripId] = useState(null);
+  const [tripSaving, setTripSaving] = useState(false);
+  const [tripJobSearch, setTripJobSearch] = useState("");
+  const [showTruckModal, setShowTruckModal] = useState(false);
+  const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
+  const [editingTruckId, setEditingTruckId] = useState(null);
+  const [truckSaving, setTruckSaving] = useState(false);
   const fileRef = useRef();
   const autoGenRef = useRef(false);
+  const tripCompleteRef = useRef(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -1149,6 +1235,15 @@ export default function App() {
   const loadClosingSheets = useCallback(async () => {
     const { data, error } = await supabase.from("closing_sheets").select("*").order("created_at", { ascending: false });
     if (!error) setClosingSheets(data || []);
+  }, []);
+
+  const loadTrips = useCallback(async () => {
+    const { data, error } = await supabase.from("trips").select("*").order("created_at", { ascending: false });
+    if (!error) setTrips(data || []);
+  }, []);
+  const loadTrucks = useCallback(async () => {
+    const { data, error } = await supabase.from("trucks").select("*").order("name", { ascending: true });
+    if (!error) setTrucksList(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -1321,6 +1416,37 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, settlementsMissing, loadClosingSheets]);
+
+  // Probe the Trips / Live Load module (trips + trucks tables + trip_id column).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: tErr } = await supabase.from("trips").select("id").limit(1);
+      const { error: kErr } = await supabase.from("trucks").select("id").limit(1);
+      const { error: jErr } = await supabase.from("storage_jobs").select("trip_id").limit(1);
+      if (cancelled) return;
+      if (!tErr && !kErr && !jErr) { loadTrips(); loadTrucks(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: TRIPS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { loadTrips(); loadTrucks(); }
+      else setTripsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadTrips, loadTrucks]);
+
+  useEffect(() => {
+    if (!session || tripsMissing) return;
+    const channel = supabase.channel("trips-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, () => loadTrips())
+      .on("postgres_changes", { event: "*", schema: "public", table: "trucks" }, () => loadTrucks())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, tripsMissing, loadTrips, loadTrucks]);
 
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
@@ -1502,7 +1628,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, trip_id:p.trip_id, trip_stop_order:p.trip_stop_order, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -1604,7 +1730,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, trip_id:p.trip_id, trip_stop_order:p.trip_stop_order, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     let arr = [...map.values()];
@@ -1613,6 +1739,7 @@ export default function App() {
     else if (dispatchFilter === "deliveries_today") arr = arr.filter(g => g.delivery_date === td);
     else if (dispatchFilter === "in_storage") arr = arr.filter(g => (g.status || "scheduled") === "in_storage");
     else if (dispatchFilter === "on_hold") arr = arr.filter(g => (g.status || "scheduled") === "on_hold");
+    else if (dispatchFilter === "no_trip") arr = arr.filter(g => !g.trip_id);
     else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
     // Most urgent FADD first; jobs with no FADD sink to the bottom.
     arr.sort((a, b) => {
@@ -1787,7 +1914,53 @@ export default function App() {
     return m;
   }, [closingSheets, sheetCalcById]);
 
-  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0 }), [sidebarBadges, settlementMetrics.openCount]);
+  // ── Trips / Live Load derived data ──
+  const truckById = useMemo(() => { const m = {}; for (const t of trucksList) m[t.id] = t; return m; }, [trucksList]);
+  const tripById = useMemo(() => { const m = {}; for (const t of trips) m[t.id] = t; return m; }, [trips]);
+  // Distinct-by-job storage_jobs rows assigned to each trip, ordered by stop order.
+  const jobsByTrip = useMemo(() => {
+    const m = {}; const seen = new Set();
+    for (const j of jobs) {
+      if (!j.trip_id) continue;
+      const sk = j.trip_id + "|" + jobKey(j);
+      if (seen.has(sk)) continue; seen.add(sk);
+      (m[j.trip_id] = m[j.trip_id] || []).push(j);
+    }
+    for (const id of Object.keys(m)) m[id].sort((a, b) => (a.trip_stop_order ?? 9999) - (b.trip_stop_order ?? 9999));
+    return m;
+  }, [jobs]);
+  const tripCalc = useCallback((trip) => {
+    const jobsIn = jobsByTrip[trip.id] || [];
+    let totalCf = 0, totalBol = 0, delivered = 0;
+    for (const j of jobsIn) { totalCf += parseCf(j.volume); totalBol += numv(j.bol_balance); if (j.date_out || j.status === "delivered") delivered++; }
+    const cap = numv(truckById[trip.truck_id]?.capacity_cf);
+    const occPct = cap > 0 ? Math.round((totalCf / cap) * 100) : null;
+    return { jobsIn, totalCf, totalBol, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
+  }, [jobsByTrip, truckById]);
+  const tripMetrics = useMemo(() => {
+    const td = today();
+    let activeCount = 0, cfTransit = 0, bolTransit = 0, deliveredToday = 0;
+    for (const t of trips) {
+      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.totalCf; bolTransit += c.totalBol; }
+    }
+    for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
+    return { activeCount, cfTransit, bolTransit, deliveredToday };
+  }, [trips, jobs, tripCalc]);
+
+  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount]);
+
+  // Auto-complete a trip once all its jobs are delivered.
+  useEffect(() => {
+    if (!session || tripsMissing || tripCompleteRef.current) return;
+    const toComplete = trips.filter(t => TRIP_ACTIVE(t.status) && tripCalc(t).allDelivered).map(t => t.id);
+    if (!toComplete.length) return;
+    tripCompleteRef.current = true;
+    (async () => {
+      await supabase.from("trips").update({ status: "completed" }).in("id", toComplete);
+      await loadTrips();
+      tripCompleteRef.current = false;
+    })();
+  }, [session, tripsMissing, trips, jobs, tripCalc, loadTrips]);
 
   const detail = records.find(r => r.id === detailId);
 
@@ -1797,7 +1970,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -2123,6 +2296,106 @@ export default function App() {
     const { data } = await supabase.from("closing_sheets").insert([{ broker_id: brokerId || null, load_date: today(), status: "open" }]).select("id").single();
     if (data?.id) { await updateJobBol(jobKeyStr, "closing_sheet_id", data.id); loadClosingSheets(); }
   }
+
+  // ── Trucks CRUD ──
+  function openAddTruck() { setEditingTruckId(null); setTruckForm(EMPTY_TRUCK); setShowTruckModal(true); }
+  function openEditTruck(t) {
+    setEditingTruckId(t.id);
+    setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false });
+    setShowTruckModal(true);
+  }
+  async function saveTruck() {
+    if (!truckForm.name.trim()) return;
+    setTruckSaving(true);
+    const payload = { name:truckForm.name.trim(), plate:truckForm.plate||null, capacity_cf: truckForm.capacity_cf !== "" ? Number(truckForm.capacity_cf) : null, notes:truckForm.notes||null, active: !!truckForm.active };
+    if (editingTruckId) await supabase.from("trucks").update(payload).eq("id", editingTruckId);
+    else await supabase.from("trucks").insert([payload]);
+    setTruckSaving(false); setShowTruckModal(false); loadTrucks();
+  }
+  async function deleteTruck(t) {
+    if (!window.confirm(`Eliminar el camión "${t.name}"?`)) return;
+    await supabase.from("trucks").delete().eq("id", t.id); loadTrucks();
+  }
+
+  // ── Trips CRUD ──
+  function nextTripNumber() {
+    let max = 0;
+    for (const t of trips) { const m = (t.trip_number || "").match(/(\d+)/); if (m) max = Math.max(max, parseInt(m[1])); }
+    return "TRIP-" + String(max + 1).padStart(3, "0");
+  }
+  function openAddTrip() {
+    setEditingTripId(null);
+    setTripForm({ ...EMPTY_TRIP, trip_number: nextTripNumber(), departure_date: today() });
+    setTripJobSearch(""); setShowTripModal(true);
+  }
+  function openEditTrip(t) {
+    setEditingTripId(t.id);
+    const assigned = (jobsByTrip[t.id] || []).map(jobKey);
+    setTripForm({ trip_number:t.trip_number||"", truck_id:t.truck_id||"", driver_id:t.driver_id||"", departure_date:t.departure_date||"", status:t.status||"loading", notes:t.notes||"", job_keys: assigned });
+    setTripJobSearch(""); setShowTripModal(true);
+  }
+  function tripToggleJob(k) {
+    setTripForm(f => ({ ...f, job_keys: f.job_keys.includes(k) ? f.job_keys.filter(x => x !== k) : [...f.job_keys, k] }));
+  }
+  function tripMoveJob(idx, dir) {
+    setTripForm(f => {
+      const arr = [...f.job_keys]; const ni = idx + dir;
+      if (ni < 0 || ni >= arr.length) return f;
+      [arr[idx], arr[ni]] = [arr[ni], arr[idx]];
+      return { ...f, job_keys: arr };
+    });
+  }
+  async function saveTrip() {
+    setTripSaving(true);
+    const payload = {
+      trip_number: tripForm.trip_number || null,
+      truck_id: tripForm.truck_id ? Number(tripForm.truck_id) : null,
+      driver_id: tripForm.driver_id ? Number(tripForm.driver_id) : null,
+      departure_date: tripForm.departure_date || null,
+      status: tripForm.status || "loading",
+      notes: tripForm.notes || null,
+    };
+    let tripId = editingTripId, error = null;
+    if (editingTripId) ({ error } = await supabase.from("trips").update(payload).eq("id", editingTripId));
+    else { const { data, error: insErr } = await supabase.from("trips").insert([payload]).select("id").single(); error = insErr; tripId = data?.id; }
+    if (!error && tripId) {
+      const wanted = tripForm.job_keys;
+      // Assign trip_id + stop order in the chosen sequence; clear de-selected jobs.
+      for (let i = 0; i < wanted.length; i++) {
+        const ids = jobs.filter(j => jobKey(j) === wanted[i]).map(j => j.id);
+        if (ids.length) await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+      }
+      const wantedSet = new Set(wanted);
+      const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(jobKey(j))).map(j => j.id);
+      if (toClear.length) await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
+    }
+    setTripSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowTripModal(false); loadTrips(); loadJobs();
+  }
+  async function setTripStatus(t, status) {
+    await supabase.from("trips").update({ status }).eq("id", t.id); loadTrips();
+  }
+  async function deleteTrip(t) {
+    if (!window.confirm(`Eliminar trip ${t.trip_number || t.id}? Los jobs quedan sin trip.`)) return;
+    await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null }).eq("trip_id", t.id);
+    await supabase.from("trips").delete().eq("id", t.id);
+    loadTrips(); loadJobs();
+  }
+  // Persist a new stop order for a trip (array of jobKeys in the desired sequence).
+  async function persistTripOrder(orderedKeys) {
+    for (let i = 0; i < orderedKeys.length; i++) {
+      const ids = jobs.filter(j => jobKey(j) === orderedKeys[i]).map(j => j.id);
+      if (ids.length) await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids);
+    }
+    loadJobs();
+  }
+  // Mark one trip job delivered (stamps date_out + status across its rows).
+  async function tripMarkDelivered(j) {
+    const ids = jobs.filter(x => jobKey(x) === jobKey(j)).map(x => x.id);
+    await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    loadJobs();
+  }
   async function savePayment() {
     if (!payModal) return;
     const ids = jobs.filter(j => jobKey(j) === payModal.jobKey).map(j => j.id);
@@ -2328,6 +2601,8 @@ export default function App() {
           {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
           {page === "settlements" && !csDetailId && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
+          {page === "trips" && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
+          {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Camión</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
         </div>
       </div>
@@ -2432,7 +2707,7 @@ export default function App() {
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","Todos"],["pickups_today","Pick ups hoy"],["deliveries_today","Deliveries hoy"],["in_storage","En storage"],["on_hold","On hold"],["nofadd","Sin FADD"]].map(([t,l]) => (
+            {[["all","Todos"],["pickups_today","Pick ups hoy"],["deliveries_today","Deliveries hoy"],["in_storage","En storage"],["on_hold","On hold"],["no_trip","Sin trip asignado"],["nofadd","Sin FADD"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -2453,19 +2728,23 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Estado","Job #","Tipo","Broker","Rep","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Bal. pickup","Bal. delivery","Storage","Acciones"].map((h, i) => (
+                    {["Estado","Job #","Tipo","Broker","Rep","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Trip","Bal. pickup","Bal. delivery","Storage","Acciones"].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {dispatchGroups.length === 0 ? (
-                    <tr><td colSpan={16} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
+                    <tr><td colSpan={17} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
                   ) : dispatchGroups.map(g => {
                     const stores = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
                     const storeLabel = stores.join(" · ");
                     const mapHref = routeUrl(g);
                     const ns = nextStatus(g);
+                    const gTrip = g.trip_id ? tripById[g.trip_id] : null;
+                    const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
+                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.totalCf, tc.occPct, tc.totalBol); })()
+                      : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
                     const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
                     const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
                     return (
@@ -2499,6 +2778,11 @@ export default function App() {
                         {g.lot_number && <div style={{ fontFamily:"monospace", fontSize:11, color:"#888", marginTop:2 }}>{g.lot_number}</div>}
                       </td>
                       <td style={{ padding:"12px" }}>{jobDriverNames(g)||"—"}</td>
+                      <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>
+                        {gTrip
+                          ? <button onClick={() => setPage("trips")} style={{ fontFamily:"monospace", fontSize:11.5, fontWeight:600, color:"#6D28D9", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{gTrip.trip_number || ("#"+gTrip.id)}</button>
+                          : <span style={{ color:"#bbb" }}>— Sin asignar —</span>}
+                      </td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.pickup_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.pickup_balance) || "—"}</td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.delivery_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.delivery_balance) || "—"}</td>
                       <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
@@ -2507,7 +2791,7 @@ export default function App() {
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                         <div style={{ display:"flex", flexDirection:"column", gap:5, alignItems:"flex-start" }}>
                           {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Ruta</a>}
-                          <a href={waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g))} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
+                          <a href={waHref} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
                           {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
                         </div>
                       </td>
@@ -2979,12 +3263,190 @@ export default function App() {
 
       {/* ───────────────────────── TRUCKS ───────────────────────── */}
       {page === "trucks" && (
-        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#999" }}>
-          <div style={{ fontSize:36, marginBottom:10 }}>🚛</div>
-          <div style={{ fontSize:15, fontWeight:600, color:"#555", marginBottom:6 }}>Gestión de flota</div>
-          <div style={{ fontSize:13, maxWidth:420, margin:"0 auto", lineHeight:1.6 }}>El registro de camiones llega pronto. Por ahora los drivers se administran desde la sección Drivers y se notifican por WhatsApp.</div>
+        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                  {["Camión","Patente","Capacidad CF","Carga actual","Ocupación","Estado",""].map((h,i) => (
+                    <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {trucksList.length === 0 ? (
+                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tripsMissing ? "Corré el SQL de configuración para activar camiones." : "Sin camiones. Agregá uno con “+ Camión”."}</td></tr>
+                ) : trucksList.map(tk => {
+                  const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
+                  const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
+                  const cap = numv(tk.capacity_cf);
+                  const pct = cap > 0 ? Math.min(100, Math.round((load / cap) * 100)) : null;
+                  return (
+                    <tr key={tk.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                      <td style={{ padding:"12px", fontWeight:600 }}>{tk.name}</td>
+                      <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12 }}>{tk.plate || "—"}</td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{cap > 0 ? `${cap.toLocaleString()} CF` : "—"}</td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{activeTrip ? `${Math.round(load).toLocaleString()} CF` : "—"}</td>
+                      <td style={{ padding:"12px", minWidth:120 }}>{cap > 0 && activeTrip ? <OccupancyBar used={load} total={cap} /> : <span style={{ color:"#bbb" }}>—</span>}</td>
+                      <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: tk.active!==false?"#EAF3DE":"#f1f1f1", color: tk.active!==false?"#3B6D11":"#888" }}>{tk.active!==false?"Activo":"Inactivo"}</span></td>
+                      <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                        <Btn onClick={() => openEditTruck(tk)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
+                        <Btn danger onClick={() => deleteTruck(tk)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{trucksList.length} camión(es)</div>
         </div>
       )}
+
+      {/* ───────────────────────── TRIPS / LIVE LOAD ───────────────────────── */}
+      {page === "trips" && (() => {
+        const Stop = ({ trip, j, idx, ordered }) => {
+          const delivered = !!j.date_out || j.status === "delivered";
+          const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
+          return (
+            <div draggable onDragStart={e => e.dataTransfer.setData("text/plain", String(idx))}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); const from = parseInt(e.dataTransfer.getData("text/plain")); if (isNaN(from) || from === idx) return; const arr = ordered.map(jobKey); const [mv] = arr.splice(from, 1); arr.splice(idx, 0, mv); persistTripOrder(arr); }}
+              style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: delivered ? "#fafafa" : "#fff", cursor:"grab", opacity: delivered ? 0.7 : 1 }}>
+              <span title="Arrastrá para reordenar" style={{ color:"#ccc", cursor:"grab" }}>⠿</span>
+              <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{idx + 1}</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                  <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                  <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+                  {fromTo && <span style={{ color:"#888" }}>· {fromTo}</span>}
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:3, flexWrap:"wrap", color:"#666" }}>
+                  <span>{Math.round(parseCf(j.volume))} CF</span>
+                  {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
+                  {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
+                  <FaddBadge fadd={j.fadd} />
+                  {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                </div>
+              </div>
+              {delivered
+                ? <span style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 8px" }}>Delivered</span>
+                : <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11 }}>Mark delivered</Btn>}
+            </div>
+          );
+        };
+        const activeTrips = trips.filter(t => TRIP_ACTIVE(t.status));
+        const shown = tripsView === "active" ? activeTrips : trips;
+        return (
+          <>
+            {tripsMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>Para Trips / Live Load (camiones, viajes y carga en vivo), corré el SQL de configuración una sola vez en Supabase.</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
+              {[
+                { label:"Trips activos", value:tripMetrics.activeCount, color:"#7C3AED" },
+                { label:"CF en tránsito", value:Math.round(tripMetrics.cfTransit).toLocaleString()+" CF", color:"#185FA5" },
+                { label:"BOL en tránsito", value:"$"+Math.round(tripMetrics.bolTransit).toLocaleString(), color:"#1A8A4E" },
+                { label:"Entregados hoy", value:tripMetrics.deliveredToday, color:"#3B6D11" },
+              ].map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:20, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
+              {[["active","Active trips"],["all","All trips"]].map(([v,l]) => (
+                <button key={v} onClick={() => setTripsView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: tripsView===v?"#fff":"none", color: tripsView===v?"#111":"#888", fontWeight: tripsView===v?600:400, boxShadow: tripsView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+              ))}
+            </div>
+
+            {shown.length === 0 ? (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>{tripsView === "active" ? "Sin trips activos. Creá uno con “+ Trip”." : "Sin trips."}</div>
+            ) : tripsView === "active" ? (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))", gap:14 }}>
+                {shown.map(t => {
+                  const c = tripCalc(t);
+                  const truck = truckById[t.truck_id];
+                  const driverNm = driverById[t.driver_id]?.name || "";
+                  const grpLink = driverById[t.driver_id]?.whatsapp_group_link;
+                  return (
+                    <div key={t.id} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
+                      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:10, marginBottom:10 }}>
+                        <div>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                            <span style={{ fontSize:15, fontWeight:800, fontFamily:"monospace" }}>{t.trip_number || `#${t.id}`}</span>
+                            <TripBadge status={t.status} />
+                          </div>
+                          <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "sin camión"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
+                        </div>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Editar</Btn>
+                        </div>
+                      </div>
+                      {c.cap > 0 ? (
+                        <div style={{ marginBottom:10 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:4 }}>
+                            <b style={{ color: occColor(c.occPct || 0) }}>{c.occPct}% ocupado</b>
+                            <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
+                          </div>
+                          <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}><div style={{ background: occColor(c.occPct || 0), height:12, width:`${Math.min(100, c.occPct || 0)}%`, transition:"width .4s" }} /></div>
+                        </div>
+                      ) : <div style={{ fontSize:12, color:"#999", marginBottom:10 }}>Camión sin capacidad cargada · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
+                      <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Stops ({c.count})</div>
+                      <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:280, overflowY:"auto" }}>
+                        {c.jobsIn.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>Sin jobs en este trip. Usá “Editar” para agregar.</div>
+                          : c.jobsIn.map((j, i) => <Stop key={j.id} trip={t} j={j} idx={i} ordered={c.jobsIn} />)}
+                      </div>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:10 }}>
+                        <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
+                        <span style={{ color:"#666" }}>A cobrar: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+                      </div>
+                      <div style={{ display:"flex", gap:8, marginTop:10 }}>
+                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Enviar manifest al driver</Btn></a>
+                        {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Salir</Btn>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Trip #","Camión","Driver","Salida","Jobs","CF","A cobrar","Estado",""].map((h,i) => <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {shown.map(t => { const c = tripCalc(t); return (
+                        <tr key={t.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700 }}>{t.trip_number || `#${t.id}`}</td>
+                          <td style={{ padding:"12px" }}>{truckById[t.truck_id]?.name || "—"}</td>
+                          <td style={{ padding:"12px" }}>{driverById[t.driver_id]?.name || "—"}</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{t.departure_date || "—"}</td>
+                          <td style={{ padding:"12px" }}>{c.count}</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{Math.round(c.totalCf).toLocaleString()} CF</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }}>${Math.round(c.totalBol).toLocaleString()}</td>
+                          <td style={{ padding:"12px" }}><TripBadge status={t.status} /></td>
+                          <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                            <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
+                            <Btn danger onClick={() => deleteTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                          </td>
+                        </tr>
+                      ); })}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{shown.length} trip(s)</div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* ───────────────────────── SETTINGS ───────────────────────── */}
       {page === "settings" && (
@@ -4182,7 +4644,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -4237,6 +4699,121 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {showTruckModal && (
+        <Modal title={editingTruckId ? "Editar camión" : "Nuevo camión"} onClose={() => setShowTruckModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowTruckModal(false)}>Cancelar</Btn>
+            <Btn primary disabled={truckSaving || !truckForm.name.trim()} onClick={saveTruck}>{truckSaving ? "Guardando..." : "Guardar"}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Nombre / número *"><input style={inp} value={truckForm.name} onChange={e => setTruckForm(f => ({...f, name:e.target.value}))} placeholder="Truck 1 / Box 26'" /></Field>
+            <Field label="Patente"><input style={inp} value={truckForm.plate} onChange={e => setTruckForm(f => ({...f, plate:e.target.value}))} placeholder="ABC-1234" /></Field>
+            <Field label="Capacidad (CF)"><input style={inp} type="number" value={truckForm.capacity_cf} onChange={e => setTruckForm(f => ({...f, capacity_cf:e.target.value}))} placeholder="ej: 1600" /></Field>
+            <Field label="Estado">
+              <select style={inp} value={truckForm.active ? "yes" : "no"} onChange={e => setTruckForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Activo</option><option value="no">Inactivo</option></select>
+            </Field>
+            <Field label="Notas" full><input style={inp} value={truckForm.notes} onChange={e => setTruckForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {showTripModal && (() => {
+        // Live capacity as jobs are added (using the form's selected jobs).
+        const cap = numv(trucksList.find(tk => tk.id === Number(tripForm.truck_id))?.capacity_cf);
+        let loadCf = 0; const seen = new Set();
+        for (const j of jobs) { const k = jobKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += parseCf(j.volume); } }
+        const remaining = cap > 0 ? cap - loadCf : null;
+        const pct = cap > 0 ? Math.min(100, Math.round((loadCf / cap) * 100)) : 0;
+        const repFor = (k) => jobs.find(j => jobKey(j) === k);
+        return (
+        <Modal title={editingTripId ? "Editar trip" : "Nuevo trip"} onClose={() => setShowTripModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowTripModal(false)}>Cancelar</Btn>
+            {editingTripId && <Btn danger onClick={() => { setShowTripModal(false); deleteTrip(trips.find(x=>x.id===editingTripId)); }}>Eliminar</Btn>}
+            <Btn primary disabled={tripSaving} onClick={saveTrip}>{tripSaving ? "Guardando..." : (editingTripId ? "Guardar cambios" : "Crear trip")}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Trip number"><input style={inp} value={tripForm.trip_number} onChange={e => setTripForm(f => ({...f, trip_number:e.target.value}))} placeholder="TRIP-001" /></Field>
+            <Field label="Departure date"><input style={inp} type="date" value={tripForm.departure_date} onChange={e => setTripForm(f => ({...f, departure_date:e.target.value}))} /></Field>
+            <Field label="Camión">
+              <select style={inp} value={tripForm.truck_id} onChange={e => setTripForm(f => ({...f, truck_id:e.target.value}))}>
+                <option value="">— Sin camión —</option>{trucksList.map(tk => <option key={tk.id} value={tk.id}>{tk.name}{tk.capacity_cf ? ` · ${Number(tk.capacity_cf).toLocaleString()} CF` : ""}</option>)}
+              </select>
+            </Field>
+            <Field label="Driver">
+              <select style={inp} value={tripForm.driver_id} onChange={e => setTripForm(f => ({...f, driver_id:e.target.value}))}>
+                <option value="">— Sin driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Estado">
+              <select style={inp} value={tripForm.status} onChange={e => setTripForm(f => ({...f, status:e.target.value}))}>
+                {Object.entries(TRIP_STATUS).map(([v,o]) => <option key={v} value={v}>{o.l}</option>)}
+              </select>
+            </Field>
+          </div>
+
+          <div style={{ background: cap > 0 && pct > 90 ? "#FCEBEB" : "#f7f7f7", borderRadius:8, padding:"10px 12px", marginTop:12 }}>
+            {cap > 0 ? (
+              <>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:5 }}>
+                  <b style={{ color: occColor(pct) }}>{pct}% · {Math.round(loadCf).toLocaleString()} CF</b>
+                  <span style={{ color: remaining < 0 ? "#A32D2D" : "#888" }}>Quedan {Math.round(remaining).toLocaleString()} CF</span>
+                </div>
+                <div style={{ background:"#e8e8e8", borderRadius:6, height:10, overflow:"hidden" }}><div style={{ background:occColor(pct), height:10, width:`${pct}%` }} /></div>
+              </>
+            ) : <div style={{ fontSize:12, color:"#888" }}>Cargá la capacidad del camión para ver la ocupación · {Math.round(loadCf).toLocaleString()} CF seleccionados</div>}
+          </div>
+
+          <SectionLabel>Stops — orden de entrega{tripForm.job_keys.length ? ` (${tripForm.job_keys.length})` : ""}</SectionLabel>
+          {tripForm.job_keys.length > 0 && (
+            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, marginBottom:8 }}>
+              {tripForm.job_keys.map((k, i) => { const j = repFor(k); if (!j) return null; return (
+                <div key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderBottom:"1px solid #f5f5f5", fontSize:13 }}>
+                  <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i+1}</span>
+                  <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
+                  <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+                  <span style={{ color:"#888" }}>{Math.round(parseCf(j.volume))} CF</span>
+                  <FaddBadge fadd={j.fadd} />
+                  <button onClick={() => tripMoveJob(i, -1)} disabled={i===0} style={{ border:"none", background:"none", cursor: i===0?"default":"pointer", color: i===0?"#ddd":"#888", fontSize:14 }}>↑</button>
+                  <button onClick={() => tripMoveJob(i, 1)} disabled={i===tripForm.job_keys.length-1} style={{ border:"none", background:"none", cursor: i===tripForm.job_keys.length-1?"default":"pointer", color: i===tripForm.job_keys.length-1?"#ddd":"#888", fontSize:14 }}>↓</button>
+                  <button onClick={() => tripToggleJob(k)} style={{ border:"none", background:"none", cursor:"pointer", color:"#E24B4A" }}>×</button>
+                </div>
+              ); })}
+            </div>
+          )}
+          <input style={{ ...inp, marginBottom:8 }} value={tripJobSearch} onChange={e => setTripJobSearch(e.target.value)} placeholder="Buscar job # / cliente / storage para agregar..." />
+          <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:180, overflowY:"auto", background:"#fff" }}>
+            {(() => {
+              const q = tripJobSearch.trim().toLowerCase();
+              if (!q) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>Buscá un job para agregarlo al trip.</div>;
+              const seen2 = new Set(); const rows = [];
+              for (const j of jobs) { const k = jobKey(j); if (seen2.has(k)) continue; seen2.add(k);
+                const s = storageById[j.storage_id] || {};
+                const hay = [j.job_number, j.customer, j.driver, s.brand, s.unit].join(" ").toLowerCase();
+                if (!hay.includes(q)) continue;
+                const otherTrip = j.trip_id && j.trip_id !== editingTripId ? tripById[j.trip_id] : null;
+                rows.push({ j, k, otherTrip });
+              }
+              if (!rows.length) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>Sin resultados.</div>;
+              return rows.slice(0, 50).map(({ j, k, otherTrip }) => {
+                const checked = tripForm.job_keys.includes(k);
+                return (
+                  <label key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked?"#f0fdf4":"#fff" }}>
+                    <input type="checkbox" checked={checked} onChange={() => tripToggleJob(k)} />
+                    <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
+                    <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+                    <span style={{ color:"#888" }}>{Math.round(parseCf(j.volume))} CF</span>
+                    {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="En otro trip activo — se moverá a este">en {otherTrip.trip_number || "#"+otherTrip.id}</span>}
+                  </label>
+                );
+              });
+            })()}
+          </div>
+          <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={tripForm.notes} onChange={e => setTripForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del trip" /></Field>
+        </Modal>
+        );
+      })()}
 
       {showCsModal && (
         <Modal title={editingCsId ? "Editar closing sheet" : "Nuevo closing sheet"} onClose={() => setShowCsModal(false)}
