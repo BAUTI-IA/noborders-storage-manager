@@ -242,6 +242,78 @@ const paymentNet = (p) => numv(p.amount) - numv(p.discount);
 const daysSince = (dateStr) => { if (!dateStr) return 0; const d = new Date(dateStr + "T00:00:00"); return Math.floor((Date.now() - d.getTime()) / 86400000); };
 const EMPTY_PAYMENT = { job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"", discount:"", discount_reason:"", received:false, received_date:"", received_by:"", cash_with_whom:"", banked:false, banked_date:"", bank_account:"", payment_stage:"", notes:"" };
 
+// ── Legal & Compliance module ──
+const EMPTY_COMPANY = { name:"", dot_number:"", mc_number:"", ein:"", state:"", address:"", phone:"", email:"", active:true, notes:"" };
+const EMPTY_COMP_DOC = { entity_type:"company", entity_id:"", document_type:"insurance", document_name:"", document_number:"", issuer:"", issue_date:"", expiry_date:"", document_url:"", notes:"" };
+// All known compliance document types (text column, so the set is open-ended).
+const DOC_TYPE_LABELS = {
+  insurance:"Insurance", dot:"DOT Registration", mc_authority:"MC Authority", ifta:"IFTA",
+  irp:"IRP / Apportioned", w9:"W-9", cdl:"CDL", medical_card:"Medical card", mvr:"MVR",
+  contract:"Contract", registration:"Registration", annual_inspection:"Annual inspection",
+  ifta_decal:"IFTA decal", drug_test:"Drug test", background_check:"Background check", other:"Other",
+};
+const docTypeLabel = (v) => DOC_TYPE_LABELS[v] || v || "—";
+// Document grid per entity type (the cells shown on each card).
+const DOC_GRID = {
+  company: ["insurance", "dot", "mc_authority", "ifta", "irp", "w9", "other"],
+  truck:   ["registration", "insurance", "irp", "annual_inspection", "ifta_decal", "other"],
+  driver:  ["cdl", "medical_card", "mvr", "drug_test", "background_check", "other"],
+};
+const ENTITY_LABELS = { company: "Empresa", truck: "Camión", driver: "Driver" };
+// Auto status from expiry date: expired / expiring_soon (≤30d) / active / none.
+function docStatus(doc) {
+  if (!doc || !doc.expiry_date) return "none";
+  const td = today();
+  if (doc.expiry_date < td) return "expired";
+  if (doc.expiry_date <= addDaysStr(td, 30)) return "expiring_soon";
+  return "active";
+}
+const docDaysToExpiry = (doc) => doc?.expiry_date ? Math.round((new Date(doc.expiry_date + "T00:00:00") - new Date(today() + "T00:00:00")) / 86400000) : null;
+const DOC_STATUS_META = {
+  active:        { l:"Al día", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  expiring_soon: { l:"Por vencer", bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" },
+  expired:       { l:"Vencido", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+  none:          { l:"Sin fecha", bg:"#f1f1f1", text:"#888", dot:"#bbb" },
+};
+function ComplianceBadge({ status }) {
+  const c = DOC_STATUS_META[status] || DOC_STATUS_META.none;
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot }} />{c.l}</span>;
+}
+// One cell in an entity's compliance document grid. Drag & drop or click to upload.
+function DocCell({ label, doc, onAdd, onEdit, onFile }) {
+  const [drag, setDrag] = useState(false);
+  const inputRef = useRef();
+  const st = doc ? docStatus(doc) : "none";
+  const days = doc ? docDaysToExpiry(doc) : null;
+  const expColor = st === "expired" ? "#A32D2D" : st === "expiring_soon" ? "#854F0B" : "#888";
+  return (
+    <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+      onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
+      style={{ border:`1px ${drag ? "dashed #378ADD" : "solid #eee"}`, borderRadius:9, padding:"9px 10px", background: drag ? "#E6F1FB" : "#fff", minHeight:90, display:"flex", flexDirection:"column", gap:4 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+        <span style={{ fontSize:11, fontWeight:700 }}>{label}</span>
+        <span style={{ marginLeft:"auto" }}><ComplianceBadge status={st} /></span>
+      </div>
+      {doc ? (
+        <>
+          <div style={{ fontSize:11, color:"#555", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{doc.document_number ? `#${doc.document_number}` : (doc.document_name || "—")}{doc.issuer ? ` · ${doc.issuer}` : ""}</div>
+          <div style={{ fontSize:10.5, color: expColor }}>{doc.expiry_date ? `Vence ${doc.expiry_date}${days != null ? ` (${days < 0 ? `hace ${-days}d` : `${days}d`})` : ""}` : "Sin vencimiento"}</div>
+          <div style={{ display:"flex", gap:9, marginTop:"auto", alignItems:"center" }}>
+            {doc.document_url
+              ? <a href={doc.document_url} target="_blank" rel="noreferrer" style={{ fontSize:10.5, color:"#185FA5", textDecoration:"none" }}>📎 Ver</a>
+              : <span style={{ fontSize:10.5, color:"#bbb" }}>Sin archivo</span>}
+            <button onClick={() => inputRef.current?.click()} style={{ fontSize:10.5, color:"#185FA5", border:"none", background:"none", cursor:"pointer", padding:0 }}>Subir</button>
+            <button onClick={onEdit} style={{ fontSize:10.5, color:"#888", border:"none", background:"none", cursor:"pointer", padding:0 }}>Editar</button>
+          </div>
+        </>
+      ) : (
+        <button onClick={onAdd} style={{ marginTop:"auto", fontSize:11, color:"#185FA5", border:"1px dashed #cfe0f0", background:"#F7FBFF", borderRadius:7, padding:"7px", cursor:"pointer" }}>+ Agregar / subir</button>
+      )}
+      <input ref={inputRef} type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) onFile(f); e.target.value = ""; }} />
+    </div>
+  );
+}
+
 const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
@@ -689,6 +761,57 @@ create policy "payments_all" on public.payments for all to anon, authenticated u
 
 do $$ begin alter publication supabase_realtime add table public.payment_accounts; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.payments; exception when others then null; end $$;`;
+
+// Legal & Compliance: companies + compliance documents + a public docs bucket.
+const COMPLIANCE_SQL = `create table if not exists public.companies (
+  id bigint generated always as identity primary key,
+  name text,
+  dot_number text,
+  mc_number text,
+  ein text,
+  state text,
+  address text,
+  phone text,
+  email text,
+  active boolean default true,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.companies enable row level security;
+drop policy if exists "companies_all" on public.companies;
+create policy "companies_all" on public.companies for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.compliance_documents (
+  id bigint generated always as identity primary key,
+  entity_type text,
+  entity_id bigint,
+  document_type text,
+  document_name text,
+  document_number text,
+  issuer text,
+  issue_date date,
+  expiry_date date,
+  status text,
+  document_url text,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.compliance_documents enable row level security;
+drop policy if exists "compliance_documents_all" on public.compliance_documents;
+create policy "compliance_documents_all" on public.compliance_documents for all to anon, authenticated using (true) with check (true);
+
+insert into storage.buckets (id, name, public)
+  values ('compliance-docs', 'compliance-docs', true)
+  on conflict (id) do update set public = true;
+drop policy if exists "compdocs_read" on storage.objects;
+create policy "compdocs_read" on storage.objects for select to anon, authenticated using (bucket_id = 'compliance-docs');
+drop policy if exists "compdocs_write" on storage.objects;
+create policy "compdocs_write" on storage.objects for insert to anon, authenticated with check (bucket_id = 'compliance-docs');
+drop policy if exists "compdocs_update" on storage.objects;
+create policy "compdocs_update" on storage.objects for update to anon, authenticated using (bucket_id = 'compliance-docs');
+
+do $$ begin alter publication supabase_realtime add table public.companies; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.compliance_documents; exception when others then null; end $$;`;
 
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
@@ -1480,6 +1603,7 @@ const NAV = [
     { id:"trips", label:"Trips / Live Load", icon:"🛣️" },
   ]},
   { section:"Business", items:[
+    { id:"compliance", label:"Legal & Compliance", icon:"📋" },
     { id:"analytics", label:"Analytics", icon:"📊" },
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
@@ -1533,6 +1657,7 @@ const PAGE_META = {
   drivers:     { title:"Drivers", sub:"Choferes de la operación" },
   trucks:      { title:"Trucks", sub:"Flota de camiones" },
   trips:       { title:"Trips / Live Load", sub:"Carga en vivo por camión" },
+  compliance:  { title:"Legal & Compliance", sub:"Empresas, documentos y vencimientos" },
   analytics:   { title:"Analytics", sub:"Métricas y recomendaciones con IA" },
   settings:    { title:"Settings", sub:"Configuración de la operación" },
 };
@@ -1674,6 +1799,24 @@ export default function App() {
   const [editingPayId, setEditingPayId] = useState(null);
   const [paySaving, setPaySaving] = useState(false);
   const [payJobSearch, setPayJobSearch] = useState("");   // job search inside the payment form
+  // Legal & Compliance
+  const [complianceMissing, setComplianceMissing] = useState(false);
+  const [companies, setCompanies] = useState([]);
+  const [complianceDocs, setComplianceDocs] = useState([]);
+  const [compTab, setCompTab] = useState("companies");    // companies | trucks | drivers | all
+  const [compBannerDismissed, setCompBannerDismissed] = useState(false);
+  const [showCompanyModal, setShowCompanyModal] = useState(false);
+  const [companyForm, setCompanyForm] = useState(EMPTY_COMPANY);
+  const [editingCompanyId, setEditingCompanyId] = useState(null);
+  const [companySaving, setCompanySaving] = useState(false);
+  const [showDocModal, setShowDocModal] = useState(false);
+  const [docForm, setDocForm] = useState(EMPTY_COMP_DOC);
+  const [editingDocId, setEditingDocId] = useState(null);
+  const [docSaving, setDocSaving] = useState(false);
+  const [compDocUploading, setCompDocUploading] = useState(false);
+  const [docFilterEntity, setDocFilterEntity] = useState("");   // all-docs filters
+  const [docFilterStatus, setDocFilterStatus] = useState("");
+  const [docFilterDays, setDocFilterDays] = useState("");
   const [toast, setToast] = useState(null);               // brief success notification
   const fileRef = useRef();
   const autoGenRef = useRef(false);
@@ -1741,6 +1884,14 @@ export default function App() {
   const loadPayAccounts = useCallback(async () => {
     const { data, error } = await supabase.from("payment_accounts").select("*").order("name", { ascending: true });
     if (!error) setPayAccounts(data || []);
+  }, []);
+  const loadCompanies = useCallback(async () => {
+    const { data, error } = await supabase.from("companies").select("*").order("name", { ascending: true });
+    if (!error) setCompanies(data || []);
+  }, []);
+  const loadComplianceDocs = useCallback(async () => {
+    const { data, error } = await supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true });
+    if (!error) setComplianceDocs(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -2039,6 +2190,36 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, paymentsMissing, loadPayments, loadPayAccounts]);
+
+  // Probe the Legal & Compliance module (companies + compliance_documents tables).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: cErr } = await supabase.from("companies").select("id").limit(1);
+      const { error: dErr } = await supabase.from("compliance_documents").select("id").limit(1);
+      if (cancelled) return;
+      if (!cErr && !dErr) { loadCompanies(); loadComplianceDocs(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: COMPLIANCE_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { loadCompanies(); loadComplianceDocs(); }
+      else setComplianceMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadCompanies, loadComplianceDocs]);
+
+  useEffect(() => {
+    if (!session || complianceMissing) return;
+    const channel = supabase.channel("compliance-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "companies" }, () => loadCompanies())
+      .on("postgres_changes", { event: "*", schema: "public", table: "compliance_documents" }, () => loadComplianceDocs())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, complianceMissing, loadCompanies, loadComplianceDocs]);
 
   // Probe the payment_stage column (added after the initial Payments release).
   useEffect(() => {
@@ -2585,7 +2766,7 @@ export default function App() {
     return { activeCount, cfTransit, bolTransit, deliveredToday };
   }, [trips, jobs, tripCalc]);
 
-  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount]);
+  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length]);
 
   // Auto-complete a trip once all its jobs are delivered.
   useEffect(() => {
@@ -2691,6 +2872,52 @@ export default function App() {
     }
     return Object.values(m).sort((a, b) => b.total - a.total);
   }, [paymentRows]);
+
+  // ── Legal & Compliance derived data ──
+  const companyById = useMemo(() => { const m = {}; for (const c of companies) m[c.id] = c; return m; }, [companies]);
+  // Display name for a doc's entity (company/truck/driver).
+  const entityName = useCallback((type, id) => {
+    if (type === "company") return companyById[id]?.name || "—";
+    if (type === "truck") { const t = truckById[id]; return t ? (t.name || `Camión #${id}`) : "—"; }
+    if (type === "driver") return driverById[id]?.name || "—";
+    return "—";
+  }, [companyById, truckById, driverById]);
+  // Docs grouped by `${entity_type}:${entity_id}` for the card grids.
+  const docsByEntity = useMemo(() => {
+    const m = {};
+    for (const d of complianceDocs) { const k = `${d.entity_type}:${d.entity_id}`; (m[k] = m[k] || []).push(d); }
+    return m;
+  }, [complianceDocs]);
+  // The latest (newest) doc of a given type for an entity (what each grid cell shows).
+  const docFor = useCallback((type, id, docType) => {
+    const arr = (docsByEntity[`${type}:${id}`] || []).filter(d => d.document_type === docType);
+    if (!arr.length) return null;
+    return arr.sort((a, b) => (b.issue_date || b.created_at || "").localeCompare(a.issue_date || a.created_at || ""))[0];
+  }, [docsByEntity]);
+  // Worst status among an entity's docs, for the card header badge.
+  const entityStatus = useCallback((type, id) => {
+    const arr = docsByEntity[`${type}:${id}`] || [];
+    let worst = "active";
+    for (const d of arr) { const s = docStatus(d); if (s === "expired") return "expired"; if (s === "expiring_soon") worst = "expiring_soon"; }
+    return arr.length ? worst : "none";
+  }, [docsByEntity]);
+  const complianceMetrics = useMemo(() => {
+    let expired = 0, expiringSoon = 0, upToDate = 0;
+    for (const d of complianceDocs) { const s = docStatus(d); if (s === "expired") expired++; else if (s === "expiring_soon") expiringSoon++; else if (s === "active") upToDate++; }
+    return { activeCompanies: companies.filter(c => c.active !== false).length, expired, expiringSoon, upToDate };
+  }, [complianceDocs, companies]);
+  // Docs expired or expiring within 7 days → alert banner + sidebar badge.
+  const complianceAlerts = useMemo(() => {
+    const rows = [];
+    for (const d of complianceDocs) {
+      const s = docStatus(d);
+      const days = docDaysToExpiry(d);
+      if (s === "expired" || (s === "expiring_soon" && days !== null && days <= 7)) {
+        rows.push({ doc: d, status: s, days, name: entityName(d.entity_type, d.entity_id) });
+      }
+    }
+    return rows.sort((a, b) => (a.days ?? 0) - (b.days ?? 0));
+  }, [complianceDocs, entityName]);
 
   const detail = records.find(r => r.id === detailId);
 
@@ -3151,6 +3378,89 @@ export default function App() {
     setLocModal(null);
     showToast(`Ubicación actualizada · ${locModal.name}`);
     loadTrucks();
+  }
+
+  // ── Legal & Compliance handlers ──
+  function openAddCompany() { setEditingCompanyId(null); setCompanyForm(EMPTY_COMPANY); setShowCompanyModal(true); }
+  function openEditCompany(c) {
+    setEditingCompanyId(c.id);
+    setCompanyForm({ name:c.name||"", dot_number:c.dot_number||"", mc_number:c.mc_number||"", ein:c.ein||"", state:c.state||"", address:c.address||"", phone:c.phone||"", email:c.email||"", active: c.active !== false, notes:c.notes||"" });
+    setShowCompanyModal(true);
+  }
+  async function saveCompany() {
+    if (!companyForm.name.trim()) return;
+    setCompanySaving(true);
+    const payload = { name:companyForm.name.trim(), dot_number:companyForm.dot_number||null, mc_number:companyForm.mc_number||null, ein:companyForm.ein||null, state:companyForm.state||null, address:companyForm.address||null, phone:companyForm.phone||null, email:companyForm.email||null, active: !!companyForm.active, notes:companyForm.notes||null };
+    let error = null;
+    if (editingCompanyId) ({ error } = await supabase.from("companies").update(payload).eq("id", editingCompanyId));
+    else ({ error } = await supabase.from("companies").insert([payload]));
+    setCompanySaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowCompanyModal(false); loadCompanies();
+  }
+  async function deleteCompany(c) {
+    if (!window.confirm(`Eliminar la empresa "${c.name}" y todos sus documentos?`)) return;
+    await supabase.from("compliance_documents").delete().eq("entity_type", "company").eq("entity_id", c.id);
+    await supabase.from("companies").delete().eq("id", c.id);
+    loadCompanies(); loadComplianceDocs();
+  }
+  function openAddDoc(prefill = {}) {
+    setEditingDocId(null);
+    setDocForm({ ...EMPTY_COMP_DOC, ...prefill });
+    setShowDocModal(true);
+  }
+  function openEditDoc(d) {
+    setEditingDocId(d.id);
+    setDocForm({ entity_type:d.entity_type||"company", entity_id:d.entity_id||"", document_type:d.document_type||"other", document_name:d.document_name||"", document_number:d.document_number||"", issuer:d.issuer||"", issue_date:d.issue_date||"", expiry_date:d.expiry_date||"", document_url:d.document_url||"", notes:d.notes||"" });
+    setShowDocModal(true);
+  }
+  async function saveDoc() {
+    if (!docForm.entity_id) { window.alert("Elegí a quién pertenece el documento."); return; }
+    setDocSaving(true);
+    const payload = {
+      entity_type: docForm.entity_type, entity_id: Number(docForm.entity_id),
+      document_type: docForm.document_type, document_name: docForm.document_name || null,
+      document_number: docForm.document_number || null, issuer: docForm.issuer || null,
+      issue_date: docForm.issue_date || null, expiry_date: docForm.expiry_date || null,
+      status: docStatus(docForm), document_url: docForm.document_url || null, notes: docForm.notes || null,
+    };
+    let error = null;
+    if (editingDocId) ({ error } = await supabase.from("compliance_documents").update(payload).eq("id", editingDocId));
+    else ({ error } = await supabase.from("compliance_documents").insert([payload]));
+    setDocSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowDocModal(false); loadComplianceDocs();
+  }
+  async function deleteDoc(d) {
+    if (!window.confirm(`Eliminar el documento "${docTypeLabel(d.document_type)}"?`)) return;
+    await supabase.from("compliance_documents").delete().eq("id", d.id); loadComplianceDocs();
+  }
+  // Upload a photo/PDF to the compliance-docs bucket. If `doc` has an id, attach to it;
+  // otherwise stash the URL in the open doc form.
+  async function uploadComplianceDoc(file, doc) {
+    if (!file) return;
+    setCompDocUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const path = `comp-${doc?.id || "new"}-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("compliance-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) { window.alert("Error al subir: " + error.message); setCompDocUploading(false); return; }
+      const { data } = supabase.storage.from("compliance-docs").getPublicUrl(path);
+      const url = data?.publicUrl || "";
+      if (doc?.id) { await supabase.from("compliance_documents").update({ document_url: url }).eq("id", doc.id); loadComplianceDocs(); }
+      else { setDocForm(f => ({ ...f, document_url: url })); }
+    } catch (e) { window.alert("Error: " + e.message); }
+    setCompDocUploading(false);
+  }
+  // Drop a file onto an empty grid cell → create the doc record then attach the file.
+  async function createDocAndUpload(entity_type, entity_id, document_type, file) {
+    if (!file) return;
+    const { data, error } = await supabase.from("compliance_documents")
+      .insert([{ entity_type, entity_id: Number(entity_id), document_type, document_name: docTypeLabel(document_type), status: "none" }])
+      .select("id").single();
+    if (error) { window.alert(error.message); return; }
+    if (data?.id) await uploadComplianceDoc(file, { id: data.id });
+    loadComplianceDocs();
   }
 
   // ── Trips CRUD ──
@@ -3692,6 +4002,7 @@ export default function App() {
           {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Camión</Btn>}
           {page === "extras" && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Empleados</Btn>}
           {page === "payments" && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Pago</Btn>}
+          {page === "compliance" && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Documento</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Empresa</Btn></>}
           {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
         </div>
       </div>
@@ -5008,6 +5319,182 @@ export default function App() {
                   ))}
                 </div>
               </div>
+            )}
+          </>
+        );
+      })()}
+
+      {/* ───────────────────────── LEGAL & COMPLIANCE ───────────────────────── */}
+      {page === "compliance" && (() => {
+        const m = complianceMetrics;
+        const cell = (entityType, entityId, dt) => {
+          const d = docFor(entityType, entityId, dt);
+          return <DocCell key={dt} label={docTypeLabel(dt)} doc={d}
+            onAdd={() => openAddDoc({ entity_type: entityType, entity_id: entityId, document_type: dt, document_name: docTypeLabel(dt) })}
+            onEdit={() => { const x = docFor(entityType, entityId, dt); if (x) openEditDoc(x); }}
+            onFile={(f) => { const x = docFor(entityType, entityId, dt); x ? uploadComplianceDoc(f, x) : createDocAndUpload(entityType, entityId, dt, f); }} />;
+        };
+        const gridStyle = { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(155px,1fr))", gap:8, marginTop:10 };
+        const cardStyle = { background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"14px 16px", marginBottom:14 };
+        const chip = { fontSize:11, color:"#666", background:"#f5f5f5", borderRadius:20, padding:"2px 9px" };
+        const tabs = [["companies","Companies"],["trucks","Trucks"],["drivers","Drivers"],["all","Todos los documentos"]];
+        // All-documents tab data
+        const allRows = complianceDocs.map(d => ({ d, st: docStatus(d), days: docDaysToExpiry(d), name: entityName(d.entity_type, d.entity_id) }))
+          .filter(r => !docFilterEntity || r.d.entity_type === docFilterEntity)
+          .filter(r => !docFilterStatus || r.st === docFilterStatus)
+          .filter(r => docFilterDays === "" || (r.days !== null && r.days <= Number(docFilterDays)))
+          .sort((a, b) => (a.d.expiry_date || "9999").localeCompare(b.d.expiry_date || "9999"));
+        const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
+        const td = { padding:"9px 10px", fontSize:12.5, verticalAlign:"middle" };
+        return (
+          <>
+            {complianceMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>Para Legal & Compliance (empresas + documentos), corré el SQL de configuración una sola vez en Supabase.</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10, marginBottom:16 }}>
+              {[
+                { label:"Empresas activas", value: m.activeCompanies, color:"#111" },
+                { label:"Documentos vencidos", value: m.expired, color:"#E24B4A" },
+                { label:"Vencen en 30 días", value: m.expiringSoon, color:"#EF9F27" },
+                { label:"Al día", value: m.upToDate, color:"#1A8A4E" },
+              ].map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:22, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {!compBannerDismissed && complianceAlerts.length > 0 && (
+              <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                  <span style={{ fontSize:13, fontWeight:700, color:"#A32D2D" }}>⚠️ {complianceAlerts.length} documento(s) vencido(s) o por vencer (≤7 días)</span>
+                  <button onClick={() => setCompBannerDismissed(true)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#A32D2D", fontSize:16, lineHeight:1 }}>×</button>
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                  {complianceAlerts.map(a => (
+                    <div key={a.doc.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#7A2222", flexWrap:"wrap" }}>
+                      <span style={{ fontSize:10, fontWeight:700, color:"#A32D2D", background:"#fff", borderRadius:20, padding:"1px 7px" }}>{ENTITY_LABELS[a.doc.entity_type] || a.doc.entity_type}</span>
+                      <b>{a.name}</b>
+                      <span>· {docTypeLabel(a.doc.document_type)}</span>
+                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{a.status === "expired" ? `Vencido hace ${Math.abs(a.days)} días` : `Vence en ${a.days} días`}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
+              {tabs.map(([v,l]) => (
+                <button key={v} onClick={() => setCompTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: compTab===v?"#fff":"none", color: compTab===v?"#111":"#888", fontWeight: compTab===v?600:400, boxShadow: compTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+              ))}
+            </div>
+
+            {complianceMissing ? null : compTab === "companies" ? (
+              companies.length === 0 ? (
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin empresas. Agregá una con “+ Empresa”.</div>
+              ) : companies.map(c => (
+                <div key={c.id} style={cardStyle}>
+                  <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
+                    <div style={{ flex:1, minWidth:200 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                        <span style={{ fontSize:16, fontWeight:800 }}>🏢 {c.name}</span>
+                        <ComplianceBadge status={entityStatus("company", c.id)} />
+                        {c.active === false && <span style={{ fontSize:10.5, color:"#888", background:"#f1f1f1", borderRadius:20, padding:"2px 8px" }}>Inactiva</span>}
+                      </div>
+                      <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:7 }}>
+                        {c.dot_number && <span style={chip}>DOT {c.dot_number}</span>}
+                        {c.mc_number && <span style={chip}>MC {c.mc_number}</span>}
+                        {c.ein && <span style={chip}>EIN {c.ein}</span>}
+                        {c.state && <span style={chip}>{c.state}</span>}
+                        {c.phone && <span style={chip}>{c.phone}</span>}
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", gap:6 }}>
+                      <Btn onClick={() => openEditCompany(c)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
+                      <Btn danger onClick={() => deleteCompany(c)} style={{ padding:"4px 10px", fontSize:12 }}>Eliminar</Btn>
+                    </div>
+                  </div>
+                  <div style={gridStyle}>{DOC_GRID.company.map(dt => cell("company", c.id, dt))}</div>
+                </div>
+              ))
+            ) : compTab === "trucks" ? (
+              trucksList.length === 0 ? (
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin camiones. Cargalos en la página Trucks.</div>
+              ) : trucksList.map(tk => (
+                <div key={tk.id} style={cardStyle}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:16, fontWeight:800 }}>🚛 {tk.name}</span>
+                    <ComplianceBadge status={entityStatus("truck", tk.id)} />
+                    {[tk.license_plate || tk.plate, tk.vin, truckSubtitle(tk)].filter(Boolean).map((x, i) => <span key={i} style={chip}>{x}</span>)}
+                  </div>
+                  <div style={gridStyle}>{DOC_GRID.truck.map(dt => cell("truck", tk.id, dt))}</div>
+                </div>
+              ))
+            ) : compTab === "drivers" ? (
+              driversList.length === 0 ? (
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin drivers. Se cargan al asignarlos a jobs.</div>
+              ) : driversList.map(dr => (
+                <div key={dr.id} style={cardStyle}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:16, fontWeight:800 }}>🧑‍✈️ {dr.name}</span>
+                    <ComplianceBadge status={entityStatus("driver", dr.id)} />
+                    {dr.phone && <span style={chip}>{dr.phone}</span>}
+                  </div>
+                  <div style={gridStyle}>{DOC_GRID.driver.map(dt => cell("driver", dr.id, dt))}</div>
+                </div>
+              ))
+            ) : (
+              <>
+                <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
+                  <select value={docFilterEntity} onChange={e => setDocFilterEntity(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
+                    <option value="">Todas las entidades</option>
+                    <option value="company">Empresas</option><option value="truck">Camiones</option><option value="driver">Drivers</option>
+                  </select>
+                  <select value={docFilterStatus} onChange={e => setDocFilterStatus(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
+                    <option value="">Todos los estados</option>
+                    <option value="expired">Vencido</option><option value="expiring_soon">Por vencer</option><option value="active">Al día</option><option value="none">Sin fecha</option>
+                  </select>
+                  <select value={docFilterDays} onChange={e => setDocFilterDays(e.target.value)} style={{ ...inp, width:"auto", minWidth:150 }}>
+                    <option value="">Cualquier vencimiento</option>
+                    <option value="7">Vence en ≤7 días</option><option value="30">≤30 días</option><option value="60">≤60 días</option><option value="90">≤90 días</option>
+                  </select>
+                </div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                  <div style={{ overflowX:"auto" }}>
+                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                      <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                        {["Entidad","Nombre","Tipo doc","N°","Emisor","Emisión","Vencimiento","Estado","Acciones"].map((h,i) => <th key={i} style={th}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {allRows.length === 0 ? (
+                          <tr><td colSpan={9} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin documentos en este filtro.</td></tr>
+                        ) : allRows.map(({ d, st, days, name }) => (
+                          <tr key={d.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                            <td style={td}><span style={{ fontSize:10.5, fontWeight:700, color:"#555", background:"#f1f1f1", borderRadius:20, padding:"1px 8px" }}>{ENTITY_LABELS[d.entity_type] || d.entity_type}</span></td>
+                            <td style={{ ...td, fontWeight:600 }}>{name}</td>
+                            <td style={td}>{docTypeLabel(d.document_type)}</td>
+                            <td style={{ ...td, fontFamily:"monospace", fontSize:12 }}>{d.document_number || "—"}</td>
+                            <td style={td}>{d.issuer || "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{d.issue_date || "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{d.expiry_date || "—"}{days !== null && <span style={{ color: st==="expired"?"#A32D2D": st==="expiring_soon"?"#854F0B":"#aaa", fontSize:10.5 }}> ({days < 0 ? `hace ${-days}d` : `${days}d`})</span>}</td>
+                            <td style={td}><ComplianceBadge status={st} /></td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>
+                              {d.document_url && <a href={d.document_url} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", marginRight:8 }}>Ver</a>}
+                              <button onClick={() => openEditDoc(d)} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>Editar</button>
+                              <button onClick={() => deleteDoc(d)} style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{allRows.length} documento(s)</div>
+                </div>
+              </>
             )}
           </>
         );
@@ -6411,7 +6898,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, EXTRAS_SQL, PAYMENTS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -6558,6 +7045,87 @@ export default function App() {
             <DetailRow label="Carga actual" value={activeTrip ? `${Math.round(load).toLocaleString()} CF${cap > 0 ? ` · ${Math.min(100, Math.round((load / cap) * 100))}%` : ""}` : "Sin viaje activo"} />
             <DetailRow label="Estado" value={tk.active !== false ? "Activo" : "Inactivo"} />
             {tk.notes && <DetailRow label="Notas" value={tk.notes} />}
+          </Modal>
+        );
+      })()}
+
+      {showCompanyModal && (
+        <Modal title={editingCompanyId ? "Editar empresa" : "Nueva empresa"} onClose={() => setShowCompanyModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowCompanyModal(false)}>Cancelar</Btn>
+            <Btn primary disabled={companySaving || !companyForm.name.trim()} onClick={saveCompany}>{companySaving ? "Guardando..." : "Guardar"}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Nombre *" full><input style={inp} value={companyForm.name} onChange={e => setCompanyForm(f => ({...f, name:e.target.value}))} placeholder="No Borders Moving LLC" /></Field>
+            <Field label="DOT number"><input style={inp} value={companyForm.dot_number} onChange={e => setCompanyForm(f => ({...f, dot_number:e.target.value}))} placeholder="1234567" /></Field>
+            <Field label="MC number"><input style={inp} value={companyForm.mc_number} onChange={e => setCompanyForm(f => ({...f, mc_number:e.target.value}))} placeholder="MC-123456" /></Field>
+            <Field label="EIN"><input style={inp} value={companyForm.ein} onChange={e => setCompanyForm(f => ({...f, ein:e.target.value}))} placeholder="12-3456789" /></Field>
+            <Field label="State"><input style={inp} list="states-list" maxLength={2} value={companyForm.state} onChange={e => setCompanyForm(f => ({...f, state: e.target.value.toUpperCase().slice(0,2)}))} placeholder="NJ" /></Field>
+            <Field label="Teléfono"><input style={inp} value={companyForm.phone} onChange={e => setCompanyForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
+            <Field label="Email"><input style={inp} value={companyForm.email} onChange={e => setCompanyForm(f => ({...f, email:e.target.value}))} placeholder="legal@empresa.com" /></Field>
+            <Field label="Dirección" full><input style={inp} value={companyForm.address} onChange={e => setCompanyForm(f => ({...f, address:e.target.value}))} placeholder="Dirección" /></Field>
+            <Field label="Estado">
+              <select style={inp} value={companyForm.active ? "yes" : "no"} onChange={e => setCompanyForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Activa</option><option value="no">Inactiva</option></select>
+            </Field>
+            <Field label="Notas" full><input style={inp} value={companyForm.notes} onChange={e => setCompanyForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {showDocModal && (() => {
+        const entityList = docForm.entity_type === "company" ? companies.map(c => ({ id:c.id, name:c.name }))
+          : docForm.entity_type === "truck" ? trucksList.map(t => ({ id:t.id, name:t.name }))
+          : driversList.map(d => ({ id:d.id, name:d.name }));
+        const typeKeys = [...new Set([...(DOC_GRID[docForm.entity_type] || []), ...Object.keys(DOC_TYPE_LABELS)])];
+        const setF = (fields) => setDocForm(f => ({ ...f, ...fields }));
+        const st = docStatus(docForm);
+        return (
+          <Modal title={editingDocId ? "Editar documento" : "Nuevo documento"} onClose={() => setShowDocModal(false)}
+            footer={<>
+              <Btn onClick={() => setShowDocModal(false)}>Cancelar</Btn>
+              <Btn primary disabled={docSaving || !docForm.entity_id} onClick={saveDoc}>{docSaving ? "Guardando..." : "Guardar"}</Btn>
+            </>}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <Field label="Tipo de entidad">
+                <select style={inp} value={docForm.entity_type} onChange={e => setF({ entity_type:e.target.value, entity_id:"", document_type:(DOC_GRID[e.target.value] || ["other"])[0] })}>
+                  <option value="company">Empresa</option><option value="truck">Camión</option><option value="driver">Driver</option>
+                </select>
+              </Field>
+              <Field label="Entidad *">
+                <select style={{ ...inp, borderColor: docForm.entity_id ? "#e5e5e5" : "#fca5a5" }} value={docForm.entity_id} onChange={e => setF({ entity_id:e.target.value })}>
+                  <option value="">— Seleccionar —</option>
+                  {entityList.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Tipo de documento">
+                <select style={inp} value={docForm.document_type} onChange={e => setF({ document_type:e.target.value, document_name: docForm.document_name || docTypeLabel(e.target.value) })}>
+                  {typeKeys.map(k => <option key={k} value={k}>{DOC_TYPE_LABELS[k] || k}</option>)}
+                </select>
+              </Field>
+              <Field label="Nombre del documento"><input style={inp} value={docForm.document_name} onChange={e => setF({ document_name:e.target.value })} placeholder="ej: Cargo insurance" /></Field>
+              <Field label="N° / póliza / certificado"><input style={inp} value={docForm.document_number} onChange={e => setF({ document_number:e.target.value })} placeholder="N°" /></Field>
+              <Field label="Emisor"><input style={inp} value={docForm.issuer} onChange={e => setF({ issuer:e.target.value })} placeholder="Aseguradora / agencia" /></Field>
+              <Field label="Fecha de emisión"><input style={inp} type="date" value={docForm.issue_date} onChange={e => setF({ issue_date:e.target.value })} /></Field>
+              <Field label="Fecha de vencimiento"><input style={inp} type="date" value={docForm.expiry_date} onChange={e => setF({ expiry_date:e.target.value })} /></Field>
+              <Field label="Notas" full><input style={inp} value={docForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10, fontSize:12.5 }}>
+              <span style={{ color:"#888" }}>Estado:</span><ComplianceBadge status={st} />
+            </div>
+            <SectionLabel>Archivo (foto o PDF)</SectionLabel>
+            <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) uploadComplianceDoc(f); }}
+              style={{ border:"2px dashed #ddd", borderRadius:10, padding:"16px", textAlign:"center", background:"#fafafa", fontSize:12.5, color:"#888" }}>
+              {compDocUploading ? "Subiendo…" : (
+                <>
+                  Arrastrá un archivo acá o{" "}
+                  <label style={{ color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>
+                    elegí uno
+                    <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) uploadComplianceDoc(f); e.target.value = ""; }} />
+                  </label>
+                  {docForm.document_url && <div style={{ marginTop:8 }}><a href={docForm.document_url} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E" }}>📎 Archivo cargado — ver</a></div>}
+                </>
+              )}
+            </div>
           </Modal>
         );
       })()}
