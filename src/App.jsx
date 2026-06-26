@@ -43,7 +43,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
-const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -280,7 +280,9 @@ const CRM_V3_SQL = `alter table public.storage_jobs
   add column if not exists carrier_notes text,
   add column if not exists client_phone text,
   add column if not exists client_email text,
-  add column if not exists driver_ids bigint[];
+  add column if not exists driver_ids bigint[],
+  add column if not exists pickup_date_from date,
+  add column if not exists pickup_date_to date;
 
 alter table public.storages add column if not exists payment_due_date date;
 
@@ -1099,7 +1101,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       const { error: dErr } = await supabase.from("drivers").select("id").limit(1);
-      const { error: rErr } = await supabase.from("storage_jobs").select("rep").limit(1);
+      const { error: rErr } = await supabase.from("storage_jobs").select("rep, pickup_date_from").limit(1);
       if (cancelled) return;
       if (!dErr && !rErr) { loadDrivers(); return; }
       let created = false;
@@ -1302,7 +1304,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -1403,12 +1405,12 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     let arr = [...map.values()];
     const td = today();
-    if (dispatchFilter === "pickups_today") arr = arr.filter(g => g.pickup_date === td);
+    if (dispatchFilter === "pickups_today") arr = arr.filter(g => { const f = g.pickup_date_from || g.pickup_date; return f && f <= td && td <= (g.pickup_date_to || f); });
     else if (dispatchFilter === "deliveries_today") arr = arr.filter(g => g.delivery_date === td);
     else if (dispatchFilter === "in_storage") arr = arr.filter(g => (g.status || "scheduled") === "in_storage");
     else if (dispatchFilter === "on_hold") arr = arr.filter(g => (g.status || "scheduled") === "on_hold");
@@ -1421,16 +1423,23 @@ export default function App() {
     return arr;
   }, [jobs, storageById, search, driverFilter, dispatchFilter]);
 
-  // Calendar: pickups (jobs with a pickup_date) grouped by job, indexed by date.
+  // Calendar: pickups grouped by job and indexed by date. A job with a date range
+  // (pickup_date_from..pickup_date_to) is shown spanning every day in that range.
   const pickupEvents = useMemo(() => {
     const map = new Map();
     const byDate = {};
     for (const j of jobs) {
-      if (!j.pickup_date) continue;
+      const from = j.pickup_date_from || j.pickup_date;
+      if (!from) continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, pickup_date:j.pickup_date, pickup_state:j.pickup_state, delivery_state:j.delivery_state });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, pickup_date:j.pickup_date, pickup_date_from:from, pickup_date_to:(j.pickup_date_to || from), pickup_state:j.pickup_state, delivery_state:j.delivery_state });
     }
-    for (const g of map.values()) { (byDate[g.pickup_date] = byDate[g.pickup_date] || []).push(g); }
+    for (const g of map.values()) {
+      let d = g.pickup_date_from;
+      const end = (g.pickup_date_to >= g.pickup_date_from) ? g.pickup_date_to : g.pickup_date_from;
+      let guard = 0;
+      while (d <= end && guard < 400) { (byDate[d] = byDate[d] || []).push(g); d = addDaysStr(d, 1); guard++; }
+    }
     return byDate;
   }, [jobs]);
 
@@ -1444,7 +1453,7 @@ export default function App() {
       if (j.date_out || j.status === "cancelled") continue;
       const k = jobKey(j);
       active.add(k);
-      if (j.pickup_date === td) pickups.add(k);
+      { const f = j.pickup_date_from || j.pickup_date; if (f && f <= td && td <= (j.pickup_date_to || f)) pickups.add(k); }
       if (j.delivery_date === td) deliveries.add(k);
       if (j.status === "in_storage") inStorage.add(k);
       if (!seen.has(k)) {
@@ -1546,7 +1555,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -1569,7 +1578,7 @@ export default function App() {
 
   function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
   function openAddJobWarehouse(name) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, warehouses: [name] }); setJobErr(null); setShowAddJob(true); }
-  function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr }); setJobErr(null); setShowAddJob(true); }
+  function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr, pickup_date_from: dateStr }); setJobErr(null); setShowAddJob(true); }
   function openEditJob(jd) {
     setEditingJobKey(jd.key);
     setJobForm({
@@ -1584,7 +1593,7 @@ export default function App() {
       extra_stops: jd.extra_stops || "", price_per_cf: jd.price_per_cf ?? "", fuel_surcharge_pct: jd.fuel_surcharge_pct ?? "", estimate: jd.estimate ?? "", deposit: jd.deposit ?? "",
       carrier_notes: jd.carrier_notes || "",
       pickup_balance: jd.pickup_balance ?? "", delivery_balance: jd.delivery_balance ?? "",
-      pickup_date: jd.pickup_date || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
+      pickup_date: jd.pickup_date || "", pickup_date_from: jd.pickup_date_from || jd.pickup_date || "", pickup_date_to: jd.pickup_date_to || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
       delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "",
       billing_active: !!jd.billing_active, client_monthly_rate: jd.client_monthly_rate ?? "", first_month_free: !!jd.first_month_free, billing_start_date: jd.billing_start_date || "",
       notes: jd.notes || "",
@@ -1598,7 +1607,7 @@ export default function App() {
     setJobForm(f => ({ ...f, warehouses: f.warehouses.includes(name) ? f.warehouses.filter(x => x !== name) : [...f.warehouses, name] }));
   }
   async function saveJob() {
-    if (!jobForm.storage_ids.length && !jobForm.warehouses.length) { setJobErr("Elegí dónde está guardado (unidad o warehouse)."); return; }
+    // Storage is optional — a job can be saved with no unit/warehouse (storage_id null).
     if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Completá al menos job, cliente o driver."); return; }
     setJobSaving(true); setJobErr(null);
     const fields = {
@@ -1618,7 +1627,8 @@ export default function App() {
     if (!jobColsMissing) {
       fields.job_type = jobForm.job_type || null;
       fields.status = jobForm.status || "scheduled";
-      fields.pickup_date = jobForm.pickup_date || null;
+      // Keep the legacy single pickup_date in sync with the range's start.
+      fields.pickup_date = jobForm.pickup_date_from || jobForm.pickup_date || null;
       fields.pickup_address = jobForm.pickup_address || null;
       fields.pickup_city = jobForm.pickup_city || null;
       fields.pickup_state = jobForm.pickup_state || null;
@@ -1649,6 +1659,8 @@ export default function App() {
       fields.fuel_surcharge_pct = jobForm.fuel_surcharge_pct !== "" ? Number(jobForm.fuel_surcharge_pct) : null;
       fields.estimate = jobForm.estimate !== "" ? Number(jobForm.estimate) : null;
       fields.deposit = jobForm.deposit !== "" ? Number(jobForm.deposit) : null;
+      fields.pickup_date_from = jobForm.pickup_date_from || null;
+      fields.pickup_date_to = jobForm.pickup_date_to || null;
       const ids = Array.isArray(jobForm.driver_ids) ? jobForm.driver_ids.map(Number) : [];
       fields.driver_ids = ids;
       // Mirror driver names into the legacy text field for display/search/back-compat.
@@ -1656,33 +1668,49 @@ export default function App() {
       if (names.length) fields.driver = names.join(", ");
     }
 
+    const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
     if (editingJobKey) {
-      // Update job-level fields on all existing parts, then reconcile locations.
       const current = jobs.filter(j => jobKey(j) === editingJobKey);
-      const desiredUnits = new Set(jobForm.storage_ids);
-      const desiredWhs = new Set(jobForm.warehouses);
-      const toDelete = [], keptUnits = new Set(), keptWhs = new Set();
-      for (const p of current) {
-        if (p.storage_id) { desiredUnits.has(p.storage_id) ? keptUnits.add(p.storage_id) : toDelete.push(p.id); }
-        else if (p.warehouse) { desiredWhs.has(p.warehouse) ? keptWhs.add(p.warehouse) : toDelete.push(p.id); }
-      }
       const created = { ...fields, created_by: userEmail };
-      const newRows = [
-        ...jobForm.storage_ids.filter(id => !keptUnits.has(id)).map(sid => ({ ...created, storage_id: sid, warehouse: null })),
-        ...jobForm.warehouses.filter(w => !keptWhs.has(w)).map(w => ({ ...created, storage_id: null, warehouse: w })),
-      ];
       let error = null;
+      // Update job-level fields on every existing part first.
       if (current.length) ({ error } = await supabase.from("storage_jobs").update({ ...fields, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", current.map(p => p.id)));
-      if (!error && toDelete.length) ({ error } = await supabase.from("storage_jobs").delete().in("id", toDelete));
-      if (!error && newRows.length) ({ error } = await supabase.from("storage_jobs").insert(newRows));
+      if (!error) {
+        if (!hasLoc) {
+          // No storage selected: collapse the job to a single unassigned row.
+          if (current.length) {
+            await supabase.from("storage_jobs").update({ storage_id: null, warehouse: null }).eq("id", current[0].id);
+            const rest = current.slice(1).map(p => p.id);
+            if (rest.length) ({ error } = await supabase.from("storage_jobs").delete().in("id", rest));
+          } else {
+            ({ error } = await supabase.from("storage_jobs").insert([{ ...created, storage_id: null, warehouse: null }]));
+          }
+        } else {
+          // Reconcile selected units/warehouses against existing parts.
+          const desiredUnits = new Set(jobForm.storage_ids);
+          const desiredWhs = new Set(jobForm.warehouses);
+          const toDelete = [], keptUnits = new Set(), keptWhs = new Set();
+          for (const p of current) {
+            if (p.storage_id) { desiredUnits.has(p.storage_id) ? keptUnits.add(p.storage_id) : toDelete.push(p.id); }
+            else if (p.warehouse) { desiredWhs.has(p.warehouse) ? keptWhs.add(p.warehouse) : toDelete.push(p.id); }
+            else toDelete.push(p.id); // drop a prior unassigned placeholder now that real locations exist
+          }
+          const newRows = [
+            ...jobForm.storage_ids.filter(id => !keptUnits.has(id)).map(sid => ({ ...created, storage_id: sid, warehouse: null })),
+            ...jobForm.warehouses.filter(w => !keptWhs.has(w)).map(w => ({ ...created, storage_id: null, warehouse: w })),
+          ];
+          if (toDelete.length) ({ error } = await supabase.from("storage_jobs").delete().in("id", toDelete));
+          if (!error && newRows.length) ({ error } = await supabase.from("storage_jobs").insert(newRows));
+        }
+      }
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
     } else {
       const created = { ...fields, created_by: userEmail };
-      const rows = [
+      const rows = hasLoc ? [
         ...jobForm.storage_ids.map(sid => ({ ...created, storage_id: sid, warehouse: null })),
         ...jobForm.warehouses.map(w => ({ ...created, storage_id: null, warehouse: w })),
-      ];
+      ] : [{ ...created, storage_id: null, warehouse: null }];
       const { error } = await supabase.from("storage_jobs").insert(rows);
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
@@ -2064,7 +2092,7 @@ export default function App() {
                       <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
                       <td style={{ padding:"12px" }}><FaddCell group={g} onSet={setJobFadd} /></td>
                       <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
-                        <div style={{ fontWeight:600 }}>{g.pickup_date || "—"}</div>
+                        <div style={{ fontWeight:600 }}>{(() => { const f = g.pickup_date_from || g.pickup_date; if (!f) return "—"; const t = g.pickup_date_to; return t && t !== f ? `${f} → ${t}` : f; })()}</div>
                         {pickupAddr && <div style={{ color:"#888", marginTop:2 }}>{pickupAddr}</div>}
                       </td>
                       <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
@@ -2978,7 +3006,8 @@ export default function App() {
           <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
           <EditRow label="Color del sticker"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
           <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
-          <EditRow label="Pickup date"><InlineField type="date" value={jobDetail.pickup_date} onSave={set("pickup_date")} /></EditRow>
+          <EditRow label="Pick up from"><InlineField type="date" value={jobDetail.pickup_date_from || jobDetail.pickup_date} onSave={(v) => { updateJobField(P, "pickup_date_from", v); updateJobField(P, "pickup_date", v); }} /></EditRow>
+          <EditRow label="Pick up to (opcional)"><InlineField type="date" value={jobDetail.pickup_date_to} onSave={set("pickup_date_to")} /></EditRow>
           <EditRow label="Pickup address"><InlineField value={jobDetail.pickup_address} onSave={set("pickup_address")} /></EditRow>
           <EditRow label="Pickup city"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
           <EditRow label="Pickup estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
@@ -3147,8 +3176,15 @@ export default function App() {
             <Btn onClick={() => setShowAddJob(false)}>Cancelar</Btn>
             <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : (editingJobKey ? "Guardar cambios" : "Guardar job")}</Btn>
           </>}>
-          <Field label={`Dónde se guarda — podés elegir varias${(jobForm.storage_ids.length + jobForm.warehouses.length) ? ` (${jobForm.storage_ids.length + jobForm.warehouses.length})` : ""}`} full>
-            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:200, overflowY:"auto", background:"#fff" }}>
+          <Field label={`Dónde se guarda — opcional, podés elegir varias${(jobForm.storage_ids.length + jobForm.warehouses.length) ? ` (${jobForm.storage_ids.length + jobForm.warehouses.length})` : ""}`} full>
+            <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:220, overflowY:"auto", background:"#fff" }}>
+              {(() => { const none = jobForm.storage_ids.length === 0 && jobForm.warehouses.length === 0; return (
+                <label onClick={() => setJobForm(f => ({ ...f, storage_ids: [], warehouses: [] }))}
+                  style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: none ? "#f0fdf4" : "#fff" }}>
+                  <input type="radio" readOnly checked={none} />
+                  <span style={{ color: none ? "#111" : "#888" }}>— Sin asignar —</span>
+                </label>
+              ); })()}
               <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Warehouses propios</div>
               {WAREHOUSES.map(w => {
                 const checked = jobForm.warehouses.includes(w);
@@ -3200,7 +3236,8 @@ export default function App() {
 
           <SectionLabel>2 · Pick up</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Pickup date"><input style={inp} type="date" value={jobForm.pickup_date} onChange={e => setJobForm(f => ({...f, pickup_date:e.target.value}))} /></Field>
+            <Field label="Pick up from"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={e => setJobForm(f => ({...f, pickup_date_from:e.target.value}))} /></Field>
+            <Field label="Pick up to (opcional)"><input style={inp} type="date" value={jobForm.pickup_date_to} onChange={e => setJobForm(f => ({...f, pickup_date_to:e.target.value}))} /></Field>
             <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={e => setJobForm(f => ({...f, pickup_address:e.target.value}))} placeholder="Dirección de pickup" /></Field>
             <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={e => setJobForm(f => ({...f, pickup_city:e.target.value}))} placeholder="Ciudad" /></Field>
             <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={e => setJobForm(f => ({...f, pickup_state:e.target.value.toUpperCase()}))} placeholder="NY" /></Field>
