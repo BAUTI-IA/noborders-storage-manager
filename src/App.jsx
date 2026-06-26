@@ -571,6 +571,13 @@ alter table public.trucks add column if not exists model text;
 alter table public.trucks add column if not exists year integer;
 alter table public.trucks add column if not exists license_plate text;
 alter table public.trucks add column if not exists license_state text;
+-- Live load / GPS: last known position per truck (manual now, Verizon API later).
+alter table public.trucks add column if not exists last_lat numeric;
+alter table public.trucks add column if not exists last_lng numeric;
+alter table public.trucks add column if not exists last_location text;
+alter table public.trucks add column if not exists last_location_at timestamptz;
+alter table public.trucks add column if not exists last_status text;
+alter table public.trucks add column if not exists verizon_vehicle_id text;
 alter table public.trucks enable row level security;
 drop policy if exists "trucks_all" on public.trucks;
 create policy "trucks_all" on public.trucks for all to anon, authenticated using (true) with check (true);
@@ -793,6 +800,60 @@ function UsStorageMap({ stats, selected, onSelect }) {
             : <div style={{ color:"#8fb98f" }}>Sin pagos por vencer</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Live-load map: truck GPS status colors + relative-time helper ──
+const LIVE_STATUS = {
+  moving:  { l:"En movimiento", dot:"#1A8A4E", bg:"#EAF3DE", text:"#3B6D11" },
+  stopped: { l:"Detenido", dot:"#E24B4A", bg:"#FCEBEB", text:"#A32D2D" },
+  unknown: { l:"Sin datos", dot:"#9aa3ad", bg:"#f1f1f1", text:"#888" },
+};
+const liveStatusMeta = (s) => LIVE_STATUS[s] || LIVE_STATUS.unknown;
+function timeAgo(iso) {
+  if (!iso) return "sin actualizar";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "sin actualizar";
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 1) return "recién";
+  if (mins < 60) return `hace ${mins} min`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `hace ${hrs} h`;
+  return `hace ${Math.round(hrs / 24)} d`;
+}
+
+// Verizon-style live map: every truck with a known position plotted on the US map.
+function TruckLiveMap({ trucks, selected, onSelect }) {
+  const wrapRef = useRef();
+  return (
+    <div ref={wrapRef} style={{ position:"relative", background:"#eaf3fb", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
+      <ComposableMap projection="geoAlbersUsa" projectionConfig={{ scale: 1000 }} width={800} height={500} style={{ width:"100%", height:"auto" }}>
+        <Geographies geography={US_GEO_URL}>
+          {({ geographies }) => geographies.map(geo => (
+            <Geography key={geo.rsmKey} geography={geo}
+              style={{
+                default: { fill:"#f3f6e9", stroke:"#cdd8e3", strokeWidth:0.6, outline:"none" },
+                hover:   { fill:"#f3f6e9", stroke:"#cdd8e3", strokeWidth:0.6, outline:"none" },
+                pressed: { fill:"#f3f6e9", stroke:"#cdd8e3", strokeWidth:0.6, outline:"none" },
+              }} />
+          ))}
+        </Geographies>
+        {trucks.map(t => {
+          if (t.last_lat == null || t.last_lng == null) return null;
+          const c = liveStatusMeta(t.last_status);
+          const isSel = selected === t.id;
+          return (
+            <Marker key={t.id} coordinates={[Number(t.last_lng), Number(t.last_lat)]} onClick={() => onSelect(isSel ? null : t.id)}>
+              <g style={{ cursor:"pointer" }}>
+                {isSel && <circle r={11} fill={c.dot} opacity={0.25} />}
+                <circle r={6} fill={c.dot} stroke="#fff" strokeWidth={1.6} />
+                {isSel && <text textAnchor="middle" y={-12} style={{ fontSize:9, fontWeight:700, fill:"#111", paintOrder:"stroke", stroke:"#fff", strokeWidth:2.5 }}>{t.name}</text>}
+              </g>
+            </Marker>
+          );
+        })}
+      </ComposableMap>
     </div>
   );
 }
@@ -1566,9 +1627,17 @@ export default function App() {
   const [calAnchor, setCalAnchor] = useState(today());  // ISO date inside the visible range
   // Trips / Live Load + trucks
   const [tripsMissing, setTripsMissing] = useState(false);
+  const [truckLocMissing, setTruckLocMissing] = useState(false); // live-load location columns not yet in DB
   const [trips, setTrips] = useState([]);
   const [trucksList, setTrucksList] = useState([]);
-  const [tripsView, setTripsView] = useState("active");  // active | all
+  const [tripsView, setTripsView] = useState("active");  // active | all | live
+  // Live-load map: status filter, selected truck, and the "set location" modal.
+  const [liveStatusFilter, setLiveStatusFilter] = useState("all"); // all | moving | stopped
+  const [liveSelTruck, setLiveSelTruck] = useState(null);
+  const [locModal, setLocModal] = useState(null); // truck row | null
+  const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
+  const [locBusy, setLocBusy] = useState(false);
+  const [locErr, setLocErr] = useState(null);
   const [showTripModal, setShowTripModal] = useState(false);
   const [tripForm, setTripForm] = useState(EMPTY_TRIP);
   const [editingTripId, setEditingTripId] = useState(null);
@@ -1889,6 +1958,24 @@ export default function App() {
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled && !created) setTruckColsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, tripsMissing]);
+
+  // Probe / auto-migrate the live-load location columns on trucks.
+  useEffect(() => {
+    if (!session || tripsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("trucks").select("last_lat").limit(1);
+      if (cancelled) return;
+      if (!error) { setTruckLocMissing(false); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.trucks add column if not exists last_lat numeric, add column if not exists last_lng numeric, add column if not exists last_location text, add column if not exists last_location_at timestamptz, add column if not exists last_status text, add column if not exists verizon_vehicle_id text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled) setTruckLocMissing(!created);
     })();
     return () => { cancelled = true; };
   }, [session, tripsMissing]);
@@ -3032,6 +3119,38 @@ export default function App() {
   async function deleteTruck(t) {
     if (!window.confirm(`Eliminar el camión "${t.name}"?`)) return;
     await supabase.from("trucks").delete().eq("id", t.id); loadTrucks();
+  }
+
+  // ── Live-load: set a truck's manual / last-known position ──
+  function openLocModal(t) {
+    setLocErr(null);
+    setLocForm({ query:"", lat: t.last_lat ?? "", lng: t.last_lng ?? "", label: t.last_location || "", status: t.last_status || "stopped" });
+    setLocModal(t);
+  }
+  // Geocode the typed address via the serverless proxy and fill lat/lng/label.
+  async function geocodeLoc() {
+    const q = locForm.query.trim();
+    if (!q) { setLocErr("Escribí una dirección para buscar."); return; }
+    setLocBusy(true); setLocErr(null);
+    try {
+      const r = await fetch("/api/geocode?q=" + encodeURIComponent(q));
+      const data = await r.json();
+      if (!r.ok) { setLocErr(data?.error || "No se pudo geocodificar."); }
+      else setLocForm(f => ({ ...f, lat: data.lat, lng: data.lng, label: data.label }));
+    } catch (e) { setLocErr("No se pudo conectar al geocoder."); }
+    setLocBusy(false);
+  }
+  async function saveLoc() {
+    const lat = parseFloat(locForm.lat), lng = parseFloat(locForm.lng);
+    if (isNaN(lat) || isNaN(lng)) { setLocErr("Faltan las coordenadas (buscá una dirección o cargá lat/lng)."); return; }
+    setLocBusy(true); setLocErr(null);
+    const payload = { last_lat: lat, last_lng: lng, last_location: locForm.label || null, last_status: locForm.status || null, last_location_at: new Date().toISOString() };
+    const { error } = await supabase.from("trucks").update(payload).eq("id", locModal.id);
+    setLocBusy(false);
+    if (error) { setLocErr(error.message); return; }
+    setLocModal(null);
+    showToast(`Ubicación actualizada · ${locModal.name}`);
+    loadTrucks();
   }
 
   // ── Trips CRUD ──
@@ -4348,12 +4467,89 @@ export default function App() {
             </div>
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
-              {[["active","Active trips"],["all","All trips"]].map(([v,l]) => (
+              {[["live","🗺️ Live map"],["active","Active trips"],["all","All trips"]].map(([v,l]) => (
                 <button key={v} onClick={() => setTripsView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: tripsView===v?"#fff":"none", color: tripsView===v?"#111":"#888", fontWeight: tripsView===v?600:400, boxShadow: tripsView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
               ))}
             </div>
 
-            {shown.length === 0 ? (
+            {tripsView === "live" ? (() => {
+              // Driver currently on each truck (from its active trip), for the side list.
+              const driverByTruck = {};
+              for (const tp of trips) { if (TRIP_ACTIVE(tp.status) && tp.truck_id) driverByTruck[tp.truck_id] = driverById[tp.driver_id]?.name; }
+              const located = trucksList.filter(t => t.last_lat != null && t.last_lng != null);
+              const visible = located.filter(t => liveStatusFilter === "all" ? true : (t.last_status || "unknown") === liveStatusFilter);
+              const noLoc = trucksList.filter(t => t.last_lat == null || t.last_lng == null);
+              const moving = located.filter(t => t.last_status === "moving").length;
+              const stopped = located.filter(t => t.last_status === "stopped").length;
+              return (
+                <>
+                  {truckLocMissing && (
+                    <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                      <span>Para guardar ubicaciones de camiones, corré el SQL de configuración actualizado una sola vez en Supabase.</span>
+                      <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+                    </div>
+                  )}
+                  <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 360px) 1fr", gap:14, alignItems:"start" }}>
+                    {/* Verizon-style side list */}
+                    <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", maxHeight:560, display:"flex", flexDirection:"column" }}>
+                      <div style={{ padding:"12px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, flexWrap:"wrap" }}>
+                        {[["all",`Todos (${located.length})`],["moving",`En movimiento (${moving})`],["stopped",`Detenidos (${stopped})`]].map(([v,l]) => (
+                          <button key={v} onClick={() => setLiveStatusFilter(v)} style={{ fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: liveStatusFilter===v?"#111":"#e5e5e5", background: liveStatusFilter===v?"#111":"#fff", color: liveStatusFilter===v?"#fff":"#666", fontWeight: liveStatusFilter===v?600:500 }}>{l}</button>
+                        ))}
+                      </div>
+                      <div style={{ overflowY:"auto" }}>
+                        {trucksList.length === 0 ? (
+                          <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>Sin camiones. Agregalos en la sección Trucks.</div>
+                        ) : visible.length === 0 ? (
+                          <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>Sin camiones con esta condición.</div>
+                        ) : visible.map(t => {
+                          const c = liveStatusMeta(t.last_status);
+                          const isSel = liveSelTruck === t.id;
+                          const dn = driverByTruck[t.id];
+                          return (
+                            <div key={t.id} onClick={() => setLiveSelTruck(isSel ? null : t.id)}
+                              style={{ padding:"11px 14px", borderBottom:"1px solid #f4f4f4", cursor:"pointer", background: isSel ? "#f0f6fc" : "#fff", borderLeft: `3px solid ${isSel ? c.dot : "transparent"}` }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                <span style={{ width:8, height:8, borderRadius:"50%", background:c.dot, flexShrink:0 }} />
+                                <span style={{ fontWeight:700, fontSize:13 }}>🚛 {t.name}</span>
+                                {t.plate && <span style={{ fontSize:11, color:"#aaa", fontFamily:"monospace" }}>{t.plate}</span>}
+                              </div>
+                              <div style={{ display:"flex", alignItems:"center", gap:6, margin:"4px 0 2px" }}>
+                                <span style={{ fontSize:10.5, fontWeight:700, color:c.text, background:c.bg, borderRadius:20, padding:"1px 8px" }}>{c.l}</span>
+                                <span style={{ fontSize:11, color:"#999" }}>{timeAgo(t.last_location_at)}</span>
+                              </div>
+                              {t.last_location && <div style={{ fontSize:11.5, color:"#666", lineHeight:1.4 }}>{t.last_location}</div>}
+                              <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:4 }}>
+                                {dn && <span style={{ fontSize:11, color:"#888" }}>🧑‍✈️ {dn}</span>}
+                                <button onClick={(e) => { e.stopPropagation(); openLocModal(t); }} style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", marginLeft:"auto" }}>Actualizar ubicación</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {noLoc.length > 0 && (
+                          <div style={{ padding:"10px 14px", fontSize:11.5, color:"#bbb", borderTop:"1px solid #f4f4f4" }}>
+                            {noLoc.length} camión(es) sin ubicación cargada{noLoc.length ? ": " : ""}
+                            {noLoc.map((t, i) => (
+                              <span key={t.id}>{i ? ", " : ""}<button onClick={() => openLocModal(t)} style={{ color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:11.5 }}>{t.name}</button></span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {/* Map */}
+                    <div>
+                      <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} />
+                      <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0" }}>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />En movimiento</span>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />Sin datos</span>
+                        <span style={{ marginLeft:"auto", color:"#aaa" }}>Ubicación manual / última conocida · listo para Verizon API</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })() : shown.length === 0 ? (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>{tripsView === "active" ? "Sin trips activos. Creá uno con “+ Trip”." : "Sin trips."}</div>
             ) : tripsView === "active" ? (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))", gap:14 }}>
@@ -6304,6 +6500,38 @@ export default function App() {
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
             </Field>
           </div>
+        </Modal>
+      )}
+
+      {locModal && (
+        <Modal title={`Ubicación · ${locModal.name}`} onClose={() => setLocModal(null)}
+          footer={<>
+            <Btn onClick={() => setLocModal(null)}>Cancelar</Btn>
+            <Btn primary disabled={locBusy} onClick={saveLoc}>{locBusy ? "Guardando..." : "Guardar ubicación"}</Btn>
+          </>}>
+          <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
+            Cargá la ubicación actual del camión por dirección (la buscamos en el mapa) o pegá las coordenadas. Cuando conectemos la API de Verizon, esto se va a actualizar solo.
+          </div>
+          <Field label="Buscar por dirección / ciudad">
+            <div style={{ display:"flex", gap:8 }}>
+              <input style={{ ...inp, flex:1 }} value={locForm.query} onChange={e => setLocForm(f => ({...f, query:e.target.value}))}
+                onKeyDown={e => { if (e.key === "Enter") geocodeLoc(); }} placeholder="ej: Atlanta, GA  ·  5050 N 13th St, Terre Haute, IN" />
+              <Btn onClick={geocodeLoc} disabled={locBusy}>{locBusy ? "..." : "Buscar"}</Btn>
+            </div>
+          </Field>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginTop:10 }}>
+            <Field label="Lat"><input style={inp} value={locForm.lat} onChange={e => setLocForm(f => ({...f, lat:e.target.value}))} placeholder="33.749" /></Field>
+            <Field label="Lng"><input style={inp} value={locForm.lng} onChange={e => setLocForm(f => ({...f, lng:e.target.value}))} placeholder="-84.388" /></Field>
+            <Field label="Estado">
+              <select style={inp} value={locForm.status} onChange={e => setLocForm(f => ({...f, status:e.target.value}))}>
+                <option value="moving">En movimiento</option>
+                <option value="stopped">Detenido</option>
+                <option value="unknown">Sin datos</option>
+              </select>
+            </Field>
+          </div>
+          <Field label="Etiqueta / dirección"><input style={{ ...inp, marginTop:10 }} value={locForm.label} onChange={e => setLocForm(f => ({...f, label:e.target.value}))} placeholder="Dirección o referencia visible en la lista" /></Field>
+          {locErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{locErr}</div>}
         </Modal>
       )}
 
