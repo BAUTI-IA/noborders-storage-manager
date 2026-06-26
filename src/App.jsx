@@ -43,7 +43,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
-const EMPTY_CS = { closing_sheet_number:"", broker_id:"", driver_id:"", load_date:"", status:"open", pads_sent:"", pads_received:"", charge_per_pad:"7", trip_cost:"", labor_charges:"", other_fees:"", other_fees_description:"", notes:"", document_url:"", job_keys:[] };
+const EMPTY_CS = { closing_sheet_number:"", broker_id:"", driver_id:"", load_date:"", status:"open", charge_per_pad:"7", trip_cost:"", labor_charges:"", other_fees:"", other_fees_description:"", notes:"", document_url:"", job_keys:[] };
 const CS_STATUS = {
   open:     { l:"Open", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },
   settled:  { l:"Settled", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
@@ -53,7 +53,28 @@ function CSBadge({ status }) {
   const c = CS_STATUS[status] || CS_STATUS.open;
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
 }
-const PAY_METHODS = [{ v:"cash", l:"Cash" }, { v:"check", l:"Check" }, { v:"zelle", l:"Zelle" }, { v:"venmo", l:"Venmo" }, { v:"mixed", l:"Mixed" }];
+const PAY_METHODS = [
+  { v:"cash", l:"Cash" },
+  { v:"credit_card", l:"Credit card" },
+  { v:"zelle", l:"Zelle" },
+  { v:"venmo", l:"Venmo" },
+  { v:"check", l:"Check" },
+  { v:"money_order", l:"Money order" },
+  { v:"paypal", l:"PayPal" },
+  { v:"cashapp", l:"Cash App" },
+  { v:"wire_transfer", l:"Wire transfer" },
+  { v:"apple_pay", l:"Apple Pay" },
+];
+const payMethodLabel = (v) => v ? (PAY_METHODS.find(p => p.v === v)?.l || v) : "";
+// Reusable payment-method <select>: always blank-default, optional, saves null when blank.
+function PaymentMethodSelect({ value, onChange, style }) {
+  return (
+    <select style={style} value={value || ""} onChange={e => onChange(e.target.value || null)}>
+      <option value="">— Select payment method —</option>
+      {PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
+    </select>
+  );
+}
 const numv = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
 // Collection status for a BOL job: complete / partial / pending.
 function collectionStatus(j) {
@@ -62,25 +83,30 @@ function collectionStatus(j) {
   if (col > 0) return { key:"partial", l:"Parcial", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" };
   return { key:"pending", l:"Pendiente", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" };
 }
+// Missing pads for a single job (received minus returned, floored at 0).
+const jobPadsMissing = (j) => Math.max(0, numv(j.pads_received) - numv(j.pads_returned));
 // All settlement math for a closing sheet given its (deduped-by-job) job rows.
+// Pads are now tallied per job (received/returned), not from the sheet header.
 function sheetCalc(sheet, jobsIn) {
-  let carrierFee = 0, bolBalance = 0, bolCollected = 0, totalCf = 0;
+  let carrierFee = 0, bolBalance = 0, bolCollected = 0, totalCf = 0, padsSent = 0, padsReturned = 0, padsMissing = 0;
   for (const j of jobsIn) {
     const cf = parseCf(j.volume);
     totalCf += cf;
     carrierFee += cf * numv(j.carrier_rate_per_cf);
     bolBalance += numv(j.bol_balance);
     bolCollected += numv(j.bol_collected);
+    padsSent += numv(j.pads_received);
+    padsReturned += numv(j.pads_returned);
+    padsMissing += jobPadsMissing(j);
   }
-  const padsMissing = Math.max(0, numv(sheet?.pads_sent) - numv(sheet?.pads_received));
   const padsCharge = padsMissing * (sheet?.charge_per_pad != null ? numv(sheet.charge_per_pad) : 7);
   const deductions = numv(sheet?.trip_cost) + numv(sheet?.labor_charges) + numv(sheet?.other_fees) + padsCharge;
   const netCarrier = carrierFee - deductions;       // what the broker owes us
   const pending = Math.max(0, bolBalance - bolCollected);
   const net = netCarrier - bolCollected;            // >0 broker owes us, <0 we owe broker
-  return { carrierFee, bolBalance, bolCollected, totalCf, padsMissing, padsCharge, deductions, netCarrier, pending, net, jobCount: jobsIn.length };
+  return { carrierFee, bolBalance, bolCollected, totalCf, padsSent, padsReturned, padsMissing, padsCharge, deductions, netCarrier, pending, net, jobCount: jobsIn.length };
 }
-const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -374,7 +400,9 @@ alter table public.storage_jobs
   add column if not exists bol_collected numeric default 0,
   add column if not exists bol_payment_method text,
   add column if not exists bol_payment_notes text,
-  add column if not exists bol_collected_date date;
+  add column if not exists bol_collected_date date,
+  add column if not exists pads_received integer default 0,
+  add column if not exists pads_returned integer default 0;
 
 insert into storage.buckets (id, name, public)
   values ('closing-sheet-docs', 'closing-sheet-docs', true)
@@ -1271,7 +1299,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       const { error: tErr } = await supabase.from("closing_sheets").select("id").limit(1);
-      const { error: jErr } = await supabase.from("storage_jobs").select("bol_balance").limit(1);
+      const { error: jErr } = await supabase.from("storage_jobs").select("bol_balance, pads_received").limit(1);
       if (cancelled) return;
       if (!tErr && !jErr) { loadClosingSheets(); return; }
       let created = false;
@@ -1474,7 +1502,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     const arr = [...map.values()];
@@ -1576,7 +1604,7 @@ export default function App() {
     const map = new Map();
     for (const p of parts) {
       const key = jobKey(p);
-      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
+      if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
     let arr = [...map.values()];
@@ -1769,7 +1797,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -1810,7 +1838,7 @@ export default function App() {
       pickup_date: jd.pickup_date || "", pickup_date_from: jd.pickup_date_from || jd.pickup_date || "", pickup_date_to: jd.pickup_date_to || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
       delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "",
       billing_active: !!jd.billing_active, client_monthly_rate: jd.client_monthly_rate ?? "", first_month_free: !!jd.first_month_free, billing_start_date: jd.billing_start_date || "",
-      closing_sheet_id: jd.closing_sheet_id ?? "", carrier_rate_per_cf: jd.carrier_rate_per_cf ?? "", bol_balance: jd.bol_balance ?? "", bol_collected: jd.bol_collected ?? "", bol_payment_method: jd.bol_payment_method || "", bol_payment_notes: jd.bol_payment_notes || "", bol_collected_date: jd.bol_collected_date || "",
+      closing_sheet_id: jd.closing_sheet_id ?? "", carrier_rate_per_cf: jd.carrier_rate_per_cf ?? "", bol_balance: jd.bol_balance ?? "", bol_collected: jd.bol_collected ?? "", bol_payment_method: jd.bol_payment_method || "", bol_payment_notes: jd.bol_payment_notes || "", bol_collected_date: jd.bol_collected_date || "", pads_received: jd.pads_received ?? "", pads_returned: jd.pads_returned ?? "",
       notes: jd.notes || "",
     });
     setJobErr(null); setJobDetailKey(null); setShowAddJob(true);
@@ -1898,6 +1926,8 @@ export default function App() {
       fields.bol_payment_method = jobForm.bol_payment_method || null;
       fields.bol_payment_notes = jobForm.bol_payment_notes || null;
       fields.bol_collected_date = jobForm.bol_collected_date || null;
+      fields.pads_received = jobForm.pads_received !== "" ? parseInt(jobForm.pads_received) : 0;
+      fields.pads_returned = jobForm.pads_returned !== "" ? parseInt(jobForm.pads_returned) : 0;
     }
 
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
@@ -2024,7 +2054,7 @@ export default function App() {
     setCsForm({
       closing_sheet_number: s.closing_sheet_number || "", broker_id: s.broker_id || "", driver_id: s.driver_id || "",
       load_date: s.load_date || "", status: s.status || "open",
-      pads_sent: s.pads_sent ?? "", pads_received: s.pads_received ?? "", charge_per_pad: s.charge_per_pad ?? "7",
+      charge_per_pad: s.charge_per_pad ?? "7",
       trip_cost: s.trip_cost ?? "", labor_charges: s.labor_charges ?? "", other_fees: s.other_fees ?? "", other_fees_description: s.other_fees_description || "",
       notes: s.notes || "", document_url: s.document_url || "", job_keys: assigned,
     });
@@ -2041,8 +2071,6 @@ export default function App() {
       driver_id: csForm.driver_id ? Number(csForm.driver_id) : null,
       load_date: csForm.load_date || null,
       status: csForm.status || "open",
-      pads_sent: csForm.pads_sent !== "" ? parseInt(csForm.pads_sent) : 0,
-      pads_received: csForm.pads_received !== "" ? parseInt(csForm.pads_received) : 0,
       charge_per_pad: csForm.charge_per_pad !== "" ? Number(csForm.charge_per_pad) : 7,
       trip_cost: csForm.trip_cost !== "" ? Number(csForm.trip_cost) : 0,
       labor_charges: csForm.labor_charges !== "" ? Number(csForm.labor_charges) : 0,
@@ -2099,17 +2127,8 @@ export default function App() {
     if (!payModal) return;
     const ids = jobs.filter(j => jobKey(j) === payModal.jobKey).map(j => j.id);
     if (!ids.length) { setPayModal(null); return; }
-    let amount, method, notes;
-    if (payModal.method === "mixed") {
-      const entries = (payModal.entries || []).filter(e => e.amount !== "");
-      amount = entries.reduce((s, e) => s + numv(e.amount), 0);
-      method = "mixed";
-      notes = entries.map(e => `${PAY_METHODS.find(m=>m.v===e.method)?.l || e.method}: $${numv(e.amount).toLocaleString()}`).join(" + ") + (payModal.notes ? ` · ${payModal.notes}` : "");
-    } else {
-      amount = numv(payModal.amount); method = payModal.method; notes = payModal.notes || null;
-    }
     await supabase.from("storage_jobs").update({
-      bol_collected: amount, bol_payment_method: method, bol_payment_notes: notes || null,
+      bol_collected: numv(payModal.amount), bol_payment_method: payModal.method || null, bol_payment_notes: payModal.notes || null,
       bol_collected_date: payModal.date || today(), updated_by: userEmail, updated_at: new Date().toISOString(),
     }).in("id", ids);
     setPayModal(null);
@@ -2856,14 +2875,14 @@ export default function App() {
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                   <thead>
                     <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Cliente","From → To","CF","Rate/CF","Carrier fee","BOL balance","Cobrado","Método","Cobro","Acciones"].map((h,i) => (
+                      {["Job #","Cliente","From → To","CF","Pads","Rate/CF","Carrier fee","BOL balance","Cobrado","Método","Cobro","Acciones"].map((h,i) => (
                         <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {jobsIn.length === 0 ? (
-                      <tr><td colSpan={11} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin jobs asignados. Usá “Editar” para agregar jobs.</td></tr>
+                      <tr><td colSpan={12} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin jobs asignados. Usá “Editar” para agregar jobs.</td></tr>
                     ) : jobsIn.map(j => {
                       const k = jobKey(j);
                       const cs = collectionStatus(j);
@@ -2875,13 +2894,14 @@ export default function App() {
                           <td style={{ padding:"10px 12px" }}>{j.customer || "—"}</td>
                           <td style={{ padding:"10px 12px", fontSize:12, color:"#555" }}>{route || "—"}</td>
                           <td style={{ padding:"10px 12px" }}><input defaultValue={parseCf(j.volume) || ""} onBlur={e => { if (e.target.value !== String(parseCf(j.volume))) updateJobBol(k, "volume", e.target.value); }} style={{ ...inp, width:64, padding:"5px 7px" }} /></td>
+                          <td style={{ padding:"10px 12px", fontSize:12, whiteSpace:"nowrap" }}>{numv(j.pads_received)} rec{jobPadsMissing(j) > 0 && <span style={{ color:"#A32D2D", fontWeight:700 }}> · {jobPadsMissing(j)} falt</span>}</td>
                           <td style={{ padding:"10px 12px" }}><input defaultValue={j.carrier_rate_per_cf ?? ""} onBlur={e => { if ((e.target.value||"") !== String(j.carrier_rate_per_cf ?? "")) updateJobBol(k, "carrier_rate_per_cf", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={{ ...inp, width:64, padding:"5px 7px" }} /></td>
                           <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600 }}>${Math.round(fee).toLocaleString()}</td>
                           <td style={{ padding:"10px 12px" }}><input defaultValue={j.bol_balance ?? ""} onBlur={e => { if ((e.target.value||"") !== String(j.bol_balance ?? "")) updateJobBol(k, "bol_balance", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={{ ...inp, width:72, padding:"5px 7px" }} /></td>
                           <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600, color:"#1A8A4E" }}>{money(j.bol_collected) || "$0"}</td>
                           <td style={{ padding:"10px 12px", fontSize:12 }}>{j.bol_payment_method ? (PAY_METHODS.find(p=>p.v===j.bol_payment_method)?.l || j.bol_payment_method) : "—"}</td>
                           <td style={{ padding:"10px 12px" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span></td>
-                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><Btn onClick={() => setPayModal({ jobKey:k, amount: j.bol_collected ?? "", method: j.bol_payment_method || "cash", date: j.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"4px 9px", fontSize:11 }}>Record payment</Btn></td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><Btn onClick={() => setPayModal({ jobKey:k, amount: j.bol_collected ?? "", method: j.bol_payment_method || "", date: j.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"4px 9px", fontSize:11 }}>Record payment</Btn></td>
                         </tr>
                       );
                     })}
@@ -2893,12 +2913,29 @@ export default function App() {
             {/* Pads + Deductions + Settlement */}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Pads</div>
-                <div className="r" style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Enviados</span><b>{numv(s.pads_sent)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Recibidos</span><b>{numv(s.pads_received)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Faltantes</span><b style={{ color: c.padsMissing>0?"#C2410C":"#111" }}>{c.padsMissing}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Cargo por pad</span><b>{m(s.charge_per_pad != null ? s.charge_per_pad : 7)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total pads charge</span><b>{m(c.padsCharge)}</b></div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Pads (por job)</div>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                  <thead><tr style={{ color:"#aaa", fontSize:10, textTransform:"uppercase" }}>
+                    <th style={{ textAlign:"left", padding:"3px 4px" }}>Job</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Recib.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Devuel.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Falt.</th>
+                  </tr></thead>
+                  <tbody>
+                    {jobsIn.map(j => { const miss = jobPadsMissing(j); return (
+                      <tr key={j.id} style={{ borderTop:"1px solid #f4f4f4" }}>
+                        <td style={{ padding:"3px 4px", fontFamily:"monospace" }}>{j.job_number || "-"}</td>
+                        <td style={{ padding:"3px 4px", textAlign:"right" }}>{numv(j.pads_received)}</td>
+                        <td style={{ padding:"3px 4px", textAlign:"right" }}>{numv(j.pads_returned)}</td>
+                        <td style={{ padding:"3px 4px", textAlign:"right", color: miss>0?"#C2410C":"#111", fontWeight: miss>0?700:400 }}>{miss}</td>
+                      </tr>
+                    ); })}
+                  </tbody>
+                </table>
+                <div style={{ borderTop:"1px solid #eee", marginTop:8, paddingTop:8 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total enviados</span><b>{c.padsSent}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total devueltos</span><b>{c.padsReturned}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total faltantes</span><b style={{ color: c.padsMissing>0?"#C2410C":"#111" }}>{c.padsMissing}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Cargo por pad</span><b>{m(s.charge_per_pad != null ? s.charge_per_pad : 7)}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total pads charge</span><b>{m(c.padsCharge)}</b></div>
+                </div>
               </div>
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
                 <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Deducciones del broker</div>
@@ -3688,7 +3725,7 @@ export default function App() {
                   <span style={{ display:"inline-flex", alignItems:"center", gap:10 }}>
                     <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
                     {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
-                    <Btn onClick={() => setPayModal({ jobKey:jobDetail.key, amount: jobDetail.bol_collected ?? "", method: jobDetail.bol_payment_method || "cash", date: jobDetail.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"3px 9px", fontSize:11 }}>Record payment</Btn>
+                    <Btn onClick={() => setPayModal({ jobKey:jobDetail.key, amount: jobDetail.bol_collected ?? "", method: jobDetail.bol_payment_method || "", date: jobDetail.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"3px 9px", fontSize:11 }}>Record payment</Btn>
                   </span>
                 </EditRow>
               </>); })()}
@@ -3928,6 +3965,17 @@ export default function App() {
               </FormSection>
             );
 
+            const padsMissingForm = Math.max(0, (jobForm.pads_received !== "" ? parseInt(jobForm.pads_received) : 0) - (jobForm.pads_returned !== "" ? parseInt(jobForm.pads_returned) : 0));
+            const pads = (
+              <FormSection title="Pads">
+                <div style={fgrid}>
+                  <Field label="Pads recibidos del broker"><input style={inp} type="number" value={jobForm.pads_received} onChange={u("pads_received")} placeholder="0" /></Field>
+                  <Field label="Pads devueltos (post-delivery)"><input style={inp} type="number" value={jobForm.pads_returned} onChange={u("pads_returned")} placeholder="0" /></Field>
+                  <Field label="Pads faltantes (auto)"><div style={{ ...inp, background:"#fafafa", fontWeight:700, color: padsMissingForm > 0 ? "#A32D2D" : "#111" }}>{padsMissingForm}</div></Field>
+                </div>
+              </FormSection>
+            );
+
             const financialsFull = (
               <FormSection title="Financiero">
                 <div style={fgrid}>
@@ -3959,7 +4007,7 @@ export default function App() {
                     </Field>
                   )}
                   <Field label="BOL cobrado ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={u("bol_collected")} placeholder="0" /></Field>
-                  <Field label="Método de pago"><select style={inp} value={jobForm.bol_payment_method} onChange={u("bol_payment_method")}><option value="">—</option>{PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}</select></Field>
+                  <Field label="Método de pago"><PaymentMethodSelect style={inp} value={jobForm.bol_payment_method} onChange={v => setJobForm(f => ({...f, bol_payment_method: v || ""}))} /></Field>
                   <Field label="Fecha de cobro"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={u("bol_collected_date")} /></Field>
                 </div>
               </FormSection>
@@ -4051,9 +4099,9 @@ export default function App() {
             return (
               <>
                 {basicInfo}
-                {t === "broker_delivery" && <>{delivery}{load}{financialsBroker}{storageBlock}</>}
-                {t === "full" && <>{pickup}{delivery}{load}{financialsFull}{storageBlock}{billingBlock}</>}
-                {t === "direct" && <>{directPickDeliver}{load}{financialsFull}</>}
+                {t === "broker_delivery" && <>{delivery}{load}{pads}{financialsBroker}{storageBlock}</>}
+                {t === "full" && <>{pickup}{delivery}{load}{pads}{financialsFull}{storageBlock}{billingBlock}</>}
+                {t === "direct" && <>{directPickDeliver}{load}{pads}{financialsFull}</>}
               </>
             );
           })()}
@@ -4254,11 +4302,10 @@ export default function App() {
           </div>
 
           <SectionLabel>Pads</SectionLabel>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
-            <Field label="Pads enviados"><input style={inp} type="number" value={csForm.pads_sent} onChange={e => setCsForm(f => ({...f, pads_sent:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Pads recibidos"><input style={inp} type="number" value={csForm.pads_received} onChange={e => setCsForm(f => ({...f, pads_received:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Cargo por pad ($)"><input style={inp} type="number" value={csForm.charge_per_pad} onChange={e => setCsForm(f => ({...f, charge_per_pad:e.target.value}))} placeholder="7" /></Field>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Cargo por pad faltante ($)"><input style={inp} type="number" value={csForm.charge_per_pad} onChange={e => setCsForm(f => ({...f, charge_per_pad:e.target.value}))} placeholder="7" /></Field>
           </div>
+          <div style={{ fontSize:11, color:"#999", marginTop:4 }}>Los pads enviados/devueltos se cargan por job (sección Pads del job) y se suman acá automáticamente.</div>
 
           <SectionLabel>Deducciones del broker</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
@@ -4272,43 +4319,22 @@ export default function App() {
         </Modal>
       )}
 
-      {payModal && (() => {
-        const isMixed = payModal.method === "mixed";
-        const mixedTotal = (payModal.entries || []).reduce((s,e)=>s+numv(e.amount),0);
-        return (
+      {payModal && (
         <Modal title="Registrar cobro (BOL)" onClose={() => setPayModal(null)}
           footer={<>
             <Btn onClick={() => setPayModal(null)}>Cancelar</Btn>
             <Btn primary onClick={savePayment}>Guardar cobro</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Método de pago">
-              <select style={inp} value={payModal.method} onChange={e => setPayModal(p => ({...p, method:e.target.value}))}>
-                {PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
-              </select>
-            </Field>
+            <Field label="Monto cobrado ($)"><input style={inp} type="number" value={payModal.amount} onChange={e => setPayModal(p => ({...p, amount:e.target.value}))} placeholder="0" /></Field>
             <Field label="Fecha de cobro"><input style={inp} type="date" value={payModal.date} onChange={e => setPayModal(p => ({...p, date:e.target.value}))} /></Field>
-            {!isMixed && <Field label="Monto cobrado ($)" full><input style={inp} type="number" value={payModal.amount} onChange={e => setPayModal(p => ({...p, amount:e.target.value}))} placeholder="0" /></Field>}
+            <Field label="Método de pago" full>
+              <PaymentMethodSelect style={inp} value={payModal.method} onChange={v => setPayModal(p => ({...p, method: v || ""}))} />
+            </Field>
+            <Field label="Notas" full><input style={inp} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Notas del cobro (ej: split cash + zelle)" /></Field>
           </div>
-          {isMixed && (
-            <div style={{ marginTop:10 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Entradas (mixed) · total ${mixedTotal.toLocaleString()}</div>
-              {(payModal.entries || []).map((e, i) => (
-                <div key={i} style={{ display:"flex", gap:8, marginBottom:6 }}>
-                  <select style={{ ...inp, flex:1 }} value={e.method} onChange={ev => setPayModal(p => ({...p, entries: p.entries.map((x,xi)=>xi===i?{...x, method:ev.target.value}:x)}))}>
-                    {PAY_METHODS.filter(m=>m.v!=="mixed").map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
-                  </select>
-                  <input style={{ ...inp, width:120 }} type="number" value={e.amount} placeholder="$" onChange={ev => setPayModal(p => ({...p, entries: p.entries.map((x,xi)=>xi===i?{...x, amount:ev.target.value}:x)}))} />
-                  <Btn onClick={() => setPayModal(p => ({...p, entries: p.entries.filter((_,xi)=>xi!==i)}))} style={{ padding:"6px 10px" }}>×</Btn>
-                </div>
-              ))}
-              <Btn onClick={() => setPayModal(p => ({...p, entries:[...(p.entries||[]), { method:"cash", amount:"" }]}))} style={{ padding:"5px 11px", fontSize:12 }}>+ Agregar entrada</Btn>
-            </div>
-          )}
-          <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Notas del cobro" /></Field>
         </Modal>
-        );
-      })()}
+      )}
 
       {(() => {
         // Shared job-list panel for broker / driver / client detail modals.
