@@ -45,7 +45,9 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
-const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true };
+const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
+// "2019 Freightliner Cascadia" subtitle from a truck row.
+const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
 const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[] };
 const TRIP_STATUS = {
   loading:    { l:"Loading", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
@@ -563,6 +565,12 @@ const TRIPS_SQL = `create table if not exists public.trucks (
   created_at timestamptz default now()
 );
 alter table public.trucks add column if not exists capacity_cf numeric;
+alter table public.trucks add column if not exists vin text;
+alter table public.trucks add column if not exists make text;
+alter table public.trucks add column if not exists model text;
+alter table public.trucks add column if not exists year integer;
+alter table public.trucks add column if not exists license_plate text;
+alter table public.trucks add column if not exists license_state text;
 alter table public.trucks enable row level security;
 drop policy if exists "trucks_all" on public.trucks;
 create policy "trucks_all" on public.trucks for all to anon, authenticated using (true) with check (true);
@@ -1570,6 +1578,8 @@ export default function App() {
   const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
   const [editingTruckId, setEditingTruckId] = useState(null);
   const [truckSaving, setTruckSaving] = useState(false);
+  const [truckColsMissing, setTruckColsMissing] = useState(false);   // vehicle-info columns
+  const [truckDetailId, setTruckDetailId] = useState(null);          // truck detail modal
   // Extras & commissions
   const [extrasMissing, setExtrasMissing] = useState(false);
   const [jobExtras, setJobExtras] = useState([]);
@@ -1865,6 +1875,23 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, tripsMissing, loadTrips, loadTrucks]);
+
+  // Probe the truck vehicle-info columns (added after the initial Trucks release).
+  useEffect(() => {
+    if (!session || tripsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("trucks").select("vin").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.trucks add column if not exists vin text, add column if not exists make text, add column if not exists model text, add column if not exists year integer, add column if not exists license_plate text, add column if not exists license_state text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setTruckColsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, tripsMissing]);
 
   // Probe the Extras & Commissions module (job_extras + employees tables).
   useEffect(() => {
@@ -2979,16 +3006,28 @@ export default function App() {
   function openAddTruck() { setEditingTruckId(null); setTruckForm(EMPTY_TRUCK); setShowTruckModal(true); }
   function openEditTruck(t) {
     setEditingTruckId(t.id);
-    setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false });
+    setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false,
+      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "" });
     setShowTruckModal(true);
   }
   async function saveTruck() {
     if (!truckForm.name.trim()) return;
     setTruckSaving(true);
     const payload = { name:truckForm.name.trim(), plate:truckForm.plate||null, capacity_cf: truckForm.capacity_cf !== "" ? Number(truckForm.capacity_cf) : null, notes:truckForm.notes||null, active: !!truckForm.active };
-    if (editingTruckId) await supabase.from("trucks").update(payload).eq("id", editingTruckId);
-    else await supabase.from("trucks").insert([payload]);
-    setTruckSaving(false); setShowTruckModal(false); loadTrucks();
+    if (!truckColsMissing) {
+      payload.year = truckForm.year !== "" ? parseInt(truckForm.year) : null;
+      payload.make = truckForm.make || null;
+      payload.model = truckForm.model || null;
+      payload.vin = truckForm.vin ? truckForm.vin.toUpperCase().slice(0, 17) : null;
+      payload.license_plate = truckForm.license_plate || null;
+      payload.license_state = truckForm.license_state || null;
+    }
+    let error = null;
+    if (editingTruckId) ({ error } = await supabase.from("trucks").update(payload).eq("id", editingTruckId));
+    else ({ error } = await supabase.from("trucks").insert([payload]));
+    setTruckSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowTruckModal(false); loadTrucks();
   }
   async function deleteTruck(t) {
     if (!window.confirm(`Eliminar el camión "${t.name}"?`)) return;
@@ -4211,7 +4250,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Camión","Patente","Capacidad CF","Carga actual","Ocupación","Estado",""].map((h,i) => (
+                  {["Camión","Patente / VIN","Capacidad CF","Carga actual","Ocupación","Estado",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -4226,8 +4265,14 @@ export default function App() {
                   const pct = cap > 0 ? Math.min(100, Math.round((load / cap) * 100)) : null;
                   return (
                     <tr key={tk.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                      <td style={{ padding:"12px", fontWeight:600 }}>{tk.name}</td>
-                      <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12 }}>{tk.plate || "—"}</td>
+                      <td style={{ padding:"12px" }}>
+                        <button onClick={() => setTruckDetailId(tk.id)} style={{ fontWeight:600, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", textAlign:"left" }}>{tk.name}</button>
+                        {truckSubtitle(tk) && <div style={{ fontSize:11, color:"#888", marginTop:2 }}>{truckSubtitle(tk)}</div>}
+                      </td>
+                      <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12 }}>
+                        {[tk.license_plate, tk.license_state].filter(Boolean).join(" ") || tk.plate || "—"}
+                        {tk.vin && <div style={{ fontSize:10, color:"#aaa", marginTop:2 }}>{tk.vin}</div>}
+                      </td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{cap > 0 ? `${cap.toLocaleString()} CF` : "—"}</td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{activeTrip ? `${Math.round(load).toLocaleString()} CF` : "—"}</td>
                       <td style={{ padding:"12px", minWidth:120 }}>{cap > 0 && activeTrip ? <OccupancyBar used={load} total={cap} /> : <span style={{ color:"#bbb" }}>—</span>}</td>
@@ -6241,8 +6286,53 @@ export default function App() {
             </Field>
             <Field label="Notas" full><input style={inp} value={truckForm.notes} onChange={e => setTruckForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
           </div>
+
+          <SectionLabel>Vehicle info</SectionLabel>
+          {truckColsMissing && (
+            <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"8px 11px", marginBottom:10, fontSize:12, color:"#854F0B", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+              <span>Corré el SQL de configuración una vez para guardar estos datos.</span>
+              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:6, padding:"3px 9px", cursor:"pointer", fontSize:11 }}>Ver SQL</button>
+            </div>
+          )}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label="Year"><input style={inp} type="number" value={truckForm.year} onChange={e => setTruckForm(f => ({...f, year:e.target.value}))} placeholder="2019" /></Field>
+            <Field label="Make"><input style={inp} value={truckForm.make} onChange={e => setTruckForm(f => ({...f, make:e.target.value}))} placeholder="Freightliner, International, Volvo…" /></Field>
+            <Field label="Model"><input style={inp} value={truckForm.model} onChange={e => setTruckForm(f => ({...f, model:e.target.value}))} placeholder="Cascadia, LT, VNL…" /></Field>
+            <Field label="VIN"><input style={inp} maxLength={17} value={truckForm.vin} onChange={e => setTruckForm(f => ({...f, vin: e.target.value.toUpperCase().slice(0, 17)}))} placeholder="17 caracteres" /></Field>
+            <Field label="License plate"><input style={inp} value={truckForm.license_plate} onChange={e => setTruckForm(f => ({...f, license_plate:e.target.value}))} placeholder="ABC-1234" /></Field>
+            <Field label="License state">
+              <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
+            </Field>
+          </div>
         </Modal>
       )}
+
+      {truckDetailId && (() => {
+        const tk = trucksList.find(t => t.id === truckDetailId);
+        if (!tk) return null;
+        const sub = truckSubtitle(tk);
+        const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
+        const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
+        const cap = numv(tk.capacity_cf);
+        return (
+          <Modal title={`Camión · ${tk.name}`} onClose={() => setTruckDetailId(null)}
+            footer={<>
+              <Btn onClick={() => { setTruckDetailId(null); openEditTruck(tk); }}>Editar</Btn>
+              <Btn primary onClick={() => setTruckDetailId(null)}>Cerrar</Btn>
+            </>}>
+            {sub && <div style={{ fontSize:13, color:"#666", marginTop:-4, marginBottom:8 }}>{sub}</div>}
+            <DetailRow label="Make / Model" value={[tk.make, tk.model].filter(Boolean).join(" ") || null} />
+            <DetailRow label="Year" value={tk.year || null} />
+            <DetailRow label="VIN" value={tk.vin || null} />
+            <DetailRow label="License plate" value={[tk.license_plate, tk.license_state].filter(Boolean).join(" · ") || null} />
+            <DetailRow label="Patente" value={tk.plate || null} />
+            <DetailRow label="Capacidad" value={cap > 0 ? `${cap.toLocaleString()} CF` : null} />
+            <DetailRow label="Carga actual" value={activeTrip ? `${Math.round(load).toLocaleString()} CF${cap > 0 ? ` · ${Math.min(100, Math.round((load / cap) * 100))}%` : ""}` : "Sin viaje activo"} />
+            <DetailRow label="Estado" value={tk.active !== false ? "Activo" : "Inactivo"} />
+            {tk.notes && <DetailRow label="Notas" value={tk.notes} />}
+          </Modal>
+        );
+      })()}
 
       {showEmpModal && (
         <Modal title="Reps / Empleados" onClose={() => { setShowEmpModal(false); setEmpDetailId(null); }}
