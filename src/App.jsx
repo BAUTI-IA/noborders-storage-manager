@@ -691,6 +691,90 @@ function OccupancyBar({ used, total, height = 8 }) {
   );
 }
 
+// ── US storage map: state centroids (lon/lat) for a self-contained SVG dot map ──
+const US_STATE_GEO = {
+  AL:{n:"Alabama",lon:-86.8,lat:32.8}, AK:{n:"Alaska",lon:-152.0,lat:63.6}, AZ:{n:"Arizona",lon:-111.9,lat:34.3},
+  AR:{n:"Arkansas",lon:-92.4,lat:34.9}, CA:{n:"California",lon:-119.7,lat:37.2}, CO:{n:"Colorado",lon:-105.5,lat:39.0},
+  CT:{n:"Connecticut",lon:-72.7,lat:41.6}, DE:{n:"Delaware",lon:-75.5,lat:39.0}, DC:{n:"Washington DC",lon:-77.0,lat:38.9},
+  FL:{n:"Florida",lon:-81.7,lat:28.6}, GA:{n:"Georgia",lon:-83.4,lat:32.6}, HI:{n:"Hawaii",lon:-157.5,lat:20.3},
+  ID:{n:"Idaho",lon:-114.6,lat:44.4}, IL:{n:"Illinois",lon:-89.2,lat:40.0}, IN:{n:"Indiana",lon:-86.3,lat:39.9},
+  IA:{n:"Iowa",lon:-93.5,lat:42.0}, KS:{n:"Kansas",lon:-98.4,lat:38.5}, KY:{n:"Kentucky",lon:-85.3,lat:37.5},
+  LA:{n:"Louisiana",lon:-91.9,lat:31.0}, ME:{n:"Maine",lon:-69.2,lat:45.4}, MD:{n:"Maryland",lon:-76.8,lat:39.0},
+  MA:{n:"Massachusetts",lon:-71.8,lat:42.3}, MI:{n:"Michigan",lon:-84.5,lat:44.3}, MN:{n:"Minnesota",lon:-94.3,lat:46.3},
+  MS:{n:"Mississippi",lon:-89.7,lat:32.7}, MO:{n:"Missouri",lon:-92.5,lat:38.4}, MT:{n:"Montana",lon:-109.6,lat:47.0},
+  NE:{n:"Nebraska",lon:-99.8,lat:41.5}, NV:{n:"Nevada",lon:-116.6,lat:39.3}, NH:{n:"New Hampshire",lon:-71.6,lat:43.7},
+  NJ:{n:"New Jersey",lon:-74.5,lat:40.2}, NM:{n:"New Mexico",lon:-106.1,lat:34.4}, NY:{n:"New York",lon:-75.5,lat:42.9},
+  NC:{n:"North Carolina",lon:-79.4,lat:35.6}, ND:{n:"North Dakota",lon:-100.3,lat:47.5}, OH:{n:"Ohio",lon:-82.8,lat:40.3},
+  OK:{n:"Oklahoma",lon:-97.5,lat:35.6}, OR:{n:"Oregon",lon:-120.6,lat:43.9}, PA:{n:"Pennsylvania",lon:-77.8,lat:40.9},
+  RI:{n:"Rhode Island",lon:-71.5,lat:41.7}, SC:{n:"South Carolina",lon:-80.9,lat:33.9}, SD:{n:"South Dakota",lon:-100.2,lat:44.4},
+  TN:{n:"Tennessee",lon:-86.3,lat:35.9}, TX:{n:"Texas",lon:-99.3,lat:31.5}, UT:{n:"Utah",lon:-111.7,lat:39.3},
+  VT:{n:"Vermont",lon:-72.7,lat:44.1}, VA:{n:"Virginia",lon:-78.8,lat:37.5}, WA:{n:"Washington",lon:-120.4,lat:47.4},
+  WV:{n:"West Virginia",lon:-80.6,lat:38.6}, WI:{n:"Wisconsin",lon:-89.9,lat:44.6}, WY:{n:"Wyoming",lon:-107.5,lat:43.0},
+};
+const US_MAP_W = 900, US_MAP_H = 560;
+// Equirectangular projection of the lower-48; Alaska/Hawaii get fixed insets.
+function projectState(code) {
+  if (code === "AK") return { x: 70, y: 500 };
+  if (code === "HI") return { x: 165, y: 515 };
+  const s = US_STATE_GEO[code]; if (!s) return null;
+  const x = 20 + (s.lon + 125) / 58.5 * 860;
+  const y = 30 + (49.5 - s.lat) / 25 * 490;
+  return { x, y };
+}
+// Dot color by number of active storages in the state.
+const stateDotColor = (count) => count >= 6 ? "#E24B4A" : count >= 3 ? "#EF9F27" : "#639922";
+
+function UsStorageMap({ stats, selected, onSelect }) {
+  const [hover, setHover] = useState(null);   // state code under cursor
+  const codes = Object.keys(US_STATE_GEO);
+  const hv = hover && stats[hover] ? { code: hover, ...stats[hover], p: projectState(hover) } : null;
+  return (
+    <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"10px 12px 6px", marginBottom:14 }}>
+      <div style={{ position:"relative" }}>
+      <svg viewBox={`0 0 ${US_MAP_W} ${US_MAP_H}`} style={{ width:"100%", height:"auto", display:"block" }}>
+        {/* faint base dot for every state = the silhouette of the US */}
+        {codes.map(c => { const p = projectState(c); if (!p) return null; const has = stats[c]; if (has) return null;
+          return <circle key={c} cx={p.x} cy={p.y} r={3.4} fill="#e7e9ec" />; })}
+        {/* active states: sized + colored dots, clickable */}
+        {codes.filter(c => stats[c]).map(c => {
+          const p = projectState(c); const d = stats[c];
+          const r = 5 + Math.sqrt(d.count) * 3.4;
+          const col = stateDotColor(d.count);
+          const isSel = selected === c;
+          return (
+            <g key={c} style={{ cursor:"pointer" }}
+              onClick={() => onSelect(selected === c ? "" : c)}
+              onMouseEnter={() => setHover(c)} onMouseLeave={() => setHover(h => h === c ? null : h)}>
+              {isSel && <circle cx={p.x} cy={p.y} r={r + 5} fill="none" stroke="#111" strokeWidth={2} />}
+              {d.due > 0 && <circle cx={p.x} cy={p.y} r={r + 3} fill="none" stroke="#E24B4A" strokeWidth={1.5} strokeDasharray="3 2" />}
+              <circle cx={p.x} cy={p.y} r={r} fill={col} fillOpacity={0.82} stroke="#fff" strokeWidth={1.5} />
+              <text x={p.x} y={p.y + 3} textAnchor="middle" fontSize={Math.min(13, r * 1.05)} fontWeight="700" fill="#fff" style={{ pointerEvents:"none" }}>{c}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {/* tooltip — positioned within the SVG box so percentages line up exactly */}
+      {hv && hv.p && (
+        <div style={{ position:"absolute", left:`${(hv.p.x / US_MAP_W) * 100}%`, top:`${(hv.p.y / US_MAP_H) * 100}%`, transform:"translate(-50%, 12px)", background:"#111", color:"#fff", borderRadius:8, padding:"8px 11px", fontSize:11.5, lineHeight:1.5, pointerEvents:"none", whiteSpace:"nowrap", boxShadow:"0 6px 20px rgba(0,0,0,0.25)", zIndex:5 }}>
+          <div style={{ fontWeight:700, marginBottom:2 }}>{US_STATE_GEO[hv.code]?.n || hv.code}</div>
+          <div>{hv.count} storage{hv.count !== 1 ? "s" : ""} activo{hv.count !== 1 ? "s" : ""}</div>
+          <div>{Math.round(hv.cf).toLocaleString()} CF en uso</div>
+          {hv.due > 0 && <div style={{ color:"#FCA5A5", fontWeight:600 }}>⚠ {hv.due} pago{hv.due !== 1 ? "s" : ""} por vencer</div>}
+        </div>
+      )}
+      </div>
+      {/* legend */}
+      <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"4px 4px 2px" }}>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#639922" }} />1–2</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#EF9F27" }} />3–5</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />6+</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", border:"1.5px dashed #E24B4A" }} />pago por vencer</span>
+        <span style={{ marginLeft:"auto", color:"#aaa" }}>Tocá un estado para filtrar la lista</span>
+      </div>
+    </div>
+  );
+}
+
 const BILLING_STATUS = {
   pending: { l:"Pending", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
   overdue: { l:"Overdue", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
@@ -1425,6 +1509,8 @@ export default function App() {
   const [billing, setBilling] = useState([]);
   const [storageTab, setStorageTab] = useState("storage_units");  // storage_units | <warehouse name>
   const [unitsSubTab, setUnitsSubTab] = useState("units");        // units | unit_jobs (inside Storage Units)
+  const [storageView, setStorageView] = useState("list");         // list | map (units sub-tab)
+  const [mapStateFilter, setMapStateFilter] = useState("");       // 2-letter state selected on the map
   const [billingTab, setBillingTab] = useState("all");       // all | pending | overdue | paid
   const [capTarget, setCapTarget] = useState(null);          // { kind, id?, name?, value }
   const [brokers, setBrokers] = useState([]);
@@ -2050,6 +2136,7 @@ export default function App() {
     const q = search.trim().toLowerCase();
     const data = records.filter(r => {
       if (r.space_type === "warehouse") return false;   // warehouses live in their own tab
+      if (mapStateFilter && r.state !== mapStateFilter) return false;  // filtered by a dot on the map
       if (!q) return true;
       const hay = [r.brand, r.state, r.zip, r.address, r.unit, r.gate_code].join(" ").toLowerCase();
       return hay.includes(q);
@@ -2060,7 +2147,23 @@ export default function App() {
       return (b.date_opened || "") > (a.date_opened || "") ? 1 : -1;
     });
     return data;
-  }, [records, search, sortBy]);
+  }, [records, search, sortBy, mapStateFilter]);
+
+  // Active rented storages grouped by state for the US map (count, CF in use, due alerts).
+  const storageStateStats = useMemo(() => {
+    const m = {};
+    for (const r of records) {
+      if (r.space_type === "warehouse") continue;
+      if (sit(r) !== "Open") continue;                 // active = currently occupied
+      if (!r.state || !US_STATE_GEO[r.state]) continue;
+      const st = (m[r.state] = m[r.state] || { count:0, cf:0, due:0 });
+      st.count += 1;
+      st.cf += usedCfByStorage[r.id] || 0;
+      const d = daysUntilDue(r);
+      if (d !== null && d <= 5) st.due += 1;
+    }
+    return m;
+  }, [records, sit, usedCfByStorage]);
 
   const metrics = useMemo(() => {
     const activeParts = jobs.filter(j => !j.date_out);
@@ -4993,6 +5096,31 @@ export default function App() {
               style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: unitsSubTab === t ? "#fff" : "none", color: unitsSubTab === t ? "#111" : "#888", fontWeight: unitsSubTab === t ? 600 : 400, boxShadow: unitsSubTab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
           ))}
         </div>
+      )}
+
+      {/* List / Map view toggle + US map (Unidades sub-tab) */}
+      {page === "storage" && storageTab === "storage_units" && unitsSubTab === "units" && (
+        <>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+              {[["list","📋 Lista"],["map","🗺️ Mapa"]].map(([v,l]) => (
+                <button key={v} onClick={() => setStorageView(v)}
+                  style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: storageView === v ? "#fff" : "none", color: storageView === v ? "#111" : "#888", fontWeight: storageView === v ? 600 : 400, boxShadow: storageView === v ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
+              ))}
+            </div>
+            {mapStateFilter && (
+              <span style={{ display:"inline-flex", alignItems:"center", gap:8, fontSize:12.5, background:"#EEF2FF", color:"#185FA5", borderRadius:20, padding:"5px 12px", fontWeight:600 }}>
+                Filtrando: {US_STATE_GEO[mapStateFilter]?.n || mapStateFilter} ({(storageStateStats[mapStateFilter]?.count) || 0})
+                <button onClick={() => setMapStateFilter("")} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12, padding:0 }}>Quitar filtro</button>
+              </span>
+            )}
+          </div>
+          {storageView === "map" && (
+            Object.keys(storageStateStats).length === 0
+              ? <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"36px", textAlign:"center", color:"#bbb", marginBottom:14 }}>No hay storages activos con estado cargado para mostrar en el mapa.</div>
+              : <UsStorageMap stats={storageStateStats} selected={mapStateFilter} onSelect={setMapStateFilter} />
+          )}
+        </>
       )}
 
       {/* JOBS EN UNIDADES — active jobs stored in rented units, one row per unit */}
