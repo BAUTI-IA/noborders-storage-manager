@@ -1067,6 +1067,29 @@ function nextStatus(g) {
 }
 const money = (v) => (v || v === 0) && !isNaN(Number(v)) ? `$${Number(v).toLocaleString()}` : null;
 
+// ── List pagination: 15 rows per page, prev/next arrows. Filters run over the
+// full set first; only the page slice is rendered. ──
+const PAGE_SIZE = 15;
+function Pager({ page, total, onPage, pageSize = PAGE_SIZE, unit = "registros" }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const cur = Math.min(page, pages - 1);
+  const from = total === 0 ? 0 : cur * pageSize + 1;
+  const to = Math.min(total, (cur + 1) * pageSize);
+  const btn = (disabled) => ({ border:"1px solid #e5e5e5", background: disabled ? "#f7f7f7" : "#fff", color: disabled ? "#ccc" : "#444", borderRadius:7, minWidth:30, height:28, cursor: disabled ? "default" : "pointer", fontSize:15, lineHeight:1, display:"inline-flex", alignItems:"center", justifyContent:"center" });
+  return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
+      <span style={{ fontSize:12, color:"#bbb" }}>{from}–{to} de {total} {unit}</span>
+      {pages > 1 && (
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <button disabled={cur <= 0} onClick={() => onPage(cur - 1)} style={btn(cur <= 0)} title="Anterior">←</button>
+          <span style={{ fontSize:12, color:"#666", minWidth:54, textAlign:"center" }}>{cur + 1} / {pages}</span>
+          <button disabled={cur >= pages - 1} onClick={() => onPage(cur + 1)} style={btn(cur >= pages - 1)} title="Siguiente">→</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Calendar helpers (Sunday-start) ──
 function weekDays(anchorStr) {
   const d = new Date(anchorStr + "T00:00:00");
@@ -1676,6 +1699,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
   const [sortBy, setSortBy] = useState("date-desc");
+  const [listPage, setListPage] = useState(0);   // current page of the Storage Units / Jobs list
   const [detailId, setDetailId] = useState(null);
   const [jobDetailKey, setJobDetailKey] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -2451,6 +2475,10 @@ export default function App() {
     }
     return Object.fromEntries(Object.entries(sets).map(([k, v]) => [k, v.size]));
   }, [jobs]);
+
+  // Reset to the first page whenever the filtered list changes (filters run over
+  // the full set; pagination is applied on top).
+  useEffect(() => { setListPage(0); }, [search, sortBy, driverFilter, page, storageTab, unitsSubTab, tab]);
 
   // Units view: manage the physical lockers themselves.
   const unitRows = useMemo(() => {
@@ -6061,7 +6089,7 @@ export default function App() {
               <tbody>
                 {unitRows.length === 0 ? (
                   <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
-                ) : unitRows.map(r => {
+                ) : unitRows.slice(listPage*PAGE_SIZE, (listPage+1)*PAGE_SIZE).map(r => {
                   const n = activeJobsByStorage[r.id] || 0;
                   const cap = r.total_capacity_cf != null ? Number(r.total_capacity_cf) : null;
                   const used = usedCfByStorage[r.id] || 0;
@@ -6109,7 +6137,7 @@ export default function App() {
               <tbody>
                 {jobGroups.length === 0 ? (
                   <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : tab==="active" ? "Sin jobs activos. Cargá uno con \"+ Nuevo job\"." : "Sin jobs en este estado."}</td></tr>
-                ) : jobGroups.map(g => {
+                ) : jobGroups.slice(listPage*PAGE_SIZE, (listPage+1)*PAGE_SIZE).map(g => {
                   // Where the goods currently sit: warehouse name, or storage brand + state.
                   const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.state].filter(Boolean).join(" · ")).filter(Boolean))];
                   const mapHref = routeUrl(g);
@@ -6154,8 +6182,9 @@ export default function App() {
             </table>
           )}
         </div>
-        <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>
-          {page === "storage" ? `${unitRows.length} de ${records.length} unidades` : `${jobGroups.length} job(s)`}
+        <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
+          <Pager page={listPage} total={page === "storage" ? unitRows.length : jobGroups.length}
+            unit={page === "storage" ? "unidades" : "job(s)"} onPage={setListPage} />
         </div>
       </div>
       </>)}
