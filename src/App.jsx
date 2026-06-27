@@ -5927,7 +5927,7 @@ export default function App() {
                 <tbody>
                   {unitJobRows.length === 0 ? (
                     <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs activos en unidades alquiladas.</td></tr>
-                  ) : unitJobRows.map(j => {
+                  ) : unitJobRows.slice(listPage*PAGE_SIZE, (listPage+1)*PAGE_SIZE).map(j => {
                     const s = j.storage || {};
                     return (
                       <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
@@ -5953,7 +5953,9 @@ export default function App() {
                 </tbody>
               </table>
             </div>
-            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{unitJobRows.length} job(s) en unidades</div>
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
+              <Pager page={listPage} total={unitJobRows.length} unit="job(s) en unidades" onPage={setListPage} />
+            </div>
           </div>
         </>
       )}
