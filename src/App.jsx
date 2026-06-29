@@ -1137,7 +1137,7 @@ function UsStorageMap({ stats, selected, onSelect }) {
 
 // ── Live-load map: truck GPS status colors + relative-time helper ──
 const LIVE_STATUS = {
-  moving:  { l:"En movimiento", dot:"#1A8A4E", bg:"#EAF3DE", text:"#3B6D11" },
+  moving:  { l:"Moving", dot:"#1A8A4E", bg:"#EAF3DE", text:"#3B6D11" },
   stopped: { l:"Detenido", dot:"#E24B4A", bg:"#FCEBEB", text:"#A32D2D" },
   unknown: { l:"No data", dot:"#9aa3ad", bg:"#f1f1f1", text:"#888" },
 };
@@ -1263,7 +1263,7 @@ const TRIP_EVENT_META = {
   job_removed:        { l:"Job quitado", icon:"➖" },
   storage_drop:       { l:"Dropped at storage", icon:"📦" },
   storage_pickup:     { l:"Loaded from storage", icon:"🔼" },
-  unplanned_pickup:   { l:"Pickup no previsto", icon:"🆕" },
+  unplanned_pickup:   { l:"Unplanned pickup", icon:"🆕" },
   delivery_completed: { l:"Delivered", icon:"✅" },
 };
 const tripEventLabel = (v) => TRIP_EVENT_META[v]?.l || v;
@@ -1624,8 +1624,8 @@ Format: numbered list, each recommendation in 2-3 lines max. Start directly with
         body: JSON.stringify({ prompt })
       });
       const data = await res.json();
-      if (!res.ok) setResult(data.error || "No se pudo conectar con la IA.");
-      else setResult(data.text || "No se pudo obtener respuesta.");
+      if (!res.ok) setResult(data.error || "Could not connect to the AI.");
+      else setResult(data.text || "Could not get a response.");
     } catch(e) {
       setResult("Error connecting to the AI. Try again.");
     }
@@ -1641,7 +1641,7 @@ Format: numbered list, each recommendation in 2-3 lines max. Start directly with
         </div>
         <button onClick={analyze} disabled={loading}
           style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background: loading ? "#f5f5f5" : "#111", color: loading ? "#aaa" : "#fff", cursor: loading ? "not-allowed" : "pointer", flexShrink:0, display:"flex", alignItems:"center", gap:6 }}>
-          {loading ? "Analizando..." : "Analizar con IA"}
+          {loading ? "Analizando..." : "Analyze with AI"}
         </button>
       </div>
       {loading && (
@@ -1675,7 +1675,7 @@ function LoginScreen() {
       else setMessage("Account created. Check your email to confirm.");
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) setError("Email o contrasena incorrectos.");
+      if (error) setError("Incorrect email or password.");
     }
     setLoading(false);
   }
@@ -1688,7 +1688,7 @@ function LoginScreen() {
         <div style={{ marginBottom:24 }}>
           <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>No Borders Moving and Storage</div>
           <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>Storage Manager</h1>
-          <p style={{ fontSize:13, color:"#888", marginTop:6 }}>{isSignUp ? "Create your account to sign in" : "Inicia sesion para continuar"}</p>
+          <p style={{ fontSize:13, color:"#888", marginTop:6 }}>{isSignUp ? "Create your account to sign in" : "Sign in to continue"}</p>
         </div>
         {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
         {message && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{message}</div>}
@@ -1696,12 +1696,12 @@ function LoginScreen() {
         <input style={{ ...inp2, marginBottom:16 }} type="password" placeholder="Contrasena" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
         <button onClick={handleSubmit} disabled={loading || !email || !password}
           style={{ width:"100%", padding:"11px", borderRadius:8, border:"none", background:"#111", color:"#fff", fontSize:14, fontWeight:600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginBottom:14 }}>
-          {loading ? "Loading..." : isSignUp ? "Create account" : "Iniciar sesion"}
+          {loading ? "Loading..." : isSignUp ? "Create account" : "Sign in"}
         </button>
         <p style={{ textAlign:"center", fontSize:13, color:"#888", margin:0 }}>
           {isSignUp ? "Already have an account? " : "Don't have an account? "}
           <span onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null); }} style={{ color:"#111", fontWeight:600, cursor:"pointer", textDecoration:"underline" }}>
-            {isSignUp ? "Inicia sesion" : "Registrate"}
+            {isSignUp ? "Sign in" : "Sign up"}
           </span>
         </p>
       </div>
@@ -1870,7 +1870,7 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
               <Field label="Date in"><input style={inp} type="date" value={form.date_in} onChange={e => setForm(f => ({...f, date_in:e.target.value}))} /></Field>
               <Field label="Client"><input style={inp} value={form.customer} onChange={e => setForm(f => ({...f, customer:e.target.value}))} placeholder="Client name" /></Field>
               <Field label="Driver"><input style={inp} value={form.driver} onChange={e => setForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
-              <Field label="Notas" full><input style={inp} value={form.notes} onChange={e => setForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
+              <Field label="Notes" full><input style={inp} value={form.notes} onChange={e => setForm(f => ({...f, notes:e.target.value}))} placeholder="Job notes" /></Field>
             </div>
             {err && <div style={{ fontSize:12, color:"#b91c1c", marginTop:8 }}>{err}</div>}
             <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
@@ -1951,7 +1951,7 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDu
 }
 
 const PAGE_META = {
-  dispatching: { title:"Dispatching", sub:"Despacho de pickups y deliveries" },
+  dispatching: { title:"Dispatching", sub:"Pickup & delivery dispatch" },
   calendario:  { title:"Calendar", sub:"Pick ups programados" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
@@ -3096,7 +3096,7 @@ export default function App() {
       const todayNoDriver = (j.pickup_date === td || j.delivery_date === td) && !j.driver;
       if (!overdue && !todayNoDriver) continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, reason: overdue ? "FADD vencido" : "No driver for today" });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, reason: overdue ? "FADD overdue" : "No driver for today" });
     }
     return [...map.values()];
   }, [jobs]);
@@ -3590,7 +3590,7 @@ export default function App() {
     setUjSaving(false);
     if (error) { window.alert(error.message); return; }
     setUnitJobPicker(false);
-    showToast(`Job ${tmpl.job_number || ""} agregado a la unidad`.replace(/\s+/g, " ").trim());
+    showToast(`Job ${tmpl.job_number || ""} added to the unit`.replace(/\s+/g, " ").trim());
     loadJobs();
   }
   function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr, pickup_date_from: dateStr }); setJobErr(null); setShowAddJob(true); }
@@ -3975,9 +3975,9 @@ export default function App() {
     try {
       const r = await fetch("/api/geocode?q=" + encodeURIComponent(q));
       const data = await r.json();
-      if (!r.ok) { setLocErr(data?.error || "No se pudo geocodificar."); }
+      if (!r.ok) { setLocErr(data?.error || "Could not geocode."); }
       else setLocForm(f => ({ ...f, lat: data.lat, lng: data.lng, label: data.label }));
-    } catch (e) { setLocErr("No se pudo conectar al geocoder."); }
+    } catch (e) { setLocErr("Could not connect to the geocoder."); }
     setLocBusy(false);
   }
   async function saveLoc() {
@@ -4231,7 +4231,7 @@ export default function App() {
     await loadJobs();
     setTripBusy(false); setTripAction(null); setUnplannedForm(EMPTY_UNPLANNED);
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Pickup no previsto: ${f.job_number || f.customer || ""}` });
-    showToast("Pickup no previsto agregado");
+    showToast("Unplanned pickup added");
   }
   // Complete a trip: optionally drop the still-on-truck jobs at a storage, then mark completed.
   async function completeTrip(trip, undeliveredKeys, dropTarget) {
@@ -4412,7 +4412,7 @@ export default function App() {
   }
   async function copyDriverExtras(driverName, monthLabel, jobsData) {
     const txt = driverExtrasReport(driverName, monthLabel, jobsData);
-    try { await navigator.clipboard.writeText(txt); window.alert("Resumen copiado al portapapeles."); }
+    try { await navigator.clipboard.writeText(txt); window.alert("Summary copied to clipboard."); }
     catch { window.prompt("Copy the summary:", txt); }
   }
   function printDriverExtras(driverName, monthLabel, jobsData) {
@@ -4425,7 +4425,7 @@ export default function App() {
       <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
       <body><h1>Extras & Comisiones — ${driverName}</h1><div class="sub">${monthLabel}</div>
       <table><thead><tr><th>Job #</th><th>Client</th><th>Extra</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th><th style="text-align:right">Commission</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#999">Sin extras</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#999">No extras</td></tr>'}</tbody>
       <tfoot><tr><td colspan="3">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
       <script>window.onload=function(){window.print();}</script></body></html>`;
     const w = window.open("", "_blank");
@@ -4447,7 +4447,7 @@ export default function App() {
   }
   async function copyRepExtras(repName, monthLabel, jobsData) {
     const txt = repExtrasReport(repName, monthLabel, jobsData);
-    try { await navigator.clipboard.writeText(txt); window.alert("Resumen copiado al portapapeles."); }
+    try { await navigator.clipboard.writeText(txt); window.alert("Summary copied to clipboard."); }
     catch { window.prompt("Copy the summary:", txt); }
   }
   function printRepExtras(repName, monthLabel, jobsData) {
@@ -4460,7 +4460,7 @@ export default function App() {
       <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
       <body><h1>Comisiones Rep — ${repName}</h1><div class="sub">${monthLabel}</div>
       <table><thead><tr><th>Job #</th><th>Client</th><th>Driver</th><th>Extra</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th><th style="text-align:right">Commission</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#999">Sin extras</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#999">No extras</td></tr>'}</tbody>
       <tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
       <script>window.onload=function(){window.print();}</script></body></html>`;
     const w = window.open("", "_blank");
@@ -4789,7 +4789,7 @@ export default function App() {
       <div class="r"><span>− Other fees</span><span>${m(numv(sheet.other_fees))}</span></div>
       <div class="r"><span>− Pads (${calc.padsMissing})</span><span>${m(calc.padsCharge)}</span></div>
       <div class="r" style="border-top:1px solid #ddd;padding-top:6px;margin-top:6px"><span><b>Broker te debe</b></span><b>${m(calc.netCarrier)}</b></div></div>
-      <div class="box"><div class="r"><span>BOL cobrado a clientes</span><b>${m(calc.bolCollected)}</b></div><div class="r"><span>Pending collection</span><span>${m(calc.pending)}</span></div></div>
+      <div class="box"><div class="r"><span>BOL collected from clients</span><b>${m(calc.bolCollected)}</b></div><div class="r"><span>Pending collection</span><span>${m(calc.pending)}</span></div></div>
       <div class="box" style="text-align:center;font-size:16px;font-weight:700">${net}</div>
       </body></html>`;
     const w = window.open("", "_blank");
@@ -4943,7 +4943,7 @@ export default function App() {
       if (!chatFile) { setZipStatus("No .txt file found inside the ZIP."); return; }
       const text = await zip.files[chatFile].async("string");
       const parsed = parseWhatsAppExport(text);
-      if (!parsed.length) { setZipStatus("No se detectaron mensajes con datos de storage."); return; }
+      if (!parsed.length) { setZipStatus("No messages with storage data detected."); return; }
       setPending(parsed); setExcluded({});
       setZipStatus(`${parsed.length} storage(s) detectados en "${chatFile}".`);
     } catch (err) { setZipStatus("Error: " + err.message); }
@@ -5261,7 +5261,7 @@ export default function App() {
               <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
               <span style={{ flex:1 }} />
               <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
-                {[["week","Semana"],["month","Month"]].map(([v,l]) => (
+                {[["week","Week"],["month","Month"]].map(([v,l]) => (
                   <button key={v} onClick={() => setCalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: calView===v?"#fff":"none", color: calView===v?"#111":"#888", fontWeight: calView===v?600:400, boxShadow: calView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
                 ))}
               </div>
@@ -5326,7 +5326,7 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Broker","Contacto","Phone","Jobs","Balance pend.","Broker share","CS abiertos","Owes us","We owe","Net","" ].map((h, i) => (
+                    {["Broker","Contact","Phone","Jobs","Balance pend.","Broker share","CS abiertos","Owes us","We owe","Net","" ].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -5677,7 +5677,7 @@ export default function App() {
 
             <div style={{ background: c.net >= 0 ? "#EAF3DE" : "#FCEBEB", border:`1px solid ${c.net >= 0 ? "#639922" : "#E24B4A"}`, borderRadius:12, padding:"18px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
               <div>
-                <div style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.05em", color: c.net >= 0 ? "#3B6D11" : "#A32D2D" }}>Resultado neto</div>
+                <div style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.05em", color: c.net >= 0 ? "#3B6D11" : "#A32D2D" }}>Net result</div>
                 <div style={{ fontSize:22, fontWeight:800, color: c.net >= 0 ? "#3B6D11" : "#A32D2D", marginTop:3 }}>{c.net >= 0 ? `Broker owes you ${m(c.net)}` : `You owe the broker ${m(-c.net)}`}</div>
               </div>
               {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark as settled</Btn>}
@@ -5916,7 +5916,7 @@ export default function App() {
                         <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
-                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Enviar manifest al driver</Btn></a>
+                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
                         {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart</Btn>}
                       </div>
                     </div>
@@ -6112,7 +6112,7 @@ export default function App() {
                               <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
                                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
                                   <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                    {["Type", "Amount", "Generado por", "Driver", "Rep %", "Com. rep"].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                    {["Type", "Amount", "Generated by", "Driver", "Rep %", "Com. rep"].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
                                   </tr></thead>
                                   <tbody>
                                     {jf.extras.map(e => (
@@ -6626,8 +6626,8 @@ export default function App() {
         <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:640 }}>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
             <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Account</div>
-            <DetailRow label="Usuario" value={userEmail} />
-            <DetailRow label="Base de datos" value={SUPABASE_URL} />
+            <DetailRow label="User" value={userEmail} />
+            <DetailRow label="Database" value={SUPABASE_URL} />
             <div style={{ marginTop:14 }}><Btn onClick={() => supabase.auth.signOut()}>Sign out</Btn></div>
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
@@ -6741,7 +6741,7 @@ export default function App() {
       {page === "analytics" && !brokerShareMissing && (revenueAnalytics.broker > 0 || revenueAnalytics.gross > 0) && (
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Revenue bruto vs neto</div>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Gross vs net revenue</div>
             <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>After what the broker keeps</div>
             {(() => {
               const { gross, broker, net } = revenueAnalytics;
@@ -7089,7 +7089,7 @@ export default function App() {
               </table>
             </div>
             <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
-              <Pager page={listPage} total={unitJobRows.length} unit="job(s) en unidades" onPage={setListPage} />
+              <Pager page={listPage} total={unitJobRows.length} unit="job(s) in units" onPage={setListPage} />
             </div>
           </div>
         </>
@@ -7360,7 +7360,7 @@ export default function App() {
           <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
           <EditRow label="Volumen (CF)"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
           <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
-          <EditRow label="Color del sticker"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
+          <EditRow label="Sticker color"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
           <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
           <EditRow label="Pick up from"><InlineField type="date" value={jobDetail.pickup_date_from || jobDetail.pickup_date} onSave={(v) => { updateJobField(P, "pickup_date_from", v); updateJobField(P, "pickup_date", v); }} /></EditRow>
           <EditRow label="Pick up to (opcional)"><InlineField type="date" value={jobDetail.pickup_date_to} onSave={set("pickup_date_to")} /></EditRow>
@@ -7387,7 +7387,7 @@ export default function App() {
               ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · desde ${jobDetail.billing_start_date}` : ""}</span>
               : <span style={{ color:"#bbb" }}>No se cobra storage</span>}
           </EditRow>
-          <EditRow label="Notas"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
+          <EditRow label="Notes"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
           </>
           ); })()}
 
@@ -7530,7 +7530,7 @@ export default function App() {
                         <span><b>−${Math.round(totalBrokerShare).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", justifyContent:"space-between", marginTop:3, fontWeight:700 }}>
-                        <span>Revenue neto (post broker)</span>
+                        <span>Net revenue (post broker)</span>
                         <span style={{ color:"#1A8A4E" }}>${Math.round(netRevenue).toLocaleString()}</span>
                       </div>
                     </div>
@@ -7545,7 +7545,7 @@ export default function App() {
                       <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
                         <ConceptBadge concept={p.concept} />
                         {p.concept === "extra" && p.extra_type && <span style={{ fontSize:10.5, color:"#6D28D9", fontWeight:600 }}>{extraTypeLabel(p.extra_type)}</span>}
-                        {p.split_group && <span title="Parte de un pago dividido" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px" }}>split</span>}
+                        {p.split_group && <span title="Part of a split payment" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px" }}>split</span>}
                         <PaymentMethodBadge method={p.method} />
                         <b>{money(paymentNet(p)) || "$0"}</b>
                         <span style={{ fontSize:11, color:"#888" }}>{p.payment_date || "—"}</span>
@@ -7634,7 +7634,7 @@ export default function App() {
                         </Field>
                       )}
                       <Field label="Trip # (opcional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Historical ref." /></Field>
-                      <Field label="Notas" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="What happened" /></Field>
+                      <Field label="Notes" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="What happened" /></Field>
                     </div>
                     <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10 }}>
                       <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancel</Btn>
@@ -7787,7 +7787,7 @@ export default function App() {
             <Field label="Monthly cost ($)"><input style={inp} type="number" value={form.monthly_cost} onChange={e => setForm(f => ({...f, monthly_cost:e.target.value}))} placeholder="0" /></Field>
             <Field label="Tarjeta"><input style={inp} value={form.card_on_file} onChange={e => setForm(f => ({...f, card_on_file:e.target.value}))} placeholder="Visa ****1234" /></Field>
             <Field label="Open date"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
-            <Field label="Vencimiento de pago"><input style={inp} type="date" value={form.payment_due_date} onChange={e => setForm(f => ({...f, payment_due_date:e.target.value}))} /></Field>
+            <Field label="Payment due date"><input style={inp} type="date" value={form.payment_due_date} onChange={e => setForm(f => ({...f, payment_due_date:e.target.value}))} /></Field>
           </div>
         </Modal>
       )}
@@ -7961,7 +7961,7 @@ export default function App() {
                   <Field label="Pick up from"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={u("pickup_date_from")} /></Field>
                   <Field label="Pick up to (opcional)"><input style={inp} type="date" value={jobForm.pickup_date_to} onChange={u("pickup_date_to")} /></Field>
                   <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Pickup address" /></Field>
-                  <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="Ciudad" /></Field>
+                  <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="City" /></Field>
                   <Field label="Pickup state"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
                   <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={u("pickup_zip")} placeholder="10001" /></Field>
                   <Field label="Extra stops" full><input style={inp} value={jobForm.extra_stops} onChange={u("extra_stops")} placeholder="paradas adicionales" /></Field>
@@ -7975,7 +7975,7 @@ export default function App() {
                   <Field label="FADD *"><input style={inp} type="date" value={jobForm.fadd} onChange={u("fadd")} /></Field>
                   <Field label="Delivery date"><input style={inp} type="date" value={jobForm.delivery_date} onChange={u("delivery_date")} /></Field>
                   <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Delivery address" /></Field>
-                  <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="Ciudad" /></Field>
+                  <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="City" /></Field>
                   <Field label="Delivery state"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
                   <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={u("delivery_zip")} placeholder="07030" /></Field>
                 </div>
@@ -7986,15 +7986,15 @@ export default function App() {
               <FormSection title="Load / Carga">
                 <div style={fgrid}>
                   <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={u("volume")} placeholder="ej: 1200" /></Field>
-                  <Field label="Color del sticker">
+                  <Field label="Sticker color">
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
                       <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={u("sticker_color")} placeholder="Rojo, Azul..." />
                     </div>
                   </Field>
                   <Field label="Lot number"><input style={inp} value={jobForm.lot_number} onChange={u("lot_number")} placeholder="LOT-4821" /></Field>
-                  <Field label="Carrier notes" full><input style={inp} value={jobForm.carrier_notes} onChange={u("carrier_notes")} placeholder="Notas para el carrier/driver" /></Field>
-                  <Field label="Notas internas" full><input style={inp} value={jobForm.notes} onChange={u("notes")} placeholder="Notas del job" /></Field>
+                  <Field label="Carrier notes" full><input style={inp} value={jobForm.carrier_notes} onChange={u("carrier_notes")} placeholder="Notes for the carrier/driver" /></Field>
+                  <Field label="Internal notes" full><input style={inp} value={jobForm.notes} onChange={u("notes")} placeholder="Job notes" /></Field>
                 </div>
               </FormSection>
             );
@@ -8023,7 +8023,7 @@ export default function App() {
                   </label>
                   {on && (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
-                      <Field label="Broker share % del balance"><input style={inp} type="number" value={jobForm.broker_job_share_pct} onChange={u("broker_job_share_pct")} placeholder="0" /></Field>
+                      <Field label="Broker share % of balance"><input style={inp} type="number" value={jobForm.broker_job_share_pct} onChange={u("broker_job_share_pct")} placeholder="0" /></Field>
                       <Field label="Broker share amount (auto)"><div style={{ ...inp, background:"#fafafa", fontWeight:700, color:"#C2410C" }}>{money(shareAmt) || "$0"}</div></Field>
                     </div>
                   )}
@@ -8035,8 +8035,8 @@ export default function App() {
                 <div style={fgrid}>
                   <Field label="Estimate ($)"><input style={inp} type="number" value={jobForm.estimate} onChange={u("estimate")} placeholder="0" /></Field>
                   <Field label="Deposit ($)"><input style={inp} type="number" value={jobForm.deposit} onChange={u("deposit")} placeholder="0" /></Field>
-                  <Field label="Balance en pickup ($)"><input style={inp} type="number" value={jobForm.pickup_balance} onChange={u("pickup_balance")} placeholder="0" /></Field>
-                  <Field label="Balance en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={u("delivery_balance")} placeholder="0" /></Field>
+                  <Field label="Pickup balance ($)"><input style={inp} type="number" value={jobForm.pickup_balance} onChange={u("pickup_balance")} placeholder="0" /></Field>
+                  <Field label="Delivery balance ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={u("delivery_balance")} placeholder="0" /></Field>
                   <Field label="Precio / CF ($)"><input style={inp} type="number" value={jobForm.price_per_cf} onChange={u("price_per_cf")} placeholder="0.65" /></Field>
                   <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={jobForm.fuel_surcharge_pct} onChange={u("fuel_surcharge_pct")} placeholder="5" /></Field>
                   {brokerJobShareBlock}
@@ -8119,7 +8119,7 @@ export default function App() {
                         <option value="no">No</option><option value="yes">Yes — bills after 30 days</option>
                       </select>
                     </Field>
-                    <Field label="Inicio de billing (auto, editable)" full>
+                    <Field label="Billing start (auto, editable)" full>
                       <input style={inp} type="date" value={jobForm.billing_start_date || (jobForm.date_in ? (jobForm.first_month_free ? addDaysStr(jobForm.date_in, 30) : jobForm.date_in) : "")} onChange={u("billing_start_date")} />
                     </Field>
                   </div>
@@ -8135,7 +8135,7 @@ export default function App() {
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                       <Field label="Pickup date"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={u("pickup_date_from")} /></Field>
                       <Field label="Pickup address"><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Pickup address" /></Field>
-                      <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="Ciudad" /></Field>
+                      <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="City" /></Field>
                       <Field label="Pickup state"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
                     </div>
                   </div>
@@ -8144,7 +8144,7 @@ export default function App() {
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                       <Field label="FADD *"><input style={inp} type="date" value={jobForm.fadd} onChange={u("fadd")} /></Field>
                       <Field label="Delivery address"><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Delivery address" /></Field>
-                      <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="Ciudad" /></Field>
+                      <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="City" /></Field>
                       <Field label="Delivery state"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
                     </div>
                   </div>
@@ -8265,10 +8265,10 @@ export default function App() {
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name" full><input style={inp} value={brokerForm.name} onChange={e => setBrokerForm(f => ({...f, name:e.target.value}))} placeholder="Allied Van Lines" /></Field>
-            <Field label="Contacto"><input style={inp} value={brokerForm.contact_name} onChange={e => setBrokerForm(f => ({...f, contact_name:e.target.value}))} placeholder="Nombre del contacto" /></Field>
+            <Field label="Contact"><input style={inp} value={brokerForm.contact_name} onChange={e => setBrokerForm(f => ({...f, contact_name:e.target.value}))} placeholder="Contact name" /></Field>
             <Field label="Phone"><input style={inp} value={brokerForm.contact_phone} onChange={e => setBrokerForm(f => ({...f, contact_phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Email" full><input style={inp} value={brokerForm.contact_email} onChange={e => setBrokerForm(f => ({...f, contact_email:e.target.value}))} placeholder="ops@broker.com" /></Field>
-            <Field label="Notas" full><input style={inp} value={brokerForm.notes} onChange={e => setBrokerForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+            <Field label="Notes" full><input style={inp} value={brokerForm.notes} onChange={e => setBrokerForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
           </div>
         </Modal>
       )}
@@ -8283,8 +8283,8 @@ export default function App() {
             <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="ej: T-12" /></Field>
-            <Field label="Link del grupo de WhatsApp" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
-            <Field label="Notas" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+            <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
+            <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
             <Field label="Status">
               <select style={inp} value={driverForm.active ? "yes" : "no"} onChange={e => setDriverForm(f => ({...f, active: e.target.value === "yes"}))}>
                 <option value="yes">Active</option><option value="no">Inactivo</option>
@@ -8307,7 +8307,7 @@ export default function App() {
             <Field label="Status">
               <select style={inp} value={truckForm.active ? "yes" : "no"} onChange={e => setTruckForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Active</option><option value="no">Inactivo</option></select>
             </Field>
-            <Field label="Notas" full><input style={inp} value={truckForm.notes} onChange={e => setTruckForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+            <Field label="Notes" full><input style={inp} value={truckForm.notes} onChange={e => setTruckForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
           </div>
 
           <SectionLabel>Vehicle info</SectionLabel>
@@ -8384,7 +8384,7 @@ export default function App() {
             <DetailRow label="Capacidad" value={cap > 0 ? `${cap.toLocaleString()} CF` : null} />
             <DetailRow label="Current load" value={activeTrip ? `${Math.round(load).toLocaleString()} CF${cap > 0 ? ` · ${Math.min(100, Math.round((load / cap) * 100))}%` : ""}` : "No active trip"} />
             <DetailRow label="Status" value={tk.active !== false ? "Active" : "Inactivo"} />
-            {tk.notes && <DetailRow label="Notas" value={tk.notes} />}
+            {tk.notes && <DetailRow label="Notes" value={tk.notes} />}
           </Modal>
         );
       })()}
@@ -8396,7 +8396,7 @@ export default function App() {
             <Btn primary disabled={companySaving || !companyForm.name.trim()} onClick={saveCompany}>{companySaving ? "Saving..." : "Save"}</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Nombre *" full><input style={inp} value={companyForm.name} onChange={e => setCompanyForm(f => ({...f, name:e.target.value}))} placeholder="No Borders Moving LLC" /></Field>
+            <Field label="Name *" full><input style={inp} value={companyForm.name} onChange={e => setCompanyForm(f => ({...f, name:e.target.value}))} placeholder="No Borders Moving LLC" /></Field>
             <Field label="DOT number"><input style={inp} value={companyForm.dot_number} onChange={e => setCompanyForm(f => ({...f, dot_number:e.target.value}))} placeholder="1234567" /></Field>
             <Field label="MC number"><input style={inp} value={companyForm.mc_number} onChange={e => setCompanyForm(f => ({...f, mc_number:e.target.value}))} placeholder="MC-123456" /></Field>
             <Field label="EIN"><input style={inp} value={companyForm.ein} onChange={e => setCompanyForm(f => ({...f, ein:e.target.value}))} placeholder="12-3456789" /></Field>
@@ -8407,7 +8407,7 @@ export default function App() {
             <Field label="Status">
               <select style={inp} value={companyForm.active ? "yes" : "no"} onChange={e => setCompanyForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Active</option><option value="no">Inactiva</option></select>
             </Field>
-            <Field label="Notas" full><input style={inp} value={companyForm.notes} onChange={e => setCompanyForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+            <Field label="Notes" full><input style={inp} value={companyForm.notes} onChange={e => setCompanyForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
           </div>
         </Modal>
       )}
@@ -8431,7 +8431,7 @@ export default function App() {
                   <option value="company">Company</option><option value="truck">Truck</option><option value="driver">Driver</option>
                 </select>
               </Field>
-              <Field label="Entidad *">
+              <Field label="Entity *">
                 <select style={{ ...inp, borderColor: docForm.entity_id ? "#e5e5e5" : "#fca5a5" }} value={docForm.entity_id} onChange={e => setF({ entity_id:e.target.value })}>
                   <option value="">— Select —</option>
                   {entityList.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
@@ -8442,15 +8442,15 @@ export default function App() {
                   {typeKeys.map(k => <option key={k} value={k}>{DOC_TYPE_LABELS[k] || k}</option>)}
                 </select>
               </Field>
-              <Field label="Nombre del documento"><input style={inp} value={docForm.document_name} onChange={e => setF({ document_name:e.target.value })} placeholder="ej: Cargo insurance" /></Field>
+              <Field label="Document name"><input style={inp} value={docForm.document_name} onChange={e => setF({ document_name:e.target.value })} placeholder="ej: Cargo insurance" /></Field>
               <Field label="No. / policy / certificate"><input style={inp} value={docForm.document_number} onChange={e => setF({ document_number:e.target.value })} placeholder="N°" /></Field>
               <Field label="Issuer"><input style={inp} value={docForm.issuer} onChange={e => setF({ issuer:e.target.value })} placeholder="Aseguradora / agencia" /></Field>
               <Field label="Issue date"><input style={inp} type="date" value={docForm.issue_date} onChange={e => setF({ issue_date:e.target.value })} /></Field>
               <Field label="Due date"><input style={inp} type="date" value={docForm.expiry_date} onChange={e => setF({ expiry_date:e.target.value })} /></Field>
-              <Field label="Notas" full><input style={inp} value={docForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
+              <Field label="Notes" full><input style={inp} value={docForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notes" /></Field>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10, fontSize:12.5 }}>
-              <span style={{ color:"#888" }}>Estado:</span><ComplianceBadge status={st} />
+              <span style={{ color:"#888" }}>Status:</span><ComplianceBadge status={st} />
             </div>
             <SectionLabel>File (photo or PDF)</SectionLabel>
             <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) uploadComplianceDoc(f); }}
@@ -8530,7 +8530,7 @@ export default function App() {
           })()}
           <SectionLabel>Add empleado</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Nombre *"><input style={inp} value={empForm.name} onChange={e => setEmpForm(f => ({...f, name:e.target.value}))} placeholder="Name" /></Field>
+            <Field label="Name *"><input style={inp} value={empForm.name} onChange={e => setEmpForm(f => ({...f, name:e.target.value}))} placeholder="Name" /></Field>
             <Field label="Rol"><input style={inp} value={empForm.role} onChange={e => setEmpForm(f => ({...f, role:e.target.value}))} placeholder="Sales rep / Manager" /></Field>
             <Field label="Phone"><input style={inp} value={empForm.phone} onChange={e => setEmpForm(f => ({...f, phone:e.target.value}))} placeholder="Phone" /></Field>
             <Field label="Email"><input style={inp} value={empForm.email} onChange={e => setEmpForm(f => ({...f, email:e.target.value}))} placeholder="Email" /></Field>
@@ -8569,8 +8569,8 @@ export default function App() {
                 </select>
               </Field>
               {!isCf && <Field label="Amount ($)"><input style={inp} type="number" value={quickExtra.amount} onChange={e => setQ({ amount:e.target.value })} placeholder="0" /></Field>}
-              {quickExtra.extra_type === "other" && <Field label="Description" full><input style={inp} value={quickExtra.description} onChange={e => setQ({ description:e.target.value })} placeholder="Detalle del extra" /></Field>}
-              <Field label="Generado por">
+              {quickExtra.extra_type === "other" && <Field label="Description" full><input style={inp} value={quickExtra.description} onChange={e => setQ({ description:e.target.value })} placeholder="Extra detail" /></Field>}
+              <Field label="Generated by">
                 <select style={inp} value={quickExtra.generated_by} disabled={locked} onChange={e => onGen(e.target.value)}>
                   {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
                 </select>
@@ -8607,7 +8607,7 @@ export default function App() {
                 <div style={{ marginTop:10 }}>
                   <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Commission base</div>
                   <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                    {[["with_fuel", "Con fuel surcharge", cf.total], ["without_fuel", "No fuel surcharge", cf.cfSub]].map(([v, l, amt]) => {
+                    {[["with_fuel", "With fuel surcharge", cf.total], ["without_fuel", "No fuel surcharge", cf.cfSub]].map(([v, l, amt]) => {
                       const on = cf.commissionBase === v;
                       return <button key={v} onClick={() => setQ({ commission_base: v })} style={{ flex:1, minWidth:140, textAlign:"left", padding:"8px 11px", borderRadius:8, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#e5e5e5"}`, background: on ? "#E6F1FB" : "#fff", color:"#111" }}>
                         <div style={{ fontSize:12.5, fontWeight:600 }}>{on ? "◉" : "○"} {l}</div>
@@ -8641,7 +8641,7 @@ export default function App() {
               <div style={{ marginTop:10 }}>
                 <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Commission base</div>
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                  {[["gross", "On the gross amount", a], ["net", "Sobre el neto (post broker)", netAmt]].map(([v, l, amt]) => {
+                  {[["gross", "On the gross amount", a], ["net", "On the net (post broker)", netAmt]].map(([v, l, amt]) => {
                     const on = commBaseVal === v;
                     return <button key={v} onClick={() => setQ({ commission_base: v })} style={{ flex:1, minWidth:150, textAlign:"left", padding:"8px 11px", borderRadius:8, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#e5e5e5"}`, background: on ? "#E6F1FB" : "#fff", color:"#111" }}>
                       <div style={{ fontSize:12.5, fontWeight:600 }}>{on ? "◉" : "○"} {l}</div>
@@ -8653,7 +8653,7 @@ export default function App() {
             )}
 
             <div style={{ marginTop:12, background:"#fafafa", borderRadius:8, padding:"9px 12px", fontSize:12.5 }}>
-              <div style={{ marginBottom:5, color:"#666" }}>Commission base: <b>{money(base) || "$0"}</b>{isCf ? ` (${cf.commissionBase === "without_fuel" ? "sin" : "con"} fuel)` : bsPct > 0 ? ` (${commBaseVal === "net" ? "neto" : "bruto"})` : ""}</div>
+              <div style={{ marginBottom:5, color:"#666" }}>Commission base: <b>{money(base) || "$0"}</b>{isCf ? ` (${cf.commissionBase === "without_fuel" ? "without" : "with"} fuel)` : bsPct > 0 ? ` (${commBaseVal === "net" ? "net" : "gross"})` : ""}</div>
               <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
                 <span>Driver commission ({numv(quickExtra.driver_commission_pct)}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
                 <span>Rep commission ({numv(quickExtra.rep_commission_pct)}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
@@ -8721,9 +8721,9 @@ export default function App() {
                   {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
                 </select>
               </Field>}
-              {!splitOn && <Field label="Descuento ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>}
-              {!splitOn && <Field label="Discount reason"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>}
-              {!payStageMissing && <Field label="Etapa del pago">
+              {!splitOn && <Field label="Discount ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>}
+              {!splitOn && <Field label="Discount reason"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Reason" /></Field>}
+              {!payStageMissing && <Field label="Payment stage">
                 <select style={inp} value={payForm.payment_stage} onChange={e => setF({ payment_stage:e.target.value })}>
                   <option value="">— Select —</option>
                   <option value="pickup">At pick up</option>
@@ -8749,7 +8749,7 @@ export default function App() {
                           {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
                         </select>
                         <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchLine(i, { amount: e.target.value })} placeholder="$" />
-                        <input style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.notes} onChange={e => patchLine(i, { notes: e.target.value })} placeholder="Notas (opcional)" />
+                        <input style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.notes} onChange={e => patchLine(i, { notes: e.target.value })} placeholder="Notes (optional)" />
                         <button onClick={() => setLines(splitLines.filter((_, ix) => ix !== i))} disabled={splitLines.length <= 1} title="Remove line" style={{ border:"none", background:"none", cursor: splitLines.length <= 1 ? "not-allowed" : "pointer", color: splitLines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
                       </div>
                     ))}
@@ -8948,7 +8948,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
+            <Field label="Notes" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notes" /></Field>
             <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Net: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
             <datalist id="who-list">{whoList.map((n, i) => <option key={i} value={n} />)}</datalist>
           </Modal>
@@ -8979,7 +8979,7 @@ export default function App() {
               <span style={{ fontSize:10.5, fontWeight:700, color:"#6D28D9", background:"#fff", borderRadius:20, padding:"1px 8px", marginLeft:8 }}>Collected via payment</span>
               {g && <div style={{ fontSize:11, color:"#6D28D9", marginTop:3 }}>Job {g.job_number || "—"} · {g.customer || ""}</div>}
             </div>
-            <Field label="Generado por">
+            <Field label="Generated by">
               <select style={inp} value={ca.generated_by} disabled={locked} onChange={e => onGen(e.target.value)}>
                 {GEN_BY.map(gb => <option key={gb.v} value={gb.v}>{gb.l}</option>)}
               </select>
@@ -9298,7 +9298,7 @@ export default function App() {
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
               <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
             </div>
-            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Enviar manifest al driver</Btn></a>
+            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
 
             {/* event log */}
             <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
@@ -9467,7 +9467,7 @@ export default function App() {
               });
             })()}
           </div>
-          <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={tripForm.notes} onChange={e => setTripForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del trip" /></Field>
+          <Field label="Notes" full><input style={{ ...inp, marginTop:10 }} value={tripForm.notes} onChange={e => setTripForm(f => ({...f, notes:e.target.value}))} placeholder="Trip notes" /></Field>
         </Modal>
         );
       })()}
@@ -9537,7 +9537,7 @@ export default function App() {
 
           <SectionLabel>Pads</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Cargo por pad faltante ($)"><input style={inp} type="number" value={csForm.charge_per_pad} onChange={e => setCsForm(f => ({...f, charge_per_pad:e.target.value}))} placeholder="7" /></Field>
+            <Field label="Missing pad charge ($)"><input style={inp} type="number" value={csForm.charge_per_pad} onChange={e => setCsForm(f => ({...f, charge_per_pad:e.target.value}))} placeholder="7" /></Field>
           </div>
           <div style={{ fontSize:11, color:"#999", marginTop:4 }}>Sent/returned pads are entered per job (job Pads section) and summed here automatically.</div>
 
@@ -9547,7 +9547,7 @@ export default function App() {
             <Field label="Labor charges ($)"><input style={inp} type="number" value={csForm.labor_charges} onChange={e => setCsForm(f => ({...f, labor_charges:e.target.value}))} placeholder="0" /></Field>
             <Field label="Other fees ($)"><input style={inp} type="number" value={csForm.other_fees} onChange={e => setCsForm(f => ({...f, other_fees:e.target.value}))} placeholder="0" /></Field>
             <Field label="Other fees description"><input style={inp} value={csForm.other_fees_description} onChange={e => setCsForm(f => ({...f, other_fees_description:e.target.value}))} placeholder="ej: detention" /></Field>
-            <Field label="Notas" full><input style={inp} value={csForm.notes} onChange={e => setCsForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
+            <Field label="Notes" full><input style={inp} value={csForm.notes} onChange={e => setCsForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
           </div>
           {editingCsId && <div style={{ marginTop:12 }}><Btn danger onClick={() => { setShowCsModal(false); deleteCs(closingSheets.find(x=>x.id===editingCsId)); }}>Delete closing sheet</Btn></div>}
         </Modal>
@@ -9565,7 +9565,7 @@ export default function App() {
             <Field label="Payment method" full>
               <PaymentMethodSelect style={inp} value={payModal.method} onChange={v => setPayModal(p => ({...p, method: v || ""}))} />
             </Field>
-            <Field label="Notas" full><input style={inp} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Collection notes (e.g. split cash + zelle)" /></Field>
+            <Field label="Notes" full><input style={inp} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Collection notes (e.g. split cash + zelle)" /></Field>
           </div>
         </Modal>
       )}
@@ -9596,7 +9596,7 @@ export default function App() {
           <>
             {brokerD && (
               <Modal title={`Broker · ${brokerD.name}`} onClose={() => setBrokerDetailId(null)} footer={<Btn primary onClick={() => setBrokerDetailId(null)}>Close</Btn>}>
-                <DetailRow label="Contacto" value={brokerD.contact_name} />
+                <DetailRow label="Contact" value={brokerD.contact_name} />
                 <DetailRow label="Phone" value={brokerD.contact_phone} />
                 <DetailRow label="Email" value={brokerD.contact_email} />
                 <SectionLabel>Jobs del broker</SectionLabel>
