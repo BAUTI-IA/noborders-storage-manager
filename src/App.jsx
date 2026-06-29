@@ -150,7 +150,7 @@ function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPat
       </td>
       <td style={{ ...cell, fontWeight:600, whiteSpace:"nowrap" }}>
         {extraTypeLabel(type)}
-        {extra?.source === "payment_split" && <span title="Cobrado vía pago dividido" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px", marginLeft:5 }}>pago</span>}
+        {extra?.source === "payment_split" && <span title="Collected via split payment" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px", marginLeft:5 }}>pago</span>}
         {type === "other" && active && <input value={desc} onChange={e => setDesc(e.target.value)} onBlur={() => onPatch(extra, { description: desc })} placeholder="Detalle" style={{ ...miniInp, width:120, marginLeft:6 }} />}
       </td>
       <td style={{ ...cell, minWidth: active && isCf ? 190 : undefined }}>{!active ? <span style={{ color:"#ccc" }}>—</span> : isCf ? (
@@ -161,7 +161,7 @@ function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPat
             <div>Total c/fuel: <b>{money(extra.extra_total_with_fuel) || "$0"}</b></div>
             <div style={{ color:"#854F0B" }}>Base com.: <b>{money(extra.commission_base_amount) || "$0"}</b> ({extra.commission_base === "without_fuel" ? "s/fuel" : "c/fuel"})</div>
           </div>
-          <button onClick={() => onEdit(extra)} title="Editar Extra CF" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✎</button>
+          <button onClick={() => onEdit(extra)} title="Edit Extra CF" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✎</button>
         </div>
       ) : <input value={amount} onChange={e => setAmount(e.target.value)} onBlur={() => onPatch(extra, { amount })} placeholder="$" style={{ ...miniInp, width:78 }} />}</td>
       <td style={cell}>{active ? (
@@ -185,7 +185,7 @@ function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPat
       <td style={cell}>{active ? <input value={rPct} onChange={e => setRPct(e.target.value)} onBlur={() => onPatch(extra, { rep_commission_pct: rPct })} style={miniInp} /> : null}</td>
       <td style={{ ...cell, color:"#1A8A4E", fontWeight:700, whiteSpace:"nowrap" }}>{active ? (money(dc) || "$0") : ""}</td>
       <td style={{ ...cell, color:"#185FA5", fontWeight:700, whiteSpace:"nowrap" }}>{active ? (money(rc) || "$0") : ""}</td>
-      <td style={{ ...cell, textAlign:"center" }}>{active && extra ? <button onClick={() => onDelete(extra)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, lineHeight:1 }}>×</button> : null}</td>
+      <td style={{ ...cell, textAlign:"center" }}>{active && extra ? <button onClick={() => onDelete(extra)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, lineHeight:1 }}>×</button> : null}</td>
     </tr>
   );
 }
@@ -225,9 +225,9 @@ const numv = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
 // Collection status for a BOL job: complete / partial / pending.
 function collectionStatus(j) {
   const bal = numv(j.bol_balance), col = numv(j.bol_collected);
-  if (bal > 0 && col >= bal) return { key:"complete", l:"Cobrado", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
+  if (bal > 0 && col >= bal) return { key:"complete", l:"Collected", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
   if (col > 0) return { key:"partial", l:"Parcial", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" };
-  return { key:"pending", l:"Pendiente", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" };
+  return { key:"pending", l:"Pending", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" };
 }
 // Missing pads for a single job (received minus returned, floored at 0).
 const jobPadsMissing = (j) => Math.max(0, numv(j.pads_received) - numv(j.pads_returned));
@@ -313,7 +313,7 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
   const isPdf = (url || "").toLowerCase().includes(".pdf");
   return (
     <div style={{ marginTop:8 }}>
-      <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>{label || "Foto / archivo"}</div>
+      <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>{label || "Photo / file"}</div>
       <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
         onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
         onClick={() => ref.current?.click()}
@@ -321,9 +321,9 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
         {uploading ? "Subiendo…" : url ? (
           <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
             {isPdf ? <span style={{ fontSize:28 }}>📄</span> : <img src={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} />}
-            <span style={{ color:"#185FA5" }}>Reemplazar archivo</span>
+            <span style={{ color:"#185FA5" }}>Replace file</span>
           </div>
-        ) : "Arrastrá o tocá para subir foto/PDF (jpg, png, heic, pdf)"}
+        ) : "Drag or tap to upload photo/PDF (jpg, png, heic, pdf)"}
       </div>
       <input ref={ref} type="file" accept="image/*,.heic,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) onFile(f); e.target.value = ""; }} />
     </div>
@@ -368,7 +368,7 @@ const DOC_GRID = {
   truck:   ["registration", "insurance", "irp", "annual_inspection", "ifta_decal", "other"],
   driver:  ["cdl", "medical_card", "mvr", "drug_test", "background_check", "other"],
 };
-const ENTITY_LABELS = { company: "Empresa", truck: "Camión", driver: "Driver" };
+const ENTITY_LABELS = { company: "Company", truck: "Truck", driver: "Driver" };
 // Auto status from expiry date: expired / expiring_soon (≤30d) / active / none.
 function docStatus(doc) {
   if (!doc || !doc.expiry_date) return "none";
@@ -379,10 +379,10 @@ function docStatus(doc) {
 }
 const docDaysToExpiry = (doc) => doc?.expiry_date ? Math.round((new Date(doc.expiry_date + "T00:00:00") - new Date(today() + "T00:00:00")) / 86400000) : null;
 const DOC_STATUS_META = {
-  active:        { l:"Al día", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
-  expiring_soon: { l:"Por vencer", bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" },
-  expired:       { l:"Vencido", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
-  none:          { l:"Sin fecha", bg:"#f1f1f1", text:"#888", dot:"#bbb" },
+  active:        { l:"Up to date", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  expiring_soon: { l:"Expiring soon", bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" },
+  expired:       { l:"Expired", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+  none:          { l:"No date", bg:"#f1f1f1", text:"#888", dot:"#bbb" },
 };
 function ComplianceBadge({ status }) {
   const c = DOC_STATUS_META[status] || DOC_STATUS_META.none;
@@ -406,17 +406,17 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
       {doc ? (
         <>
           <div style={{ fontSize:11, color:"#555", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{doc.document_number ? `#${doc.document_number}` : (doc.document_name || "—")}{doc.issuer ? ` · ${doc.issuer}` : ""}</div>
-          <div style={{ fontSize:10.5, color: expColor }}>{doc.expiry_date ? `Vence ${doc.expiry_date}${days != null ? ` (${days < 0 ? `hace ${-days}d` : `${days}d`})` : ""}` : "Sin vencimiento"}</div>
+          <div style={{ fontSize:10.5, color: expColor }}>{doc.expiry_date ? `Vence ${doc.expiry_date}${days != null ? ` (${days < 0 ? `hace ${-days}d` : `${days}d`})` : ""}` : "No expiry"}</div>
           <div style={{ display:"flex", gap:9, marginTop:"auto", alignItems:"center" }}>
             {doc.document_url
               ? <a href={doc.document_url} target="_blank" rel="noreferrer" style={{ fontSize:10.5, color:"#185FA5", textDecoration:"none" }}>📎 Ver</a>
-              : <span style={{ fontSize:10.5, color:"#bbb" }}>Sin archivo</span>}
+              : <span style={{ fontSize:10.5, color:"#bbb" }}>No file</span>}
             <button onClick={() => inputRef.current?.click()} style={{ fontSize:10.5, color:"#185FA5", border:"none", background:"none", cursor:"pointer", padding:0 }}>Subir</button>
-            <button onClick={onEdit} style={{ fontSize:10.5, color:"#888", border:"none", background:"none", cursor:"pointer", padding:0 }}>Editar</button>
+            <button onClick={onEdit} style={{ fontSize:10.5, color:"#888", border:"none", background:"none", cursor:"pointer", padding:0 }}>Edit</button>
           </div>
         </>
       ) : (
-        <button onClick={onAdd} style={{ marginTop:"auto", fontSize:11, color:"#185FA5", border:"1px dashed #cfe0f0", background:"#F7FBFF", borderRadius:7, padding:"7px", cursor:"pointer" }}>+ Agregar / subir</button>
+        <button onClick={onAdd} style={{ marginTop:"auto", fontSize:11, color:"#185FA5", border:"1px dashed #cfe0f0", background:"#F7FBFF", borderRadius:7, padding:"7px", cursor:"pointer" }}>+ Add / upload</button>
       )}
       <input ref={inputRef} type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) onFile(f); e.target.value = ""; }} />
     </div>
@@ -445,8 +445,8 @@ function AuditInfo({ rec }) {
   if (!rec || (!rec.created_by && !rec.updated_by && !rec.created_at)) return null;
   return (
     <div style={{ marginTop:14, paddingTop:10, borderTop:"1px solid #f5f5f5", fontSize:11, color:"#bbb", lineHeight:1.6 }}>
-      {(rec.created_by || rec.created_at) && <div>Creado por {rec.created_by || "—"}{rec.created_at ? ` · ${fmtTs(rec.created_at)}` : ""}</div>}
-      {(rec.updated_by || rec.updated_at) && <div>Última edición por {rec.updated_by || "—"}{rec.updated_at ? ` · ${fmtTs(rec.updated_at)}` : ""}</div>}
+      {(rec.created_by || rec.created_at) && <div>Created by {rec.created_by || "—"}{rec.created_at ? ` · ${fmtTs(rec.created_at)}` : ""}</div>}
+      {(rec.updated_by || rec.updated_at) && <div>Last edited by {rec.updated_by || "—"}{rec.updated_at ? ` · ${fmtTs(rec.updated_at)}` : ""}</div>}
     </div>
   );
 }
@@ -480,7 +480,7 @@ function PaymentBadge({ record, situation }) {
   const c = days <= 5 ? { bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" }
           : days <= 10 ? { bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" }
           : { bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
-  const label = days < 0 ? "Vencido" : days === 0 ? "Hoy" : `${days} días`;
+  const label = days < 0 ? "Expired" : days === 0 ? "Today" : `${days} days`;
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}>
       <span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />
@@ -501,7 +501,7 @@ function FaddBadge({ fadd }) {
           : days <= 3 ? { bg:"#FDE3CF", text:"#C2410C", dot:"#EA580C" }
           : days <= 7 ? { bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" }
           : { bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
-  const label = days < 0 ? "Overdue" : days === 0 ? "Hoy" : `${days} días`;
+  const label = days < 0 ? "Overdue" : days === 0 ? "Today" : `${days} days`;
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}>
       <span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />
@@ -1116,8 +1116,8 @@ function UsStorageMap({ stats, selected, onSelect }) {
         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#EAF3DE", border:"1px solid #cfe0b8" }} />1–2</span>
         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#FAEEDA", border:"1px solid #ecd6ad" }} />3–5</span>
         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#FCEBEB", border:"1px solid #f0cccc" }} />6+</span>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", border:"1.5px dashed #E24B4A" }} />pago por vencer</span>
-        <span style={{ marginLeft:"auto", color:"#aaa" }}>Tocá un estado para filtrar la lista</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", border:"1.5px dashed #E24B4A" }} />payment expiring soon</span>
+        <span style={{ marginLeft:"auto", color:"#aaa" }}>Tap a state to filter the list</span>
       </div>
 
       {/* tooltip */}
@@ -1127,8 +1127,8 @@ function UsStorageMap({ stats, selected, onSelect }) {
           <div>{ts.count} storage{ts.count !== 1 ? "s" : ""} activo{ts.count !== 1 ? "s" : ""}</div>
           <div>{Math.round(ts.cf).toLocaleString()} CF en uso</div>
           {ts.due > 0
-            ? <div style={{ color:"#FCA5A5", fontWeight:600 }}>⚠ {ts.due} pago{ts.due !== 1 ? "s" : ""} por vencer (≤5 días)</div>
-            : <div style={{ color:"#8fb98f" }}>Sin pagos por vencer</div>}
+            ? <div style={{ color:"#FCA5A5", fontWeight:600 }}>⚠ {ts.due} payment{ts.due !== 1 ? "s" : ""} expiring soon (≤5 days)</div>
+            : <div style={{ color:"#8fb98f" }}>No payments expiring soon</div>}
         </div>
       )}
     </div>
@@ -1139,15 +1139,15 @@ function UsStorageMap({ stats, selected, onSelect }) {
 const LIVE_STATUS = {
   moving:  { l:"En movimiento", dot:"#1A8A4E", bg:"#EAF3DE", text:"#3B6D11" },
   stopped: { l:"Detenido", dot:"#E24B4A", bg:"#FCEBEB", text:"#A32D2D" },
-  unknown: { l:"Sin datos", dot:"#9aa3ad", bg:"#f1f1f1", text:"#888" },
+  unknown: { l:"No data", dot:"#9aa3ad", bg:"#f1f1f1", text:"#888" },
 };
 const liveStatusMeta = (s) => LIVE_STATUS[s] || LIVE_STATUS.unknown;
 function timeAgo(iso) {
-  if (!iso) return "sin actualizar";
+  if (!iso) return "not updated";
   const t = new Date(iso).getTime();
-  if (isNaN(t)) return "sin actualizar";
+  if (isNaN(t)) return "not updated";
   const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (mins < 1) return "recién";
+  if (mins < 1) return "just now";
   if (mins < 60) return `hace ${mins} min`;
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `hace ${hrs} h`;
@@ -1204,7 +1204,7 @@ function billingReminderLink(b) {
 }
 function settlementWaLink(sheet, calc, brokerName, driverName) {
   const m = (n) => `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-  const netResult = calc.net >= 0 ? `Broker te debe ${m(calc.net)}` : `Le debés al broker ${m(-calc.net)}`;
+  const netResult = calc.net >= 0 ? `Broker owes you ${m(calc.net)}` : `You owe the broker ${m(-calc.net)}`;
   const txt = [
     `Closing Sheet #${sheet.closing_sheet_number || "-"} — ${brokerName || "-"}`,
     `Load date: ${sheet.load_date || "-"} | Driver: ${driverName || "-"}`,
@@ -1261,10 +1261,10 @@ const tripUpdateWaLink = (...args) => "https://wa.me/?text=" + encodeURIComponen
 const TRIP_EVENT_META = {
   job_added:          { l:"Job agregado", icon:"➕" },
   job_removed:        { l:"Job quitado", icon:"➖" },
-  storage_drop:       { l:"Dejado en storage", icon:"📦" },
-  storage_pickup:     { l:"Cargado de storage", icon:"🔼" },
+  storage_drop:       { l:"Dropped at storage", icon:"📦" },
+  storage_pickup:     { l:"Loaded from storage", icon:"🔼" },
   unplanned_pickup:   { l:"Pickup no previsto", icon:"🆕" },
-  delivery_completed: { l:"Entregado", icon:"✅" },
+  delivery_completed: { l:"Delivered", icon:"✅" },
 };
 const tripEventLabel = (v) => TRIP_EVENT_META[v]?.l || v;
 const EMPTY_UNPLANNED = { job_number:"", customer:"", volume:"", pickup_address:"", delivery_address:"", fadd:"", broker_id:"", sticker_color:"", lot_number:"" };
@@ -1320,7 +1320,7 @@ const money = (v) => (v || v === 0) && !isNaN(Number(v)) ? `$${Number(v).toLocal
 // ── List pagination: 15 rows per page, prev/next arrows. Filters run over the
 // full set first; only the page slice is rendered. ──
 const PAGE_SIZE = 15;
-function Pager({ page, total, onPage, pageSize = PAGE_SIZE, unit = "registros" }) {
+function Pager({ page, total, onPage, pageSize = PAGE_SIZE, unit = "records" }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const cur = Math.min(page, pages - 1);
   const from = total === 0 ? 0 : cur * pageSize + 1;
@@ -1328,7 +1328,7 @@ function Pager({ page, total, onPage, pageSize = PAGE_SIZE, unit = "registros" }
   const btn = (disabled) => ({ border:"1px solid #e5e5e5", background: disabled ? "#f7f7f7" : "#fff", color: disabled ? "#ccc" : "#444", borderRadius:7, minWidth:30, height:28, cursor: disabled ? "default" : "pointer", fontSize:15, lineHeight:1, display:"inline-flex", alignItems:"center", justifyContent:"center" });
   return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
-      <span style={{ fontSize:12, color:"#bbb" }}>{from}–{to} de {total} {unit}</span>
+      <span style={{ fontSize:12, color:"#bbb" }}>{from}–{to} of {total} {unit}</span>
       {pages > 1 && (
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <button disabled={cur <= 0} onClick={() => onPage(cur - 1)} style={btn(cur <= 0)} title="Anterior">←</button>
@@ -1354,7 +1354,7 @@ function monthGrid(anchorStr) {
 }
 function shiftDate(anchorStr, days) { const x = new Date(anchorStr + "T00:00:00"); x.setDate(x.getDate() + days); return fmtDateLocal(x); }
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-const DOW_ES = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+const DOW_ES = ["Dom","Lun","Mar","Wed","Jue","Vie","Sat"];
 function calEventColor(g) {
   const s = g.status || "scheduled";
   if (s === "cancelled") return { bg:"#FCEBEB", text:"#A32D2D", bar:"#E24B4A" };       // red
@@ -1388,7 +1388,7 @@ function waLink(g, storeLabel, brokerName, groupLink) {
 }
 
 // Sticker color: stored as free text, with a color swatch for the known names.
-const STICKER_COLORS = ["Rojo","Azul","Verde","Amarillo","Naranja","Rosa","Violeta","Blanco","Negro","Gris","Marrón"];
+const STICKER_COLORS = ["Rojo","Azul","Verde","Amarillo","Naranja","Rosa","Violeta","Blanco","Negro","Gris","Brown"];
 const COLOR_MAP = { rojo:"#e24b4a", red:"#e24b4a", azul:"#185FA5", blue:"#185FA5", verde:"#3B6D11", green:"#3B6D11", amarillo:"#EAB308", yellow:"#EAB308", naranja:"#EA7C27", orange:"#EA7C27", rosa:"#EC4899", pink:"#EC4899", violeta:"#7C3AED", purple:"#7C3AED", blanco:"#FFFFFF", white:"#FFFFFF", negro:"#111111", black:"#111111", gris:"#888888", gray:"#888888", "marrón":"#92400E", marron:"#92400E", brown:"#92400E" };
 const colorHex = (name) => { if (!name) return null; const k = name.trim().toLowerCase(); return COLOR_MAP[k] || null; };
 
@@ -1414,7 +1414,7 @@ const sitColor = {
 
 const Badge = ({ situation }) => {
   const c = sitColor[situation] || sitColor.Open;
-  const label = situation === "Close" ? "Cerrado" : situation === "Empty" ? "Vacio" : "Activo";
+  const label = situation === "Close" ? "Closed" : situation === "Empty" ? "Empty" : "Active";
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:500, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text }}>
       <span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />
@@ -1605,17 +1605,17 @@ function AIPanel({ records }) {
     const sameState = Object.entries(byState).filter(([,v])=>v>=3).map(([k,v])=>`${k}: ${v} storages`);
     const sameBrand = Object.entries(byBrand).filter(([,v])=>v>=3).map(([k,v])=>`${k}: ${v} unidades`);
 
-    const prompt = `Sos un experto en operaciones de empresas de mudanzas en USA. Analiza estos datos de storages activos y dame 4-6 recomendaciones concretas y accionables para mejorar la eficiencia y reducir costos. Se especifico, directo y práctico.
+    const prompt = `You are an expert in US moving-company operations. Analyze this active-storage data and give me 4-6 concrete, actionable recommendations to improve efficiency and reduce costs. Be specific, direct and practical.
 
-DATOS:
-- Total storages activos: ${active.length}
-- Costo mensual total registrado: $${totalCost.toLocaleString()} (${noCost} storages sin costo cargado)
-- Storages por estado: ${JSON.stringify(byState)}
-- Storages por empresa: ${JSON.stringify(byBrand)}
-- Estados con 3+ storages: ${sameState.join(", ") || "ninguno"}
-- Empresas con 3+ unidades: ${sameBrand.join(", ") || "ninguna"}
+DATA:
+- Total active storages: ${active.length}
+- Total monthly cost recorded: $${totalCost.toLocaleString()} (${noCost} storages with no cost entered)
+- Storages by state: ${JSON.stringify(byState)}
+- Storages by company: ${JSON.stringify(byBrand)}
+- States with 3+ storages: ${sameState.join(", ") || "none"}
+- Companies with 3+ units: ${sameBrand.join(", ") || "none"}
 
-Formato: lista numerada, cada recomendacion en 2-3 lineas max. Empieza directo con "1."`;
+Format: numbered list, each recommendation in 2-3 lines max. Start directly with "1."`;
 
     try {
       const res = await fetch("/api/analyze", {
@@ -1627,7 +1627,7 @@ Formato: lista numerada, cada recomendacion en 2-3 lineas max. Empieza directo c
       if (!res.ok) setResult(data.error || "No se pudo conectar con la IA.");
       else setResult(data.text || "No se pudo obtener respuesta.");
     } catch(e) {
-      setResult("Error al conectar con la IA. Intenta de nuevo.");
+      setResult("Error connecting to the AI. Try again.");
     }
     setLoading(false);
   }
@@ -1637,7 +1637,7 @@ Formato: lista numerada, cada recomendacion en 2-3 lineas max. Empieza directo c
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom: result ? 16 : 0 }}>
         <div>
           <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Recomendaciones con IA</div>
-          <div style={{ fontSize:12, color:"#bbb" }}>Analisis automatico de tu operacion de storages</div>
+          <div style={{ fontSize:12, color:"#bbb" }}>Automatic analysis of your storage operation</div>
         </div>
         <button onClick={analyze} disabled={loading}
           style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background: loading ? "#f5f5f5" : "#111", color: loading ? "#aaa" : "#fff", cursor: loading ? "not-allowed" : "pointer", flexShrink:0, display:"flex", alignItems:"center", gap:6 }}>
@@ -1672,7 +1672,7 @@ function LoginScreen() {
     if (isSignUp) {
       const { error } = await supabase.auth.signUp({ email, password });
       if (error) setError(error.message);
-      else setMessage("Cuenta creada. Revisa tu email para confirmar.");
+      else setMessage("Account created. Check your email to confirm.");
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) setError("Email o contrasena incorrectos.");
@@ -1688,7 +1688,7 @@ function LoginScreen() {
         <div style={{ marginBottom:24 }}>
           <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>No Borders Moving and Storage</div>
           <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>Storage Manager</h1>
-          <p style={{ fontSize:13, color:"#888", marginTop:6 }}>{isSignUp ? "Crea tu cuenta para acceder" : "Inicia sesion para continuar"}</p>
+          <p style={{ fontSize:13, color:"#888", marginTop:6 }}>{isSignUp ? "Create your account to sign in" : "Inicia sesion para continuar"}</p>
         </div>
         {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
         {message && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{message}</div>}
@@ -1696,10 +1696,10 @@ function LoginScreen() {
         <input style={{ ...inp2, marginBottom:16 }} type="password" placeholder="Contrasena" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
         <button onClick={handleSubmit} disabled={loading || !email || !password}
           style={{ width:"100%", padding:"11px", borderRadius:8, border:"none", background:"#111", color:"#fff", fontSize:14, fontWeight:600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginBottom:14 }}>
-          {loading ? "Cargando..." : isSignUp ? "Crear cuenta" : "Iniciar sesion"}
+          {loading ? "Loading..." : isSignUp ? "Create account" : "Iniciar sesion"}
         </button>
         <p style={{ textAlign:"center", fontSize:13, color:"#888", margin:0 }}>
-          {isSignUp ? "Ya tenes cuenta? " : "No tenes cuenta? "}
+          {isSignUp ? "Already have an account? " : "Don't have an account? "}
           <span onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null); }} style={{ color:"#111", fontWeight:600, cursor:"pointer", textDecoration:"underline" }}>
             {isSignUp ? "Inicia sesion" : "Registrate"}
           </span>
@@ -1732,7 +1732,7 @@ function JobCard({ job, onDeliver }) {
         )}
       </div>
       <div style={{ fontSize:12, color:"#666", display:"flex", flexWrap:"wrap", gap:"2px 12px" }}>
-        {job.customer && <span>Cliente: <strong style={{ color:"#333" }}>{job.customer}</strong></span>}
+        {job.customer && <span>Client: <strong style={{ color:"#333" }}>{job.customer}</strong></span>}
         {job.driver && <span>Driver: <strong style={{ color:"#333" }}>{job.driver}</strong></span>}
         {job.date_in && <span>In: {job.date_in}</span>}
         {job.date_out && <span>Out: {job.date_out}</span>}
@@ -1770,7 +1770,7 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
   async function addExistingJob() {
     const parts = allJobs.filter(j => jobKey(j) === pickKey);
     if (!parts.length) return;
-    if (parts.some(p => String(p.storage_id) === String(storageId))) { setErr("Ese job ya está en esta unidad."); return; }
+    if (parts.some(p => String(p.storage_id) === String(storageId))) { setErr("That job is already in this unit."); return; }
     setSaving(true); setErr(null);
     const tmpl = parts[0];
     const { id, storage_id, warehouse, created_at, updated_at, date_out, ...rest } = tmpl;
@@ -1783,7 +1783,7 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
   }
 
   async function addJob() {
-    if (!form.job_number && !form.customer && !form.driver) { setErr("Completá al menos job, cliente o driver."); return; }
+    if (!form.job_number && !form.customer && !form.driver) { setErr("Fill in at least job, client or driver."); return; }
     setSaving(true); setErr(null);
     const payload = {
       storage_id: storageId,
@@ -1809,8 +1809,8 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
   if (!dbReady) {
     return (
       <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"12px 14px", fontSize:13, color:"#854F0B" }}>
-        El historial de jobs necesita una configuración inicial de la base de datos.
-        {onSetup && <button onClick={onSetup} style={{ marginLeft:8, background:"none", border:"none", color:"#854F0B", fontWeight:600, textDecoration:"underline", cursor:"pointer", fontSize:13 }}>Ver cómo activarlo</button>}
+        The job history needs an initial database setup.
+        {onSetup && <button onClick={onSetup} style={{ marginLeft:8, background:"none", border:"none", color:"#854F0B", fontWeight:600, textDecoration:"underline", cursor:"pointer", fontSize:13 }}>See how to enable it</button>}
       </div>
     );
   }
@@ -1819,7 +1819,7 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
     <div>
       <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:14 }}>
         {active.length === 0 && delivered.length === 0 && (
-          <div style={{ fontSize:13, color:"#bbb", padding:"6px 0" }}>Todavía no hay jobs en esta unidad.</div>
+          <div style={{ fontSize:13, color:"#bbb", padding:"6px 0" }}>No jobs in this unit yet.</div>
         )}
         {active.map(j => <JobCard key={j.id} job={j} onDeliver={deliver} />)}
 
@@ -1841,9 +1841,9 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
 
       <div style={{ background:"#fafafa", border:"1px solid #f0f0f0", borderRadius:10, padding:"12px" }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:10 }}>
-          <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Agregar job</span>
+          <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Add job</span>
           <div style={{ display:"inline-flex", background:"#fff", border:"1px solid #e5e5e5", borderRadius:8, padding:2 }}>
-            {[["existing","Existente"],["new","Crear nuevo"]].map(([m,l]) => (
+            {[["existing","Existente"],["new","Create new"]].map(([m,l]) => (
               <button key={m} onClick={() => { setMode(m); setErr(null); }} type="button"
                 style={{ fontSize:12, fontWeight: mode===m?600:500, padding:"4px 10px", borderRadius:6, border:"none", cursor:"pointer", background: mode===m?"#111":"transparent", color: mode===m?"#fff":"#666" }}>{l}</button>
             ))}
@@ -1853,14 +1853,14 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
           <>
             <Field label="Job existente">
               <select style={inp} value={pickKey} onChange={e => { setPickKey(e.target.value); setErr(null); }}>
-                <option value="">— Seleccionar job —</option>
-                {candidates.map(g => <option key={g.key} value={g.key}>{[g.job_number || "(sin #)", g.customer].filter(Boolean).join(" — ")}</option>)}
+                <option value="">— Select job —</option>
+                {candidates.map(g => <option key={g.key} value={g.key}>{[g.job_number || "(no #)", g.customer].filter(Boolean).join(" — ")}</option>)}
               </select>
             </Field>
-            {candidates.length === 0 && <div style={{ fontSize:12, color:"#999", marginTop:6 }}>No hay otros jobs activos disponibles. Usá "Crear nuevo".</div>}
+            {candidates.length === 0 && <div style={{ fontSize:12, color:"#999", marginTop:6 }}>No other active jobs available. Use "Create new".</div>}
             {err && <div style={{ fontSize:12, color:"#b91c1c", marginTop:8 }}>{err}</div>}
             <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
-              <Btn primary disabled={saving || !pickKey} onClick={addExistingJob}>{saving ? "Agregando..." : "+ Agregar a esta unidad"}</Btn>
+              <Btn primary disabled={saving || !pickKey} onClick={addExistingJob}>{saving ? "Adding..." : "+ Add to this unit"}</Btn>
             </div>
           </>
         ) : (
@@ -1868,13 +1868,13 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
               <Field label="Job #"><input style={inp} value={form.job_number} onChange={e => setForm(f => ({...f, job_number:e.target.value}))} placeholder="B8417142" /></Field>
               <Field label="Date in"><input style={inp} type="date" value={form.date_in} onChange={e => setForm(f => ({...f, date_in:e.target.value}))} /></Field>
-              <Field label="Cliente"><input style={inp} value={form.customer} onChange={e => setForm(f => ({...f, customer:e.target.value}))} placeholder="Nombre del cliente" /></Field>
+              <Field label="Client"><input style={inp} value={form.customer} onChange={e => setForm(f => ({...f, customer:e.target.value}))} placeholder="Client name" /></Field>
               <Field label="Driver"><input style={inp} value={form.driver} onChange={e => setForm(f => ({...f, driver:e.target.value}))} placeholder="Driver" /></Field>
               <Field label="Notas" full><input style={inp} value={form.notes} onChange={e => setForm(f => ({...f, notes:e.target.value}))} placeholder="Notas del job" /></Field>
             </div>
             {err && <div style={{ fontSize:12, color:"#b91c1c", marginTop:8 }}>{err}</div>}
             <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
-              <Btn primary disabled={saving} onClick={addJob}>{saving ? "Agregando..." : "+ Agregar job"}</Btn>
+              <Btn primary disabled={saving} onClick={addJob}>{saving ? "Adding..." : "+ Add job"}</Btn>
             </div>
           </>
         )}
@@ -1887,7 +1887,7 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
 const NAV = [
   { section:"Operations", items:[
     { id:"dispatching", label:"Dispatching", icon:"🚚" },
-    { id:"calendario", label:"Calendario", icon:"📅" },
+    { id:"calendario", label:"Calendar", icon:"📅" },
     { id:"storage", label:"Storage", icon:"🏬" },
     { id:"jobs", label:"Jobs", icon:"💼" },
   ]},
@@ -1897,7 +1897,7 @@ const NAV = [
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
-    { id:"clientes", label:"Clientes", icon:"👥" },
+    { id:"clientes", label:"Clients", icon:"👥" },
   ]},
   { section:"Fleet", items:[
     { id:"drivers", label:"Drivers", icon:"🪪" },
@@ -1940,11 +1940,11 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDu
       </div>
       <div style={{ padding:"12px", borderTop:"1px solid #f3f3f3" }}>
         {dupCount > 0 && (
-          <button onClick={onShowDuplicates} title="Revisar posibles duplicados" style={{ width:"100%", marginBottom:8, padding:"8px", borderRadius:8, border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#B45309", fontSize:12, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-            🔍 {dupCount} duplicado{dupCount === 1 ? "" : "s"}
+          <button onClick={onShowDuplicates} title="Review possible duplicates" style={{ width:"100%", marginBottom:8, padding:"8px", borderRadius:8, border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#B45309", fontSize:12, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+            🔍 {dupCount} duplicate{dupCount === 1 ? "" : "s"}
           </button>
         )}
-        <button onClick={onSignOut} style={{ width:"100%", padding:"8px", borderRadius:8, border:"1px solid #eee", background:"#fff", color:"#888", fontSize:12, cursor:"pointer" }}>Salir</button>
+        <button onClick={onSignOut} style={{ width:"100%", padding:"8px", borderRadius:8, border:"1px solid #eee", background:"#fff", color:"#888", fontSize:12, cursor:"pointer" }}>Sign out</button>
       </div>
     </div>
   );
@@ -1952,21 +1952,21 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDu
 
 const PAGE_META = {
   dispatching: { title:"Dispatching", sub:"Despacho de pickups y deliveries" },
-  calendario:  { title:"Calendario", sub:"Pick ups programados" },
-  storage:     { title:"Storage", sub:"Unidades físicas y ocupación" },
-  jobs:        { title:"Jobs", sub:"Todos los trabajos con detalle completo" },
-  brokers:     { title:"Brokers", sub:"Brokers y balances pendientes" },
-  billing:     { title:"Billing", sub:"Cobro de storage a clientes" },
-  settlements: { title:"Carrier Settlements", sub:"Closing sheets de broker deliveries" },
-  extras:      { title:"Extras & Comisiones", sub:"Extras por job y comisiones de driver/rep" },
-  payments:    { title:"Payments", sub:"Cobros, efectivo en circulación y depósitos" },
-  clientes:    { title:"Clientes", sub:"Clientes y sus trabajos" },
-  drivers:     { title:"Drivers", sub:"Choferes de la operación" },
-  trucks:      { title:"Trucks", sub:"Flota de camiones" },
-  trips:       { title:"Trips / Live Load", sub:"Carga en vivo por camión" },
-  compliance:  { title:"Legal & Compliance", sub:"Empresas, documentos y vencimientos" },
-  analytics:   { title:"Analytics", sub:"Métricas y recomendaciones con IA" },
-  settings:    { title:"Settings", sub:"Configuración de la operación" },
+  calendario:  { title:"Calendar", sub:"Pick ups programados" },
+  storage:     { title:"Storage", sub:"Physical units and occupancy" },
+  jobs:        { title:"Jobs", sub:"All jobs with full detail" },
+  brokers:     { title:"Brokers", sub:"Brokers and outstanding balances" },
+  billing:     { title:"Billing", sub:"Client storage collection" },
+  settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
+  extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
+  payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
+  clientes:    { title:"Clients", sub:"Clients and their jobs" },
+  drivers:     { title:"Drivers", sub:"Operation drivers" },
+  trucks:      { title:"Trucks", sub:"Truck fleet" },
+  trips:       { title:"Trips / Live Load", sub:"Live load per truck" },
+  compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
+  analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
+  settings:    { title:"Settings", sub:"Operation settings" },
 };
 
 export default function App() {
@@ -2000,7 +2000,7 @@ export default function App() {
   const [whPicker, setWhPicker] = useState(null); // { name } | null
   const [whPickerKey, setWhPickerKey] = useState(""); // selected existing job key
   const [whPickerSaving, setWhPickerSaving] = useState(false);
-  // Top-level "+ Job a unidad" picker: choose a unit + an existing job (or create new).
+  // Top-level "+ Job to unit" picker: choose a unit + an existing job (or create new).
   const [unitJobPicker, setUnitJobPicker] = useState(false);
   const [ujUnitId, setUjUnitId] = useState("");
   const [ujKey, setUjKey] = useState("");
@@ -2983,7 +2983,7 @@ export default function App() {
   );
   const duePaymentsSoon = useMemo(
     () => records.filter(r => sit(r) === "Open" && (() => { const d = daysUntilDue(r); return d !== null && d <= 3; })())
-      .map(r => ({ id:r.id, label: [r.brand, r.unit].filter(Boolean).join(" ") || r.address || `Unidad #${r.id}`, days: daysUntilDue(r) }))
+      .map(r => ({ id:r.id, label: [r.brand, r.unit].filter(Boolean).join(" ") || r.address || `Unit #${r.id}`, days: daysUntilDue(r) }))
       .sort((a, b) => a.days - b.days),
     [records, sit]
   );
@@ -3096,7 +3096,7 @@ export default function App() {
       const todayNoDriver = (j.pickup_date === td || j.delivery_date === td) && !j.driver;
       if (!overdue && !todayNoDriver) continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, reason: overdue ? "FADD vencido" : "Sin driver para hoy" });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, reason: overdue ? "FADD vencido" : "No driver for today" });
     }
     return [...map.values()];
   }, [jobs]);
@@ -3264,7 +3264,7 @@ export default function App() {
   // Display name for a doc's entity (company/truck/driver).
   const entityName = useCallback((type, id) => {
     if (type === "company") return companyById[id]?.name || "—";
-    if (type === "truck") { const t = truckById[id]; return t ? (t.name || `Camión #${id}`) : "—"; }
+    if (type === "truck") { const t = truckById[id]; return t ? (t.name || `Truck #${id}`) : "—"; }
     if (type === "driver") return driverById[id]?.name || "—";
     return "—";
   }, [companyById, truckById, driverById]);
@@ -3396,7 +3396,7 @@ export default function App() {
     const m = {};
     for (const p of paymentRows) {
       if (!(isPhysical(p.method) && p.received && !p.banked)) continue;
-      const who = ((p.cash_with_whom || p.received_by || "").trim()) || "— Sin asignar —";
+      const who = ((p.cash_with_whom || p.received_by || "").trim()) || "— Unassigned —";
       if (!m[who]) m[who] = { name:who, total:0, cash:0, check:0, money_order:0, items:[] };
       m[who].total += p._net; m[who][p.method] = (m[who][p.method] || 0) + p._net; m[who].items.push(p);
     }
@@ -3472,7 +3472,7 @@ export default function App() {
     const jobDups = [];
     for (const rows of Object.values(byNum)) {
       const byCust = {};
-      for (const r of rows) { const c = (r.customer || "").trim() || "(sin cliente)"; (byCust[c] = byCust[c] || []).push(r); }
+      for (const r of rows) { const c = (r.customer || "").trim() || "(no client)"; (byCust[c] = byCust[c] || []).push(r); }
       if (Object.keys(byCust).length >= 2) {
         const variants = Object.entries(byCust).map(([customer, rs]) => ({ customer, ids: rs.map(r => r.id), status: rs[0].status, date: rs[0].date_in || (rs[0].created_at || "").slice(0, 10), key: jobKey(rs[0]) }));
         jobDups.push({ key: "job:" + (rows[0].job_number || "").toLowerCase(), number: rows[0].job_number, variants });
@@ -3509,14 +3509,14 @@ export default function App() {
   // Delete specific storage_jobs rows (a duplicate variant), cleaning up links.
   async function deleteJobRows(ids, label) {
     if (!ids || !ids.length) return;
-    if (!window.confirm(`¿Eliminar ${label || "estas filas del job"}? Esta acción no se puede deshacer.`)) return;
+    if (!window.confirm(`Delete ${label || "these job rows"}? This action cannot be undone.`)) return;
     if (!extrasMissing) await supabase.from("job_extras").delete().in("job_id", ids);
     if (!paymentsMissing) await supabase.from("payments").delete().in("job_id", ids);
     await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids);
     const { error } = await supabase.from("storage_jobs").delete().in("id", ids);
     if (error) { window.alert(error.message); return; }
     setJobs(prev => prev.filter(j => !ids.includes(j.id)));
-    showToast("Registro duplicado eliminado");
+    showToast("Duplicate record deleted");
     loadJobs(); if (!paymentsMissing) loadPayments(); if (!extrasMissing) loadExtras();
   }
 
@@ -3543,7 +3543,7 @@ export default function App() {
     // New unit duplicating an existing open unit → block with confirmation.
     if (!editId) {
       const dup = findStorageDup(form.brand, form.unit, form.state);
-      if (dup && !window.confirm(`${dup.brand} Unidad ${dup.unit}${dup.state ? ` en ${dup.state}` : ""} ya está abierta en el sistema.\n\n¿Seguro que querés crear un duplicado?`)) return;
+      if (dup && !window.confirm(`${dup.brand} Unit ${dup.unit}${dup.state ? ` en ${dup.state}` : ""} is already open in the system.\n\nAre you sure you want to create a duplicate?`)) return;
     }
     setSaving(true);
     const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, phone:form.phone||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
@@ -3562,7 +3562,7 @@ export default function App() {
   async function addExistingJobToWarehouse(key, name) {
     const parts = jobs.filter(j => jobKey(j) === key);
     if (!parts.length) { setWhPicker(null); return; }
-    if (parts.some(p => p.warehouse === name)) { showToast(`Ese job ya está en ${name}`); setWhPicker(null); return; }
+    if (parts.some(p => p.warehouse === name)) { showToast(`That job is already in ${name}`); setWhPicker(null); return; }
     const tmpl = parts[0];
     // Drop row-specific / server-managed fields; keep all job-level columns intact.
     const { id, storage_id, warehouse, created_at, updated_at, date_out, ...rest } = tmpl;
@@ -3581,7 +3581,7 @@ export default function App() {
   async function addExistingJobToUnit(key, storageId) {
     const parts = jobs.filter(j => jobKey(j) === key);
     if (!parts.length || !storageId) { setUnitJobPicker(false); return; }
-    if (parts.some(p => String(p.storage_id) === String(storageId))) { showToast("Ese job ya está en esa unidad"); setUnitJobPicker(false); return; }
+    if (parts.some(p => String(p.storage_id) === String(storageId))) { showToast("That job is already in that unit"); setUnitJobPicker(false); return; }
     const tmpl = parts[0];
     const { id, storage_id, warehouse, created_at, updated_at, date_out, ...rest } = tmpl;
     const row = { ...rest, storage_id: Number(storageId), warehouse: null, date_out: null, created_by: userEmail };
@@ -3603,7 +3603,7 @@ export default function App() {
   async function deleteJob(g) {
     const ids = (g.parts && g.parts.length ? g.parts.map(p => p.id) : jobs.filter(j => jobKey(j) === g.key).map(j => j.id));
     if (!ids.length) return;
-    if (!window.confirm(`¿Seguro que querés eliminar el job ${g.job_number || "(sin #)"} — ${g.customer || "sin cliente"}? Esta acción no se puede deshacer.`)) return;
+    if (!window.confirm(`Are you sure you want to delete job ${g.job_number || "(no #)"} — ${g.customer || "no client"}? This action cannot be undone.`)) return;
     // Clean up related records first (FKs cascade for extras/billing, but be explicit).
     if (!extrasMissing) await supabase.from("job_extras").delete().in("job_id", ids);
     if (!paymentsMissing) await supabase.from("payments").delete().in("job_id", ids);
@@ -3650,7 +3650,7 @@ export default function App() {
   }
   async function saveJob() {
     // Storage is optional — a job can be saved with no unit/warehouse (storage_id null).
-    if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Completá al menos job, cliente o driver."); return; }
+    if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Fill in at least job, client or driver."); return; }
     setJobSaving(true); setJobErr(null);
     const fields = {
       job_number: jobForm.job_number || null,
@@ -3819,7 +3819,7 @@ export default function App() {
     loadBrokers();
   }
   async function deleteBroker(b) {
-    if (!window.confirm(`Eliminar el broker "${b.name}"? Los jobs asociados quedan sin broker.`)) return;
+    if (!window.confirm(`Delete broker "${b.name}"? Los jobs asociados quedan sin broker.`)) return;
     await supabase.from("brokers").delete().eq("id", b.id);
     loadBrokers();
   }
@@ -3841,7 +3841,7 @@ export default function App() {
     loadDrivers();
   }
   async function deleteDriver(d) {
-    if (!window.confirm(`Eliminar el driver "${d.name}"?`)) return;
+    if (!window.confirm(`Delete driver "${d.name}"?`)) return;
     await supabase.from("drivers").delete().eq("id", d.id);
     loadDrivers();
   }
@@ -3911,7 +3911,7 @@ export default function App() {
     loadClosingSheets();
   }
   async function deleteCs(s) {
-    if (!window.confirm(`Eliminar el closing sheet #${s.closing_sheet_number || s.id}? Los jobs quedan sin asignar.`)) return;
+    if (!window.confirm(`Delete closing sheet #${s.closing_sheet_number || s.id}? Jobs are left unassigned.`)) return;
     await supabase.from("storage_jobs").update({ closing_sheet_id: null }).eq("closing_sheet_id", s.id);
     await supabase.from("closing_sheets").delete().eq("id", s.id);
     setCsDetailId(null); loadClosingSheets(); loadJobs();
@@ -3957,7 +3957,7 @@ export default function App() {
     setShowTruckModal(false); loadTrucks();
   }
   async function deleteTruck(t) {
-    if (!window.confirm(`Eliminar el camión "${t.name}"?`)) return;
+    if (!window.confirm(`Delete truck "${t.name}"?`)) return;
     await supabase.from("trucks").delete().eq("id", t.id); loadTrucks();
   }
 
@@ -3970,7 +3970,7 @@ export default function App() {
   // Geocode the typed address via the serverless proxy and fill lat/lng/label.
   async function geocodeLoc() {
     const q = locForm.query.trim();
-    if (!q) { setLocErr("Escribí una dirección para buscar."); return; }
+    if (!q) { setLocErr("Type an address to search."); return; }
     setLocBusy(true); setLocErr(null);
     try {
       const r = await fetch("/api/geocode?q=" + encodeURIComponent(q));
@@ -3982,14 +3982,14 @@ export default function App() {
   }
   async function saveLoc() {
     const lat = parseFloat(locForm.lat), lng = parseFloat(locForm.lng);
-    if (isNaN(lat) || isNaN(lng)) { setLocErr("Faltan las coordenadas (buscá una dirección o cargá lat/lng)."); return; }
+    if (isNaN(lat) || isNaN(lng)) { setLocErr("Missing coordinates (search an address or enter lat/lng)."); return; }
     setLocBusy(true); setLocErr(null);
     const payload = { last_lat: lat, last_lng: lng, last_location: locForm.label || null, last_status: locForm.status || null, last_location_at: new Date().toISOString() };
     const { error } = await supabase.from("trucks").update(payload).eq("id", locModal.id);
     setLocBusy(false);
     if (error) { setLocErr(error.message); return; }
     setLocModal(null);
-    showToast(`Ubicación actualizada · ${locModal.name}`);
+    showToast(`Location updated · ${locModal.name}`);
     loadTrucks();
   }
 
@@ -4012,7 +4012,7 @@ export default function App() {
     setShowCompanyModal(false); loadCompanies();
   }
   async function deleteCompany(c) {
-    if (!window.confirm(`Eliminar la empresa "${c.name}" y todos sus documentos?`)) return;
+    if (!window.confirm(`Delete company "${c.name}" y todos sus documentos?`)) return;
     await supabase.from("compliance_documents").delete().eq("entity_type", "company").eq("entity_id", c.id);
     await supabase.from("companies").delete().eq("id", c.id);
     loadCompanies(); loadComplianceDocs();
@@ -4028,7 +4028,7 @@ export default function App() {
     setShowDocModal(true);
   }
   async function saveDoc() {
-    if (!docForm.entity_id) { window.alert("Elegí a quién pertenece el documento."); return; }
+    if (!docForm.entity_id) { window.alert("Choose who the document belongs to."); return; }
     setDocSaving(true);
     const payload = {
       entity_type: docForm.entity_type, entity_id: Number(docForm.entity_id),
@@ -4045,7 +4045,7 @@ export default function App() {
     setShowDocModal(false); loadComplianceDocs();
   }
   async function deleteDoc(d) {
-    if (!window.confirm(`Eliminar el documento "${docTypeLabel(d.document_type)}"?`)) return;
+    if (!window.confirm(`Delete document "${docTypeLabel(d.document_type)}"?`)) return;
     await supabase.from("compliance_documents").delete().eq("id", d.id); loadComplianceDocs();
   }
   // Upload a photo/PDF to the compliance-docs bucket. If `doc` has an id, attach to it;
@@ -4057,7 +4057,7 @@ export default function App() {
       const ext = (file.name.split(".").pop() || "bin").toLowerCase();
       const path = `comp-${doc?.id || "new"}-${Date.now()}.${ext}`;
       const { error } = await supabase.storage.from("compliance-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
-      if (error) { window.alert("Error al subir: " + error.message); setCompDocUploading(false); return; }
+      if (error) { window.alert("Upload error: " + error.message); setCompDocUploading(false); return; }
       const { data } = supabase.storage.from("compliance-docs").getPublicUrl(path);
       const url = data?.publicUrl || "";
       if (doc?.id) { await supabase.from("compliance_documents").update({ document_url: url }).eq("id", doc.id); loadComplianceDocs(); }
@@ -4137,11 +4137,11 @@ export default function App() {
   // Manual trip status change — always dispatcher-initiated and confirmed.
   async function setTripStatus(t, status) {
     const label = (TRIP_STATUS[status]?.l) || status;
-    if (!window.confirm(`¿Cambiar el estado del trip ${t.trip_number || "#"+t.id} a "${label}"?`)) return;
+    if (!window.confirm(`Change the status of trip ${t.trip_number || "#"+t.id} to "${label}"?`)) return;
     await supabase.from("trips").update({ status }).eq("id", t.id); loadTrips();
   }
   async function deleteTrip(t) {
-    if (!window.confirm(`Eliminar trip ${t.trip_number || t.id}? Los jobs quedan sin trip.`)) return;
+    if (!window.confirm(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`)) return;
     await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null }).eq("trip_id", t.id);
     await supabase.from("trips").delete().eq("id", t.id);
     loadTrips(); loadJobs();
@@ -4269,7 +4269,7 @@ export default function App() {
     // Optional status alignment (never forced).
     if (meta.status) {
       const ids = jobs.filter(j => jobKey(j) === jobKeyStr).map(j => j.id);
-      if (ids.length && window.confirm(`¿Actualizar el estado del job a "${statusMeta(meta.status).l}"?`)) {
+      if (ids.length && window.confirm(`Update the job status to "${statusMeta(meta.status).l}"?`)) {
         const patch = { status: meta.status, updated_by: userEmail, updated_at: new Date().toISOString() };
         if (meta.status === "delivered") patch.date_out = f.event_date || today();
         await supabase.from("storage_jobs").update(patch).in("id", ids);
@@ -4279,7 +4279,7 @@ export default function App() {
     showToast("Evento agregado");
   }
   async function deleteJobEvent(ev) {
-    if (!window.confirm("¿Eliminar este evento del timeline?")) return;
+    if (!window.confirm("Delete this timeline event?")) return;
     await supabase.from("job_events").delete().eq("id", ev.id);
     loadJobEvents();
   }
@@ -4393,7 +4393,7 @@ export default function App() {
     setEmpSaving(false); setEmpForm(EMPTY_EMPLOYEE); loadEmployees();
   }
   async function deleteEmployee(em) {
-    if (!window.confirm(`Eliminar a "${em.name}"?`)) return;
+    if (!window.confirm(`Delete "${em.name}"?`)) return;
     await supabase.from("employees").delete().eq("id", em.id); loadEmployees();
   }
   // Per-driver export: build a plain-text payment summary, copy to clipboard.
@@ -4404,16 +4404,16 @@ export default function App() {
       lines.push(`Job ${jd.job_number || "—"} · ${jd.customer || ""}`.trim());
       for (const e of jd.extras) {
         totAmt += numv(e.amount); totComm += numv(e.driver_commission_amount);
-        lines.push(`   ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}: $${numv(e.amount).toLocaleString()}  →  comisión driver $${numv(e.driver_commission_amount).toLocaleString()} (${numv(e.driver_commission_pct)}%)`);
+        lines.push(`   ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}: $${numv(e.amount).toLocaleString()}  →  commission driver $${numv(e.driver_commission_amount).toLocaleString()} (${numv(e.driver_commission_pct)}%)`);
       }
     }
-    lines.push("", `TOTAL EXTRAS: $${totAmt.toLocaleString()}`, `TOTAL COMISIÓN DRIVER: $${totComm.toLocaleString()}`);
+    lines.push("", `TOTAL EXTRAS: $${totAmt.toLocaleString()}`, `TOTAL COMMISSION DRIVER: $${totComm.toLocaleString()}`);
     return lines.join("\n");
   }
   async function copyDriverExtras(driverName, monthLabel, jobsData) {
     const txt = driverExtrasReport(driverName, monthLabel, jobsData);
     try { await navigator.clipboard.writeText(txt); window.alert("Resumen copiado al portapapeles."); }
-    catch { window.prompt("Copiá el resumen:", txt); }
+    catch { window.prompt("Copy the summary:", txt); }
   }
   function printDriverExtras(driverName, monthLabel, jobsData) {
     let totAmt = 0, totComm = 0;
@@ -4424,7 +4424,7 @@ export default function App() {
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Extras ${driverName}</title>
       <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
       <body><h1>Extras & Comisiones — ${driverName}</h1><div class="sub">${monthLabel}</div>
-      <table><thead><tr><th>Job #</th><th>Cliente</th><th>Extra</th><th style="text-align:right">Monto</th><th style="text-align:right">%</th><th style="text-align:right">Comisión</th></tr></thead>
+      <table><thead><tr><th>Job #</th><th>Client</th><th>Extra</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th><th style="text-align:right">Commission</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#999">Sin extras</td></tr>'}</tbody>
       <tfoot><tr><td colspan="3">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
       <script>window.onload=function(){window.print();}</script></body></html>`;
@@ -4439,16 +4439,16 @@ export default function App() {
       lines.push(`Job ${jd.job_number || "—"} · ${jd.customer || ""}${jd.driverName ? ` · 🧑‍✈️ ${jd.driverName}` : ""}`.trim());
       for (const e of jd.extras) {
         totAmt += numv(e.amount); totComm += numv(e.rep_commission_amount);
-        lines.push(`   ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}: $${numv(e.amount).toLocaleString()}  →  comisión rep $${numv(e.rep_commission_amount).toLocaleString()} (${numv(e.rep_commission_pct)}%)`);
+        lines.push(`   ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}: $${numv(e.amount).toLocaleString()}  →  commission rep $${numv(e.rep_commission_amount).toLocaleString()} (${numv(e.rep_commission_pct)}%)`);
       }
     }
-    lines.push("", `TOTAL EXTRAS: $${totAmt.toLocaleString()}`, `TOTAL COMISIÓN REP: $${totComm.toLocaleString()}`);
+    lines.push("", `TOTAL EXTRAS: $${totAmt.toLocaleString()}`, `TOTAL COMMISSION REP: $${totComm.toLocaleString()}`);
     return lines.join("\n");
   }
   async function copyRepExtras(repName, monthLabel, jobsData) {
     const txt = repExtrasReport(repName, monthLabel, jobsData);
     try { await navigator.clipboard.writeText(txt); window.alert("Resumen copiado al portapapeles."); }
-    catch { window.prompt("Copiá el resumen:", txt); }
+    catch { window.prompt("Copy the summary:", txt); }
   }
   function printRepExtras(repName, monthLabel, jobsData) {
     let totAmt = 0, totComm = 0;
@@ -4459,7 +4459,7 @@ export default function App() {
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comisiones ${repName}</title>
       <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
       <body><h1>Comisiones Rep — ${repName}</h1><div class="sub">${monthLabel}</div>
-      <table><thead><tr><th>Job #</th><th>Cliente</th><th>Driver</th><th>Extra</th><th style="text-align:right">Monto</th><th style="text-align:right">%</th><th style="text-align:right">Comisión</th></tr></thead>
+      <table><thead><tr><th>Job #</th><th>Client</th><th>Driver</th><th>Extra</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th><th style="text-align:right">Commission</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#999">Sin extras</td></tr>'}</tbody>
       <tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
       <script>window.onload=function(){window.print();}</script></body></html>`;
@@ -4501,7 +4501,7 @@ export default function App() {
       const ext = (file.name.split(".").pop() || "bin").toLowerCase();
       const path = `pay-${editingPayId || "new"}-${field}-${Date.now()}.${ext}`;
       const { error } = await supabase.storage.from("payment-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
-      if (error) { window.alert("Error al subir: " + error.message); setPayDocUploading(false); return; }
+      if (error) { window.alert("Upload error: " + error.message); setPayDocUploading(false); return; }
       const { data } = supabase.storage.from("payment-docs").getPublicUrl(path);
       setPayForm(f => ({ ...f, [field]: data?.publicUrl || "" }));
     } catch (e) { window.alert("Error: " + e.message); }
@@ -4603,10 +4603,10 @@ export default function App() {
     const lines = (f.split_lines || []).filter(l => l.amount !== "" && numv(l.amount) !== 0);
     const total = numv(f.amount);
     const splitTotal = lines.reduce((s, l) => s + numv(l.amount), 0);
-    if (!lines.length) { window.alert("Agregá al menos una línea con monto."); return; }
+    if (!lines.length) { window.alert("Add at least one line with an amount."); return; }
     if (Math.abs(splitTotal - total) > 0.01) { window.alert(`El total de las divisiones ($${splitTotal.toLocaleString()}) no coincide con el monto ingresado ($${total.toLocaleString()}).`); return; }
     const hasExtra = lines.some(l => splitConcept(l.concept).extra);
-    if (hasExtra && !f.job_id) { window.alert("Seleccioná un job para poder registrar los extras y sus comisiones."); return; }
+    if (hasExtra && !f.job_id) { window.alert("Select a job to record the extras and their commissions."); return; }
     setPaySaving(true);
     const group = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now());
     const base = payPayload(f);
@@ -4646,7 +4646,7 @@ export default function App() {
     if (createdExtras.length) {
       const toAssign = [];
       for (const e of createdExtras) {
-        if (window.confirm(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} registrado. ¿Asignar comisión ahora?`)) toAssign.push(e);
+        if (window.confirm(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`)) toAssign.push(e);
       }
       if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
     }
@@ -4655,7 +4655,7 @@ export default function App() {
     const f = payForm;
     // Duplicate check / money-order serial → block with an explicit confirmation.
     const serialDup = f.method === "check" ? findCheckSerialDup(f.check_serial) : f.method === "money_order" ? findMoSerialDup(f.mo_serial) : null;
-    if (serialDup && !window.confirm(`El número ${serialDup.serial} ya fue registrado ($${Math.round(serialDup.amount).toLocaleString()} el ${serialDup.date}, job ${serialDup.job_number}).\n\nEste número de serie ya está en el sistema. ¿Seguro que querés guardar un duplicado?`)) return;
+    if (serialDup && !window.confirm(`Number ${serialDup.serial} was already recorded ($${Math.round(serialDup.amount).toLocaleString()} on ${serialDup.date}, job ${serialDup.job_number}).\n\nThis serial number is already in the system. Are you sure you want to save a duplicate?`)) return;
     if (f.split_enabled && !editingPayId && !splitMissing) { await saveSplitPayment(f); return; }
     setPaySaving(true);
     const payload = payPayload(f);
@@ -4713,7 +4713,7 @@ export default function App() {
     loadPayments();
   }
   async function deletePaymentRow(p) {
-    if (!window.confirm("¿Eliminar este pago?")) return;
+    if (!window.confirm("Delete this payment?")) return;
     if (p.cc_fee_payment_id) await supabase.from("payments").delete().eq("id", p.cc_fee_payment_id);
     if (!extrasMissing && !splitMissing) await supabase.from("job_extras").delete().eq("payment_id", p.id);
     await supabase.from("payments").delete().eq("id", p.id); loadPayments(); loadExtras();
@@ -4721,7 +4721,7 @@ export default function App() {
   // Delete every payment row in a split group (and any extras / cc-fee children linked to them).
   async function deleteSplitGroup(rows) {
     if (!rows.length) return;
-    if (!window.confirm(`¿Eliminar este pago dividido (${rows.length} líneas)?`)) return;
+    if (!window.confirm(`Delete this split payment (${rows.length} lines)?`)) return;
     const ids = rows.map(r => r.id);
     const feeIds = rows.map(r => r.cc_fee_payment_id).filter(Boolean);
     if (!extrasMissing && !splitMissing) await supabase.from("job_extras").delete().in("payment_id", ids);
@@ -4766,7 +4766,7 @@ export default function App() {
       const ext = (file.name.split(".").pop() || "bin").toLowerCase();
       const path = `cs-${sheet?.id || "new"}-${Date.now()}.${ext}`;
       const { error } = await supabase.storage.from("closing-sheet-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
-      if (error) { window.alert("Error al subir: " + error.message); setDocUploading(false); return; }
+      if (error) { window.alert("Upload error: " + error.message); setDocUploading(false); return; }
       const { data } = supabase.storage.from("closing-sheet-docs").getPublicUrl(path);
       const url = data?.publicUrl || "";
       if (sheet?.id) { await supabase.from("closing_sheets").update({ document_url: url }).eq("id", sheet.id); loadClosingSheets(); }
@@ -4777,19 +4777,19 @@ export default function App() {
   function exportCsPdf(sheet, calc, brokerNm, driverNm, jobsIn) {
     const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
     const rows = jobsIn.map(j => `<tr><td>${j.job_number||"-"}</td><td>${j.customer||"-"}</td><td>${Math.round(parseCf(j.volume))} CF</td><td>${m(numv(j.carrier_rate_per_cf))}</td><td>${m(parseCf(j.volume)*numv(j.carrier_rate_per_cf))}</td><td>${m(numv(j.bol_balance))}</td><td>${m(numv(j.bol_collected))}</td></tr>`).join("");
-    const net = calc.net >= 0 ? `Broker te debe ${m(calc.net)}` : `Le debés al broker ${m(-calc.net)}`;
+    const net = calc.net >= 0 ? `Broker owes you ${m(calc.net)}` : `You owe the broker ${m(-calc.net)}`;
     const html = `<html><head><meta charset="utf-8"><title>CS ${sheet.closing_sheet_number||""}</title>
       <style>body{font-family:system-ui,sans-serif;padding:30px;color:#111}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f5f5f5}.box{border:1px solid #ddd;border-radius:8px;padding:12px;margin-top:10px}.r{display:flex;justify-content:space-between;font-size:13px;margin:3px 0}</style></head>
       <body><h1>Closing Sheet #${sheet.closing_sheet_number||"-"}</h1>
       <div>Broker: <b>${brokerNm||"-"}</b> · Driver: ${driverNm||"-"} · Load date: ${sheet.load_date||"-"} · Status: ${sheet.status}</div>
-      <table><thead><tr><th>Job #</th><th>Cliente</th><th>CF</th><th>Rate/CF</th><th>Carrier fee</th><th>BOL balance</th><th>Collected</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>Job #</th><th>Client</th><th>CF</th><th>Rate/CF</th><th>Carrier fee</th><th>BOL balance</th><th>Collected</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="box"><div class="r"><span>Carrier fee subtotal</span><b>${m(calc.carrierFee)}</b></div>
       <div class="r"><span>− Trip cost</span><span>${m(numv(sheet.trip_cost))}</span></div>
       <div class="r"><span>− Labor</span><span>${m(numv(sheet.labor_charges))}</span></div>
       <div class="r"><span>− Other fees</span><span>${m(numv(sheet.other_fees))}</span></div>
       <div class="r"><span>− Pads (${calc.padsMissing})</span><span>${m(calc.padsCharge)}</span></div>
       <div class="r" style="border-top:1px solid #ddd;padding-top:6px;margin-top:6px"><span><b>Broker te debe</b></span><b>${m(calc.netCarrier)}</b></div></div>
-      <div class="box"><div class="r"><span>BOL cobrado a clientes</span><b>${m(calc.bolCollected)}</b></div><div class="r"><span>Pendiente de cobro</span><span>${m(calc.pending)}</span></div></div>
+      <div class="box"><div class="r"><span>BOL cobrado a clientes</span><b>${m(calc.bolCollected)}</b></div><div class="r"><span>Pending collection</span><span>${m(calc.pending)}</span></div></div>
       <div class="box" style="text-align:center;font-size:16px;font-weight:700">${net}</div>
       </body></html>`;
     const w = window.open("", "_blank");
@@ -4911,7 +4911,7 @@ export default function App() {
   }
 
   async function deleteRecord(id) {
-    if (!window.confirm("Eliminar este storage?")) return;
+    if (!window.confirm("Delete this storage?")) return;
     await supabase.from("storages").delete().eq("id", id);
     setDetailId(null);
   }
@@ -4940,7 +4940,7 @@ export default function App() {
       const zip = await JSZip.loadAsync(file);
       let chatFile = Object.keys(zip.files).find(n => /chat.*\.txt$/i.test(n) && !zip.files[n].dir);
       if (!chatFile) chatFile = Object.keys(zip.files).find(n => /\.txt$/i.test(n) && !zip.files[n].dir);
-      if (!chatFile) { setZipStatus("No se encontro un archivo .txt dentro del ZIP."); return; }
+      if (!chatFile) { setZipStatus("No .txt file found inside the ZIP."); return; }
       const text = await zip.files[chatFile].async("string");
       const parsed = parseWhatsAppExport(text);
       if (!parsed.length) { setZipStatus("No se detectaron mensajes con datos de storage."); return; }
@@ -4996,17 +4996,17 @@ export default function App() {
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           {page === "storage" && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
-          {page === "storage" && <Btn onClick={openAdd}>+ Unidad</Btn>}
+          {page === "storage" && <Btn onClick={openAdd}>+ Unit</Btn>}
           {page === "storage" && storageTab === "storage_units" && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
           {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
           {page === "settlements" && !csDetailId && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
           {page === "trips" && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
-          {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Camión</Btn>}
-          {page === "extras" && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Empleados</Btn>}
-          {page === "payments" && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Pago</Btn>}
-          {page === "compliance" && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Documento</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Empresa</Btn></>}
-          {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ Nuevo job</Btn>}
+          {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
+          {page === "extras" && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
+          {page === "payments" && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
+          {page === "compliance" && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Documento</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
+          {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
       </div>
 
@@ -5019,53 +5019,53 @@ export default function App() {
 
       {paymentColMissing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
-          Para el seguimiento de pagos, agregá la columna una sola vez en Supabase (SQL Editor):
+          To track payments, add the column once in Supabase (SQL Editor):
           <code style={{ display:"block", marginTop:6, fontFamily:"monospace", fontSize:12 }}>alter table public.storages add column if not exists payment_due_date date;</code>
         </div>
       )}
 
       {faddColMissing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
-          Para el FADD / Dispatching, agregá la columna una sola vez en Supabase (SQL Editor):
+          For FADD / Dispatching, add the column once in Supabase (SQL Editor):
           <code style={{ display:"block", marginTop:6, fontFamily:"monospace", fontSize:12 }}>alter table public.storage_jobs add column if not exists fadd date;</code>
         </div>
       )}
 
       {jobColsMissing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
-          Para el CRM de Dispatching (tipo de job, estados, pickup/delivery), agregá estas columnas una sola vez en Supabase (SQL Editor):
+          For the Dispatching CRM (job type, statuses, pickup/delivery), add these columns once in Supabase (SQL Editor):
           <code style={{ display:"block", marginTop:6, fontFamily:"monospace", fontSize:12, whiteSpace:"pre-wrap" }}>{JOB_COLS_SQL}</code>
         </div>
       )}
 
       {crmV2Missing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <span>Para Brokers y los balances de pickup/delivery, corré este SQL una sola vez en Supabase (SQL Editor).</span>
+          <span>For Brokers and pickup/delivery balances, run this SQL once in Supabase (SQL Editor).</span>
           <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
         </div>
       )}
 
       {billingMissing && page !== "billing" && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <span>Para Billing y la ocupación de storage (capacidad CF), corré el SQL de configuración una sola vez en Supabase.</span>
+          <span>For Billing and storage occupancy (CF capacity), run the setup SQL once in Supabase.</span>
           <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
         </div>
       )}
 
       {crmV3Missing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <span>Para Drivers, multi-asignación, rep y los campos financieros nuevos, corré el SQL de configuración una sola vez en Supabase.</span>
+          <span>For Drivers, multi-assignment, rep and the new financial fields, run the setup SQL once in Supabase.</span>
           <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
         </div>
       )}
 
       {page === "storage" && duePaymentsSoon.length > 0 && (
         <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D" }}>
-          <strong>⚠️ {duePaymentsSoon.length} pago(s) vencen en 3 días o menos:</strong>
+          <strong>⚠️ {duePaymentsSoon.length} payment(s) due in 3 days or less:</strong>
           <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
             {duePaymentsSoon.map(p => (
               <span key={p.id} onClick={() => setDetailId(p.id)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
-                {p.label} · {p.days < 0 ? "vencido" : p.days === 0 ? "hoy" : `${p.days}d`}
+                {p.label} · {p.days < 0 ? "overdue" : p.days === 0 ? "today" : `${p.days}d`}
               </span>
             ))}
           </div>
@@ -5077,11 +5077,11 @@ export default function App() {
         <>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:10, marginBottom:16 }}>
             {[
-              { label:"Pickups hoy", value:dispatchMetrics.pickups, color:"#185FA5" },
-              { label:"Deliveries hoy", value:dispatchMetrics.deliveries, color:"#3B6D11" },
+              { label:"Pickups today", value:dispatchMetrics.pickups, color:"#185FA5" },
+              { label:"Deliveries today", value:dispatchMetrics.deliveries, color:"#3B6D11" },
               { label:"FADD overdue", value:faddStats.overdue, color:"#A32D2D" },
-              { label:"FADD esta semana", value:faddStats.dueWeek, color:"#C2410C" },
-              { label:"En storage", value:dispatchMetrics.inStorage, color:"#7C3AED" },
+              { label:"FADD this week", value:faddStats.dueWeek, color:"#C2410C" },
+              { label:"In storage", value:dispatchMetrics.inStorage, color:"#7C3AED" },
               { label:"Balance pickup pend.", value:"$"+dispatchMetrics.puBal.toLocaleString(), color:"#1A8A4E" },
               { label:"Balance delivery pend.", value:"$"+dispatchMetrics.delBal.toLocaleString(), color:"#1A8A4E" },
               { label:"Billing overdue", value:billingOverdueCount, color:"#A32D2D" },
@@ -5096,8 +5096,8 @@ export default function App() {
           {duplicateReport.total > 0 && (
             <div onClick={() => setShowDupModal(true)} style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#B45309", display:"flex", alignItems:"center", gap:8, cursor:"pointer", flexWrap:"wrap" }}>
               <span style={{ fontSize:16 }}>🔍</span>
-              <b>{duplicateReport.total} posible{duplicateReport.total === 1 ? "" : "s"} duplicado{duplicateReport.total === 1 ? "" : "s"}</b>
-              <span style={{ color:"#a07d3a" }}>· Jobs {duplicateReport.jobs.length} · Pagos {duplicateReport.payments.length} · Storages {duplicateReport.storages.length}</span>
+              <b>{duplicateReport.total} posible{duplicateReport.total === 1 ? "" : "s"} duplicate{duplicateReport.total === 1 ? "" : "s"}</b>
+              <span style={{ color:"#a07d3a" }}>· Jobs {duplicateReport.jobs.length} · Payments {duplicateReport.payments.length} · Storages {duplicateReport.storages.length}</span>
               <span style={{ marginLeft:"auto", textDecoration:"underline", fontWeight:600 }}>Revisar →</span>
             </div>
           )}
@@ -5105,7 +5105,7 @@ export default function App() {
           {dispatchAlerts.length > 0 && !bannerDismissed && (
             <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:13, color:"#A32D2D", display:"flex", alignItems:"flex-start", gap:10 }}>
               <div style={{ flex:1 }}>
-                <strong>⚠️ {dispatchAlerts.length} job(s) requieren atención:</strong>
+                <strong>⚠️ {dispatchAlerts.length} job(s) need attention:</strong>
                 <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
                   {dispatchAlerts.map(a => (
                     <span key={a.key} onClick={() => setJobDetailKey(a.key)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
@@ -5114,12 +5114,12 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              <button onClick={() => setBannerDismissed(true)} title="Descartar" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#A32D2D", flexShrink:0 }}>×</button>
+              <button onClick={() => setBannerDismissed(true)} title="Dismiss" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#A32D2D", flexShrink:0 }}>×</button>
             </div>
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","Todos"],["pickups_today","Pick ups hoy"],["deliveries_today","Deliveries hoy"],["in_storage","En storage"],["on_hold","On hold"],["no_trip","Sin trip asignado"],["nofadd","Sin FADD"]].map(([t,l]) => (
+            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -5127,10 +5127,10 @@ export default function App() {
 
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
             <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar por job #, cliente, driver, pickup, delivery..."
+              placeholder="Search by job #, client, driver, pickup, delivery..."
               style={{ ...inp, flex:1, minWidth:180 }} />
             <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
-              <option value="">Todos los drivers</option>
+              <option value="">All drivers</option>
               {drivers.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
@@ -5140,7 +5140,7 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Estado","Job #","Tipo","Broker","Rep","Cliente","FADD","Pickup","Delivery","CF","Sticker","Driver","Trip","Bal. pickup","Bal. delivery","Storage","Acciones"].map((h, i) => (
+                    {["Status","Job #","Type","Broker","Rep","Client","FADD","Pickup","Delivery","CF","Sticker","Driver","Trip","Bal. pickup","Bal. delivery","Storage","Actions"].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -5164,10 +5164,10 @@ export default function App() {
                       <td style={{ padding:"12px" }}><StatusBadge status={g.status} /></td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
-                          {!g.sticker_color && <span title="Sticker sin asignar" style={{ cursor:"help" }}>⚠️</span>}
+                          {!g.sticker_color && <span title="Sticker unassigned" style={{ cursor:"help" }}>⚠️</span>}
                           <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(ver)"}</button>
                           {g.job_type === "broker_delivery" && (g.status === "delivered" || g.parts?.some(p => p.date_out)) && numv(g.bol_collected) < numv(g.bol_balance) && numv(g.bol_balance) > 0 && (
-                            <span title="Cobro BOL pendiente" style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Cobro pendiente</span>
+                            <span title="BOL collection pending" style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Collection pending</span>
                           )}
                           {jobKeysWithExtras.has(g.key) && (
                             <span title="Tiene extras registrados" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>
@@ -5177,8 +5177,8 @@ export default function App() {
                             if (outstanding <= 0) return null;
                             const delivered = g.status === "delivered" || g.parts?.some(p => p.date_out);
                             return delivered
-                              ? <span title={`Entregado sin cobrar · faltan $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#B91C1C", background:"#FEE2E2", borderRadius:10, padding:"1px 6px" }}>Sin cobrar</span>
-                              : <span title={`Balance pendiente · $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Balance pendiente</span>;
+                              ? <span title={`Delivered, not collected · $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#B91C1C", background:"#FEE2E2", borderRadius:10, padding:"1px 6px" }}>Not collected</span>
+                              : <span title={`Outstanding balance · $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Outstanding</span>;
                           })()}
                         </span>
                       </td>
@@ -5204,7 +5204,7 @@ export default function App() {
                       <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>
                         {gTrip
                           ? <button onClick={() => setPage("trips")} style={{ fontFamily:"monospace", fontSize:11.5, fontWeight:600, color:"#6D28D9", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{gTrip.trip_number || ("#"+gTrip.id)}</button>
-                          : <span style={{ color:"#bbb" }}>— Sin asignar —</span>}
+                          : <span style={{ color:"#bbb" }}>— Unassigned —</span>}
                       </td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.pickup_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.pickup_balance) || "—"}</td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.delivery_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.delivery_balance) || "—"}</td>
@@ -5216,7 +5216,7 @@ export default function App() {
                           {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Ruta</a>}
                           <a href={waHref} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
                           {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
-                          <button onClick={() => deleteJob(g)} title="Eliminar job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:14, padding:0, alignSelf:"flex-start" }}>🗑 Eliminar</button>
+                          <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:14, padding:0, alignSelf:"flex-start" }}>🗑 Delete</button>
                         </div>
                       </td>
                     </tr>
@@ -5261,14 +5261,14 @@ export default function App() {
               <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
               <span style={{ flex:1 }} />
               <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
-                {[["week","Semana"],["month","Mes"]].map(([v,l]) => (
+                {[["week","Semana"],["month","Month"]].map(([v,l]) => (
                   <button key={v} onClick={() => setCalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: calView===v?"#fff":"none", color: calView===v?"#111":"#888", fontWeight: calView===v?600:400, boxShadow: calView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
                 ))}
               </div>
             </div>
 
             <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap", fontSize:11, color:"#666" }}>
-              {[["#639922","Activo"],["#FACC15","On hold / Redispatch"],["#E24B4A","Cancelado"],["#7C3AED","Long haul"],["#378ADD","Entregado"]].map(([c,l]) => (
+              {[["#639922","Active"],["#FACC15","On hold / Redispatch"],["#E24B4A","Cancelled"],["#7C3AED","Long haul"],["#378ADD","Delivered"]].map(([c,l]) => (
                 <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
               ))}
             </div>
@@ -5281,7 +5281,7 @@ export default function App() {
                   const isToday = ds === today();
                   return (
                     <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday?"#378ADD":"#efefef"}`, borderRadius:10, minHeight:160, display:"flex", flexDirection:"column" }}>
-                      <div onClick={() => openAddJobDate(ds)} title="Crear pick up" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <div onClick={() => openAddJobDate(ds)} title="Create pickup" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                         <span style={{ fontSize:11, fontWeight:600 }}>{DOW_ES[d.getDay()]} {d.getDate()}</span>
                         <span style={{ color:"#bbb", fontSize:13 }}>+</span>
                       </div>
@@ -5304,7 +5304,7 @@ export default function App() {
                       <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth?"#fff":"#fafafa", opacity: inMonth?1:0.6 }}>
                         <div onClick={() => openAddJobDate(date)} style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
                         {evs.slice(0,3).map(g => <Event key={g.key} g={g} />)}
-                        {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} más</div>}
+                        {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} more</div>}
                       </div>
                     );
                   })}
@@ -5319,21 +5319,21 @@ export default function App() {
       {page === "brokers" && (
         <>
           <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
-            <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Nuevo broker</Btn>
+            <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ New broker</Btn>
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Broker","Contacto","Teléfono","Jobs","Balance pend.","Broker share","CS abiertos","Nos debe","Le debemos","Net","" ].map((h, i) => (
+                    {["Broker","Contacto","Phone","Jobs","Balance pend.","Broker share","CS abiertos","Owes us","We owe","Net","" ].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {brokers.length === 0 ? (
-                    <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV2Missing ? "Corré el SQL de configuración para activar brokers." : "Sin brokers cargados."}</td></tr>
+                    <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV2Missing ? "Run the setup SQL to enable brokers." : "No brokers added."}</td></tr>
                   ) : brokers.map(b => {
                     const st = brokerStats[b.id] || { jobs:new Set(), balance:0 };
                     const count = st.jobs.size;
@@ -5352,8 +5352,8 @@ export default function App() {
                         <td style={{ padding:"12px", whiteSpace:"nowrap", color: ss.weOwe>0?"#A32D2D":"#bbb" }}>${Math.round(ss.weOwe).toLocaleString()}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:700, color: net>=0?"#1A8A4E":"#A32D2D" }}>{net>=0?`+$${Math.round(net).toLocaleString()}`:`−$${Math.round(-net).toLocaleString()}`}</td>
                         <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                          <Btn onClick={() => openEditBroker(b)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
-                          <Btn danger onClick={() => deleteBroker(b)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                          <Btn onClick={() => openEditBroker(b)} style={{ padding:"4px 10px", fontSize:12 }}>Edit</Btn>
+                          <Btn danger onClick={() => deleteBroker(b)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>
                         </td>
                       </tr>
                     );
@@ -5373,14 +5373,14 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Driver","Teléfono","Grupo WhatsApp","Jobs activos","Estado",""].map((h,i) => (
+                  {["Driver","Phone","Grupo WhatsApp","Jobs activos","Status",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {driversList.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV3Missing ? "Corré el SQL de configuración para activar drivers." : "Sin drivers. Agregá uno con “+ Driver”."}</td></tr>
+                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV3Missing ? "Run the setup SQL to enable drivers." : "No drivers. Add one with “+ Driver”."}</td></tr>
                 ) : driversList.map(d => {
                   const act = new Set(jobs.filter(j => !j.date_out && j.status !== "cancelled" && ((Array.isArray(j.driver_ids) && j.driver_ids.includes(d.id)) || (j.driver && d.name && j.driver.includes(d.name)))).map(jobKey)).size;
                   return (
@@ -5389,12 +5389,12 @@ export default function App() {
                         <button onClick={() => setDriverDetailId(d.id)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#111", fontWeight:600, textDecoration:"underline" }}>{d.name}</button>
                       </td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{d.phone ? <a href={`tel:${d.phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{d.phone}</a> : "—"}</td>
-                      <td style={{ padding:"12px" }}>{d.whatsapp_group_link ? <a href={d.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Abrir grupo ↗</a> : "—"}</td>
+                      <td style={{ padding:"12px" }}>{d.whatsapp_group_link ? <a href={d.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Open group ↗</a> : "—"}</td>
                       <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: act>0?"#EAF3DE":"#f5f5f5", color: act>0?"#3B6D11":"#bbb" }}>{act}</span></td>
-                      <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: d.active!==false?"#EAF3DE":"#f1f1f1", color: d.active!==false?"#3B6D11":"#888" }}>{d.active!==false?"Activo":"Inactivo"}</span></td>
+                      <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: d.active!==false?"#EAF3DE":"#f1f1f1", color: d.active!==false?"#3B6D11":"#888" }}>{d.active!==false?"Active":"Inactivo"}</span></td>
                       <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                        <Btn onClick={() => openEditDriver(d)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
-                        <Btn danger onClick={() => deleteDriver(d)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                        <Btn onClick={() => openEditDriver(d)} style={{ padding:"4px 10px", fontSize:12 }}>Edit</Btn>
+                        <Btn danger onClick={() => deleteDriver(d)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>
                       </td>
                     </tr>
                   );
@@ -5413,14 +5413,14 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Cliente","Teléfono","Email","Jobs activos","Total jobs","Balance pendiente"].map((h,i) => (
+                  {["Client","Phone","Email","Jobs activos","Total jobs","Outstanding balance"].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {clients.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin clientes todavía.</td></tr>
+                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>No clients yet.</td></tr>
                 ) : clients.map(c => (
                   <tr key={c.name} style={{ borderBottom:"1px solid #fafafa" }}>
                     <td style={{ padding:"12px", fontWeight:600 }}>
@@ -5445,17 +5445,17 @@ export default function App() {
         <>
           {settlementsMissing && (
             <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-              <span>Para Carrier Settlements (closing sheets + cobros BOL + subida de documentos), corré el SQL de configuración una sola vez en Supabase.</span>
+              <span>For Carrier Settlements (closing sheets + BOL collections + document upload), run the setup SQL once in Supabase.</span>
               <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
             </div>
           )}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
             {[
-              { label:"Closing sheets abiertos", value:settlementMetrics.openCount, color:"#185FA5" },
-              { label:"Broker nos debe", value:"$"+Math.round(settlementMetrics.owesUs).toLocaleString(), color:"#1A8A4E" },
-              { label:"Le debemos a brokers", value:"$"+Math.round(settlementMetrics.weOwe).toLocaleString(), color:"#A32D2D" },
-              { label:"Cobros BOL pendientes", value:"$"+Math.round(settlementMetrics.pendingBol).toLocaleString(), color:"#C2410C" },
-              { label:"Pads pendientes ($)", value:"$"+Math.round(settlementMetrics.padsValue).toLocaleString(), color:"#92760B" },
+              { label:"Open closing sheets", value:settlementMetrics.openCount, color:"#185FA5" },
+              { label:"Broker owes us", value:"$"+Math.round(settlementMetrics.owesUs).toLocaleString(), color:"#1A8A4E" },
+              { label:"We owe brokers", value:"$"+Math.round(settlementMetrics.weOwe).toLocaleString(), color:"#A32D2D" },
+              { label:"Outstanding BOL collections", value:"$"+Math.round(settlementMetrics.pendingBol).toLocaleString(), color:"#C2410C" },
+              { label:"Pads outstanding ($)", value:"$"+Math.round(settlementMetrics.padsValue).toLocaleString(), color:"#92760B" },
             ].map(m => (
               <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                 <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{m.label}</div>
@@ -5475,14 +5475,14 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["CS #","Broker","Driver","Load date","Jobs","Total CF","Carrier fee","BOL cobrado","Net settlement","Estado","Acciones"].map((h,i) => (
+                    {["CS #","Broker","Driver","Load date","Jobs","Total CF","Carrier fee","BOL collected","Net settlement","Status","Actions"].map((h,i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {closingSheets.filter(s => csTab==="all" || s.status===csTab).length === 0 ? (
-                    <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{settlementsMissing ? "Corré el SQL para activar settlements." : "Sin closing sheets. Creá uno con “+ Closing sheet”."}</td></tr>
+                    <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{settlementsMissing ? "Run the SQL to enable settlements." : "No closing sheets. Create one with “+ Closing sheet”."}</td></tr>
                   ) : closingSheets.filter(s => csTab==="all" || s.status===csTab).map(s => {
                     const c = sheetCalcById[s.id] || {};
                     const ageDays = s.created_at ? Math.round((startOfToday() - new Date(s.created_at)) / ONE_DAY) : 0;
@@ -5491,7 +5491,7 @@ export default function App() {
                       <tr key={s.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                           <button onClick={() => setCsDetailId(s.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{s.closing_sheet_number || `#${s.id}`}</button>
-                          {stale && <span title={`Abierto hace ${ageDays} días`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:10, padding:"1px 6px" }}>⚠ {ageDays}d</span>}
+                          {stale && <span title={`Open for ${ageDays} days`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:10, padding:"1px 6px" }}>⚠ {ageDays}d</span>}
                         </td>
                         <td style={{ padding:"12px" }}>{brokerName(s.broker_id) || "—"}</td>
                         <td style={{ padding:"12px" }}>{driverById[s.driver_id]?.name || "—"}</td>
@@ -5521,7 +5521,7 @@ export default function App() {
       {/* ───────────────────────── SETTLEMENTS (detail) ───────────────────────── */}
       {page === "settlements" && csDetailId && (() => {
         const s = sheetById[csDetailId];
-        if (!s) return <div style={{ color:"#bbb" }}>Closing sheet no encontrado. <button onClick={() => setCsDetailId(null)} style={{ color:"#185FA5", background:"none", border:"none", cursor:"pointer" }}>Volver</button></div>;
+        if (!s) return <div style={{ color:"#bbb" }}>Closing sheet no encontrado. <button onClick={() => setCsDetailId(null)} style={{ color:"#185FA5", background:"none", border:"none", cursor:"pointer" }}>Back</button></div>;
         const jobsIn = jobsBySheet[csDetailId] || [];
         const c = sheetCalc(s, jobsIn);
         const brokerNm = brokerName(s.broker_id);
@@ -5532,16 +5532,16 @@ export default function App() {
         return (
           <>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
-              <Btn onClick={() => setCsDetailId(null)}>← Volver</Btn>
+              <Btn onClick={() => setCsDetailId(null)}>← Back</Btn>
               <span style={{ flex:1 }} />
               <Btn onClick={() => exportCsPdf(s, c, brokerNm, driverNm, jobsIn)}>📄 Export PDF</Btn>
               <a href={settlementWaLink(s, c, brokerNm, driverNm)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn>💬 WhatsApp broker</Btn></a>
-              <Btn onClick={() => openEditCs(s)}>Editar</Btn>
+              <Btn onClick={() => openEditCs(s)}>Edit</Btn>
               {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark settled</Btn>}
             </div>
 
             {s.status === "open" && ageDays >= 30 && (
-              <div style={{ background:"#FEF3C7", border:"1px solid #EAB308", borderRadius:10, padding:"9px 13px", marginBottom:14, fontSize:13, color:"#92760B" }}>⚠️ Este closing sheet está abierto hace {ageDays} días.</div>
+              <div style={{ background:"#FEF3C7", border:"1px solid #EAB308", borderRadius:10, padding:"9px 13px", marginBottom:14, fontSize:13, color:"#92760B" }}>⚠️ This closing sheet has been open for {ageDays} days.</div>
             )}
 
             <div style={{ display:"grid", gridTemplateColumns:"1fr 280px", gap:14, marginBottom:14 }}>
@@ -5559,7 +5559,7 @@ export default function App() {
                 <div style={{ marginTop:12 }}>
                   <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Notas</div>
                   <textarea defaultValue={s.notes || ""} onBlur={e => { if ((e.target.value||"") !== (s.notes||"")) supabase.from("closing_sheets").update({ notes: e.target.value || null }).eq("id", s.id).then(loadClosingSheets); }}
-                    placeholder="Notas del closing sheet..." style={{ ...inp, minHeight:60, resize:"vertical", fontFamily:"inherit" }} />
+                    placeholder="Closing sheet notes..." style={{ ...inp, minHeight:60, resize:"vertical", fontFamily:"inherit" }} />
                 </div>
               </div>
 
@@ -5572,9 +5572,9 @@ export default function App() {
                     : s.document_url ? (
                       isImg ? <img src={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
                         : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Ver documento (PDF)</a></div>
-                    ) : <div style={{ fontSize:12, color:"#999" }}>Arrastrá o hacé clic para subir foto/PDF del closing sheet</div>}
+                    ) : <div style={{ fontSize:12, color:"#999" }}>Drag or click to upload closing-sheet photo/PDF</div>}
                 </label>
-                {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>Clic en el área para reemplazar</div>}
+                {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>Click the area to replace</div>}
               </div>
             </div>
 
@@ -5584,14 +5584,14 @@ export default function App() {
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                   <thead>
                     <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Cliente","From → To","CF","Pads","Rate/CF","Carrier fee","BOL balance","Cobrado","Método","Cobro","Acciones"].map((h,i) => (
+                      {["Job #","Client","From → To","CF","Pads","Rate/CF","Carrier fee","BOL balance","Collected","Method","Collection","Actions"].map((h,i) => (
                         <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {jobsIn.length === 0 ? (
-                      <tr><td colSpan={12} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin jobs asignados. Usá “Editar” para agregar jobs.</td></tr>
+                      <tr><td colSpan={12} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No jobs assigned. Use “Edit” to add jobs.</td></tr>
                     ) : jobsIn.map(j => {
                       const k = jobKey(j);
                       const cs = collectionStatus(j);
@@ -5671,14 +5671,14 @@ export default function App() {
                   <div key={j.id} style={{ display:"flex", justifyContent:"space-between", fontSize:12, margin:"4px 0", color:"#555" }}><span style={{ fontFamily:"monospace" }}>{j.job_number || "-"}</span><span>{money(j.bol_collected) || "$0"} / {money(j.bol_balance) || "$0"}</span></div>
                 ))}
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total cobrado</span><span>{m(c.bolCollected)}</span></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:4, color:"#C2410C" }}><span>Pendiente</span><span>{m(c.pending)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:4, color:"#C2410C" }}><span>Pending</span><span>{m(c.pending)}</span></div>
               </div>
             </div>
 
             <div style={{ background: c.net >= 0 ? "#EAF3DE" : "#FCEBEB", border:`1px solid ${c.net >= 0 ? "#639922" : "#E24B4A"}`, borderRadius:12, padding:"18px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
               <div>
                 <div style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.05em", color: c.net >= 0 ? "#3B6D11" : "#A32D2D" }}>Resultado neto</div>
-                <div style={{ fontSize:22, fontWeight:800, color: c.net >= 0 ? "#3B6D11" : "#A32D2D", marginTop:3 }}>{c.net >= 0 ? `Broker te debe ${m(c.net)}` : `Le debés al broker ${m(-c.net)}`}</div>
+                <div style={{ fontSize:22, fontWeight:800, color: c.net >= 0 ? "#3B6D11" : "#A32D2D", marginTop:3 }}>{c.net >= 0 ? `Broker owes you ${m(c.net)}` : `You owe the broker ${m(-c.net)}`}</div>
               </div>
               {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark as settled</Btn>}
             </div>
@@ -5693,14 +5693,14 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Camión","Patente / VIN","Capacidad CF","Carga actual","Ocupación","Estado",""].map((h,i) => (
+                  {["Truck","Patente / VIN","Capacidad CF","Current load","Occupancy","Status",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {trucksList.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tripsMissing ? "Corré el SQL de configuración para activar camiones." : "Sin camiones. Agregá uno con “+ Camión”."}</td></tr>
+                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tripsMissing ? "Run the setup SQL to enable trucks." : "No trucks. Add one with “+ Truck”."}</td></tr>
                 ) : trucksList.map(tk => {
                   const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
                   const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
@@ -5719,10 +5719,10 @@ export default function App() {
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{cap > 0 ? `${cap.toLocaleString()} CF` : "—"}</td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{activeTrip ? `${Math.round(load).toLocaleString()} CF` : "—"}</td>
                       <td style={{ padding:"12px", minWidth:120 }}>{cap > 0 && activeTrip ? <OccupancyBar used={load} total={cap} /> : <span style={{ color:"#bbb" }}>—</span>}</td>
-                      <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: tk.active!==false?"#EAF3DE":"#f1f1f1", color: tk.active!==false?"#3B6D11":"#888" }}>{tk.active!==false?"Activo":"Inactivo"}</span></td>
+                      <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: tk.active!==false?"#EAF3DE":"#f1f1f1", color: tk.active!==false?"#3B6D11":"#888" }}>{tk.active!==false?"Active":"Inactivo"}</span></td>
                       <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                        <Btn onClick={() => openEditTruck(tk)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
-                        <Btn danger onClick={() => deleteTruck(tk)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                        <Btn onClick={() => openEditTruck(tk)} style={{ padding:"4px 10px", fontSize:12 }}>Edit</Btn>
+                        <Btn danger onClick={() => deleteTruck(tk)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>
                       </td>
                     </tr>
                   );
@@ -5730,7 +5730,7 @@ export default function App() {
               </tbody>
             </table>
           </div>
-          <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{trucksList.length} camión(es)</div>
+          <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{trucksList.length} truck(s)</div>
         </div>
       )}
 
@@ -5744,7 +5744,7 @@ export default function App() {
               onDragOver={e => e.preventDefault()}
               onDrop={e => { e.preventDefault(); const from = parseInt(e.dataTransfer.getData("text/plain")); if (isNaN(from) || from === idx) return; const arr = ordered.map(jobKey); const [mv] = arr.splice(from, 1); arr.splice(idx, 0, mv); persistTripOrder(arr); }}
               style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: delivered ? "#fafafa" : "#fff", cursor:"grab", opacity: delivered ? 0.7 : 1 }}>
-              <span title="Arrastrá para reordenar" style={{ color:"#ccc", cursor:"grab" }}>⠿</span>
+              <span title="Drag to reorder" style={{ color:"#ccc", cursor:"grab" }}>⠿</span>
               <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{idx + 1}</span>
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
@@ -5772,16 +5772,16 @@ export default function App() {
           <>
             {tripsMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span>Para Trips / Live Load (camiones, viajes y carga en vivo), corré el SQL de configuración una sola vez en Supabase.</span>
+                <span>For Trips / Live Load (trucks, trips and live load), run the setup SQL once in Supabase.</span>
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
               </div>
             )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
               {[
                 { label:"Trips activos", value:tripMetrics.activeCount, color:"#7C3AED" },
-                { label:"CF en tránsito", value:Math.round(tripMetrics.cfTransit).toLocaleString()+" CF", color:"#185FA5" },
-                { label:"BOL en tránsito", value:"$"+Math.round(tripMetrics.bolTransit).toLocaleString(), color:"#1A8A4E" },
-                { label:"Entregados hoy", value:tripMetrics.deliveredToday, color:"#3B6D11" },
+                { label:"CF in transit", value:Math.round(tripMetrics.cfTransit).toLocaleString()+" CF", color:"#185FA5" },
+                { label:"BOL in transit", value:"$"+Math.round(tripMetrics.bolTransit).toLocaleString(), color:"#1A8A4E" },
+                { label:"Delivered today", value:tripMetrics.deliveredToday, color:"#3B6D11" },
               ].map(mt => (
                 <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                   <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
@@ -5809,7 +5809,7 @@ export default function App() {
                 <>
                   {truckLocMissing && (
                     <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                      <span>Para guardar ubicaciones de camiones, corré el SQL de configuración actualizado una sola vez en Supabase.</span>
+                      <span>To save truck locations, run the updated setup SQL once in Supabase.</span>
                       <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
                     </div>
                   )}
@@ -5817,15 +5817,15 @@ export default function App() {
                     {/* Verizon-style side list */}
                     <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", maxHeight:560, display:"flex", flexDirection:"column" }}>
                       <div style={{ padding:"12px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, flexWrap:"wrap" }}>
-                        {[["all",`Todos (${located.length})`],["moving",`En movimiento (${moving})`],["stopped",`Detenidos (${stopped})`]].map(([v,l]) => (
+                        {[["all",`All (${located.length})`],["moving",`En movimiento (${moving})`],["stopped",`Detenidos (${stopped})`]].map(([v,l]) => (
                           <button key={v} onClick={() => setLiveStatusFilter(v)} style={{ fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: liveStatusFilter===v?"#111":"#e5e5e5", background: liveStatusFilter===v?"#111":"#fff", color: liveStatusFilter===v?"#fff":"#666", fontWeight: liveStatusFilter===v?600:500 }}>{l}</button>
                         ))}
                       </div>
                       <div style={{ overflowY:"auto" }}>
                         {trucksList.length === 0 ? (
-                          <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>Sin camiones. Agregalos en la sección Trucks.</div>
+                          <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>No trucks. Add them in the Trucks section.</div>
                         ) : visible.length === 0 ? (
-                          <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>Sin camiones con esta condición.</div>
+                          <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>No trucks in this condition.</div>
                         ) : visible.map(t => {
                           const c = liveStatusMeta(t.last_status);
                           const isSel = liveSelTruck === t.id;
@@ -5845,14 +5845,14 @@ export default function App() {
                               {t.last_location && <div style={{ fontSize:11.5, color:"#666", lineHeight:1.4 }}>{t.last_location}</div>}
                               <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:4 }}>
                                 {dn && <span style={{ fontSize:11, color:"#888" }}>🧑‍✈️ {dn}</span>}
-                                <button onClick={(e) => { e.stopPropagation(); openLocModal(t); }} style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", marginLeft:"auto" }}>Actualizar ubicación</button>
+                                <button onClick={(e) => { e.stopPropagation(); openLocModal(t); }} style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", marginLeft:"auto" }}>Update location</button>
                               </div>
                             </div>
                           );
                         })}
                         {noLoc.length > 0 && (
                           <div style={{ padding:"10px 14px", fontSize:11.5, color:"#bbb", borderTop:"1px solid #f4f4f4" }}>
-                            {noLoc.length} camión(es) sin ubicación cargada{noLoc.length ? ": " : ""}
+                            {noLoc.length} truck(s) with no location set{noLoc.length ? ": " : ""}
                             {noLoc.map((t, i) => (
                               <span key={t.id}>{i ? ", " : ""}<button onClick={() => openLocModal(t)} style={{ color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:11.5 }}>{t.name}</button></span>
                             ))}
@@ -5867,14 +5867,14 @@ export default function App() {
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />En movimiento</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />Sin datos</span>
-                        <span style={{ marginLeft:"auto", color:"#aaa" }}>Ubicación manual / última conocida · listo para Verizon API</span>
+                        <span style={{ marginLeft:"auto", color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
                       </div>
                     </div>
                   </div>
                 </>
               );
             })() : shown.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>{tripsView === "active" ? "Sin trips activos. Creá uno con “+ Trip”." : "Sin trips."}</div>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>{tripsView === "active" ? "No active trips. Create one with “+ Trip”." : "No trips."}</div>
             ) : tripsView === "active" ? (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))", gap:14 }}>
                 {shown.map(t => {
@@ -5890,11 +5890,11 @@ export default function App() {
                             <button onClick={() => setTripDetailId(t.id)} style={{ fontSize:15, fontWeight:800, fontFamily:"monospace", color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button>
                             <TripBadge status={t.status} />
                           </div>
-                          <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "sin camión"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
+                          <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "no truck"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
                         </div>
                         <div style={{ display:"flex", gap:6 }}>
                           <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Gestionar</Btn>
-                          <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Editar</Btn>
+                          <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit</Btn>
                         </div>
                       </div>
                       {c.cap > 0 ? (
@@ -5905,19 +5905,19 @@ export default function App() {
                           </div>
                           <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}><div style={{ background: occColor(c.occPct || 0), height:12, width:`${Math.min(100, c.occPct || 0)}%`, transition:"width .4s" }} /></div>
                         </div>
-                      ) : <div style={{ fontSize:12, color:"#999", marginBottom:10 }}>Camión sin capacidad cargada · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
+                      ) : <div style={{ fontSize:12, color:"#999", marginBottom:10 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
                       <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Stops ({c.count})</div>
                       <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:280, overflowY:"auto" }}>
-                        {c.jobsIn.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>Sin jobs en este trip. Usá “Editar” para agregar.</div>
+                        {c.jobsIn.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No jobs in this trip. Use “Edit” to add.</div>
                           : c.jobsIn.map((j, i) => <Stop key={j.id} trip={t} j={j} idx={i} ordered={c.jobsIn} />)}
                       </div>
                       <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:10 }}>
                         <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-                        <span style={{ color:"#666" }}>A cobrar: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+                        <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
                         <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Enviar manifest al driver</Btn></a>
-                        {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Salir</Btn>}
+                        {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart</Btn>}
                       </div>
                     </div>
                   );
@@ -5928,7 +5928,7 @@ export default function App() {
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                     <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Trip #","Camión","Driver","Salida","Jobs","CF","A cobrar","Estado",""].map((h,i) => <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>)}
+                      {["Trip #","Truck","Driver","Salida","Jobs","CF","To collect","Status",""].map((h,i) => <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>)}
                     </tr></thead>
                     <tbody>
                       {shown.map(t => { const c = tripCalc(t); return (
@@ -5942,9 +5942,9 @@ export default function App() {
                           <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }}>${Math.round(c.totalBol).toLocaleString()}</td>
                           <td style={{ padding:"12px" }}><TripBadge status={t.status} /></td>
                           <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                            <Btn onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 10px", fontSize:12 }}>Abrir</Btn>
-                            <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Editar</Btn>
-                            <Btn danger onClick={() => deleteTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
+                            <Btn onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 10px", fontSize:12 }}>Open</Btn>
+                            <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Edit</Btn>
+                            <Btn danger onClick={() => deleteTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>
                           </td>
                         </tr>
                       ); })}
@@ -5960,7 +5960,7 @@ export default function App() {
 
       {/* ───────────────────────── EXTRAS & COMMISSIONS ───────────────────────── */}
       {page === "extras" && (() => {
-        const monthLabel = (() => { if (!exMonth) return "Todos los meses"; const [y, m] = exMonth.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : exMonth; })();
+        const monthLabel = (() => { if (!exMonth) return "All months"; const [y, m] = exMonth.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : exMonth; })();
         const pendingComm = jobExtras.filter(e => e.active !== false && extraPending(e));
         const driverIds = exDriver ? [Number(exDriver)] : driversList.map(d => d.id);
         const allGroups = [...extraJobGroups.values()];
@@ -6017,13 +6017,13 @@ export default function App() {
           <>
             {extrasMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span>Para Extras & Comisiones (job_extras + empleados/reps), corré el SQL de configuración una sola vez en Supabase.</span>
+                <span>For Extras & Commissions (job_extras + employees/reps), run the setup SQL once in Supabase.</span>
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
               </div>
             )}
             {pendingComm.length > 0 && (
               <div style={{ background:"#FFF8EC", border:"1px solid #F4DDB0", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
-                <div style={{ fontSize:13, fontWeight:700, color:"#854F0B", marginBottom:8 }}>⚠️ Extras cobrados vía pago sin comisión asignada ({pendingComm.length})</div>
+                <div style={{ fontSize:13, fontWeight:700, color:"#854F0B", marginBottom:8 }}>⚠️ Extras collected via payment with no commission assigned ({pendingComm.length})</div>
                 <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                   {pendingComm.map(e => {
                     const g = extraJobGroups.get(jobKeyByRowId[e.job_id]);
@@ -6033,8 +6033,8 @@ export default function App() {
                         <span>{g?.customer || ""}</span>
                         <span style={{ fontWeight:700 }}>{extraTypeLabel(e.extra_type)}</span>
                         <span style={{ fontWeight:700 }}>{money(e.amount) || "$0"}</span>
-                        <span style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>Cobrado vía pago</span>
-                        <span style={{ marginLeft:"auto" }}><Btn primary style={{ padding:"4px 11px", fontSize:12 }} onClick={() => openCommAssign(e)}>Asignar comisión</Btn></span>
+                        <span style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>Collected via payment</span>
+                        <span style={{ marginLeft:"auto" }}><Btn primary style={{ padding:"4px 11px", fontSize:12 }} onClick={() => openCommAssign(e)}>Assign commission</Btn></span>
                       </div>
                     );
                   })}
@@ -6044,9 +6044,9 @@ export default function App() {
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:10, marginBottom:16 }}>
               {[
                 { label:`Extras (${monthLabel})`, value:"$"+Math.round(extraMetrics.total).toLocaleString(), color:"#111" },
-                { label:"Comisiones driver", value:"$"+Math.round(extraMetrics.driverComm).toLocaleString(), color:"#1A8A4E" },
-                { label:"Comisiones rep", value:"$"+Math.round(extraMetrics.repComm).toLocaleString(), color:"#185FA5" },
-                { label:"Para la empresa", value:"$"+Math.round(extraMetrics.company).toLocaleString(), color:"#EF9F27" },
+                { label:"Driver commissions", value:"$"+Math.round(extraMetrics.driverComm).toLocaleString(), color:"#1A8A4E" },
+                { label:"Rep commissions", value:"$"+Math.round(extraMetrics.repComm).toLocaleString(), color:"#185FA5" },
+                { label:"For the company", value:"$"+Math.round(extraMetrics.company).toLocaleString(), color:"#EF9F27" },
               ].map(mt => (
                 <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                   <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
@@ -6057,20 +6057,20 @@ export default function App() {
 
             <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
               <select value={exDriver} onChange={e => setExDriver(e.target.value)} style={{ ...inp, width:"auto", minWidth:150 }}>
-                <option value="">Todos los drivers</option>
+                <option value="">All drivers</option>
                 {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
               <select value={exRep} onChange={e => setExRep(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
-                <option value="">Todos los reps</option>
+                <option value="">All reps</option>
                 {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
               </select>
               <input type="month" value={exMonth} onChange={e => setExMonth(e.target.value)} style={{ ...inp, width:"auto" }} />
-              {exMonth ? <button onClick={() => setExMonth("")} style={{ ...inp, width:"auto", cursor:"pointer", background:"#fff", color:"#888" }}>Todos los meses ✕</button> : <span style={{ fontSize:12, color:"#888", alignSelf:"center" }}>Todos los meses</span>}
+              {exMonth ? <button onClick={() => setExMonth("")} style={{ ...inp, width:"auto", cursor:"pointer", background:"#fff", color:"#888" }}>All months ✕</button> : <span style={{ fontSize:12, color:"#888", alignSelf:"center" }}>All months</span>}
               <select value={exType} onChange={e => setExType(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
-                <option value="">Todos los tipos</option>
+                <option value="">All types</option>
                 {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
               </select>
-              <input value={exSearch} onChange={e => setExSearch(e.target.value)} placeholder="Buscar job # o cliente…" style={{ ...inp, width:"auto", minWidth:170 }} />
+              <input value={exSearch} onChange={e => setExSearch(e.target.value)} placeholder="Search job # or client…" style={{ ...inp, width:"auto", minWidth:170 }} />
             </div>
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
@@ -6081,9 +6081,9 @@ export default function App() {
 
             {extrasMissing ? null : extrasTab === "reps" ? (
               employees.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay reps cargados. Agregalos con “Reps / Empleados”.</div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No reps added. Add them with “Reps / Employees”.</div>
               ) : repSections.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Ningún rep tiene extras para {monthLabel} con estos filtros.</div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No rep has extras for {monthLabel} with these filters.</div>
               ) : (
                 <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
                   {repSections.map(sec => {
@@ -6095,7 +6095,7 @@ export default function App() {
                           {sec.emp.role && <span style={{ fontSize:11, color:"#888" }}>{sec.emp.role}</span>}
                           <span style={{ flex:1 }} />
                           <span style={{ fontSize:12, color:"#666" }}>Extras: <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
-                          <span style={{ fontSize:12, color:"#185FA5" }}>Comisión: <b>${Math.round(sec.totalComm).toLocaleString()}</b></span>
+                          <span style={{ fontSize:12, color:"#185FA5" }}>Commission: <b>${Math.round(sec.totalComm).toLocaleString()}</b></span>
                           <Btn onClick={() => copyRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>📋 Copiar</Btn>
                           <Btn onClick={() => printRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>🖨️ PDF</Btn>
                         </div>
@@ -6112,7 +6112,7 @@ export default function App() {
                               <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
                                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
                                   <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                    {["Tipo", "Monto", "Generado por", "Driver", "Rep %", "Com. rep"].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                    {["Type", "Amount", "Generado por", "Driver", "Rep %", "Com. rep"].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
                                   </tr></thead>
                                   <tbody>
                                     {jf.extras.map(e => (
@@ -6135,7 +6135,7 @@ export default function App() {
                               <span>TOTAL EXTRAS</span><span>${Math.round(sec.totalAmt).toLocaleString()}</span>
                             </div>
                             <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:700, background:"#FEF9C3", borderRadius:8 }}>
-                              <span>COMISIÓN {sec.emp.name}</span><span style={{ color:"#185FA5" }}>${Math.round(sec.totalComm).toLocaleString()}</span>
+                              <span>COMMISSION {sec.emp.name}</span><span style={{ color:"#185FA5" }}>${Math.round(sec.totalComm).toLocaleString()}</span>
                             </div>
                           </div>
                         </div>
@@ -6145,15 +6145,15 @@ export default function App() {
                 </div>
               )
             ) : extrasMissing ? null : driversList.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay drivers todavía. Cargá drivers y asignalos a jobs.</div>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No drivers yet. Add drivers and assign them to jobs.</div>
             ) : sections.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin extras para {exMonth ? monthLabel : "ningún mes"} con estos filtros.</div>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin extras para {exMonth ? monthLabel : "no month"} with these filters.</div>
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
                 {sections.map(sec => {
                   const dExpanded = extrasTabExpanded.has("d:" + sec.did);
                   const allJobsData = sec.months.flatMap(mn => mn.jobs.map(j => ({ job_number: j.g.job_number, customer: j.g.customer, extras: j.exs })));
-                  const periodLabel = exMonth ? monthLabel : "Todos los meses";
+                  const periodLabel = exMonth ? monthLabel : "All months";
                   const toggleMonth = (mKey, isOpen) => setExtrasTabExpanded(prev => { const n = new Set(prev); if (isOpen) { n.delete(mKey); n.add("c:" + mKey); } else { n.delete("c:" + mKey); n.add(mKey); } return n; });
                   return (
                     <div key={sec.did} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
@@ -6164,7 +6164,7 @@ export default function App() {
                         <span style={{ fontSize:11, color:"#aaa" }}>{dExpanded ? "▾" : "▸"}</span>
                         <span style={{ flex:1 }} />
                         <span style={{ fontSize:12, color:"#666" }}>Extras <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
-                        <span style={{ fontSize:11.5, fontWeight:700, color:"#1A8A4E", background:"#EAF3DE", borderRadius:20, padding:"3px 11px" }}>Comisión ${Math.round(sec.totalComm).toLocaleString()}</span>
+                        <span style={{ fontSize:11.5, fontWeight:700, color:"#1A8A4E", background:"#EAF3DE", borderRadius:20, padding:"3px 11px" }}>Commission ${Math.round(sec.totalComm).toLocaleString()}</span>
                       </div>
                       {dExpanded && (
                         <div style={{ padding:"8px 12px 12px" }}>
@@ -6182,7 +6182,7 @@ export default function App() {
                                   <span style={{ fontSize:12.5, fontWeight:700 }}>{mn.label}</span>
                                   <span style={{ flex:1 }} />
                                   <span style={{ fontSize:11.5, color:"#666" }}>Extras <b>${Math.round(mn.totalAmt).toLocaleString()}</b></span>
-                                  <span style={{ fontSize:11.5, color:"#1A8A4E" }}>Comisión <b>${Math.round(mn.totalComm).toLocaleString()}</b></span>
+                                  <span style={{ fontSize:11.5, color:"#1A8A4E" }}>Commission <b>${Math.round(mn.totalComm).toLocaleString()}</b></span>
                                 </div>
                                 {open && (
                                   <div>
@@ -6190,17 +6190,17 @@ export default function App() {
                                       <div key={j.g.key} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", borderTop:"1px solid #f6f6f6", flexWrap:"wrap" }}>
                                         <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:12.5, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(ver)"}</button>
                                         <span style={{ fontSize:12.5, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.g.customer || "—"}</span>
-                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Editar extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>)}</span>
+                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Edit extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>)}</span>
                                         <span style={{ flex:1 }} />
-                                        <span style={{ fontSize:12.5, color:"#666" }} title="Total cobrado">${Math.round(j.amt).toLocaleString()}</span>
-                                        <span style={{ fontSize:12.5, fontWeight:700, color:"#1A8A4E" }} title="Comisión driver">${Math.round(j.comm).toLocaleString()}</span>
-                                        <span title={j.pending ? "Comisión pendiente" : "Comisión asignada"}>{j.pending ? "⚠️" : "✅"}</span>
-                                        <button onClick={() => setJobDetailKey(j.g.key)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+                                        <span style={{ fontSize:12.5, color:"#666" }} title="Total collected">${Math.round(j.amt).toLocaleString()}</span>
+                                        <span style={{ fontSize:12.5, fontWeight:700, color:"#1A8A4E" }} title="Driver commission">${Math.round(j.comm).toLocaleString()}</span>
+                                        <span title={j.pending ? "Commission pending" : "Commission assigned"}>{j.pending ? "⚠️" : "✅"}</span>
+                                        <button onClick={() => setJobDetailKey(j.g.key)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
                                       </div>
                                     ))}
                                     <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 11px", borderTop:"2px solid #eee", fontSize:12.5, fontWeight:700, background:"#FEF9C3" }}>
                                       <span>Total {mn.label}</span>
-                                      <span>Extras ${Math.round(mn.totalAmt).toLocaleString()} · Comisión <span style={{ color:"#1A8A4E" }}>${Math.round(mn.totalComm).toLocaleString()}</span></span>
+                                      <span>Extras ${Math.round(mn.totalAmt).toLocaleString()} · Commission <span style={{ color:"#1A8A4E" }}>${Math.round(mn.totalComm).toLocaleString()}</span></span>
                                     </div>
                                   </div>
                                 )}
@@ -6236,17 +6236,17 @@ export default function App() {
           if (p.banked && inWeek(p.banked_date)) bankWeek += paymentNet(p);
         }
         const metricDefs = [
-          { label:"Esperado este mes", value:"$"+Math.round(m.expected).toLocaleString(), color:"#666" },
-          { label:"Recibido este mes", value:"$"+Math.round(m.received).toLocaleString(), color:"#1A8A4E" },
-          { label:"En circulación (sin depositar)", value:"$"+Math.round(m.inCirc).toLocaleString(), color:"#E24B4A" },
-          { label:"Depositado este mes", value:"$"+Math.round(m.banked).toLocaleString(), color:"#185FA5" },
-          { label:"Pendiente de cobro", value:"$"+Math.round(m.pending).toLocaleString(), color:"#EF9F27" },
-          { label:"CC fees cobrados", value:"$"+Math.round(m.ccFees).toLocaleString(), color:"#7C3AED" },
+          { label:"Expected this month", value:"$"+Math.round(m.expected).toLocaleString(), color:"#666" },
+          { label:"Received this month", value:"$"+Math.round(m.received).toLocaleString(), color:"#1A8A4E" },
+          { label:"In circulation (not deposited)", value:"$"+Math.round(m.inCirc).toLocaleString(), color:"#E24B4A" },
+          { label:"Deposited this month", value:"$"+Math.round(m.banked).toLocaleString(), color:"#185FA5" },
+          { label:"Pending collection", value:"$"+Math.round(m.pending).toLocaleString(), color:"#EF9F27" },
+          { label:"CC fees collected", value:"$"+Math.round(m.ccFees).toLocaleString(), color:"#7C3AED" },
         ];
         const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
         const td2 = { padding:"9px 10px", fontSize:12.5, verticalAlign:"middle" };
         const Toggle = ({ on, onClick, disabled }) => (
-          <button onClick={onClick} disabled={disabled} style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, border:"none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, background: on ? "#EAF3DE" : "#F1F1F1", color: on ? "#3B6D11" : "#999" }}>{on ? "Sí" : "No"}</button>
+          <button onClick={onClick} disabled={disabled} style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, border:"none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, background: on ? "#EAF3DE" : "#F1F1F1", color: on ? "#3B6D11" : "#999" }}>{on ? "Yes" : "No"}</button>
         );
         // One payment row (also used for split children, slightly indented + tinted).
         const renderPayRow = (p, child = false) => (
@@ -6263,7 +6263,7 @@ export default function App() {
             </td>
             <td style={{ ...td2, fontFamily:"monospace", fontSize:11.5, whiteSpace:"nowrap" }}>{payRef(p) || "—"}</td>
             <td style={{ ...td2, fontSize:11.5, whiteSpace:"nowrap" }}>{payIssuer(p) || "—"}</td>
-            <td style={{ ...td2, textAlign:"center" }}>{payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="Ver documento" style={{ border:"none", background:"none", cursor:"pointer", fontSize:15 }}>📷</button> : <span style={{ color:"#ddd" }}>—</span>}</td>
+            <td style={{ ...td2, textAlign:"center" }}>{payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="View document" style={{ border:"none", background:"none", cursor:"pointer", fontSize:15 }}>📷</button> : <span style={{ color:"#ddd" }}>—</span>}</td>
             <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:600 }}>{money(p.amount) || "$0"}</td>
             <td style={{ ...td2, whiteSpace:"nowrap", color: numv(p.discount) ? "#E24B4A" : "#ccc" }}>{numv(p.discount) ? "-"+money(p.discount) : "—"}</td>
             <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
@@ -6275,8 +6275,8 @@ export default function App() {
             <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.banked_date || "—"}</td>
             <td style={td2}>{p.bank_account || "—"}</td>
             <td style={{ ...td2, whiteSpace:"nowrap" }}>
-              <button onClick={() => openEditPayment(p)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
-              <button onClick={() => deletePaymentRow(p)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
+              <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+              <button onClick={() => deletePaymentRow(p)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
             </td>
           </tr>
         );
@@ -6300,7 +6300,7 @@ export default function App() {
           <>
             {paymentsMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span>Para Payments (cobros, circulación y depósitos), corré el SQL de configuración una sola vez en Supabase.</span>
+                <span>For Payments (collections, circulation and deposits), run the setup SQL once in Supabase.</span>
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
               </div>
             )}
@@ -6315,7 +6315,7 @@ export default function App() {
 
             {stalePayments.length > 0 && (
               <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
-                <div style={{ fontSize:13, fontWeight:700, color:"#A32D2D", marginBottom:6 }}>⚠️ Recibido sin depositar hace +7 días ({stalePayments.length})</div>
+                <div style={{ fontSize:13, fontWeight:700, color:"#A32D2D", marginBottom:6 }}>⚠️ Received, not deposited for 7+ days ({stalePayments.length})</div>
                 <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                   {stalePayments.map(p => (
                     <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#7A2222", flexWrap:"wrap" }}>
@@ -6323,7 +6323,7 @@ export default function App() {
                       <span style={{ fontWeight:700 }}>${p._net.toLocaleString()}</span>
                       <span>· {payMethodLabel(p.method)}</span>
                       <span>· {(p.cash_with_whom || p.received_by || "—")}</span>
-                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{daysSince(p.received_date || p.payment_date)} días</span>
+                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{daysSince(p.received_date || p.payment_date)} days</span>
                     </div>
                   ))}
                 </div>
@@ -6331,14 +6331,14 @@ export default function App() {
             )}
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
-              {[["all","Todos"],["pending","Pendientes"],["received","Recibidos"],["circulation","En circulación"],["banked","Depositados"]].map(([v,l]) => (
+              {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
                 <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
               ))}
             </div>
 
             {paymentsMissing ? null : payTab === "circulation" ? (
               circulation.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay efectivo/cheques en circulación. Todo depositado. 🎉</div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No cash/checks in circulation. All deposited. 🎉</div>
               ) : (
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(330px,1fr))", gap:14 }}>
                   {circulation.map(person => (
@@ -6366,7 +6366,7 @@ export default function App() {
                                 <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
                                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{p._g?.customer || "—"}</span>
                                 <PaymentMethodBadge method={p.method} />
-                                {payPhotoUrl(p) && <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="Ver documento" style={{ border:"none", background:"none", cursor:"pointer", fontSize:13 }}>📷</button>}
+                                {payPhotoUrl(p) && <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="View document" style={{ border:"none", background:"none", cursor:"pointer", fontSize:13 }}>📷</button>}
                                 <span style={{ fontWeight:700 }}>${p._net.toLocaleString()}</span>
                                 <span style={{ color:"#999", whiteSpace:"nowrap" }}>{daysSince(p.received_date || p.payment_date)}d</span>
                               </div>
@@ -6375,7 +6375,7 @@ export default function App() {
                           );
                         })}
                       </div>
-                      <a href={"https://wa.me/?text=" + encodeURIComponent(`Hi ${person.name}, you currently have $${Math.round(person.total).toLocaleString()} in circulation:\n` + person.items.map(p => `• Job ${p._g?.job_number || p.job_id || "—"} — $${p._net.toLocaleString()} (${payMethodLabel(p.method)})`).join("\n") + `\nPlease deposit or deliver by end of week. Thank you.`)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Pedir depósito</Btn></a>
+                      <a href={"https://wa.me/?text=" + encodeURIComponent(`Hi ${person.name}, you currently have $${Math.round(person.total).toLocaleString()} in circulation:\n` + person.items.map(p => `• Job ${p._g?.job_number || p.job_id || "—"} — $${p._net.toLocaleString()} (${payMethodLabel(p.method)})`).join("\n") + `\nPlease deposit or deliver by end of week. Thank you.`)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Request deposit</Btn></a>
                     </div>
                   ))}
                 </div>
@@ -6385,7 +6385,7 @@ export default function App() {
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                     <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Cliente","Broker","Driver","Concepto","Método","Ref #","Issuer","Foto","Monto","Desc.","Neto","Fecha","Recibido","Recibido por","Quién tiene","Depositado","Fecha dep.","Cuenta","Acciones"].map((h, i) => <th key={i} style={th}>{h}</th>)}
+                      {["Job #","Client","Broker","Driver","Concept","Method","Ref #","Issuer","Photo","Amount","Desc.","Net","Date","Received","Received by","Who has it","Deposited","Dep. date","Account","Actions"].map((h, i) => <th key={i} style={th}>{h}</th>)}
                     </tr></thead>
                     <tbody>
                       {rows.length === 0 ? (
@@ -6402,13 +6402,13 @@ export default function App() {
                             <td style={td2}>
                               <button onClick={() => toggleSplit(it.group)} style={{ border:"none", background:"none", cursor:"pointer", fontSize:12, color:"#6D28D9", fontWeight:700, padding:0 }}>{open ? "▾" : "▸"} <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Split ({it.rows.length})</span></button>
                             </td>
-                            <td style={td2} colSpan={4}><span style={{ fontSize:11.5, color:"#999" }}><PaymentMethodBadge method={rep.method} /> · {it.rows.length} líneas</span></td>
+                            <td style={td2} colSpan={4}><span style={{ fontSize:11.5, color:"#999" }}><PaymentMethodBadge method={rep.method} /> · {it.rows.length} lines</span></td>
                             <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700 }}>{money(it.total) || "$0"}</td>
                             <td style={td2}><span style={{ color:"#ccc" }}>—</span></td>
                             <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:800, color:"#6D28D9" }}>${Math.round(it.total).toLocaleString()}</td>
                             <td style={td2} colSpan={7}><span style={{ fontSize:11.5, color:"#999" }}>{rep.payment_date || "—"}</span></td>
                             <td style={{ ...td2, whiteSpace:"nowrap" }}>
-                              <button onClick={() => deleteSplitGroup(it.rows)} title="Eliminar split" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15 }}>×</button>
+                              <button onClick={() => deleteSplitGroup(it.rows)} title="Delete split" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15 }}>×</button>
                             </td>
                           </tr>
                         );
@@ -6423,15 +6423,15 @@ export default function App() {
 
             {!paymentsMissing && (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px", marginTop:18 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Cash flow semanal</div>
+                <div style={{ fontSize:12, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Weekly cash flow</div>
                 <div style={{ fontSize:11, color:"#aaa", marginBottom:12 }}>{wkStart} → {wkEnd}</div>
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10 }}>
                   {[
-                    { l:"Esperado esta semana", v:expWeek, c:"#666" },
-                    { l:"Recibido esta semana", v:recvWeek, c:"#1A8A4E" },
-                    { l:"En circulación (total)", v:m.inCirc, c:"#E24B4A" },
-                    { l:"Depositado esta semana", v:bankWeek, c:"#185FA5" },
-                    { l:"Proyección si se deposita todo", v:m.banked + m.inCirc, c:"#7C3AED" },
+                    { l:"Expected this week", v:expWeek, c:"#666" },
+                    { l:"Received this week", v:recvWeek, c:"#1A8A4E" },
+                    { l:"In circulation (total)", v:m.inCirc, c:"#E24B4A" },
+                    { l:"Deposited this week", v:bankWeek, c:"#185FA5" },
+                    { l:"Projection if everything is deposited", v:m.banked + m.inCirc, c:"#7C3AED" },
                   ].map(x => (
                     <div key={x.l} style={{ border:"1px solid #f0f0f0", borderRadius:8, padding:"10px 12px" }}>
                       <div style={{ fontSize:10.5, color:"#999", fontWeight:500 }}>{x.l}</div>
@@ -6458,7 +6458,7 @@ export default function App() {
         const gridStyle = { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(155px,1fr))", gap:8, marginTop:10 };
         const cardStyle = { background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"14px 16px", marginBottom:14 };
         const chip = { fontSize:11, color:"#666", background:"#f5f5f5", borderRadius:20, padding:"2px 9px" };
-        const tabs = [["companies","Companies"],["trucks","Trucks"],["drivers","Drivers"],["all","Todos los documentos"]];
+        const tabs = [["companies","Companies"],["trucks","Trucks"],["drivers","Drivers"],["all","All documents"]];
         // All-documents tab data
         const allRows = complianceDocs.map(d => ({ d, st: docStatus(d), days: docDaysToExpiry(d), name: entityName(d.entity_type, d.entity_id) }))
           .filter(r => !docFilterEntity || r.d.entity_type === docFilterEntity)
@@ -6471,16 +6471,16 @@ export default function App() {
           <>
             {complianceMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span>Para Legal & Compliance (empresas + documentos), corré el SQL de configuración una sola vez en Supabase.</span>
+                <span>For Legal & Compliance (companies + documents), run the setup SQL once in Supabase.</span>
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
               </div>
             )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10, marginBottom:16 }}>
               {[
-                { label:"Empresas activas", value: m.activeCompanies, color:"#111" },
+                { label:"Active companies", value: m.activeCompanies, color:"#111" },
                 { label:"Documentos vencidos", value: m.expired, color:"#E24B4A" },
-                { label:"Vencen en 30 días", value: m.expiringSoon, color:"#EF9F27" },
-                { label:"Al día", value: m.upToDate, color:"#1A8A4E" },
+                { label:"Expiring in 30 days", value: m.expiringSoon, color:"#EF9F27" },
+                { label:"Up to date", value: m.upToDate, color:"#1A8A4E" },
               ].map(mt => (
                 <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                   <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
@@ -6492,7 +6492,7 @@ export default function App() {
             {!compBannerDismissed && complianceAlerts.length > 0 && (
               <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                  <span style={{ fontSize:13, fontWeight:700, color:"#A32D2D" }}>⚠️ {complianceAlerts.length} documento(s) vencido(s) o por vencer (≤7 días)</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:"#A32D2D" }}>⚠️ {complianceAlerts.length} document(s) expired or expiring soon (≤7 days)</span>
                   <button onClick={() => setCompBannerDismissed(true)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#A32D2D", fontSize:16, lineHeight:1 }}>×</button>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
@@ -6501,7 +6501,7 @@ export default function App() {
                       <span style={{ fontSize:10, fontWeight:700, color:"#A32D2D", background:"#fff", borderRadius:20, padding:"1px 7px" }}>{ENTITY_LABELS[a.doc.entity_type] || a.doc.entity_type}</span>
                       <b>{a.name}</b>
                       <span>· {docTypeLabel(a.doc.document_type)}</span>
-                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{a.status === "expired" ? `Vencido hace ${Math.abs(a.days)} días` : `Vence en ${a.days} días`}</span>
+                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{a.status === "expired" ? `Overdue ${Math.abs(a.days)} days ago` : `Expires in ${a.days} days`}</span>
                     </div>
                   ))}
                 </div>
@@ -6516,7 +6516,7 @@ export default function App() {
 
             {complianceMissing ? null : compTab === "companies" ? (
               companies.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin empresas. Agregá una con “+ Empresa”.</div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No companies. Add one with “+ Company”.</div>
               ) : companies.map(c => (
                 <div key={c.id} style={cardStyle}>
                   <div style={{ display:"flex", alignItems:"flex-start", gap:10, flexWrap:"wrap" }}>
@@ -6535,8 +6535,8 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ display:"flex", gap:6 }}>
-                      <Btn onClick={() => openEditCompany(c)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
-                      <Btn danger onClick={() => deleteCompany(c)} style={{ padding:"4px 10px", fontSize:12 }}>Eliminar</Btn>
+                      <Btn onClick={() => openEditCompany(c)} style={{ padding:"4px 10px", fontSize:12 }}>Edit</Btn>
+                      <Btn danger onClick={() => deleteCompany(c)} style={{ padding:"4px 10px", fontSize:12 }}>Delete</Btn>
                     </div>
                   </div>
                   <div style={gridStyle}>{DOC_GRID.company.map(dt => cell("company", c.id, dt))}</div>
@@ -6544,7 +6544,7 @@ export default function App() {
               ))
             ) : compTab === "trucks" ? (
               trucksList.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin camiones. Cargalos en la página Trucks.</div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No trucks. Load them on the Trucks page.</div>
               ) : trucksList.map(tk => (
                 <div key={tk.id} style={cardStyle}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
@@ -6573,22 +6573,22 @@ export default function App() {
                 <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
                   <select value={docFilterEntity} onChange={e => setDocFilterEntity(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
                     <option value="">Todas las entidades</option>
-                    <option value="company">Empresas</option><option value="truck">Camiones</option><option value="driver">Drivers</option>
+                    <option value="company">Companys</option><option value="truck">Camiones</option><option value="driver">Drivers</option>
                   </select>
                   <select value={docFilterStatus} onChange={e => setDocFilterStatus(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
-                    <option value="">Todos los estados</option>
-                    <option value="expired">Vencido</option><option value="expiring_soon">Por vencer</option><option value="active">Al día</option><option value="none">Sin fecha</option>
+                    <option value="">All states</option>
+                    <option value="expired">Expired</option><option value="expiring_soon">Expiring soon</option><option value="active">Up to date</option><option value="none">Sin fecha</option>
                   </select>
                   <select value={docFilterDays} onChange={e => setDocFilterDays(e.target.value)} style={{ ...inp, width:"auto", minWidth:150 }}>
                     <option value="">Cualquier vencimiento</option>
-                    <option value="7">Vence en ≤7 días</option><option value="30">≤30 días</option><option value="60">≤60 días</option><option value="90">≤90 días</option>
+                    <option value="7">Expires in ≤7 days</option><option value="30">≤30 days</option><option value="60">≤60 days</option><option value="90">≤90 days</option>
                   </select>
                 </div>
                 <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
                   <div style={{ overflowX:"auto" }}>
                     <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                       <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                        {["Entidad","Nombre","Tipo doc","N°","Emisor","Emisión","Vencimiento","Estado","Acciones"].map((h,i) => <th key={i} style={th}>{h}</th>)}
+                        {["Entity","Name","Doc type","N°","Issuer","Issued","Expiry","Status","Actions"].map((h,i) => <th key={i} style={th}>{h}</th>)}
                       </tr></thead>
                       <tbody>
                         {allRows.length === 0 ? (
@@ -6605,7 +6605,7 @@ export default function App() {
                             <td style={td}><ComplianceBadge status={st} /></td>
                             <td style={{ ...td, whiteSpace:"nowrap" }}>
                               {d.document_url && <a href={d.document_url} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", marginRight:8 }}>Ver</a>}
-                              <button onClick={() => openEditDoc(d)} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>Editar</button>
+                              <button onClick={() => openEditDoc(d)} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>Edit</button>
                               <button onClick={() => deleteDoc(d)} style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
                             </td>
                           </tr>
@@ -6625,10 +6625,10 @@ export default function App() {
       {page === "settings" && (
         <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:640 }}>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Cuenta</div>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Account</div>
             <DetailRow label="Usuario" value={userEmail} />
             <DetailRow label="Base de datos" value={SUPABASE_URL} />
-            <div style={{ marginTop:14 }}><Btn onClick={() => supabase.auth.signOut()}>Cerrar sesión</Btn></div>
+            <div style={{ marginTop:14 }}><Btn onClick={() => supabase.auth.signOut()}>Sign out</Btn></div>
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
             <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Warehouses propios</div>
@@ -6638,7 +6638,7 @@ export default function App() {
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
             <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Base de datos</div>
-            <Btn onClick={() => setShowSetup(true)}>Ver SQL de configuración (storage_jobs, brokers, balances)</Btn>
+            <Btn onClick={() => setShowSetup(true)}>View setup SQL (storage_jobs, brokers, balances)</Btn>
           </div>
         </div>
       )}
@@ -6648,16 +6648,16 @@ export default function App() {
         <>
           {billingMissing && (
             <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-              <span>Para el módulo de billing, corré el SQL de configuración una sola vez en Supabase.</span>
+              <span>For the billing module, run the setup SQL once in Supabase.</span>
               <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
             </div>
           )}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
             {[
-              { label:"Total pendiente", value:"$"+billingMetrics.pending.toLocaleString(), color:"#A32D2D" },
+              { label:"Total outstanding", value:"$"+billingMetrics.pending.toLocaleString(), color:"#A32D2D" },
               { label:"Overdue", value:`${billingMetrics.overdueCount} · $${billingMetrics.overdueSum.toLocaleString()}`, color:"#A32D2D" },
-              { label:"Vence esta semana", value:`${billingMetrics.weekCount} · $${billingMetrics.weekSum.toLocaleString()}`, color:"#C2410C" },
-              { label:"Cobrado este mes", value:"$"+billingMetrics.collected.toLocaleString(), color:"#1A8A4E" },
+              { label:"Due this week", value:`${billingMetrics.weekCount} · $${billingMetrics.weekSum.toLocaleString()}`, color:"#C2410C" },
+              { label:"Collected this month", value:"$"+billingMetrics.collected.toLocaleString(), color:"#1A8A4E" },
             ].map(m => (
               <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                 <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
@@ -6667,7 +6667,7 @@ export default function App() {
           </div>
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","Todos"],["pending","Pendientes"],["overdue","Overdue"],["paid","Pagados"]].map(([t,l]) => (
+            {[["all","All"],["pending","Pending"],["overdue","Overdue"],["paid","Pagados"]].map(([t,l]) => (
               <button key={t} onClick={() => setBillingTab(t)}
                 style={{ fontSize:13, fontWeight: billingTab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: billingTab === t ? "#111" : "#999", borderBottom: billingTab === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -6678,7 +6678,7 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Estado","Cliente","Job #","Storage","Días en storage","Período","Monto","Acciones"].map((h,i) => (
+                    {["Status","Client","Job #","Storage","Days in storage","Period","Amount","Actions"].map((h,i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -6686,14 +6686,14 @@ export default function App() {
                 <tbody>
                   {(() => {
                     const rows = billingRows.filter(b => billingTab === "all" || b.status === billingTab);
-                    if (rows.length === 0) return <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{billingMissing ? "Corré el SQL para activar billing." : "Sin registros de billing."}</td></tr>;
+                    if (rows.length === 0) return <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{billingMissing ? "Run the SQL to enable billing." : "No billing records."}</td></tr>;
                     return rows.map(b => (
                       <tr key={b.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ padding:"12px" }}><BillingBadge status={b.status} /></td>
                         <td style={{ padding:"12px" }}>{b.customer}</td>
                         <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{b.job_number}</td>
                         <td style={{ padding:"12px", fontSize:12, color:"#555" }}>{b.location}</td>
-                        <td style={{ padding:"12px" }}>{b.daysIn != null ? `${b.daysIn} días` : "—"}</td>
+                        <td style={{ padding:"12px" }}>{b.daysIn != null ? `${b.daysIn} days` : "—"}</td>
                         <td style={{ padding:"12px", fontSize:12, color:"#555", whiteSpace:"nowrap" }}>{b.billing_period_start || "—"} → {b.billing_period_end || "—"}</td>
                         <td style={{ padding:"12px", fontWeight:600 }}>${Number(b.amount || 0).toLocaleString()}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
@@ -6720,14 +6720,14 @@ export default function App() {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:20 }}>
         {[
           { label:"Jobs activos", value:metrics.activeJobs, color:"#3B6D11" },
-          { label:"Entregados", value:metrics.deliveredJobs, color:"#888" },
-          { label:"Unidades", value:metrics.units, color:"#111" },
-          { label:"Unidades ocupadas", value:metrics.occupied, color:"#185FA5" },
-          { label:"Pagos urgentes", value:urgentPayments, color:"#A32D2D" },
+          { label:"Delivered", value:metrics.deliveredJobs, color:"#888" },
+          { label:"Units", value:metrics.units, color:"#111" },
+          { label:"Occupied units", value:metrics.occupied, color:"#185FA5" },
+          { label:"Urgent payments", value:urgentPayments, color:"#A32D2D" },
           { label:"Overdue FADD", value:faddStats.overdue, color:"#A32D2D" },
           { label:"Due this week", value:faddStats.dueWeek, color:"#C2410C" },
-          { label:"Costo mensual", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
-          { label:"Estados USA", value:metrics.states, color:"#888" },
+          { label:"Monthly cost", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
+          { label:"US states", value:metrics.states, color:"#888" },
         ].map(m => (
           <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
             <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
@@ -6742,10 +6742,10 @@ export default function App() {
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
             <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Revenue bruto vs neto</div>
-            <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Después de lo que se queda el broker</div>
+            <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>After what the broker keeps</div>
             {(() => {
               const { gross, broker, net } = revenueAnalytics;
-              const rows = [["Bruto (cobrado + extras)", gross, "#185FA5"], ["− Broker share", broker, "#C2410C"], ["Neto para la empresa", net, "#1A8A4E"]];
+              const rows = [["Gross (collected + extras)", gross, "#185FA5"], ["− Broker share", broker, "#C2410C"], ["Net to company", net, "#1A8A4E"]];
               const max = Math.max(gross, 1);
               return rows.map(([l, v, c]) => (
                 <div key={l} style={{ marginBottom:12 }}>
@@ -6789,7 +6789,7 @@ export default function App() {
 
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Aperturas vs cierres por mes</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Evolucion mensual de tu operacion</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Monthly evolution of your operation</div>
               {(() => {
                 const monthNames = {"01":"Ene","02":"Feb","03":"Mar","04":"Abr","05":"May","06":"Jun","07":"Jul","08":"Ago","09":"Sep","10":"Oct","11":"Nov","12":"Dic"};
                 const opens = records.reduce((acc,r)=>{ if(r.date_opened){ const m=r.date_opened.slice(0,7); acc[m]=(acc[m]||0)+1; } return acc; },{});
@@ -6803,7 +6803,7 @@ export default function App() {
                     <div key={month} style={{ marginBottom:10 }}>
                       <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
                         <span style={{ fontWeight:500 }}>{label}</span>
-                        <span style={{ color:"#3B6D11" }}>+{openCount} abiertos</span>
+                        <span style={{ color:"#3B6D11" }}>+{openCount} open</span>
                       </div>
                       <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
                         <div style={{ background:"#3B6D11", borderRadius:6, height:8, width:`${(openCount/maxVal)*100}%`, transition:"width .4s" }} />
@@ -6815,7 +6815,7 @@ export default function App() {
             </div>
 
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Gasto mensual por empresa</div>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly spend per company</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto le pagas a cada cadena de storages</div>
               {(() => {
                 const byBrand = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
@@ -6841,7 +6841,7 @@ export default function App() {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storages activos por estado</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Donde tenes mas exposicion operativa</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Where you have the most operational exposure</div>
               {(() => {
                 const byState = records.filter(r=>sit(r)==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{});
                 const sorted = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,10);
@@ -6861,8 +6861,8 @@ export default function App() {
             </div>
 
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Costo mensual por estado</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Donde gastas mas dinero en storages</div>
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly cost per state</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Where you spend the most money on storages</div>
               {(() => {
                 const byCost = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
@@ -6894,7 +6894,7 @@ export default function App() {
                 for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); if (!j.broker_id) continue; map.set(j.broker_id, (map.get(j.broker_id)||0) + (num(j.estimate) || num(j.pickup_balance)+num(j.delivery_balance))); }
                 const sorted = [...map.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
-                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Cargá brokers y estimates para ver esto</p>;
+                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Add brokers and estimates to see this</p>;
                 return sorted.map(([bid,val]) => (
                   <div key={bid} style={{ marginBottom:12 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:5 }}>
@@ -6909,7 +6909,7 @@ export default function App() {
 
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Jobs por estado</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Distribución de jobs activos e históricos</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Distribution of active and historical jobs</div>
               {(() => {
                 const counts = {}; const seen = new Set();
                 for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const s = j.status || "scheduled"; counts[s] = (counts[s]||0)+1; }
@@ -6943,7 +6943,7 @@ export default function App() {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>CF movidos por mes</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Volumen total (pies cúbicos) por mes</div>
+              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Total volume (cubic feet) per month</div>
               {(() => {
                 const by = {}; const seen = new Set();
                 for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const d = j.pickup_date || j.date_in; if (!d) continue; const m = d.slice(0,7); by[m] = (by[m]||0) + parseCf(j.volume); }
@@ -6972,7 +6972,7 @@ export default function App() {
                 for (const j of jobs) { if (!j.date_out) continue; const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const names = (jobDriverNames(j) || "").split(",").map(s=>s.trim()).filter(Boolean); for (const n of names) counts[n] = (counts[n]||0)+1; }
                 const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
-                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Sin entregas todavía</p>;
+                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>No deliveries yet</p>;
                 return sorted.map(([name,c]) => (
                   <div key={name} style={{ marginBottom:12 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:5 }}>
@@ -7009,19 +7009,19 @@ export default function App() {
       {/* Nested tabs inside Storage Units */}
       {page === "storage" && storageTab === "storage_units" && (
         <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
-          {[["units","Unidades"],["unit_jobs","Jobs en unidades"]].map(([t,l]) => (
+          {[["units","Units"],["unit_jobs","Jobs in units"]].map(([t,l]) => (
             <button key={t} onClick={() => setUnitsSubTab(t)}
               style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: unitsSubTab === t ? "#fff" : "none", color: unitsSubTab === t ? "#111" : "#888", fontWeight: unitsSubTab === t ? 600 : 400, boxShadow: unitsSubTab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
           ))}
         </div>
       )}
 
-      {/* List / Map view toggle + US map (Unidades sub-tab) */}
+      {/* List / Map view toggle + US map (Units sub-tab) */}
       {page === "storage" && storageTab === "storage_units" && unitsSubTab === "units" && (
         <>
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
-              {[["list","📋 Lista"],["map","🗺️ Mapa"]].map(([v,l]) => (
+              {[["list","📋 List"],["map","🗺️ Map"]].map(([v,l]) => (
                 <button key={v} onClick={() => setStorageView(v)}
                   style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: storageView === v ? "#fff" : "none", color: storageView === v ? "#111" : "#888", fontWeight: storageView === v ? 600 : 400, boxShadow: storageView === v ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
               ))}
@@ -7029,7 +7029,7 @@ export default function App() {
             {mapStateFilter && (
               <span style={{ display:"inline-flex", alignItems:"center", gap:8, fontSize:12.5, background:"#EEF2FF", color:"#185FA5", borderRadius:20, padding:"5px 12px", fontWeight:600 }}>
                 Filtrando: {US_CODE_TO_NAME[mapStateFilter] || mapStateFilter} ({(storageStateStats[mapStateFilter]?.count) || 0})
-                <button onClick={() => setMapStateFilter("")} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12, padding:0 }}>Quitar filtro</button>
+                <button onClick={() => setMapStateFilter("")} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12, padding:0 }}>Clear filter</button>
               </span>
             )}
           </div>
@@ -7046,7 +7046,7 @@ export default function App() {
         <>
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
             <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar por job #, cliente, driver, empresa, unidad..."
+              placeholder="Search by job #, client, driver, company, unit..."
               style={{ ...inp, flex:1, minWidth:180 }} />
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
@@ -7054,7 +7054,7 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Empresa","Unidad","Ubicación","Job #","Cliente","Volumen","Lot #","Sticker","Driver","FADD","Estado",""].map((h,i) => (
+                    {["Company","Unit","Location","Job #","Client","Volumen","Lot #","Sticker","Driver","FADD","Status",""].map((h,i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -7112,18 +7112,18 @@ export default function App() {
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:14 }}>
                 <div>
                   <div style={{ fontSize:18, fontWeight:700 }}>🏭 {name}</div>
-                  <div style={{ fontSize:12, color:"#999" }}>Warehouse propio · {byJob.length} job(s) activo(s)</div>
+                  <div style={{ fontSize:12, color:"#999" }}>Own warehouse · {byJob.length} job(s) activo(s)</div>
                 </div>
                 <div style={{ display:"flex", gap:8 }}>
                   <Btn primary disabled={!dbReady} onClick={() => openWarehouseJobPicker(name)} style={{ padding:"7px 14px" }}>+ Job a este warehouse</Btn>
-                  <Btn onClick={() => openCapacity({ kind:"warehouse", name, value: cap != null ? String(cap) : "" })} style={{ padding:"7px 14px" }}>Editar capacidad</Btn>
+                  <Btn onClick={() => openCapacity({ kind:"warehouse", name, value: cap != null ? String(cap) : "" })} style={{ padding:"7px 14px" }}>Edit capacidad</Btn>
                 </div>
               </div>
               {cap != null ? (
                 <div>
                   <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:6 }}>
                     <span style={{ fontWeight:700, color:occColor(pct) }}>{pct}% ocupado</span>
-                    <span style={{ color:"#888" }}>{Math.round(used).toLocaleString()} usado · {Math.round(free).toLocaleString()} libre · {cap.toLocaleString()} CF total</span>
+                    <span style={{ color:"#888" }}>{Math.round(used).toLocaleString()} used · {Math.round(free).toLocaleString()} free · {cap.toLocaleString()} CF total</span>
                   </div>
                   <div style={{ background:"#f0f0f0", borderRadius:8, height:16, overflow:"hidden" }}>
                     <div style={{ background:occColor(pct), height:16, width:`${pct}%`, transition:"width .4s" }} />
@@ -7131,7 +7131,7 @@ export default function App() {
                 </div>
               ) : (
                 <div style={{ fontSize:13, color:"#999", display:"flex", alignItems:"center", gap:8 }}>
-                  Capacidad sin configurar · {Math.round(used).toLocaleString()} CF en uso.
+                  Capacity not set · {Math.round(used).toLocaleString()} CF in use.
                   <span onClick={() => openCapacity({ kind:"warehouse", name, value:"" })} style={{ color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Configurar capacidad</span>
                 </div>
               )}
@@ -7142,7 +7142,7 @@ export default function App() {
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                   <thead>
                     <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Cliente","Lot #","Sticker","Volumen","Driver","FADD","Estado",""].map((h,i) => (
+                      {["Job #","Client","Lot #","Sticker","Volumen","Driver","FADD","Status",""].map((h,i) => (
                         <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                       ))}
                     </tr>
@@ -7178,7 +7178,7 @@ export default function App() {
 
       {page === "jobs" && (
         <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-          {[["active","Activos"],["scheduled","Programados"],["in_storage","En storage"],["out_for_delivery","En entrega"],["delivered","Entregados"]].map(([t,l]) => {
+          {[["active","Active"],["scheduled","Scheduled"],["in_storage","In storage"],["out_for_delivery","Out for delivery"],["delivered","Delivered"]].map(([t,l]) => {
             const n = jobTabCounts[t] || 0;
             return (
               <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>
@@ -7192,18 +7192,18 @@ export default function App() {
       {((page === "storage" && storageTab === "storage_units" && unitsSubTab === "units") || page === "jobs") && (<>
       <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder={page === "storage" ? "Buscar empresa, ubicación, zip, unidad..." : "Buscar por job #, cliente, driver, zip, ubicación..."}
+          placeholder={page === "storage" ? "Search company, location, zip, unit..." : "Search by job #, client, driver, zip, location..."}
           style={{ ...inp, flex:1, minWidth:180 }} />
         {page !== "storage" && (
           <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
-            <option value="">Todos los drivers</option>
+            <option value="">All drivers</option>
             {drivers.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
         )}
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inp, minWidth:150 }}>
           <option value="date-desc">Mas reciente</option>
           <option value="date-asc">Mas antiguo</option>
-          <option value="customer">Cliente A-Z</option>
+          <option value="customer">Client A-Z</option>
           <option value="driver">Driver A-Z</option>
         </select>
       </div>
@@ -7218,7 +7218,7 @@ export default function App() {
               </colgroup>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Empresa","Estado","Zip","Direccion","Unidad","Gate Code","Apertura","Payment","Jobs activos","Situacion","Ocupación"].map(h => (
+                  {["Company","Status","Zip","Address","Unit","Gate Code","Apertura","Payment","Jobs activos","Situacion","Occupancy"].map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                   ))}
                 </tr>
@@ -7265,7 +7265,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Job #","Cliente","Tipo","Estado","FADD","Volumen","Ubicación","Driver","Ruta", tab==="delivered"?"Entregado":""].filter(Boolean).map(h => (
+                  {["Job #","Client","Type","Status","FADD","Volumen","Location","Driver","Ruta", tab==="delivered"?"Delivered":""].filter(Boolean).map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                   <th style={{ width:150 }} />
@@ -7273,7 +7273,7 @@ export default function App() {
               </thead>
               <tbody>
                 {jobGroups.length === 0 ? (
-                  <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "Sin jobs entregados" : tab==="active" ? "Sin jobs activos. Cargá uno con \"+ Nuevo job\"." : "Sin jobs en este estado."}</td></tr>
+                  <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tab==="delivered" ? "No delivered jobs" : tab==="active" ? "No active jobs. Add one with \"+ New job\"." : "No jobs in this status."}</td></tr>
                 ) : jobGroups.slice(listPage*PAGE_SIZE, (listPage+1)*PAGE_SIZE).map(g => {
                   // Where the goods currently sit: warehouse name, or storage brand + state.
                   const locs = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.state].filter(Boolean).join(" · ")).filter(Boolean))];
@@ -7303,13 +7303,13 @@ export default function App() {
                         <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
                         <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                           <Btn onClick={() => undeliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Desentregar</Btn>
-                          <button onClick={() => deleteJob(g)} title="Eliminar job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
+                          <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
                         </td>
                       </>
                     ) : (
                       <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                         <Btn onClick={() => deliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Marcar entregado</Btn>
-                        <button onClick={() => deleteJob(g)} title="Eliminar job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
+                        <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
                       </td>
                     )}
                   </tr>
@@ -7321,7 +7321,7 @@ export default function App() {
         </div>
         <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
           <Pager page={listPage} total={page === "storage" ? unitRows.length : jobGroups.length}
-            unit={page === "storage" ? "unidades" : "job(s)"} onPage={setListPage} />
+            unit={page === "storage" ? "units" : "job(s)"} onPage={setListPage} />
         </div>
       </div>
       </>)}
@@ -7331,8 +7331,8 @@ export default function App() {
       {jobDetail && (
         <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
           footer={<>
-            <Btn onClick={() => openEditJob(jobDetail)}>Editar</Btn>
-            <Btn danger onClick={() => deleteJob(jobDetail)}>🗑 Eliminar job</Btn>
+            <Btn onClick={() => openEditJob(jobDetail)}>Edit</Btn>
+            <Btn danger onClick={() => deleteJob(jobDetail)}>🗑 Delete job</Btn>
             <Btn onClick={() => window.open(waLink(jobDetail, (jobDetail.parts||[]).map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean).join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail)), "_blank")}>💬 WhatsApp</Btn>
             {nextStatus(jobDetail) && <Btn onClick={() => advanceStatus(jobDetail)}>→ {statusMeta(nextStatus(jobDetail)).l}</Btn>}
             {jobDetail.parts.some(p => !p.date_out) && (
@@ -7341,13 +7341,13 @@ export default function App() {
             {jobDetail.parts.some(p => p.date_out) && (
               <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Desentregar todo</Btn>
             )}
-            <Btn primary onClick={() => setJobDetailKey(null)}>Cerrar</Btn>
+            <Btn primary onClick={() => setJobDetailKey(null)}>Close</Btn>
           </>}>
-          <SectionLabel>Datos del job <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:"#bbb" }}>· click para editar</span></SectionLabel>
+          <SectionLabel>Job data <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:"#bbb" }}>· click to edit</span></SectionLabel>
           {(() => { const P = jobDetail.parts; const set = (f) => (v) => updateJobField(P, f, v); return (
           <>
           <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
-          <EditRow label="Cliente"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
+          <EditRow label="Client"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
           <EditRow label="Broker">
             <select value={jobDetail.broker_id || ""} onChange={e => set("broker_id")(e.target.value ? Number(e.target.value) : "")}
               style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
@@ -7355,9 +7355,9 @@ export default function App() {
               {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </EditRow>
-          <EditRow label="Tipo"><TypeBadge type={jobDetail.job_type} /></EditRow>
-          <EditRow label="Estado"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
-          <EditRow label="Driver (quién lo dejó)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
+          <EditRow label="Type"><TypeBadge type={jobDetail.job_type} /></EditRow>
+          <EditRow label="Status"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
+          <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
           <EditRow label="Volumen (CF)"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
           <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
           <EditRow label="Color del sticker"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
@@ -7366,25 +7366,25 @@ export default function App() {
           <EditRow label="Pick up to (opcional)"><InlineField type="date" value={jobDetail.pickup_date_to} onSave={set("pickup_date_to")} /></EditRow>
           <EditRow label="Pickup address"><InlineField value={jobDetail.pickup_address} onSave={set("pickup_address")} /></EditRow>
           <EditRow label="Pickup city"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
-          <EditRow label="Pickup estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
+          <EditRow label="Pickup state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
           <EditRow label="Pickup zip"><InlineField value={jobDetail.pickup_zip} onSave={set("pickup_zip")} /></EditRow>
           <EditRow label="Balance pickup ($)"><InlineField value={jobDetail.pickup_balance} onSave={set("pickup_balance")} display={money(jobDetail.pickup_balance)} /></EditRow>
           <EditRow label="Date in (a storage)"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
           <EditRow label="Delivery date"><InlineField type="date" value={jobDetail.delivery_date} onSave={set("delivery_date")} /></EditRow>
           <EditRow label="Delivery address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
           <EditRow label="Delivery city"><InlineField value={jobDetail.delivery_city} onSave={set("delivery_city")} /></EditRow>
-          <EditRow label="Delivery estado"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
+          <EditRow label="Delivery state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
           <EditRow label="Delivery zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
           <EditRow label="Balance delivery ($)"><InlineField value={jobDetail.delivery_balance} onSave={set("delivery_balance")} display={money(jobDetail.delivery_balance)} /></EditRow>
           {routeUrl(jobDetail) && (
             <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
               <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Ruta</span>
-              <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ Ver ruta storage → delivery en Google Maps</a>
+              <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ View route storage → delivery en Google Maps</a>
             </div>
           )}
-          <EditRow label="Billing al cliente">
+          <EditRow label="Client billing">
             {jobDetail.billing_active
-              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Activo · {money(jobDetail.client_monthly_rate) || "$0"}/mes{jobDetail.first_month_free ? " · 1er mes gratis" : ""}{jobDetail.billing_start_date ? ` · desde ${jobDetail.billing_start_date}` : ""}</span>
+              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · desde ${jobDetail.billing_start_date}` : ""}</span>
               : <span style={{ color:"#bbb" }}>No se cobra storage</span>}
           </EditRow>
           <EditRow label="Notas"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
@@ -7412,17 +7412,17 @@ export default function App() {
                         <button onClick={() => { setJobDetailKey(null); setPage("settlements"); setCsDetailId(linked.id); }} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>#{linked.closing_sheet_number || linked.id}</button>
                         <CSBadge status={linked.status} />
                         <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
-                          <option value="">Mover…</option>
+                          <option value="">Move…</option>
                           {openSheets.filter(s => s.id !== linked.id).map(s => <option key={s.id} value={String(s.id)}>→ #{s.closing_sheet_number || s.id}</option>)}
-                          <option value="__new">→ ➕ Nuevo</option>
-                          <option value="__unlink">Quitar del closing sheet</option>
+                          <option value="__new">→ ➕ New</option>
+                          <option value="__unlink">Remove from closing sheet</option>
                         </select>
                       </span>
                     ) : (
                       <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
-                        <option value="">+ Agregar a closing sheet…</option>
-                        {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "sin broker"}</option>)}
-                        <option value="__new">➕ Crear nuevo</option>
+                        <option value="">+ Add to closing sheet…</option>
+                        {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "no broker"}</option>)}
+                        <option value="__new">➕ Create new</option>
                       </select>
                     )}
                   </EditRow>
@@ -7431,8 +7431,8 @@ export default function App() {
               {(() => { const P = jobDetail.parts; return (<>
                 <EditRow label="Carrier rate / CF"><InlineField value={jobDetail.carrier_rate_per_cf} onSave={(v) => updateJobField(P, "carrier_rate_per_cf", v === "" ? null : Number(v))} display={money(jobDetail.carrier_rate_per_cf)} /></EditRow>
                 <EditRow label="Carrier fee (auto)"><span style={{ fontWeight:600 }}>{money(parseCf(jobDetail.volume) * numv(jobDetail.carrier_rate_per_cf)) || "$0"}</span></EditRow>
-                <EditRow label="BOL balance a cobrar"><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(P, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></EditRow>
-                <EditRow label="BOL cobrado">
+                <EditRow label="BOL balance to collect"><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(P, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></EditRow>
+                <EditRow label="BOL collected">
                   <span style={{ display:"inline-flex", alignItems:"center", gap:10 }}>
                     <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
                     {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
@@ -7463,13 +7463,13 @@ export default function App() {
                         <span style={{ flex:1 }} />
                         <span style={{ fontSize:12, color:"#1A8A4E", fontWeight:600 }}>D {money(e.driver_commission_amount) || "$0"}</span>
                         <span style={{ fontSize:12, color:"#185FA5", fontWeight:600 }}>R {money(e.rep_commission_amount) || "$0"}</span>
-                        <button onClick={() => deleteExtra(e)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
+                        <button onClick={() => deleteExtra(e)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
                       </div>
                     ))}
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8 }}>
                   {exs.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total extras: <b>${Math.round(totAmt).toLocaleString()}</b></span>}
                   <span style={{ flex:1 }} />
-                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar extra</Btn>
+                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add extra</Btn>
                 </div>
               </>
             );
@@ -7503,12 +7503,12 @@ export default function App() {
             const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
             return (
               <>
-                <SectionLabel>Pagos {ps.length ? `(${ps.length})` : ""}</SectionLabel>
+                <SectionLabel>Payments {ps.length ? `(${ps.length})` : ""}</SectionLabel>
                 <div style={{ background:"#fafafa", borderRadius:9, padding:"10px 12px", marginBottom:8 }}>
                   <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13 }}>
                     <span>Balance del job: <b>${Math.round(expected).toLocaleString()}</b></span>
                     <span>Cobrado (job): <b style={{ color:"#1A8A4E" }}>${Math.round(jobCollected).toLocaleString()}</b></span>
-                    <span>Saldo job: <b style={{ color: jobOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(jobOutstanding).toLocaleString()}</b></span>
+                    <span>Job balance: <b style={{ color: jobOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(jobOutstanding).toLocaleString()}</b></span>
                   </div>
                   {(exsOwed > 0 || extrasCollected > 0) && (
                     <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12.5, marginTop:6, paddingTop:6, borderTop:"1px solid #eee", color:"#555" }}>
@@ -7536,7 +7536,7 @@ export default function App() {
                     </div>
                   )}
                   <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, paddingTop:8, borderTop:"1px solid #eee", fontSize:13.5, fontWeight:800 }}>
-                    <span>Saldo total pendiente</span>
+                    <span>Total outstanding balance</span>
                     <span style={{ color: totalOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
                   </div>
                 </div>
@@ -7551,15 +7551,15 @@ export default function App() {
                         <span style={{ fontSize:11, color:"#888" }}>{p.payment_date || "—"}</span>
                         {p.received
                           ? (p.banked
-                              ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px" }}>Depositado</span>
-                              : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:20, padding:"1px 7px" }}>En circulación{p.cash_with_whom ? ` · ${p.cash_with_whom}` : ""}</span>)
-                          : <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 7px" }}>Pendiente</span>}
+                              ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px" }}>Deposited</span>
+                              : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:20, padding:"1px 7px" }}>In circulation{p.cash_with_whom ? ` · ${p.cash_with_whom}` : ""}</span>)
+                          : <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 7px" }}>Pending</span>}
                         <span style={{ flex:1 }} />
-                        <button onClick={() => openEditPayment(p)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>
+                        <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>
                       </div>
                     ))}
                 <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: jobOutstanding > 0 ? String(Math.round(jobOutstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar pago</Btn>
+                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: jobOutstanding > 0 ? String(Math.round(jobOutstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add pago</Btn>
                 </div>
               </>
             );
@@ -7570,7 +7570,7 @@ export default function App() {
             const partSet = new Set(partIds);
             const repId = Math.min(...partIds);
             const storageTargets = [
-              ...records.filter(r => r.space_type !== "warehouse").map(r => ({ key:String(r.id), id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unidad #${r.id}` })),
+              ...records.filter(r => r.space_type !== "warehouse").map(r => ({ key:String(r.id), id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
               ...WAREHOUSES.map(w => ({ key:"wh:"+w, id:null, label:`Warehouse ${w}` })),
             ];
             // Merge automatic trip_events + manual job_events for this job, oldest → newest.
@@ -7593,10 +7593,10 @@ export default function App() {
                 <SectionLabel>Timeline {items.length ? `(${items.length})` : ""}</SectionLabel>
                 {jobEventsMissing && (
                   <div style={{ fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
-                    Corré el SQL actualizado para guardar eventos manuales del job. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
+                    Run the updated SQL to save manual job events. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
                   </div>
                 )}
-                {items.length === 0 && !jobEventForm ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin eventos todavía.</div>
+                {items.length === 0 && !jobEventForm ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No events yet.</div>
                   : <div style={{ display:"flex", flexDirection:"column" }}>
                       {items.map((it, i) => (
                         <div key={it.id} style={{ display:"flex", gap:10, padding:"8px 0", borderBottom: i < items.length-1 ? "1px solid #f4f4f4" : "none" }}>
@@ -7611,7 +7611,7 @@ export default function App() {
                             {it.notes && <div style={{ fontSize:12, color:"#555", marginTop:2 }}>{it.notes}</div>}
                             <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{(it.date || "").replace("T", " ").slice(0, 16)}{it.by ? ` · ${it.by}` : ""}</div>
                           </div>
-                          {it.source === "manual" && <button onClick={() => deleteJobEvent(it.raw)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
+                          {it.source === "manual" && <button onClick={() => deleteJobEvent(it.raw)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
                         </div>
                       ))}
                     </div>}
@@ -7619,8 +7619,8 @@ export default function App() {
                 {jobEventForm ? (
                   <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", marginTop:10, background:"#fafafa" }}>
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Fecha *"><input style={inp} type="date" value={jobEventForm.event_date} onChange={e => setJE({ event_date:e.target.value })} /></Field>
-                      <Field label="Tipo de evento *">
+                      <Field label="Date *"><input style={inp} type="date" value={jobEventForm.event_date} onChange={e => setJE({ event_date:e.target.value })} /></Field>
+                      <Field label="Event type *">
                         <select style={inp} value={jobEventForm.event_type} onChange={e => setJE({ event_type:e.target.value })}>
                           {JOB_EVENT_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
                         </select>
@@ -7628,29 +7628,29 @@ export default function App() {
                       {meta?.storage && (
                         <Field label="Storage / warehouse (opcional)">
                           <select style={inp} value={jobEventForm.storage_id} onChange={e => { const tgt = storageTargets.find(s => s.key === e.target.value); setJE({ storage_id: e.target.value, storage_label: tgt?.label || "" }); }}>
-                            <option value="">— Ninguno —</option>
+                            <option value="">— None —</option>
                             {storageTargets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
                           </select>
                         </Field>
                       )}
-                      <Field label="Trip # (opcional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Ref. histórica" /></Field>
-                      <Field label="Notas" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="Qué pasó" /></Field>
+                      <Field label="Trip # (opcional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Historical ref." /></Field>
+                      <Field label="Notas" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="What happened" /></Field>
                     </div>
                     <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10 }}>
-                      <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancelar</Btn>
-                      <Btn primary onClick={() => saveJobEvent(jobDetail.key, repId)} style={{ padding:"5px 12px", fontSize:12 }}>Guardar evento</Btn>
+                      <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancel</Btn>
+                      <Btn primary onClick={() => saveJobEvent(jobDetail.key, repId)} style={{ padding:"5px 12px", fontSize:12 }}>Save event</Btn>
                     </div>
                   </div>
                 ) : !jobEventsMissing && (
                   <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                    <Btn onClick={() => setJobEventForm({ event_date: today(), event_type:"picked_up", notes:"", storage_id:"", storage_label:"", trip_ref:"" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar evento</Btn>
+                    <Btn onClick={() => setJobEventForm({ event_date: today(), event_type:"picked_up", notes:"", storage_id:"", storage_label:"", trip_ref:"" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add evento</Btn>
                   </div>
                 )}
               </>
             );
           })()}
 
-          <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
+          <SectionLabel>{jobDetail.parts.length === 1 ? "Where it's stored" : `Where it's stored (${jobDetail.parts.length})`}</SectionLabel>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {jobDetail.parts.map(p => {
               const s = p.storage || {};
@@ -7661,9 +7661,9 @@ export default function App() {
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
                     <span style={jobBadgeStyle(delivered)}>
                       <span style={{ width:6, height:6, borderRadius:"50%", background: delivered ? "#bbb" : "#639922" }} />
-                      {delivered ? "Entregado" : "Activo"}
+                      {delivered ? "Delivered" : "Active"}
                     </span>
-                    <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unidad")}</strong>
+                    <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
                     <span style={{ flex:1 }} />
                     {!delivered
                       ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Marcar entregado</Btn>
@@ -7671,11 +7671,11 @@ export default function App() {
                   </div>
                   <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
                     {isWh ? (
-                      <div>📍 Warehouse propio — {p.warehouse}</div>
+                      <div>📍 Own warehouse — {p.warehouse}</div>
                     ) : (
                       <>
                         {s.address && <div>📍 {s.address}</div>}
-                        <div>Unidad: <strong style={{ fontFamily:"monospace" }}>{s.unit || "—"}</strong></div>
+                        <div>Unit: <strong style={{ fontFamily:"monospace" }}>{s.unit || "—"}</strong></div>
                         {s.gate_code && (
                           <div style={{ display:"inline-flex", alignItems:"center" }}>Gate code: <span style={{ fontFamily:"monospace", marginLeft:4 }}>{s.gate_code}</span><CopyButton value={s.gate_code} /></div>
                         )}
@@ -7698,34 +7698,34 @@ export default function App() {
       )}
 
       {detail && (
-        <Modal title={`${detail.brand||"Unidad"}${detail.unit ? " — "+detail.unit : ""}${detail.state ? " · "+detail.state : ""}`} onClose={() => setDetailId(null)}
+        <Modal title={`${detail.brand||"Unit"}${detail.unit ? " — "+detail.unit : ""}${detail.state ? " · "+detail.state : ""}`} onClose={() => setDetailId(null)}
           footer={<>
-            <Btn danger onClick={() => deleteRecord(detail.id)}>Eliminar</Btn>
-            <Btn onClick={() => { setDetailId(null); openEdit(detail); }}>Editar unidad</Btn>
-            <Btn primary onClick={() => openAddJob(detail.id)}>+ Agregar job</Btn>
+            <Btn danger onClick={() => deleteRecord(detail.id)}>Delete</Btn>
+            <Btn onClick={() => { setDetailId(null); openEdit(detail); }}>Edit unit</Btn>
+            <Btn primary onClick={() => openAddJob(detail.id)}>+ Add job</Btn>
           </>}>
           <div style={{ marginBottom:10, display:"flex", alignItems:"center", gap:10 }}>
             <Badge situation={sit(detail)} />
             <span style={{ fontSize:13, color:"#888" }}>{activeJobsByStorage[detail.id] || 0} job(s) activo(s)</span>
           </div>
-          <SectionLabel>Unidad</SectionLabel>
-          <DetailRow label="Empresa" value={detail.brand} />
-          <DetailRow label="Direccion" value={detail.address} />
-          <DetailRow label="Estado" value={detail.state} />
+          <SectionLabel>Unit</SectionLabel>
+          <DetailRow label="Company" value={detail.brand} />
+          <DetailRow label="Address" value={detail.address} />
+          <DetailRow label="Status" value={detail.state} />
           <DetailRow label="Zip code" value={detail.zip} />
-          <DetailRow label="Unidad" value={detail.unit} />
+          <DetailRow label="Unit" value={detail.unit} />
           <DetailRow label="Tamano" value={detail.size} />
           <DetailRow label="Gate Code" value={detail.gate_code} />
           <DetailRow label="Lock / Combo" value={detail.lock} />
-          <SectionLabel>Cuenta</SectionLabel>
+          <SectionLabel>Account</SectionLabel>
           <DetailRow label="Email" value={detail.email} />
           <DetailRow label="Account #" value={detail.account} />
-          <DetailRow label="Teléfono" value={detail.phone} />
+          <DetailRow label="Phone" value={detail.phone} />
           <DetailRow label="Tarjeta" value={detail.card_on_file} />
-          <DetailRow label="Costo mensual" value={detail.monthly_cost ? "$" + detail.monthly_cost : null} />
-          <DetailRow label="Fecha de apertura" value={detail.date_opened} />
+          <DetailRow label="Monthly cost" value={detail.monthly_cost ? "$" + detail.monthly_cost : null} />
+          <DetailRow label="Open date" value={detail.date_opened} />
 
-          <SectionLabel>Pago</SectionLabel>
+          <SectionLabel>Payment</SectionLabel>
           <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, alignItems:"center" }}>
             <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Vencimiento de pago</span>
             <span style={{ fontWeight:500 }}>{fmtDateLocal(paymentDueDate(detail)) || "—"}</span>
@@ -7733,7 +7733,7 @@ export default function App() {
             <PaymentBadge record={detail} situation={sit(detail)} />
           </div>
           <div style={{ display:"flex", gap:8, marginTop:10 }}>
-            <Btn onClick={() => renewPayment(detail)}>Renovar — sumar 30 días</Btn>
+            <Btn onClick={() => renewPayment(detail)}>Renew — add 30 days</Btn>
             {sit(detail) !== "Close" && <Btn danger onClick={() => closeStorage(detail)}>Cerrar storage</Btn>}
           </div>
 
@@ -7755,21 +7755,21 @@ export default function App() {
       )}
 
       {showAdd && (
-        <Modal title={editId ? "Editar unidad" : "Nueva unidad"} onClose={() => setShowAdd(false)}
+        <Modal title={editId ? "Edit unit" : "New unit"} onClose={() => setShowAdd(false)}
           footer={<>
-            <Btn onClick={() => setShowAdd(false)}>Cancelar</Btn>
-            <Btn primary disabled={saving} onClick={saveForm}>{saving ? "Guardando..." : "Guardar"}</Btn>
+            <Btn onClick={() => setShowAdd(false)}>Cancel</Btn>
+            <Btn primary disabled={saving} onClick={saveForm}>{saving ? "Saving..." : "Save"}</Btn>
           </>}>
           <p style={{ fontSize:12, color:"#999", margin:"0 0 12px" }}>Datos fijos de la unidad. Los clientes y jobs se cargan aparte en el historial.</p>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Empresa"><input style={inp} list="brands-list" value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="Elegí o escribí (CubeSmart...)" /></Field>
-            <Field label="Estado"><input style={inp} list="states-list" value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value.toUpperCase()}))} placeholder="TN" /></Field>
+            <Field label="Company"><input style={inp} list="brands-list" value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="Choose or type (CubeSmart...)" /></Field>
+            <Field label="Status"><input style={inp} list="states-list" value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value.toUpperCase()}))} placeholder="TN" /></Field>
             <Field label="Zip code"><input style={inp} value={form.zip} onChange={e => setForm(f => ({...f, zip:e.target.value}))} placeholder="38555" /></Field>
-            <Field label="Direccion" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
-            <Field label="Unidad #">
+            <Field label="Address" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
+            <Field label="Unit #">
               <input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" />
               <DupHint checking={stBrandChecking && (form.brand || "").trim() !== "" && (form.unit || "").trim() !== ""} tone="danger">
-                {storageDup && <span>⚠️ {storageDup.brand} Unidad {storageDup.unit}{storageDup.state ? ` en ${storageDup.state}` : ""} ya está abierta en el sistema. <a onClick={() => { setShowAdd(false); setDetailId(storageDup.id); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver storage</a></span>}
+                {storageDup && <span>⚠️ {storageDup.brand} Unit {storageDup.unit}{storageDup.state ? ` in ${storageDup.state}` : ""} is already open in the system. <a onClick={() => { setShowAdd(false); setDetailId(storageDup.id); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver storage</a></span>}
               </DupHint>
             </Field>
             <Field label="Tamano"><input style={inp} list="sizes-list" value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
@@ -7777,16 +7777,16 @@ export default function App() {
             <Field label="Lock / Combo"><input style={inp} value={form.lock} onChange={e => setForm(f => ({...f, lock:e.target.value}))} placeholder="use 8141 to unlock..." /></Field>
             <Field label="Email"><input style={inp} value={form.email} onChange={e => setForm(f => ({...f, email:e.target.value}))} placeholder="service@..." /></Field>
             <Field label="Account #"><input style={inp} value={form.account} onChange={e => setForm(f => ({...f, account:e.target.value}))} placeholder="NONE" /></Field>
-            <Field label="Teléfono"><input style={inp} value={form.phone} onChange={e => setForm(f => ({...f, phone:e.target.value}))} placeholder="(931) 555-0199" /></Field>
-            <Field label="Estado de la unidad">
+            <Field label="Phone"><input style={inp} value={form.phone} onChange={e => setForm(f => ({...f, phone:e.target.value}))} placeholder="(931) 555-0199" /></Field>
+            <Field label="Unit status">
               <select style={inp} value={form.situation} onChange={e => setForm(f => ({...f, situation:e.target.value}))}>
-                <option value="Open">Activa (automático según jobs)</option>
+                <option value="Open">Active (automatic based on jobs)</option>
                 <option value="Close">Cerrada</option>
               </select>
             </Field>
-            <Field label="Costo mensual ($)"><input style={inp} type="number" value={form.monthly_cost} onChange={e => setForm(f => ({...f, monthly_cost:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Monthly cost ($)"><input style={inp} type="number" value={form.monthly_cost} onChange={e => setForm(f => ({...f, monthly_cost:e.target.value}))} placeholder="0" /></Field>
             <Field label="Tarjeta"><input style={inp} value={form.card_on_file} onChange={e => setForm(f => ({...f, card_on_file:e.target.value}))} placeholder="Visa ****1234" /></Field>
-            <Field label="Fecha de apertura"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
+            <Field label="Open date"><input style={inp} type="date" value={form.date_opened} onChange={e => setForm(f => ({...f, date_opened:e.target.value}))} /></Field>
             <Field label="Vencimiento de pago"><input style={inp} type="date" value={form.payment_due_date} onChange={e => setForm(f => ({...f, payment_due_date:e.target.value}))} /></Field>
           </div>
         </Modal>
@@ -7796,7 +7796,7 @@ export default function App() {
         // Units the job can be attached to (physical lockers, not warehouses).
         const units = records.filter(r => r.space_type !== "warehouse")
           .sort((a, b) => (a.brand || "").localeCompare(b.brand || ""));
-        const unitLabel = (r) => [r.brand || "Unidad", r.unit && `#${r.unit}`, r.state].filter(Boolean).join(" · ");
+        const unitLabel = (r) => [r.brand || "Unit", r.unit && `#${r.unit}`, r.state].filter(Boolean).join(" · ");
         // Active jobs not already in the chosen unit.
         let candidates = [];
         if (ujUnitId) {
@@ -7810,27 +7810,27 @@ export default function App() {
           candidates = [...groups.values()].filter(g => !g.here).sort((a, b) => (b.date_in || "").localeCompare(a.date_in || ""));
         }
         return (
-          <Modal title="+ Job a una unidad" onClose={() => setUnitJobPicker(false)}
+          <Modal title="+ Job to a unit" onClose={() => setUnitJobPicker(false)}
             footer={<>
-              <Btn onClick={() => setUnitJobPicker(false)}>Cancelar</Btn>
+              <Btn onClick={() => setUnitJobPicker(false)}>Cancel</Btn>
               <Btn primary disabled={!ujUnitId || !ujKey || ujSaving} onClick={() => addExistingJobToUnit(ujKey, ujUnitId)}>
-                {ujSaving ? "Agregando..." : "Agregar a la unidad"}
+                {ujSaving ? "Adding..." : "Add to the unit"}
               </Btn>
             </>}>
             <div style={{ fontSize:13, color:"#666", marginBottom:14 }}>
-              Elegí una unidad y agregá un job existente, o creá uno nuevo.
+              Choose a unit and add an existing job, or create a new one.
             </div>
-            <Field label="Unidad">
+            <Field label="Unit">
               <select style={inp} value={ujUnitId} onChange={e => { setUjUnitId(e.target.value); setUjKey(""); }}>
-                <option value="">— Seleccionar unidad —</option>
+                <option value="">— Select unit —</option>
                 {units.map(r => <option key={r.id} value={r.id}>{unitLabel(r)}</option>)}
               </select>
             </Field>
             <div style={{ height:10 }} />
             <Field label="Job existente">
               <select style={inp} value={ujKey} disabled={!ujUnitId} onChange={e => setUjKey(e.target.value)}>
-                <option value="">{ujUnitId ? "— Seleccionar job —" : "Elegí una unidad primero"}</option>
-                {candidates.map(g => <option key={g.key} value={g.key}>{[g.job_number || "(sin #)", g.customer].filter(Boolean).join(" — ")}</option>)}
+                <option value="">{ujUnitId ? "— Select job —" : "Choose a unit first"}</option>
+                {candidates.map(g => <option key={g.key} value={g.key}>{[g.job_number || "(no #)", g.customer].filter(Boolean).join(" — ")}</option>)}
               </select>
             </Field>
             {ujUnitId && candidates.length === 0 && (
@@ -7842,7 +7842,7 @@ export default function App() {
               <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
             </div>
             <Btn disabled={!ujUnitId} onClick={() => { const sid = Number(ujUnitId); setUnitJobPicker(false); openAddJob(sid); }} style={{ width:"100%", padding:"9px 14px" }}>
-              + Crear nuevo job {ujUnitId ? "" : "(elegí una unidad)"}
+              + Create new job {ujUnitId ? "" : "(choose a unit)"}
             </Btn>
           </Modal>
         );
@@ -7863,19 +7863,19 @@ export default function App() {
         return (
           <Modal title={`+ Job a ${name}`} onClose={() => setWhPicker(null)}
             footer={<>
-              <Btn onClick={() => setWhPicker(null)}>Cancelar</Btn>
+              <Btn onClick={() => setWhPicker(null)}>Cancel</Btn>
               <Btn primary disabled={!whPickerKey || whPickerSaving} onClick={() => addExistingJobToWarehouse(whPickerKey, name)}>
-                {whPickerSaving ? "Agregando..." : `Agregar a ${name}`}
+                {whPickerSaving ? "Adding..." : `Add to ${name}`}
               </Btn>
             </>}>
             <div style={{ fontSize:13, color:"#666", marginBottom:14 }}>
-              Agregá un job existente a <b>{name}</b>, o creá uno nuevo si todavía no existe.
+              Add an existing job to <b>{name}</b>, or create a new one if it doesn't exist yet.
             </div>
             <Field label="Job existente">
               <select style={inp} value={whPickerKey} onChange={e => setWhPickerKey(e.target.value)}>
-                <option value="">— Seleccionar job —</option>
+                <option value="">— Select job —</option>
                 {candidates.map(g => (
-                  <option key={g.key} value={g.key}>{[g.job_number || "(sin #)", g.customer].filter(Boolean).join(" — ")}</option>
+                  <option key={g.key} value={g.key}>{[g.job_number || "(no #)", g.customer].filter(Boolean).join(" — ")}</option>
                 ))}
               </select>
             </Field>
@@ -7887,16 +7887,16 @@ export default function App() {
               <span style={{ fontSize:11, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.05em" }}>o</span>
               <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
             </div>
-            <Btn onClick={() => { setWhPicker(null); openAddJobWarehouse(name); }} style={{ width:"100%", padding:"9px 14px" }}>+ Crear nuevo job</Btn>
+            <Btn onClick={() => { setWhPicker(null); openAddJobWarehouse(name); }} style={{ width:"100%", padding:"9px 14px" }}>+ Create new job</Btn>
           </Modal>
         );
       })()}
 
       {showAddJob && (
-        <Modal title={editingJobKey ? "Editar job" : "Nuevo job"} onClose={() => setShowAddJob(false)}
+        <Modal title={editingJobKey ? "Edit job" : "New job"} onClose={() => setShowAddJob(false)}
           footer={<>
-            <Btn onClick={() => setShowAddJob(false)}>Cancelar</Btn>
-            <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Guardando..." : (editingJobKey ? "Guardar cambios" : "Guardar job")}</Btn>
+            <Btn onClick={() => setShowAddJob(false)}>Cancel</Btn>
+            <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Saving..." : (editingJobKey ? "Save changes" : "Save job")}</Btn>
           </>}>
           {(() => {
             const t = jobForm.job_type;
@@ -7904,19 +7904,19 @@ export default function App() {
             const uUp = (k) => (e) => setJobForm(f => ({ ...f, [k]: e.target.value.toUpperCase() }));
 
             const basicInfo = (
-              <FormSection title="Información básica">
+              <FormSection title="Basic info">
                 <div style={fgrid}>
                   <Field label="Job # *">
                     <input style={inp} value={jobForm.job_number} onChange={u("job_number")} placeholder="B8417142" />
                     <DupHint checking={jobNumChecking && (jobForm.job_number || "").trim() !== ""} tone={jobNumberDup?.delivered ? "ok" : "warn"}>
                       {jobNumberDup && (jobNumberDup.delivered ? (
-                        <span>ℹ️ Este job ya fue entregado el {jobNumberDup.dateOut || jobNumberDup.date} — ¿seguro? <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
+                        <span>ℹ️ This job was already delivered on {jobNumberDup.dateOut || jobNumberDup.date} — are you sure? <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
                       ) : (
-                        <span>⚠️ Job {jobNumberDup.job_number} ya existe — {jobNumberDup.customer || "sin cliente"}, {statusMeta(jobNumberDup.status).l}, {jobNumberDup.date}. <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
+                        <span>⚠️ Job {jobNumberDup.job_number} already exists — {jobNumberDup.customer || "no client"}, {statusMeta(jobNumberDup.status).l}, {jobNumberDup.date}. <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
                       ))}
                     </DupHint>
                   </Field>
-                  <Field label="Tipo de job *">
+                  <Field label="Job type *">
                     <select style={inp} value={jobForm.job_type} onChange={u("job_type")}>
                       {JOB_TYPES.map(x => <option key={x.v} value={x.v}>{x.l}{x.v==="full"?" (pickup → storage → delivery)":x.v==="direct"?" (pickup → delivery)":" (solo delivery)"}</option>)}
                     </select>
@@ -7926,18 +7926,18 @@ export default function App() {
                       <option value="">— Sin broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
                   </Field>
-                  <Field label="Cliente *"><input style={inp} value={jobForm.customer} onChange={u("customer")} placeholder="Nombre del cliente" /></Field>
-                  <Field label="Teléfono del cliente"><input style={inp} value={jobForm.client_phone} onChange={u("client_phone")} placeholder="(555) 123-4567" /></Field>
-                  <Field label="Email del cliente"><input style={inp} value={jobForm.client_email} onChange={u("client_email")} placeholder="cliente@email.com" /></Field>
+                  <Field label="Client *"><input style={inp} value={jobForm.customer} onChange={u("customer")} placeholder="Client name" /></Field>
+                  <Field label="Client phone"><input style={inp} value={jobForm.client_phone} onChange={u("client_phone")} placeholder="(555) 123-4567" /></Field>
+                  <Field label="Client email"><input style={inp} value={jobForm.client_email} onChange={u("client_email")} placeholder="client@email.com" /></Field>
                   <Field label="Rep (interno)"><input style={inp} value={jobForm.rep} onChange={u("rep")} placeholder="Rep" /></Field>
-                  <Field label="Estado">
+                  <Field label="Status">
                     <select style={inp} value={jobForm.status} onChange={u("status")}>{STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}</select>
                   </Field>
                 </div>
                 <div style={{ marginTop:10 }}>
                   <label style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Driver{(jobForm.driver_ids?.length) ? ` (${jobForm.driver_ids.length})` : ""}</label>
                   {driversList.length === 0 ? (
-                    <input style={{ ...inp, marginTop:4 }} list="drivers-list" value={jobForm.driver} onChange={u("driver")} placeholder="Cargá drivers en la sección Drivers para multi-asignar" />
+                    <input style={{ ...inp, marginTop:4 }} list="drivers-list" value={jobForm.driver} onChange={u("driver")} placeholder="Add drivers in the Drivers section to multi-assign" />
                   ) : (
                     <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:130, overflowY:"auto", background:"#fff", marginTop:4 }}>
                       {driversList.filter(d => d.active !== false).map(d => {
@@ -7960,9 +7960,9 @@ export default function App() {
                 <div style={fgrid}>
                   <Field label="Pick up from"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={u("pickup_date_from")} /></Field>
                   <Field label="Pick up to (opcional)"><input style={inp} type="date" value={jobForm.pickup_date_to} onChange={u("pickup_date_to")} /></Field>
-                  <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Dirección de pickup" /></Field>
+                  <Field label="Pickup address" full><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Pickup address" /></Field>
                   <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="Ciudad" /></Field>
-                  <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
+                  <Field label="Pickup state"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
                   <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={u("pickup_zip")} placeholder="10001" /></Field>
                   <Field label="Extra stops" full><input style={inp} value={jobForm.extra_stops} onChange={u("extra_stops")} placeholder="paradas adicionales" /></Field>
                 </div>
@@ -7974,9 +7974,9 @@ export default function App() {
                 <div style={fgrid}>
                   <Field label="FADD *"><input style={inp} type="date" value={jobForm.fadd} onChange={u("fadd")} /></Field>
                   <Field label="Delivery date"><input style={inp} type="date" value={jobForm.delivery_date} onChange={u("delivery_date")} /></Field>
-                  <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Dirección de entrega" /></Field>
+                  <Field label="Delivery address" full><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Delivery address" /></Field>
                   <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="Ciudad" /></Field>
-                  <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
+                  <Field label="Delivery state"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
                   <Field label="Delivery zip"><input style={inp} value={jobForm.delivery_zip} onChange={u("delivery_zip")} placeholder="07030" /></Field>
                 </div>
               </FormSection>
@@ -8003,9 +8003,9 @@ export default function App() {
             const pads = (
               <FormSection title="Pads">
                 <div style={fgrid}>
-                  <Field label="Pads recibidos del broker"><input style={inp} type="number" value={jobForm.pads_received} onChange={u("pads_received")} placeholder="0" /></Field>
-                  <Field label="Pads devueltos (post-delivery)"><input style={inp} type="number" value={jobForm.pads_returned} onChange={u("pads_returned")} placeholder="0" /></Field>
-                  <Field label="Pads faltantes (auto)"><div style={{ ...inp, background:"#fafafa", fontWeight:700, color: padsMissingForm > 0 ? "#A32D2D" : "#111" }}>{padsMissingForm}</div></Field>
+                  <Field label="Pads received from broker"><input style={inp} type="number" value={jobForm.pads_received} onChange={u("pads_received")} placeholder="0" /></Field>
+                  <Field label="Pads returned (post-delivery)"><input style={inp} type="number" value={jobForm.pads_returned} onChange={u("pads_returned")} placeholder="0" /></Field>
+                  <Field label="Pads missing (auto)"><div style={{ ...inp, background:"#fafafa", fontWeight:700, color: padsMissingForm > 0 ? "#A32D2D" : "#111" }}>{padsMissingForm}</div></Field>
                 </div>
               </FormSection>
             );
@@ -8048,7 +8048,7 @@ export default function App() {
             const financialsBroker = (
               <FormSection title="Financiero (broker delivery)">
                 <div style={fgrid}>
-                  <Field label="BOL balance a cobrar al cliente ($)"><input style={inp} type="number" value={jobForm.bol_balance} onChange={u("bol_balance")} placeholder="0" /></Field>
+                  <Field label="BOL balance to collect from client ($)"><input style={inp} type="number" value={jobForm.bol_balance} onChange={u("bol_balance")} placeholder="0" /></Field>
                   <Field label="Carrier rate / CF ($)"><input style={inp} type="number" value={jobForm.carrier_rate_per_cf} onChange={u("carrier_rate_per_cf")} placeholder="0.55" /></Field>
                   <Field label="Carrier total (CF × rate)"><div style={{ ...inp, background:"#fafafa", fontWeight:700 }}>{money(carrierTotal) || "$0"}</div></Field>
                   {!settlementsMissing && (
@@ -8056,14 +8056,14 @@ export default function App() {
                       <select style={inp} value={jobForm.closing_sheet_id === "" || jobForm.closing_sheet_id == null ? "" : String(jobForm.closing_sheet_id)} onChange={e => setJobForm(f => ({...f, closing_sheet_id: e.target.value === "" ? "" : (e.target.value === "__new__" ? "__new__" : Number(e.target.value))}))}>
                         <option value="">— Sin closing sheet —</option>
                         {(() => { const cur = jobForm.closing_sheet_id; const linked = cur && cur !== "__new__" ? closingSheets.find(s => s.id === Number(cur)) : null; return (linked && linked.status !== "open") ? <option value={String(linked.id)}>#{linked.closing_sheet_number || linked.id} ({linked.status})</option> : null; })()}
-                        {closingSheets.filter(s => s.status === "open").map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "sin broker"}</option>)}
-                        <option value="__new__">➕ Crear nuevo closing sheet</option>
+                        {closingSheets.filter(s => s.status === "open").map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "no broker"}</option>)}
+                        <option value="__new__">➕ Create new closing sheet</option>
                       </select>
                     </Field>
                   )}
-                  <Field label="BOL cobrado ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={u("bol_collected")} placeholder="0" /></Field>
-                  <Field label="Método de pago"><PaymentMethodSelect style={inp} value={jobForm.bol_payment_method} onChange={v => setJobForm(f => ({...f, bol_payment_method: v || ""}))} /></Field>
-                  <Field label="Fecha de cobro"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={u("bol_collected_date")} /></Field>
+                  <Field label="BOL collected ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={u("bol_collected")} placeholder="0" /></Field>
+                  <Field label="Payment method"><PaymentMethodSelect style={inp} value={jobForm.bol_payment_method} onChange={v => setJobForm(f => ({...f, bol_payment_method: v || ""}))} /></Field>
+                  <Field label="Collection date"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={u("bol_collected_date")} /></Field>
                   {brokerJobShareBlock}
                 </div>
               </FormSection>
@@ -8076,7 +8076,7 @@ export default function App() {
                     <label onClick={() => setJobForm(f => ({ ...f, storage_ids: [], warehouses: [] }))}
                       style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: none ? "#f0fdf4" : "#fff" }}>
                       <input type="radio" readOnly checked={none} />
-                      <span style={{ color: none ? "#111" : "#888" }}>— Sin asignar —</span>
+                      <span style={{ color: none ? "#111" : "#888" }}>— Unassigned —</span>
                     </label>
                   ); })()}
                   <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Warehouses propios</div>
@@ -8088,15 +8088,15 @@ export default function App() {
                       </label>
                     );
                   })}
-                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Unidades alquiladas</div>
+                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Units alquiladas</div>
                   {records.filter(r => r.space_type !== "warehouse").length === 0 ? (
-                    <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No hay unidades cargadas todavía.</div>
+                    <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No units added yet.</div>
                   ) : records.filter(r => r.space_type !== "warehouse").map(r => {
                     const checked = jobForm.storage_ids.includes(r.id);
                     return (
                       <label key={r.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
                         <input type="checkbox" checked={checked} onChange={() => toggleJobUnit(r.id)} />
-                        <span>{[r.brand, r.unit && `Unidad ${r.unit}`, r.state].filter(Boolean).join(" · ") || `Unidad #${r.id}`}</span>
+                        <span>{[r.brand, r.unit && `Unit ${r.unit}`, r.state].filter(Boolean).join(" · ") || `Unit #${r.id}`}</span>
                       </label>
                     );
                   })}
@@ -8106,17 +8106,17 @@ export default function App() {
             );
 
             const billingBlock = (
-              <FormSection title="Storage billing al cliente (opcional)" defaultOpen={false}>
+              <FormSection title="Client storage billing (optional)" defaultOpen={false}>
                 <label style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, cursor:"pointer", padding:"4px 0" }}>
                   <input type="checkbox" checked={!!jobForm.billing_active} onChange={e => setJobForm(f => ({...f, billing_active:e.target.checked}))} />
-                  <span>Cobrar a este cliente por guardar (cada 30 días)</span>
+                  <span>Bill this client for storage (every 30 days)</span>
                 </label>
                 {jobForm.billing_active && (
                   <div style={{ ...fgrid, marginTop:8 }}>
-                    <Field label="Tarifa mensual ($)"><input style={inp} type="number" value={jobForm.client_monthly_rate} onChange={u("client_monthly_rate")} placeholder="ej: 150" /></Field>
-                    <Field label="¿Primer mes gratis?">
+                    <Field label="Monthly rate ($)"><input style={inp} type="number" value={jobForm.client_monthly_rate} onChange={u("client_monthly_rate")} placeholder="ej: 150" /></Field>
+                    <Field label="First month free?">
                       <select style={inp} value={jobForm.first_month_free ? "yes" : "no"} onChange={e => setJobForm(f => ({...f, first_month_free: e.target.value === "yes"}))}>
-                        <option value="no">No</option><option value="yes">Sí — cobra a los 30 días</option>
+                        <option value="no">No</option><option value="yes">Yes — bills after 30 days</option>
                       </select>
                     </Field>
                     <Field label="Inicio de billing (auto, editable)" full>
@@ -8128,24 +8128,24 @@ export default function App() {
             );
 
             const directPickDeliver = (
-              <FormSection title="Pick up + Delivery (mismo día)">
+              <FormSection title="Pick up + Delivery (same day)">
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:14 }}>
                   <div>
                     <div style={{ fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Pick up</div>
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                       <Field label="Pickup date"><input style={inp} type="date" value={jobForm.pickup_date_from} onChange={u("pickup_date_from")} /></Field>
-                      <Field label="Pickup address"><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Dirección de pickup" /></Field>
+                      <Field label="Pickup address"><input style={inp} value={jobForm.pickup_address} onChange={u("pickup_address")} placeholder="Pickup address" /></Field>
                       <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="Ciudad" /></Field>
-                      <Field label="Pickup estado"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
+                      <Field label="Pickup state"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Delivery</div>
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                       <Field label="FADD *"><input style={inp} type="date" value={jobForm.fadd} onChange={u("fadd")} /></Field>
-                      <Field label="Delivery address"><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Dirección de entrega" /></Field>
+                      <Field label="Delivery address"><input style={inp} value={jobForm.delivery_address} onChange={u("delivery_address")} placeholder="Delivery address" /></Field>
                       <Field label="Delivery city"><input style={inp} value={jobForm.delivery_city} onChange={u("delivery_city")} placeholder="Ciudad" /></Field>
-                      <Field label="Delivery estado"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
+                      <Field label="Delivery state"><input style={inp} list="states-list" value={jobForm.delivery_state} onChange={uUp("delivery_state")} placeholder="NJ" /></Field>
                     </div>
                   </div>
                 </div>
@@ -8166,10 +8166,10 @@ export default function App() {
       )}
 
       {capTarget && (
-        <Modal title={capTarget.kind === "warehouse" ? `Capacidad — ${capTarget.name}` : "Capacidad de la unidad"} onClose={() => setCapTarget(null)}
+        <Modal title={capTarget.kind === "warehouse" ? `Capacidad — ${capTarget.name}` : "Unit capacity"} onClose={() => setCapTarget(null)}
           footer={<>
-            <Btn onClick={() => setCapTarget(null)}>Cancelar</Btn>
-            <Btn primary onClick={saveCapacity}>Guardar</Btn>
+            <Btn onClick={() => setCapTarget(null)}>Cancel</Btn>
+            <Btn primary onClick={saveCapacity}>Save</Btn>
           </>}>
           <Field label="Capacidad total (CF)">
             <input style={inp} type="number" autoFocus value={capTarget.value}
@@ -8177,14 +8177,14 @@ export default function App() {
               onKeyDown={e => { if (e.key === "Enter") saveCapacity(); }}
               placeholder="ej: 10000" />
           </Field>
-          <p style={{ fontSize:12, color:"#999", marginTop:8 }}>Capacidad en pies cúbicos. La ocupación se calcula con el volumen (CF) de los jobs activos.</p>
+          <p style={{ fontSize:12, color:"#999", marginTop:8 }}>Cubic-feet capacity. Occupancy is calculated from the active jobs' volume (CF).</p>
         </Modal>
       )}
 
       {showImport && (
         <Modal title="Importar desde WhatsApp" onClose={() => setShowImport(false)}
           footer={<>
-            <Btn onClick={() => setShowImport(false)}>Cancelar</Btn>
+            <Btn onClick={() => setShowImport(false)}>Cancel</Btn>
             {importTab === "paste" && <Btn onClick={previewPaste}>Previsualizar</Btn>}
             <Btn primary disabled={saving || !pending.filter((_,i) => !excluded[i]).length} onClick={confirmImport}>
               {saving ? "Importando..." : `Importar (${pending.filter((_,i) => !excluded[i]).length})`}
@@ -8210,7 +8210,7 @@ export default function App() {
                 onClick={() => fileRef.current.click()}
                 style={{ border:`2px dashed ${isDragging ? "#378ADD" : "#ddd"}`, borderRadius:10, padding:"28px 16px", textAlign:"center", cursor:"pointer", background: isDragging ? "#E6F1FB" : "#fafafa", transition:"all .15s" }}>
                 <div style={{ fontSize:28, marginBottom:8 }}>zip</div>
-                <p style={{ fontSize:13, color:"#888" }}>Hace clic o arrastra el archivo .zip aca</p>
+                <p style={{ fontSize:13, color:"#888" }}>Click or drag the .zip file here</p>
                 {zipName && <p style={{ fontSize:13, fontWeight:600, color:"#111", marginTop:6 }}>{zipName}</p>}
               </div>
               <input ref={fileRef} type="file" accept=".zip" style={{ display:"none" }} onChange={e => handleZip(e.target.files[0])} />
@@ -8225,8 +8225,8 @@ export default function App() {
                   <label key={i} style={{ display:"flex", alignItems:"flex-start", gap:8, fontSize:12, background: excluded[i] ? "#fafafa" : "#f0fdf4", borderRadius:8, padding:"8px 10px", cursor:"pointer", border:"1px solid", borderColor: excluded[i] ? "#efefef" : "#bbf7d0" }}>
                     <input type="checkbox" checked={!excluded[i]} onChange={e => setExcluded(ex => ({...ex, [i]: !e.target.checked}))} style={{ marginTop:1 }} />
                     <div>
-                      <span style={{ fontWeight:600 }}>{r.driver||"Sin nombre"}</span>
-                      <span style={{ color:"#666" }}> · {r.brand||"?"} · Unidad {r.unit||"?"}</span>
+                      <span style={{ fontWeight:600 }}>{r.driver||"No name"}</span>
+                      <span style={{ color:"#666" }}> · {r.brand||"?"} · Unit {r.unit||"?"}</span>
                       {r.address && <div style={{ color:"#888", marginTop:2 }}>{r.address}</div>}
                     </div>
                   </label>
@@ -8240,33 +8240,33 @@ export default function App() {
       {showSetup && (() => {
         const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
         return (
-        <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
+        <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
           <p style={{ fontSize:13, color:"#555", lineHeight:1.6, marginTop:0 }}>
-            La clave pública no permite crear tablas/columnas. Ejecutá este SQL <strong>una sola vez</strong> en el
+            The public key cannot create tables/columns. Run this SQL <strong>once</strong> in the
             SQL Editor de Supabase. Incluye <strong>storage_jobs</strong>, las columnas de Dispatching, la tabla
-            <strong> brokers</strong> (con los brokers comunes pre-cargados) y los balances. Después recargá.
+            <strong> brokers</strong> (with common brokers pre-loaded) and balances. Then reload.
           </p>
           <pre style={{ background:"#0f172a", color:"#e2e8f0", borderRadius:10, padding:"14px", fontSize:11.5, lineHeight:1.5, overflowX:"auto", whiteSpace:"pre" }}>{allSql}</pre>
           <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
             <Btn onClick={() => {
               navigator.clipboard?.writeText(allSql).then(() => { setSqlCopied(true); setTimeout(() => setSqlCopied(false), 1500); }).catch(() => {});
-            }}>{sqlCopied ? "✓ Copiado" : "Copiar SQL"}</Btn>
+            }}>{sqlCopied ? "✓ Copied" : "Copy SQL"}</Btn>
           </div>
         </Modal>
         );
       })()}
 
       {showBrokerModal && (
-        <Modal title={editingBrokerId ? "Editar broker" : "Nuevo broker"} onClose={() => setShowBrokerModal(false)}
+        <Modal title={editingBrokerId ? "Edit broker" : "New broker"} onClose={() => setShowBrokerModal(false)}
           footer={<>
-            <Btn onClick={() => setShowBrokerModal(false)}>Cancelar</Btn>
-            <Btn primary disabled={brokerSaving || !brokerForm.name.trim()} onClick={saveBroker}>{brokerSaving ? "Guardando..." : "Guardar"}</Btn>
+            <Btn onClick={() => setShowBrokerModal(false)}>Cancel</Btn>
+            <Btn primary disabled={brokerSaving || !brokerForm.name.trim()} onClick={saveBroker}>{brokerSaving ? "Saving..." : "Save"}</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Nombre" full><input style={inp} value={brokerForm.name} onChange={e => setBrokerForm(f => ({...f, name:e.target.value}))} placeholder="Allied Van Lines" /></Field>
+            <Field label="Name" full><input style={inp} value={brokerForm.name} onChange={e => setBrokerForm(f => ({...f, name:e.target.value}))} placeholder="Allied Van Lines" /></Field>
             <Field label="Contacto"><input style={inp} value={brokerForm.contact_name} onChange={e => setBrokerForm(f => ({...f, contact_name:e.target.value}))} placeholder="Nombre del contacto" /></Field>
-            <Field label="Teléfono"><input style={inp} value={brokerForm.contact_phone} onChange={e => setBrokerForm(f => ({...f, contact_phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
+            <Field label="Phone"><input style={inp} value={brokerForm.contact_phone} onChange={e => setBrokerForm(f => ({...f, contact_phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Email" full><input style={inp} value={brokerForm.contact_email} onChange={e => setBrokerForm(f => ({...f, contact_email:e.target.value}))} placeholder="ops@broker.com" /></Field>
             <Field label="Notas" full><input style={inp} value={brokerForm.notes} onChange={e => setBrokerForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
           </div>
@@ -8274,20 +8274,20 @@ export default function App() {
       )}
 
       {showDriverModal && (
-        <Modal title={editingDriverId ? "Editar driver" : "Nuevo driver"} onClose={() => setShowDriverModal(false)}
+        <Modal title={editingDriverId ? "Edit driver" : "New driver"} onClose={() => setShowDriverModal(false)}
           footer={<>
-            <Btn onClick={() => setShowDriverModal(false)}>Cancelar</Btn>
-            <Btn primary disabled={driverSaving || !driverForm.name.trim()} onClick={saveDriver}>{driverSaving ? "Guardando..." : "Guardar"}</Btn>
+            <Btn onClick={() => setShowDriverModal(false)}>Cancel</Btn>
+            <Btn primary disabled={driverSaving || !driverForm.name.trim()} onClick={saveDriver}>{driverSaving ? "Saving..." : "Save"}</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Nombre" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Nombre del chofer" /></Field>
-            <Field label="Teléfono"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
+            <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
+            <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="ej: T-12" /></Field>
             <Field label="Link del grupo de WhatsApp" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notas" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
-            <Field label="Estado">
+            <Field label="Status">
               <select style={inp} value={driverForm.active ? "yes" : "no"} onChange={e => setDriverForm(f => ({...f, active: e.target.value === "yes"}))}>
-                <option value="yes">Activo</option><option value="no">Inactivo</option>
+                <option value="yes">Active</option><option value="no">Inactivo</option>
               </select>
             </Field>
           </div>
@@ -8295,17 +8295,17 @@ export default function App() {
       )}
 
       {showTruckModal && (
-        <Modal title={editingTruckId ? "Editar camión" : "Nuevo camión"} onClose={() => setShowTruckModal(false)}
+        <Modal title={editingTruckId ? "Edit truck" : "New truck"} onClose={() => setShowTruckModal(false)}
           footer={<>
-            <Btn onClick={() => setShowTruckModal(false)}>Cancelar</Btn>
-            <Btn primary disabled={truckSaving || !truckForm.name.trim()} onClick={saveTruck}>{truckSaving ? "Guardando..." : "Guardar"}</Btn>
+            <Btn onClick={() => setShowTruckModal(false)}>Cancel</Btn>
+            <Btn primary disabled={truckSaving || !truckForm.name.trim()} onClick={saveTruck}>{truckSaving ? "Saving..." : "Save"}</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Nombre / número *"><input style={inp} value={truckForm.name} onChange={e => setTruckForm(f => ({...f, name:e.target.value}))} placeholder="Truck 1 / Box 26'" /></Field>
+            <Field label="Name / number *"><input style={inp} value={truckForm.name} onChange={e => setTruckForm(f => ({...f, name:e.target.value}))} placeholder="Truck 1 / Box 26'" /></Field>
             <Field label="Patente"><input style={inp} value={truckForm.plate} onChange={e => setTruckForm(f => ({...f, plate:e.target.value}))} placeholder="ABC-1234" /></Field>
             <Field label="Capacidad (CF)"><input style={inp} type="number" value={truckForm.capacity_cf} onChange={e => setTruckForm(f => ({...f, capacity_cf:e.target.value}))} placeholder="ej: 1600" /></Field>
-            <Field label="Estado">
-              <select style={inp} value={truckForm.active ? "yes" : "no"} onChange={e => setTruckForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Activo</option><option value="no">Inactivo</option></select>
+            <Field label="Status">
+              <select style={inp} value={truckForm.active ? "yes" : "no"} onChange={e => setTruckForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Active</option><option value="no">Inactivo</option></select>
             </Field>
             <Field label="Notas" full><input style={inp} value={truckForm.notes} onChange={e => setTruckForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
           </div>
@@ -8313,7 +8313,7 @@ export default function App() {
           <SectionLabel>Vehicle info</SectionLabel>
           {truckColsMissing && (
             <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"8px 11px", marginBottom:10, fontSize:12, color:"#854F0B", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-              <span>Corré el SQL de configuración una vez para guardar estos datos.</span>
+              <span>Run the setup SQL once to save this data.</span>
               <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:6, padding:"3px 9px", cursor:"pointer", fontSize:11 }}>Ver SQL</button>
             </div>
           )}
@@ -8331,25 +8331,25 @@ export default function App() {
       )}
 
       {locModal && (
-        <Modal title={`Ubicación · ${locModal.name}`} onClose={() => setLocModal(null)}
+        <Modal title={`Location · ${locModal.name}`} onClose={() => setLocModal(null)}
           footer={<>
-            <Btn onClick={() => setLocModal(null)}>Cancelar</Btn>
-            <Btn primary disabled={locBusy} onClick={saveLoc}>{locBusy ? "Guardando..." : "Guardar ubicación"}</Btn>
+            <Btn onClick={() => setLocModal(null)}>Cancel</Btn>
+            <Btn primary disabled={locBusy} onClick={saveLoc}>{locBusy ? "Saving..." : "Save location"}</Btn>
           </>}>
           <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
-            Cargá la ubicación actual del camión por dirección (la buscamos en el mapa) o pegá las coordenadas. Cuando conectemos la API de Verizon, esto se va a actualizar solo.
+            Set the truck's current location by address (we look it up on the map) or paste the coordinates. Once we connect the Verizon API, this will update automatically.
           </div>
-          <Field label="Buscar por dirección / ciudad">
+          <Field label="Search by address / city">
             <div style={{ display:"flex", gap:8 }}>
               <input style={{ ...inp, flex:1 }} value={locForm.query} onChange={e => setLocForm(f => ({...f, query:e.target.value}))}
                 onKeyDown={e => { if (e.key === "Enter") geocodeLoc(); }} placeholder="ej: Atlanta, GA  ·  5050 N 13th St, Terre Haute, IN" />
-              <Btn onClick={geocodeLoc} disabled={locBusy}>{locBusy ? "..." : "Buscar"}</Btn>
+              <Btn onClick={geocodeLoc} disabled={locBusy}>{locBusy ? "..." : "Search"}</Btn>
             </div>
           </Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginTop:10 }}>
             <Field label="Lat"><input style={inp} value={locForm.lat} onChange={e => setLocForm(f => ({...f, lat:e.target.value}))} placeholder="33.749" /></Field>
             <Field label="Lng"><input style={inp} value={locForm.lng} onChange={e => setLocForm(f => ({...f, lng:e.target.value}))} placeholder="-84.388" /></Field>
-            <Field label="Estado">
+            <Field label="Status">
               <select style={inp} value={locForm.status} onChange={e => setLocForm(f => ({...f, status:e.target.value}))}>
                 <option value="moving">En movimiento</option>
                 <option value="stopped">Detenido</option>
@@ -8357,7 +8357,7 @@ export default function App() {
               </select>
             </Field>
           </div>
-          <Field label="Etiqueta / dirección"><input style={{ ...inp, marginTop:10 }} value={locForm.label} onChange={e => setLocForm(f => ({...f, label:e.target.value}))} placeholder="Dirección o referencia visible en la lista" /></Field>
+          <Field label="Label / address"><input style={{ ...inp, marginTop:10 }} value={locForm.label} onChange={e => setLocForm(f => ({...f, label:e.target.value}))} placeholder="Address or reference visible in the list" /></Field>
           {locErr && <div style={{ fontSize:12, color:"#b91c1c", marginTop:10 }}>{locErr}</div>}
         </Modal>
       )}
@@ -8370,10 +8370,10 @@ export default function App() {
         const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
         const cap = numv(tk.capacity_cf);
         return (
-          <Modal title={`Camión · ${tk.name}`} onClose={() => setTruckDetailId(null)}
+          <Modal title={`Truck · ${tk.name}`} onClose={() => setTruckDetailId(null)}
             footer={<>
-              <Btn onClick={() => { setTruckDetailId(null); openEditTruck(tk); }}>Editar</Btn>
-              <Btn primary onClick={() => setTruckDetailId(null)}>Cerrar</Btn>
+              <Btn onClick={() => { setTruckDetailId(null); openEditTruck(tk); }}>Edit</Btn>
+              <Btn primary onClick={() => setTruckDetailId(null)}>Close</Btn>
             </>}>
             {sub && <div style={{ fontSize:13, color:"#666", marginTop:-4, marginBottom:8 }}>{sub}</div>}
             <DetailRow label="Make / Model" value={[tk.make, tk.model].filter(Boolean).join(" ") || null} />
@@ -8382,18 +8382,18 @@ export default function App() {
             <DetailRow label="License plate" value={[tk.license_plate, tk.license_state].filter(Boolean).join(" · ") || null} />
             <DetailRow label="Patente" value={tk.plate || null} />
             <DetailRow label="Capacidad" value={cap > 0 ? `${cap.toLocaleString()} CF` : null} />
-            <DetailRow label="Carga actual" value={activeTrip ? `${Math.round(load).toLocaleString()} CF${cap > 0 ? ` · ${Math.min(100, Math.round((load / cap) * 100))}%` : ""}` : "Sin viaje activo"} />
-            <DetailRow label="Estado" value={tk.active !== false ? "Activo" : "Inactivo"} />
+            <DetailRow label="Current load" value={activeTrip ? `${Math.round(load).toLocaleString()} CF${cap > 0 ? ` · ${Math.min(100, Math.round((load / cap) * 100))}%` : ""}` : "No active trip"} />
+            <DetailRow label="Status" value={tk.active !== false ? "Active" : "Inactivo"} />
             {tk.notes && <DetailRow label="Notas" value={tk.notes} />}
           </Modal>
         );
       })()}
 
       {showCompanyModal && (
-        <Modal title={editingCompanyId ? "Editar empresa" : "Nueva empresa"} onClose={() => setShowCompanyModal(false)}
+        <Modal title={editingCompanyId ? "Edit company" : "New company"} onClose={() => setShowCompanyModal(false)}
           footer={<>
-            <Btn onClick={() => setShowCompanyModal(false)}>Cancelar</Btn>
-            <Btn primary disabled={companySaving || !companyForm.name.trim()} onClick={saveCompany}>{companySaving ? "Guardando..." : "Guardar"}</Btn>
+            <Btn onClick={() => setShowCompanyModal(false)}>Cancel</Btn>
+            <Btn primary disabled={companySaving || !companyForm.name.trim()} onClick={saveCompany}>{companySaving ? "Saving..." : "Save"}</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Nombre *" full><input style={inp} value={companyForm.name} onChange={e => setCompanyForm(f => ({...f, name:e.target.value}))} placeholder="No Borders Moving LLC" /></Field>
@@ -8401,11 +8401,11 @@ export default function App() {
             <Field label="MC number"><input style={inp} value={companyForm.mc_number} onChange={e => setCompanyForm(f => ({...f, mc_number:e.target.value}))} placeholder="MC-123456" /></Field>
             <Field label="EIN"><input style={inp} value={companyForm.ein} onChange={e => setCompanyForm(f => ({...f, ein:e.target.value}))} placeholder="12-3456789" /></Field>
             <Field label="State"><input style={inp} list="states-list" maxLength={2} value={companyForm.state} onChange={e => setCompanyForm(f => ({...f, state: e.target.value.toUpperCase().slice(0,2)}))} placeholder="NJ" /></Field>
-            <Field label="Teléfono"><input style={inp} value={companyForm.phone} onChange={e => setCompanyForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
-            <Field label="Email"><input style={inp} value={companyForm.email} onChange={e => setCompanyForm(f => ({...f, email:e.target.value}))} placeholder="legal@empresa.com" /></Field>
-            <Field label="Dirección" full><input style={inp} value={companyForm.address} onChange={e => setCompanyForm(f => ({...f, address:e.target.value}))} placeholder="Dirección" /></Field>
-            <Field label="Estado">
-              <select style={inp} value={companyForm.active ? "yes" : "no"} onChange={e => setCompanyForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Activa</option><option value="no">Inactiva</option></select>
+            <Field label="Phone"><input style={inp} value={companyForm.phone} onChange={e => setCompanyForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
+            <Field label="Email"><input style={inp} value={companyForm.email} onChange={e => setCompanyForm(f => ({...f, email:e.target.value}))} placeholder="legal@company.com" /></Field>
+            <Field label="Address" full><input style={inp} value={companyForm.address} onChange={e => setCompanyForm(f => ({...f, address:e.target.value}))} placeholder="Address" /></Field>
+            <Field label="Status">
+              <select style={inp} value={companyForm.active ? "yes" : "no"} onChange={e => setCompanyForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Active</option><option value="no">Inactiva</option></select>
             </Field>
             <Field label="Notas" full><input style={inp} value={companyForm.notes} onChange={e => setCompanyForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
           </div>
@@ -8420,46 +8420,46 @@ export default function App() {
         const setF = (fields) => setDocForm(f => ({ ...f, ...fields }));
         const st = docStatus(docForm);
         return (
-          <Modal title={editingDocId ? "Editar documento" : "Nuevo documento"} onClose={() => setShowDocModal(false)}
+          <Modal title={editingDocId ? "Edit document" : "New document"} onClose={() => setShowDocModal(false)}
             footer={<>
-              <Btn onClick={() => setShowDocModal(false)}>Cancelar</Btn>
-              <Btn primary disabled={docSaving || !docForm.entity_id} onClick={saveDoc}>{docSaving ? "Guardando..." : "Guardar"}</Btn>
+              <Btn onClick={() => setShowDocModal(false)}>Cancel</Btn>
+              <Btn primary disabled={docSaving || !docForm.entity_id} onClick={saveDoc}>{docSaving ? "Saving..." : "Save"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-              <Field label="Tipo de entidad">
+              <Field label="Entity type">
                 <select style={inp} value={docForm.entity_type} onChange={e => setF({ entity_type:e.target.value, entity_id:"", document_type:(DOC_GRID[e.target.value] || ["other"])[0] })}>
-                  <option value="company">Empresa</option><option value="truck">Camión</option><option value="driver">Driver</option>
+                  <option value="company">Company</option><option value="truck">Truck</option><option value="driver">Driver</option>
                 </select>
               </Field>
               <Field label="Entidad *">
                 <select style={{ ...inp, borderColor: docForm.entity_id ? "#e5e5e5" : "#fca5a5" }} value={docForm.entity_id} onChange={e => setF({ entity_id:e.target.value })}>
-                  <option value="">— Seleccionar —</option>
+                  <option value="">— Select —</option>
                   {entityList.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
                 </select>
               </Field>
-              <Field label="Tipo de documento">
+              <Field label="Document type">
                 <select style={inp} value={docForm.document_type} onChange={e => setF({ document_type:e.target.value, document_name: docForm.document_name || docTypeLabel(e.target.value) })}>
                   {typeKeys.map(k => <option key={k} value={k}>{DOC_TYPE_LABELS[k] || k}</option>)}
                 </select>
               </Field>
               <Field label="Nombre del documento"><input style={inp} value={docForm.document_name} onChange={e => setF({ document_name:e.target.value })} placeholder="ej: Cargo insurance" /></Field>
-              <Field label="N° / póliza / certificado"><input style={inp} value={docForm.document_number} onChange={e => setF({ document_number:e.target.value })} placeholder="N°" /></Field>
-              <Field label="Emisor"><input style={inp} value={docForm.issuer} onChange={e => setF({ issuer:e.target.value })} placeholder="Aseguradora / agencia" /></Field>
-              <Field label="Fecha de emisión"><input style={inp} type="date" value={docForm.issue_date} onChange={e => setF({ issue_date:e.target.value })} /></Field>
-              <Field label="Fecha de vencimiento"><input style={inp} type="date" value={docForm.expiry_date} onChange={e => setF({ expiry_date:e.target.value })} /></Field>
+              <Field label="No. / policy / certificate"><input style={inp} value={docForm.document_number} onChange={e => setF({ document_number:e.target.value })} placeholder="N°" /></Field>
+              <Field label="Issuer"><input style={inp} value={docForm.issuer} onChange={e => setF({ issuer:e.target.value })} placeholder="Aseguradora / agencia" /></Field>
+              <Field label="Issue date"><input style={inp} type="date" value={docForm.issue_date} onChange={e => setF({ issue_date:e.target.value })} /></Field>
+              <Field label="Due date"><input style={inp} type="date" value={docForm.expiry_date} onChange={e => setF({ expiry_date:e.target.value })} /></Field>
               <Field label="Notas" full><input style={inp} value={docForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10, fontSize:12.5 }}>
               <span style={{ color:"#888" }}>Estado:</span><ComplianceBadge status={st} />
             </div>
-            <SectionLabel>Archivo (foto o PDF)</SectionLabel>
+            <SectionLabel>File (photo or PDF)</SectionLabel>
             <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) uploadComplianceDoc(f); }}
               style={{ border:"2px dashed #ddd", borderRadius:10, padding:"16px", textAlign:"center", background:"#fafafa", fontSize:12.5, color:"#888" }}>
               {compDocUploading ? "Subiendo…" : (
                 <>
-                  Arrastrá un archivo acá o{" "}
+                  Drag a file here or{" "}
                   <label style={{ color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>
-                    elegí uno
+                    choose one
                     <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) uploadComplianceDoc(f); e.target.value = ""; }} />
                   </label>
                   {docForm.document_url && <div style={{ marginTop:8 }}><a href={docForm.document_url} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E" }}>📎 Archivo cargado — ver</a></div>}
@@ -8471,16 +8471,16 @@ export default function App() {
       })()}
 
       {showEmpModal && (
-        <Modal title="Reps / Empleados" onClose={() => { setShowEmpModal(false); setEmpDetailId(null); }}
-          footer={<Btn onClick={() => { setShowEmpModal(false); setEmpDetailId(null); }}>Cerrar</Btn>}>
+        <Modal title="Reps / Employees" onClose={() => { setShowEmpModal(false); setEmpDetailId(null); }}
+          footer={<Btn onClick={() => { setShowEmpModal(false); setEmpDetailId(null); }}>Close</Btn>}>
           <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:14 }}>
-            {employees.length === 0 ? <div style={{ fontSize:13, color:"#bbb" }}>Todavía no hay empleados cargados.</div>
+            {employees.length === 0 ? <div style={{ fontSize:13, color:"#bbb" }}>No employees added yet.</div>
               : employees.map(em => (
                 <div key={em.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
                   <button onClick={() => setEmpDetailId(id => id === em.id ? null : em.id)} style={{ fontWeight:600, background:"none", border:"none", padding:0, cursor:"pointer", color: empDetailId === em.id ? "#185FA5" : "#111", textDecoration:"underline" }}>{em.name}</button>
                   {em.role && <span style={{ fontSize:11, color:"#888" }}>· {em.role}</span>}
                   <span style={{ flex:1 }} />
-                  <button onClick={() => deleteEmployee(em)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
+                  <button onClick={() => deleteEmployee(em)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
                 </div>
               ))}
           </div>
@@ -8500,14 +8500,14 @@ export default function App() {
             const moLabel = (mo) => { const [y, m] = mo.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : mo; };
             return (
               <div style={{ background:"#F8FAFC", border:"1px solid #e8eef4", borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
-                <div style={{ fontSize:13, fontWeight:700, marginBottom:8 }}>Perfil de {emp?.name} · comisiones</div>
-                {months.length === 0 ? <div style={{ fontSize:12, color:"#999" }}>Sin extras registrados todavía.</div> : (<>
-                  <SectionLabel>Comisión por mes</SectionLabel>
+                <div style={{ fontSize:13, fontWeight:700, marginBottom:8 }}>Profile of {emp?.name} · commissions</div>
+                {months.length === 0 ? <div style={{ fontSize:12, color:"#999" }}>No extras recorded yet.</div> : (<>
+                  <SectionLabel>Commission per month</SectionLabel>
                   <div style={{ display:"flex", flexDirection:"column", gap:3, marginBottom:8 }}>
                     {months.map(mo => (
                       <div key={mo} style={{ display:"flex", justifyContent:"space-between", fontSize:12.5, padding:"3px 0" }}>
                         <span>{moLabel(mo)}</span>
-                        <span style={{ color:"#888" }}>extras ${Math.round(byMonth[mo].amount).toLocaleString()} · <b style={{ color:"#185FA5" }}>comisión ${Math.round(byMonth[mo].comm).toLocaleString()}</b></span>
+                        <span style={{ color:"#888" }}>extras ${Math.round(byMonth[mo].amount).toLocaleString()} · <b style={{ color:"#185FA5" }}>commission ${Math.round(byMonth[mo].comm).toLocaleString()}</b></span>
                       </div>
                     ))}
                   </div>
@@ -8528,14 +8528,14 @@ export default function App() {
               </div>
             );
           })()}
-          <SectionLabel>Agregar empleado</SectionLabel>
+          <SectionLabel>Add empleado</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Nombre *"><input style={inp} value={empForm.name} onChange={e => setEmpForm(f => ({...f, name:e.target.value}))} placeholder="Nombre" /></Field>
+            <Field label="Nombre *"><input style={inp} value={empForm.name} onChange={e => setEmpForm(f => ({...f, name:e.target.value}))} placeholder="Name" /></Field>
             <Field label="Rol"><input style={inp} value={empForm.role} onChange={e => setEmpForm(f => ({...f, role:e.target.value}))} placeholder="Sales rep / Manager" /></Field>
-            <Field label="Teléfono"><input style={inp} value={empForm.phone} onChange={e => setEmpForm(f => ({...f, phone:e.target.value}))} placeholder="Teléfono" /></Field>
+            <Field label="Phone"><input style={inp} value={empForm.phone} onChange={e => setEmpForm(f => ({...f, phone:e.target.value}))} placeholder="Phone" /></Field>
             <Field label="Email"><input style={inp} value={empForm.email} onChange={e => setEmpForm(f => ({...f, email:e.target.value}))} placeholder="Email" /></Field>
           </div>
-          <div style={{ marginTop:12 }}><Btn primary disabled={empSaving || !empForm.name.trim()} onClick={saveEmployee}>{empSaving ? "Guardando..." : "+ Agregar"}</Btn></div>
+          <div style={{ marginTop:12 }}><Btn primary disabled={empSaving || !empForm.name.trim()} onClick={saveEmployee}>{empSaving ? "Saving..." : "+ Add"}</Btn></div>
         </Modal>
       )}
 
@@ -8557,19 +8557,19 @@ export default function App() {
         const base = isCf ? cf.base : (commBaseVal === "net" ? netAmt : a);
         const dc = base * numv(quickExtra.driver_commission_pct) / 100, rc = base * numv(quickExtra.rep_commission_pct) / 100;
         return (
-          <Modal title={quickExtra.id ? "Editar extra" : "Agregar extra"} onClose={() => setQuickExtra(null)}
+          <Modal title={quickExtra.id ? "Edit extra" : "Add extra"} onClose={() => setQuickExtra(null)}
             footer={<>
-              <Btn onClick={() => setQuickExtra(null)}>Cancelar</Btn>
-              <Btn primary disabled={!quickExtra.driver_id} onClick={saveQuickExtra}>{quickExtra.id ? "Guardar cambios" : "Guardar extra"}</Btn>
+              <Btn onClick={() => setQuickExtra(null)}>Cancel</Btn>
+              <Btn primary disabled={!quickExtra.driver_id} onClick={saveQuickExtra}>{quickExtra.id ? "Save changes" : "Save extra"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-              <Field label="Tipo">
+              <Field label="Type">
                 <select style={inp} value={quickExtra.extra_type} onChange={e => onType(e.target.value)}>
                   {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
                 </select>
               </Field>
-              {!isCf && <Field label="Monto ($)"><input style={inp} type="number" value={quickExtra.amount} onChange={e => setQ({ amount:e.target.value })} placeholder="0" /></Field>}
-              {quickExtra.extra_type === "other" && <Field label="Descripción" full><input style={inp} value={quickExtra.description} onChange={e => setQ({ description:e.target.value })} placeholder="Detalle del extra" /></Field>}
+              {!isCf && <Field label="Amount ($)"><input style={inp} type="number" value={quickExtra.amount} onChange={e => setQ({ amount:e.target.value })} placeholder="0" /></Field>}
+              {quickExtra.extra_type === "other" && <Field label="Description" full><input style={inp} value={quickExtra.description} onChange={e => setQ({ description:e.target.value })} placeholder="Detalle del extra" /></Field>}
               <Field label="Generado por">
                 <select style={inp} value={quickExtra.generated_by} disabled={locked} onChange={e => onGen(e.target.value)}>
                   {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
@@ -8605,13 +8605,13 @@ export default function App() {
                   <Field label="Total charged"><input style={{ ...inp, background:"#f3f3f3", fontWeight:700 }} value={money(cf.total) || "$0"} readOnly /></Field>
                 </div>
                 <div style={{ marginTop:10 }}>
-                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Base de comisión</div>
+                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Commission base</div>
                   <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                    {[["with_fuel", "Con fuel surcharge", cf.total], ["without_fuel", "Sin fuel surcharge", cf.cfSub]].map(([v, l, amt]) => {
+                    {[["with_fuel", "Con fuel surcharge", cf.total], ["without_fuel", "No fuel surcharge", cf.cfSub]].map(([v, l, amt]) => {
                       const on = cf.commissionBase === v;
                       return <button key={v} onClick={() => setQ({ commission_base: v })} style={{ flex:1, minWidth:140, textAlign:"left", padding:"8px 11px", borderRadius:8, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#e5e5e5"}`, background: on ? "#E6F1FB" : "#fff", color:"#111" }}>
                         <div style={{ fontSize:12.5, fontWeight:600 }}>{on ? "◉" : "○"} {l}</div>
-                        <div style={{ fontSize:11, color:"#888", marginTop:2 }}>Comisión sobre {money(amt) || "$0"}</div>
+                        <div style={{ fontSize:11, color:"#888", marginTop:2 }}>Commission on {money(amt) || "$0"}</div>
                       </button>;
                     })}
                   </div>
@@ -8639,13 +8639,13 @@ export default function App() {
             {/* Commission base selector (gross vs net) — only for non-CF when broker share applies */}
             {!isCf && bsOn && bsPct > 0 && (
               <div style={{ marginTop:10 }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Base de comisión</div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Commission base</div>
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                  {[["gross", "Sobre el monto bruto", a], ["net", "Sobre el neto (post broker)", netAmt]].map(([v, l, amt]) => {
+                  {[["gross", "On the gross amount", a], ["net", "Sobre el neto (post broker)", netAmt]].map(([v, l, amt]) => {
                     const on = commBaseVal === v;
                     return <button key={v} onClick={() => setQ({ commission_base: v })} style={{ flex:1, minWidth:150, textAlign:"left", padding:"8px 11px", borderRadius:8, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#e5e5e5"}`, background: on ? "#E6F1FB" : "#fff", color:"#111" }}>
                       <div style={{ fontSize:12.5, fontWeight:600 }}>{on ? "◉" : "○"} {l}</div>
-                      <div style={{ fontSize:11, color:"#888", marginTop:2 }}>Comisión sobre {money(amt) || "$0"}</div>
+                      <div style={{ fontSize:11, color:"#888", marginTop:2 }}>Commission on {money(amt) || "$0"}</div>
                     </button>;
                   })}
                 </div>
@@ -8653,10 +8653,10 @@ export default function App() {
             )}
 
             <div style={{ marginTop:12, background:"#fafafa", borderRadius:8, padding:"9px 12px", fontSize:12.5 }}>
-              <div style={{ marginBottom:5, color:"#666" }}>Base de comisión: <b>{money(base) || "$0"}</b>{isCf ? ` (${cf.commissionBase === "without_fuel" ? "sin" : "con"} fuel)` : bsPct > 0 ? ` (${commBaseVal === "net" ? "neto" : "bruto"})` : ""}</div>
+              <div style={{ marginBottom:5, color:"#666" }}>Commission base: <b>{money(base) || "$0"}</b>{isCf ? ` (${cf.commissionBase === "without_fuel" ? "sin" : "con"} fuel)` : bsPct > 0 ? ` (${commBaseVal === "net" ? "neto" : "bruto"})` : ""}</div>
               <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
-                <span>Comisión driver ({numv(quickExtra.driver_commission_pct)}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
-                <span>Comisión rep ({numv(quickExtra.rep_commission_pct)}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
+                <span>Driver commission ({numv(quickExtra.driver_commission_pct)}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
+                <span>Rep commission ({numv(quickExtra.rep_commission_pct)}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
                 {bsPct > 0 && <span>Broker share: <b style={{ color:"#C2410C" }}>{money(brokerShare) || "$0"}</b></span>}
                 <span>Net empresa: <b style={{ color:"#EF9F27" }}>{money(netAmt - dc - rc) || "$0"}</b></span>
               </div>
@@ -8685,27 +8685,27 @@ export default function App() {
         const patchLine = (i, fields) => setLines(splitLines.map((l, ix) => ix === i ? { ...l, ...fields } : l));
         const saveDisabled = paySaving || payForm.amount === "" || (splitOn && (!splitMatches || splitLines.every(l => l.amount === "")));
         return (
-          <Modal title={editingPayId ? "Editar pago" : "Nuevo pago"} onClose={() => setShowPayModal(false)}
+          <Modal title={editingPayId ? "Edit payment" : "New payment"} onClose={() => setShowPayModal(false)}
             footer={<>
-              <Btn onClick={() => setShowPayModal(false)}>Cancelar</Btn>
-              <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Guardando..." : (editingPayId ? "Guardar cambios" : splitOn ? "Crear pagos divididos" : "Crear pago")}</Btn>
+              <Btn onClick={() => setShowPayModal(false)}>Cancel</Btn>
+              <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : (editingPayId ? "Save changes" : splitOn ? "Create split payments" : "Create payment")}</Btn>
             </>}>
             <Field label="Job">
               {selectedG ? (
                 <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                  <span style={{ fontFamily:"monospace", fontWeight:700 }}>{selectedG.job_number || "(sin #)"}</span>
+                  <span style={{ fontFamily:"monospace", fontWeight:700 }}>{selectedG.job_number || "(no #)"}</span>
                   <span style={{ fontSize:12, color:"#666" }}>{selectedG.customer || "—"}</span>
                   <button onClick={() => setF({ job_id:"" })} style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:12, textDecoration:"underline" }}>cambiar</button>
                 </div>
               ) : (
                 <>
-                  <input style={inp} value={payJobSearch} onChange={e => setPayJobSearch(e.target.value)} placeholder="Buscar por job # o cliente…" />
+                  <input style={inp} value={payJobSearch} onChange={e => setPayJobSearch(e.target.value)} placeholder="Search by job # or client…" />
                   {q && (
                     <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:160, overflowY:"auto" }}>
                       {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>Sin resultados.</div>
                         : matches.map(g => (
                           <button key={g.key} onClick={() => { setF({ job_id: g.repId }); setPayJobSearch(""); }} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
-                            <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(sin #)"}</span> · {g.customer || "—"}
+                            <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(no #)"}</span> · {g.customer || "—"}
                           </button>
                         ))}
                     </div>
@@ -8714,15 +8714,15 @@ export default function App() {
               )}
             </Field>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
-              <Field label="Fecha de pago"><input style={inp} type="date" value={payForm.payment_date} onChange={e => setF({ payment_date:e.target.value })} /></Field>
-              <Field label={splitOn ? "Monto total ($) *" : "Monto ($) *"}><input style={inp} type="number" value={payForm.amount} onChange={e => setF({ amount:e.target.value })} placeholder="0" /></Field>
-              {!splitOn && <Field label="Concepto">
+              <Field label="Payment date"><input style={inp} type="date" value={payForm.payment_date} onChange={e => setF({ payment_date:e.target.value })} /></Field>
+              <Field label={splitOn ? "Total amount ($) *" : "Amount ($) *"}><input style={inp} type="number" value={payForm.amount} onChange={e => setF({ amount:e.target.value })} placeholder="0" /></Field>
+              {!splitOn && <Field label="Concept">
                 <select style={inp} value={payForm.concept} onChange={e => setF({ concept:e.target.value })}>
                   {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
                 </select>
               </Field>}
               {!splitOn && <Field label="Descuento ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>}
-              {!splitOn && <Field label="Razón del descuento"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>}
+              {!splitOn && <Field label="Discount reason"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>}
               {!payStageMissing && <Field label="Etapa del pago">
                 <select style={inp} value={payForm.payment_stage} onChange={e => setF({ payment_stage:e.target.value })}>
                   <option value="">— Select —</option>
@@ -8738,11 +8738,11 @@ export default function App() {
               <div style={{ marginTop:10 }}>
                 <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
                   <input type="checkbox" checked={!!payForm.split_enabled} onChange={e => setF({ split_enabled: e.target.checked, split_lines: e.target.checked && splitLines.length ? splitLines : [{ concept:"job", amount:"", notes:"" }] })} />
-                  ✂️ Dividir el pago (split)
+                  ✂️ Split the payment
                 </label>
                 {splitOn && (
                   <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
-                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Repartí el monto total en conceptos. Las líneas de extra se registran automáticamente para comisiones.</div>
+                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Split the total amount into concepts. Extra lines are recorded automatically for commissions.</div>
                     {splitLines.map((l, i) => (
                       <div key={i} style={{ display:"flex", gap:6, alignItems:"flex-start", marginBottom:7, flexWrap:"wrap" }}>
                         <select style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.concept} onChange={e => patchLine(i, { concept: e.target.value })}>
@@ -8750,13 +8750,13 @@ export default function App() {
                         </select>
                         <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchLine(i, { amount: e.target.value })} placeholder="$" />
                         <input style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.notes} onChange={e => patchLine(i, { notes: e.target.value })} placeholder="Notas (opcional)" />
-                        <button onClick={() => setLines(splitLines.filter((_, ix) => ix !== i))} disabled={splitLines.length <= 1} title="Quitar línea" style={{ border:"none", background:"none", cursor: splitLines.length <= 1 ? "not-allowed" : "pointer", color: splitLines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
+                        <button onClick={() => setLines(splitLines.filter((_, ix) => ix !== i))} disabled={splitLines.length <= 1} title="Remove line" style={{ border:"none", background:"none", cursor: splitLines.length <= 1 ? "not-allowed" : "pointer", color: splitLines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
                       </div>
                     ))}
-                    <button onClick={() => setLines([...splitLines, { concept:"job", amount:"", notes:"" }])} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Agregar línea</button>
+                    <button onClick={() => setLines([...splitLines, { concept:"job", amount:"", notes:"" }])} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Add line</button>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
                       <span style={{ color:"#666" }}>Split total: <b style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>${splitSum.toLocaleString(undefined, { maximumFractionDigits:2 })}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${numv(payForm.amount).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></span>
-                      <span style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>{splitMatches ? "✓ coincide" : `✗ difiere $${Math.abs(splitSum - numv(payForm.amount)).toLocaleString(undefined, { maximumFractionDigits:2 })}`}</span>
+                      <span style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>{splitMatches ? "✓ matches" : `✗ difiere $${Math.abs(splitSum - numv(payForm.amount)).toLocaleString(undefined, { maximumFractionDigits:2 })}`}</span>
                     </div>
                   </div>
                 )}
@@ -8765,7 +8765,7 @@ export default function App() {
 
             {/* Method pill tabs */}
             <div style={{ marginTop:12 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Método</div>
+              <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Method</div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                 {PAY_METHODS.map(pm => {
                   const on = payForm.method === pm.v;
@@ -8777,7 +8777,7 @@ export default function App() {
 
             {payColsMissing && (
               <div style={{ marginTop:8, fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px" }}>
-                Corré el SQL actualizado para guardar los detalles de cheque/money order/CC fee. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
+                Run the updated SQL to save check / money order / CC fee details. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
               </div>
             )}
 
@@ -8790,12 +8790,12 @@ export default function App() {
                   <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
                     {CHECK_TYPES.map(t => { const on = ck === t.v; return <button key={t.v} onClick={() => setF({ check_type: t.v })} style={{ fontSize:12, fontWeight:600, padding:"5px 11px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#cfe0f0"}`, background: on ? "#185FA5" : "#fff", color: on ? "#fff" : "#185FA5" }}>{t.l}</button>; })}
                   </div>
-                  {!ck ? <div style={{ fontSize:12, color:"#888" }}>Elegí el tipo de cheque.</div> : isPersonal ? (
+                  {!ck ? <div style={{ fontSize:12, color:"#888" }}>Choose the check type.</div> : isPersonal ? (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
                       <Field label="Check number (serial)">
                         <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
                         <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
-                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} ya registrado — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="From (titular)"><input style={inp} value={payForm.check_from} onChange={e => setF({ check_from:e.target.value })} placeholder="Account holder" /></Field>
@@ -8810,11 +8810,11 @@ export default function App() {
                       <Field label="Check number (serial)">
                         <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
                         <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
-                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} ya registrado — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="Transaction number"><input style={inp} value={payForm.check_transaction_number} onChange={e => setF({ check_transaction_number:e.target.value })} placeholder="Transaction #" /></Field>
-                      <Field label="Remitter (quién compró)"><input style={inp} value={payForm.check_remitter} onChange={e => setF({ check_remitter:e.target.value })} placeholder="Remitter" /></Field>
+                      <Field label="Remitter (who bought it)"><input style={inp} value={payForm.check_remitter} onChange={e => setF({ check_remitter:e.target.value })} placeholder="Remitter" /></Field>
                       <Field label="Purchased by"><input style={inp} value={payForm.check_purchased_by} onChange={e => setF({ check_purchased_by:e.target.value })} placeholder="Comprador" /></Field>
                       <Field label="Bank / Issuer">
                         <select style={inp} value={payForm.check_bank} onChange={e => setF({ check_bank:e.target.value })}>
@@ -8826,7 +8826,7 @@ export default function App() {
                       <Field label="Memo" full><input style={inp} value={payForm.check_memo} onChange={e => setF({ check_memo:e.target.value })} placeholder="Memo" /></Field>
                     </div>
                   )}
-                  {ck && <PayPhotoBox url={payForm.check_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "check_photo_url")} label="Foto del cheque" />}
+                  {ck && <PayPhotoBox url={payForm.check_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "check_photo_url")} label="Check photo" />}
                 </div>
               );
             })()}
@@ -8844,20 +8844,20 @@ export default function App() {
                       <Field label="Serial number">
                         <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
                         <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
-                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} ya registrado — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
                       <Field label="Post office #"><input style={inp} value={payForm.mo_post_office} onChange={e => setF({ mo_post_office:e.target.value })} placeholder="Post office" /></Field>
                       <Field label="From name"><input style={inp} value={payForm.mo_from_name} onChange={e => setF({ mo_from_name:e.target.value })} placeholder="From" /></Field>
-                      <Field label="From address" full><input style={inp} value={payForm.mo_from_address} onChange={e => setF({ mo_from_address:e.target.value })} placeholder="Dirección" /></Field>
+                      <Field label="From address" full><input style={inp} value={payForm.mo_from_address} onChange={e => setF({ mo_from_address:e.target.value })} placeholder="Address" /></Field>
                     </div>
                   ) : (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
                       <Field label="Serial number">
                         <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
                         <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
-                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} ya registrado — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
@@ -8867,7 +8867,7 @@ export default function App() {
                       <Field label="Issuer location"><input style={inp} value={payForm.mo_issuer_location} onChange={e => setF({ mo_issuer_location:e.target.value })} placeholder="Location" /></Field>
                     </div>
                   )}
-                  <PayPhotoBox url={payForm.mo_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "mo_photo_url")} label="Foto del money order" />
+                  <PayPhotoBox url={payForm.mo_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "mo_photo_url")} label="Money order photo" />
                 </div>
               );
             })()}
@@ -8879,7 +8879,7 @@ export default function App() {
                 <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF6EC", border:"1px solid #F4DDB0", borderRadius:9 }}>
                   <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
                     <input type="checkbox" checked={!!payForm.cc_fee_enabled} onChange={e => setF({ cc_fee_enabled: e.target.checked })} />
-                    Cobrar CC fee al cliente
+                    Charge CC fee to client
                   </label>
                   {payForm.cc_fee_enabled && (
                     <>
@@ -8903,31 +8903,31 @@ export default function App() {
             <div style={{ marginTop:10, padding:"10px 12px", background:"#fafafa", borderRadius:8 }}>
               <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer" }}>
                 <input type="checkbox" checked={digital ? true : payForm.received} disabled={digital} onChange={e => setF({ received:e.target.checked })} />
-                <b>Recibido</b>{digital && <span style={{ fontSize:11, color:"#888" }}>(automático en pagos digitales)</span>}
+                <b>Received</b>{digital && <span style={{ fontSize:11, color:"#888" }}>(automatic for digital payments)</span>}
               </label>
               {(digital || payForm.received) && (
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
-                  <Field label="Recibido por">
+                  <Field label="Received by">
                     <input style={inp} list="who-list" value={payForm.received_by} onChange={e => setF({ received_by:e.target.value })} placeholder="Driver / rep" />
                   </Field>
-                  <Field label="Fecha recibido"><input style={inp} type="date" value={payForm.received_date} onChange={e => setF({ received_date:e.target.value })} /></Field>
+                  <Field label="Received date"><input style={inp} type="date" value={payForm.received_date} onChange={e => setF({ received_date:e.target.value })} /></Field>
                 </div>
               )}
             </div>
 
             {physical && (
               <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF8F0", borderRadius:8, border:"1px solid #FAE6CF" }}>
-                <Field label="¿Quién tiene el dinero?">
-                  <input style={inp} list="who-list" value={payForm.cash_with_whom} onChange={e => setF({ cash_with_whom:e.target.value })} placeholder="Persona que tiene cash/cheque" />
+                <Field label="Who has the money?">
+                  <input style={inp} list="who-list" value={payForm.cash_with_whom} onChange={e => setF({ cash_with_whom:e.target.value })} placeholder="Person holding the cash/check" />
                 </Field>
                 <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", marginTop:10 }}>
                   <input type="checkbox" checked={payForm.banked} onChange={e => setF({ banked:e.target.checked })} />
-                  <b>Depositado</b>
+                  <b>Deposited</b>
                 </label>
                 {payForm.banked && (
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
-                    <Field label="Fecha depósito"><input style={inp} type="date" value={payForm.banked_date} onChange={e => setF({ banked_date:e.target.value })} /></Field>
-                    <Field label="Cuenta bancaria">
+                    <Field label="Deposit date"><input style={inp} type="date" value={payForm.banked_date} onChange={e => setF({ banked_date:e.target.value })} /></Field>
+                    <Field label="Bank account">
                       <select style={inp} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
                         <option value="">— Select —</option>
                         {payAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
@@ -8939,17 +8939,17 @@ export default function App() {
             )}
             {digital && (
               <div style={{ marginTop:10, padding:"8px 12px", background:"#E6F1FB", borderRadius:8, fontSize:12.5, color:"#185FA5" }}>
-                💳 Pago digital — se marca como depositado automáticamente.
+                💳 Digital payment — automatically marked as deposited.
                 <div style={{ marginTop:6 }}>
                   <select style={{ ...inp, width:"auto" }} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
-                    <option value="">— Cuenta (opcional) —</option>
+                    <option value="">— Account (optional) —</option>
                     {payAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
                   </select>
                 </div>
               </div>
             )}
             <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
-            <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Neto: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
+            <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Net: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
             <datalist id="who-list">{whoList.map((n, i) => <option key={i} value={n} />)}</datalist>
           </Modal>
         );
@@ -8969,14 +8969,14 @@ export default function App() {
         const onGen = (v) => { const d = commissionDefaults(ex.extra_type, v); setCA({ generated_by: v, driver_pct: String(d.driver), rep_pct: String(d.rep), rep_id: v === "driver_only" ? "" : ca.rep_id }); };
         const remaining = ca.queue.length;
         return (
-          <Modal title="Asignar comisión" onClose={() => setCommAssign(null)}
+          <Modal title="Assign commission" onClose={() => setCommAssign(null)}
             footer={<>
-              <Btn onClick={advanceCommQueue}>Saltar{remaining ? ` (${remaining} más)` : ""}</Btn>
-              <Btn primary onClick={saveCommAssign}>Guardar comisión</Btn>
+              <Btn onClick={advanceCommQueue}>Skip{remaining ? ` (${remaining} more)` : ""}</Btn>
+              <Btn primary onClick={saveCommAssign}>Save commission</Btn>
             </>}>
             <div style={{ background:"#EDE9FE", border:"1px solid #C4B5FD", borderRadius:9, padding:"9px 12px", marginBottom:12, fontSize:13 }}>
               <b>{extraTypeLabel(ex.extra_type)}</b> · <b style={{ color:"#6D28D9" }}>{money(ex.amount) || "$0"}</b>
-              <span style={{ fontSize:10.5, fontWeight:700, color:"#6D28D9", background:"#fff", borderRadius:20, padding:"1px 8px", marginLeft:8 }}>Cobrado vía pago</span>
+              <span style={{ fontSize:10.5, fontWeight:700, color:"#6D28D9", background:"#fff", borderRadius:20, padding:"1px 8px", marginLeft:8 }}>Collected via payment</span>
               {g && <div style={{ fontSize:11, color:"#6D28D9", marginTop:3 }}>Job {g.job_number || "—"} · {g.customer || ""}</div>}
             </div>
             <Field label="Generado por">
@@ -9001,11 +9001,11 @@ export default function App() {
               {ca.generated_by !== "driver_only" && <Field label="Rep %"><input style={inp} type="number" value={ca.rep_pct} onChange={e => setCA({ rep_pct: e.target.value })} /></Field>}
             </div>
             <div style={{ marginTop:12, background:"#fafafa", borderRadius:8, padding:"9px 12px", fontSize:12.5 }}>
-              <div style={{ marginBottom:5, color:"#666" }}>Base de comisión: <b>{money(base) || "$0"}</b></div>
+              <div style={{ marginBottom:5, color:"#666" }}>Commission base: <b>{money(base) || "$0"}</b></div>
               <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
-                <span>Comisión driver ({dPct}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
-                <span>Comisión rep ({rPct}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
-                <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(base - dc - rc) || "$0"}</b></span>
+                <span>Driver commission ({dPct}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
+                <span>Rep commission ({rPct}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
+                <span>Company: <b style={{ color:"#EF9F27" }}>{money(base - dc - rc) || "$0"}</b></span>
               </div>
             </div>
           </Modal>
@@ -9021,18 +9021,18 @@ export default function App() {
         const miniBtn = { padding:"3px 9px", fontSize:11.5 };
         const sectionTitle = (icon, label, n) => <div style={{ fontSize:13, fontWeight:800, margin:"4px 0 8px", display:"flex", alignItems:"center", gap:7 }}>{icon} {label} <span style={{ fontSize:11, fontWeight:700, color:"#B45309", background:"#FFF1D6", borderRadius:20, padding:"1px 8px" }}>{n}</span></div>;
         return (
-          <Modal title="Revisión de duplicados" onClose={() => setShowDupModal(false)}
-            footer={<Btn onClick={() => setShowDupModal(false)}>Cerrar</Btn>}>
-            <p style={{ fontSize:12.5, color:"#666", marginTop:-4, marginBottom:14 }}>Posibles duplicados detectados en el sistema. Revisá cada uno: <b>eliminá</b> el registro repetido o <b>descartá</b> si es un falso positivo.</p>
-            {R.total === 0 && <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:10, padding:"16px", textAlign:"center", color:"#3B6D11", fontSize:13 }}>✅ No hay duplicados pendientes. Todo limpio.</div>}
+          <Modal title="Duplicate review" onClose={() => setShowDupModal(false)}
+            footer={<Btn onClick={() => setShowDupModal(false)}>Close</Btn>}>
+            <p style={{ fontSize:12.5, color:"#666", marginTop:-4, marginBottom:14 }}>Possible duplicates detected in the system. Review each one: <b>delete</b> the repeated record or <b>dismiss</b> if it is a false positive.</p>
+            {R.total === 0 && <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:10, padding:"16px", textAlign:"center", color:"#3B6D11", fontSize:13 }}>✅ No pending duplicates. All clean.</div>}
 
             {R.jobs.length > 0 && <div style={{ marginBottom:8 }}>
-              {sectionTitle("💼", "Jobs con mismo número", R.jobs.length)}
+              {sectionTitle("💼", "Jobs with the same number", R.jobs.length)}
               {R.jobs.map(d => (
                 <div key={d.key} style={groupBox}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-                    <b style={{ fontFamily:"monospace", fontSize:13 }}>{d.number || "(sin #)"}</b>
-                    <span style={{ fontSize:11, color:"#999" }}>· {d.variants.length} clientes distintos con este número</span>
+                    <b style={{ fontFamily:"monospace", fontSize:13 }}>{d.number || "(no #)"}</b>
+                    <span style={{ fontSize:11, color:"#999" }}>· {d.variants.length} distinct clients with this number</span>
                     <span style={{ marginLeft:"auto" }}><Btn onClick={() => dismissDup(d.key)} style={miniBtn}>Descartar</Btn></span>
                   </div>
                   <div style={rowWrap}>
@@ -9042,7 +9042,7 @@ export default function App() {
                         <div style={{ fontSize:11, color:"#777", margin:"3px 0 8px" }}><StatusBadge status={v.status} /> · {v.date || "—"} · {v.ids.length} fila(s)</div>
                         <div style={{ display:"flex", gap:6 }}>
                           <Btn onClick={() => { setShowDupModal(false); setJobDetailKey(v.key); }} style={miniBtn}>Ver</Btn>
-                          <Btn danger onClick={() => deleteJobRows(v.ids, `${d.number} · ${v.customer}`)} style={miniBtn}>Eliminar este</Btn>
+                          <Btn danger onClick={() => deleteJobRows(v.ids, `${d.number} · ${v.customer}`)} style={miniBtn}>Delete this</Btn>
                         </div>
                       </div>
                     ))}
@@ -9052,12 +9052,12 @@ export default function App() {
             </div>}
 
             {R.payments.length > 0 && <div style={{ marginBottom:8 }}>
-              {sectionTitle("💰", "Pagos con mismo serial", R.payments.length)}
+              {sectionTitle("💰", "Payments with the same serial", R.payments.length)}
               {R.payments.map(d => (
                 <div key={d.key} style={groupBox}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
                     <b style={{ fontFamily:"monospace", fontSize:13 }}>{d.kind} #{d.serial}</b>
-                    <span style={{ fontSize:11, color:"#999" }}>· {d.rows.length} pagos</span>
+                    <span style={{ fontSize:11, color:"#999" }}>· {d.rows.length} payments</span>
                     <span style={{ marginLeft:"auto" }}><Btn onClick={() => dismissDup(d.key)} style={miniBtn}>Descartar</Btn></span>
                   </div>
                   <div style={rowWrap}>
@@ -9067,7 +9067,7 @@ export default function App() {
                         <div style={{ fontSize:11, color:"#777", margin:"3px 0 8px" }}><PaymentMethodBadge method={p.method} /> · {p.payment_date || "—"} · job {payJobNumber(p)}{p.split_group ? " · split" : ""}</div>
                         <div style={{ display:"flex", gap:6 }}>
                           {k && <Btn onClick={() => { setShowDupModal(false); setJobDetailKey(k); }} style={miniBtn}>Ver</Btn>}
-                          <Btn danger onClick={() => deletePaymentRow(p)} style={miniBtn}>Eliminar este</Btn>
+                          <Btn danger onClick={() => deletePaymentRow(p)} style={miniBtn}>Delete this</Btn>
                         </div>
                       </div>
                     ); })}
@@ -9081,8 +9081,8 @@ export default function App() {
               {R.storages.map(d => (
                 <div key={d.key} style={groupBox}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-                    <b style={{ fontSize:13 }}>{d.rows[0].brand} · Unidad {d.rows[0].unit}{d.rows[0].state ? ` · ${d.rows[0].state}` : ""}</b>
-                    <span style={{ fontSize:11, color:"#999" }}>· {d.rows.length} abiertos</span>
+                    <b style={{ fontSize:13 }}>{d.rows[0].brand}  · Unit {d.rows[0].unit}{d.rows[0].state ? ` · ${d.rows[0].state}` : ""}</b>
+                    <span style={{ fontSize:11, color:"#999" }}>· {d.rows.length} open</span>
                     <span style={{ marginLeft:"auto" }}><Btn onClick={() => dismissDup(d.key)} style={miniBtn}>Descartar</Btn></span>
                   </div>
                   <div style={rowWrap}>
@@ -9092,7 +9092,7 @@ export default function App() {
                         <div style={{ fontSize:11, color:"#777", margin:"3px 0 8px" }}>{r.state || "—"}{r.account ? ` · ${r.account}` : ""}{r.date_opened ? ` · abierto ${r.date_opened}` : ""}</div>
                         <div style={{ display:"flex", gap:6 }}>
                           <Btn onClick={() => { setShowDupModal(false); setDetailId(r.id); }} style={miniBtn}>Ver</Btn>
-                          <Btn danger onClick={() => deleteRecord(r.id)} style={miniBtn}>Eliminar este</Btn>
+                          <Btn danger onClick={() => deleteRecord(r.id)} style={miniBtn}>Delete this</Btn>
                         </div>
                       </div>
                     ))}
@@ -9117,7 +9117,7 @@ export default function App() {
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
         const events = tripEventsByTrip[t.id] || [];
         const dropTargets = [
-          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unidad #${r.id}` })),
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
           ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
         ];
         // Jobs that can be added (not on any trip, not delivered).
@@ -9134,20 +9134,20 @@ export default function App() {
         return (
           <Modal title={`Trip ${t.trip_number || "#"+t.id}`} onClose={() => { setTripDetailId(null); setTripAction(null); setStorageDropJob(null); setTripWaLink(null); }}
             footer={<>
-              {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Salir (en tránsito)</Btn>}
+              {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart (in transit)</Btn>}
               {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Completar trip…</Btn>}
-              {TRIP_ACTIVE(t.status) && <Btn danger onClick={() => setTripStatus(t, "cancelled")}>Cancelar trip</Btn>}
-              <Btn onClick={() => { setTripDetailId(null); setTripAction(null); }}>Cerrar</Btn>
+              {TRIP_ACTIVE(t.status) && <Btn danger onClick={() => setTripStatus(t, "cancelled")}>Cancel trip</Btn>}
+              <Btn onClick={() => { setTripDetailId(null); setTripAction(null); }}>Close</Btn>
             </>}>
             <div style={{ fontSize:12.5, color:"#888", marginTop:-4, marginBottom:10 }}>
-              <TripBadge status={t.status} /> &nbsp;🚛 {truck?.name || "sin camión"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}
+              <TripBadge status={t.status} /> &nbsp;🚛 {truck?.name || "no truck"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}
             </div>
 
             {/* pending driver WhatsApp update */}
             {tripWaLink && (
               <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"9px 12px", marginBottom:12, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>{tripWaLink.label} — avisá al driver</span>
-                <a href={tripWaLink.href} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ padding:"5px 11px", fontSize:12 }}>📲 Enviar update</Btn></a>
+                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>{tripWaLink.label} — notify the driver</span>
+                <a href={tripWaLink.href} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ padding:"5px 11px", fontSize:12 }}>📲 Send update</Btn></a>
                 <button onClick={() => setTripWaLink(null)} style={{ border:"none", background:"none", cursor:"pointer", color:"#3B6D11", fontSize:16 }}>×</button>
               </div>
             )}
@@ -9161,16 +9161,16 @@ export default function App() {
                 </div>
                 <div style={{ background:"#f0f0f0", borderRadius:6, height:14, overflow:"hidden" }}><div style={{ background: occColor(pct), height:14, width:`${Math.min(100, pct)}%`, transition:"width .4s" }} /></div>
               </div>
-            ) : <div style={{ fontSize:12, color:"#999", marginBottom:6 }}>Camión sin capacidad cargada · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
+            ) : <div style={{ fontSize:12, color:"#999", marginBottom:6 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
             {over > 0 && <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:8, padding:"8px 11px", fontSize:12.5, fontWeight:700, color:"#A32D2D", margin:"8px 0" }}>⚠️ Over capacity by {over.toLocaleString()} CF</div>}
 
             {/* Read-only delivery progress indicator (never changes trip status) */}
-            {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>📦 Entregados: <b style={{ color: c.allDelivered ? "#3B6D11" : "#111" }}>{c.delivered}/{c.count}</b>{c.delivered < c.count ? ` · ${c.count - c.delivered} pendiente(s)` : ""}</div>}
+            {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>📦 Delivered: <b style={{ color: c.allDelivered ? "#3B6D11" : "#111" }}>{c.delivered}/{c.count}</b>{c.delivered < c.count ? ` · ${c.count - c.delivered} pending` : ""}</div>}
 
             {/* Non-blocking suggestion — trip stays as-is until the dispatcher acts */}
             {c.allDelivered && TRIP_ACTIVE(t.status) && (
               <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"10px 12px", margin:"8px 0", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ Todos los jobs entregados — ¿marcar el trip como completado?</span>
+                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ All jobs delivered — mark trip as completed?</span>
                 <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Marcar completado</Btn>
               </div>
             )}
@@ -9178,8 +9178,8 @@ export default function App() {
             {/* in-transit action buttons */}
             {inTransit && !tripAction && !storageDropJob && (
               <div style={{ display:"flex", gap:8, margin:"12px 0", flexWrap:"wrap" }}>
-                <Btn primary onClick={() => { setTripAction("add"); setTripAddJobSearch(""); }} style={bigBtn}>➕ Agregar job</Btn>
-                <Btn onClick={() => setTripAction("pickup")} style={bigBtn}>🔼 Cargar de storage</Btn>
+                <Btn primary onClick={() => { setTripAction("add"); setTripAddJobSearch(""); }} style={bigBtn}>➕ Add job</Btn>
+                <Btn onClick={() => setTripAction("pickup")} style={bigBtn}>🔼 Load from storage</Btn>
                 <Btn onClick={() => { setUnplannedForm(EMPTY_UNPLANNED); setTripAction("unplanned"); }} style={bigBtn}>🆕 Pick up no previsto</Btn>
               </div>
             )}
@@ -9187,21 +9187,21 @@ export default function App() {
             {/* action panel: add existing job */}
             {tripAction === "add" && (
               <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Agregar job al trip</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
-                <input style={inp} value={tripAddJobSearch} onChange={e => setTripAddJobSearch(e.target.value)} placeholder="Buscar por job # o cliente…" />
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Add job al trip</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <input style={inp} value={tripAddJobSearch} onChange={e => setTripAddJobSearch(e.target.value)} placeholder="Search by job # or client…" />
                 <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:8, maxHeight:230, overflowY:"auto", background:"#fff" }}>
                   {addableFiltered.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>Sin jobs disponibles.</div>
                     : addableFiltered.map(j => (
                       <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
                         <div style={{ flex:1, minWidth:0 }}>
-                          <div><b className="mono" style={{ fontFamily:"monospace" }}>{j.job_number || "(sin #)"}</b> · {j.customer || "—"}</div>
+                          <div><b className="mono" style={{ fontFamily:"monospace" }}>{j.job_number || "(no #)"}</b> · {j.customer || "—"}</div>
                           <div style={{ color:"#888", marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
                             <span>{Math.round(parseCf(j.volume))} CF</span><FaddBadge fadd={j.fadd} />
                             {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} />}
-                            {(j.storage_id || j.warehouse) && <span>📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unidad")}</span>}
+                            {(j.storage_id || j.warehouse) && <span>📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</span>}
                           </div>
                         </div>
-                        <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Agregar</Btn>
+                        <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Add</Btn>
                       </div>
                     ))}
                 </div>
@@ -9211,16 +9211,16 @@ export default function App() {
             {/* action panel: pick up from storage */}
             {tripAction === "pickup" && (
               <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Cargar un job desde storage</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Load a job from storage</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
                 <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:230, overflowY:"auto", background:"#fff" }}>
                   {jobsInStorage.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No hay jobs en storage para cargar.</div>
                     : jobsInStorage.map(j => (
                       <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
                         <div style={{ flex:1, minWidth:0 }}>
-                          <div><b style={{ fontFamily:"monospace" }}>{j.job_number || "(sin #)"}</b> · {j.customer || "—"}</div>
-                          <div style={{ color:"#888", marginTop:2 }}>{Math.round(parseCf(j.volume))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unidad")}</div>
+                          <div><b style={{ fontFamily:"monospace" }}>{j.job_number || "(no #)"}</b> · {j.customer || "—"}</div>
+                          <div style={{ color:"#888", marginTop:2 }}>{Math.round(parseCf(j.volume))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</div>
                         </div>
-                        <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Cargar</Btn>
+                        <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Load</Btn>
                       </div>
                     ))}
                 </div>
@@ -9233,29 +9233,29 @@ export default function App() {
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Pick up no previsto</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                   <Field label="Job #"><input style={inp} value={unplannedForm.job_number} onChange={e => setU({ job_number:e.target.value })} placeholder="Job #" /></Field>
-                  <Field label="Cliente"><input style={inp} value={unplannedForm.customer} onChange={e => setU({ customer:e.target.value })} placeholder="Cliente" /></Field>
+                  <Field label="Client"><input style={inp} value={unplannedForm.customer} onChange={e => setU({ customer:e.target.value })} placeholder="Client" /></Field>
                   <Field label="CF"><input style={inp} value={unplannedForm.volume} onChange={e => setU({ volume:e.target.value })} placeholder="ej: 600" /></Field>
                   <Field label="FADD"><input style={inp} type="date" value={unplannedForm.fadd} onChange={e => setU({ fadd:e.target.value })} /></Field>
-                  <Field label="Pickup"><input style={inp} value={unplannedForm.pickup_address} onChange={e => setU({ pickup_address:e.target.value })} placeholder="Dirección pickup" /></Field>
-                  <Field label="Delivery"><input style={inp} value={unplannedForm.delivery_address} onChange={e => setU({ delivery_address:e.target.value })} placeholder="Dirección delivery" /></Field>
+                  <Field label="Pickup"><input style={inp} value={unplannedForm.pickup_address} onChange={e => setU({ pickup_address:e.target.value })} placeholder="Pickup address" /></Field>
+                  <Field label="Delivery"><input style={inp} value={unplannedForm.delivery_address} onChange={e => setU({ delivery_address:e.target.value })} placeholder="Delivery address" /></Field>
                   <Field label="Broker"><select style={inp} value={unplannedForm.broker_id} onChange={e => setU({ broker_id:e.target.value })}><option value="">— Broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></Field>
                   <Field label="Sticker"><input style={inp} list="sticker-colors-list" value={unplannedForm.sticker_color} onChange={e => setU({ sticker_color:e.target.value })} placeholder="Color" /></Field>
                   <Field label="Lot #"><input style={inp} value={unplannedForm.lot_number} onChange={e => setU({ lot_number:e.target.value })} placeholder="Lot" /></Field>
                 </div>
-                <div style={{ marginTop:10, textAlign:"right" }}><Btn primary disabled={tripBusy || (!unplannedForm.job_number && !unplannedForm.customer)} onClick={() => saveUnplannedPickup(t)}>Agregar al trip</Btn></div>
+                <div style={{ marginTop:10, textAlign:"right" }}><Btn primary disabled={tripBusy || (!unplannedForm.job_number && !unplannedForm.customer)} onClick={() => saveUnplannedPickup(t)}>Add al trip</Btn></div>
               </div>
             )}
 
             {/* per-job storage drop panel */}
             {storageDropJob && storageDropJob.tripId === t.id && (
               <div style={{ border:"1px solid #EF9F27", borderRadius:10, padding:"12px", margin:"10px 0", background:"#FFF8F0" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Dejar en storage: {storageDropJob.label}</b><button onClick={() => setStorageDropJob(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Drop at storage: {storageDropJob.label}</b><button onClick={() => setStorageDropJob(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                   <select id="drop-target-sel" style={{ ...inp, flex:1, minWidth:180 }} defaultValue="">
-                    <option value="">— Elegí storage / warehouse —</option>
+                    <option value="">— Choose storage / warehouse —</option>
                     {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
                   </select>
-                  <Btn primary disabled={tripBusy} onClick={() => { const sel = document.getElementById("drop-target-sel"); const idx = sel?.value; if (idx === "" || idx == null) { window.alert("Elegí un destino."); return; } tripDropAtStorage(t, storageDropJob.jobKey, dropTargets[Number(idx)]); }}>Confirmar drop</Btn>
+                  <Btn primary disabled={tripBusy} onClick={() => { const sel = document.getElementById("drop-target-sel"); const idx = sel?.value; if (idx === "" || idx == null) { window.alert("Choose a destination."); return; } tripDropAtStorage(t, storageDropJob.jobKey, dropTargets[Number(idx)]); }}>Confirmar drop</Btn>
                 </div>
               </div>
             )}
@@ -9286,7 +9286,7 @@ export default function App() {
                       {!delivered && (
                         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                           <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
-                          {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Dejar en storage</Btn>}
+                          {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
                         </div>
                       )}
                     </div>
@@ -9296,18 +9296,18 @@ export default function App() {
 
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-              <span style={{ color:"#666" }}>A cobrar: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+              <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
             </div>
             <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Enviar manifest al driver</Btn></a>
 
             {/* event log */}
             <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
-              <span style={{ fontSize:11.5, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.06em" }}>Registro del trip ({events.length})</span>
+              <span style={{ fontSize:11.5, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.06em" }}>Trip log ({events.length})</span>
               <span style={{ marginLeft:"auto", color:"#bbb", fontSize:11, transform: tripLogOpen ? "rotate(90deg)" : "none", transition:"transform .15s" }}>▸</span>
             </button>
             {tripLogOpen && (
-              tripEventsMissing ? <div style={{ fontSize:12, color:"#999", padding:"4px 0" }}>Corré el SQL actualizado para activar el registro de eventos.</div>
-              : events.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"4px 0" }}>Sin eventos registrados todavía.</div>
+              tripEventsMissing ? <div style={{ fontSize:12, color:"#999", padding:"4px 0" }}>Run the updated SQL to enable the event log.</div>
+              : events.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"4px 0" }}>No events recorded yet.</div>
               : <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                   {events.map(e => {
                     const j = e.job_id ? jobs.find(x => x.id === e.job_id) : null;
@@ -9336,23 +9336,23 @@ export default function App() {
         const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
         const bolPending = c.jobsIn.reduce((s, j) => s + Math.max(0, numv(j.bol_balance) - numv(j.bol_collected)), 0);
         const dropTargets = [
-          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unidad #${r.id}` })),
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
           ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
         ];
         const dur = t.departure_date ? Math.max(0, Math.round((new Date(today() + "T00:00:00") - new Date(t.departure_date + "T00:00:00")) / 86400000)) : null;
         return (
           <Modal title={`Completar trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
             footer={<>
-              <Btn onClick={() => setTripCompleteModal(null)}>Cancelar</Btn>
-              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(jobKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Guardando..." : "Marcar completado"}</Btn>
+              <Btn onClick={() => setTripCompleteModal(null)}>Cancel</Btn>
+              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(jobKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Marcar completado"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
               {[
-                { l:"Jobs entregados", v:`${deliveredJobs.length} / ${c.count}` },
-                { l:"CF entregados", v:`${Math.round(cfDelivered).toLocaleString()} CF` },
-                { l:"BOL cobrado", v:`$${Math.round(bolCollected).toLocaleString()}` },
-                { l:"Balance pendiente", v:`$${Math.round(bolPending).toLocaleString()}` },
-                { l:"Duración", v: dur != null ? `${dur} día(s)` : "—" },
+                { l:"Delivered jobs", v:`${deliveredJobs.length} / ${c.count}` },
+                { l:"CF delivered", v:`${Math.round(cfDelivered).toLocaleString()} CF` },
+                { l:"BOL collected", v:`$${Math.round(bolCollected).toLocaleString()}` },
+                { l:"Outstanding balance", v:`$${Math.round(bolPending).toLocaleString()}` },
+                { l:"Duration", v: dur != null ? `${dur} day(s)` : "—" },
               ].map(x => (
                 <div key={x.l} style={{ border:"1px solid #efefef", borderRadius:9, padding:"10px 12px" }}>
                   <div style={{ fontSize:10.5, color:"#aaa", fontWeight:600 }}>{x.l}</div>
@@ -9362,10 +9362,10 @@ export default function App() {
             </div>
             {undelivered.length > 0 && (
               <div style={{ background:"#FFF8F0", border:"1px solid #EF9F27", borderRadius:9, padding:"11px 13px" }}>
-                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {undelivered.length} job(s) sin entregar en el camión. ¿Mandar a storage?</div>
+                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {undelivered.length} job(s) not delivered on the truck. Send to storage?</div>
                 <div style={{ fontSize:11.5, color:"#888", marginBottom:8 }}>{undelivered.map(j => j.job_number || j.customer).filter(Boolean).join(", ")}</div>
                 <select style={inp} value={completeDropTarget} onChange={e => setCompleteDropTarget(e.target.value)}>
-                  <option value="">— Elegí storage / warehouse para los no entregados —</option>
+                  <option value="">— Choose storage / warehouse for the undelivered —</option>
                   {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
                 </select>
               </div>
@@ -9383,18 +9383,18 @@ export default function App() {
         const pct = cap > 0 ? Math.min(100, Math.round((loadCf / cap) * 100)) : 0;
         const repFor = (k) => jobs.find(j => jobKey(j) === k);
         return (
-        <Modal title={editingTripId ? "Editar trip" : "Nuevo trip"} onClose={() => setShowTripModal(false)}
+        <Modal title={editingTripId ? "Edit trip" : "New trip"} onClose={() => setShowTripModal(false)}
           footer={<>
-            <Btn onClick={() => setShowTripModal(false)}>Cancelar</Btn>
-            {editingTripId && <Btn danger onClick={() => { setShowTripModal(false); deleteTrip(trips.find(x=>x.id===editingTripId)); }}>Eliminar</Btn>}
-            <Btn primary disabled={tripSaving} onClick={saveTrip}>{tripSaving ? "Guardando..." : (editingTripId ? "Guardar cambios" : "Crear trip")}</Btn>
+            <Btn onClick={() => setShowTripModal(false)}>Cancel</Btn>
+            {editingTripId && <Btn danger onClick={() => { setShowTripModal(false); deleteTrip(trips.find(x=>x.id===editingTripId)); }}>Delete</Btn>}
+            <Btn primary disabled={tripSaving} onClick={saveTrip}>{tripSaving ? "Saving..." : (editingTripId ? "Save changes" : "Create trip")}</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Trip number"><input style={inp} value={tripForm.trip_number} onChange={e => setTripForm(f => ({...f, trip_number:e.target.value}))} placeholder="TRIP-001" /></Field>
             <Field label="Departure date"><input style={inp} type="date" value={tripForm.departure_date} onChange={e => setTripForm(f => ({...f, departure_date:e.target.value}))} /></Field>
-            <Field label="Camión">
+            <Field label="Truck">
               <select style={inp} value={tripForm.truck_id} onChange={e => setTripForm(f => ({...f, truck_id:e.target.value}))}>
-                <option value="">— Sin camión —</option>{trucksList.map(tk => <option key={tk.id} value={tk.id}>{tk.name}{tk.capacity_cf ? ` · ${Number(tk.capacity_cf).toLocaleString()} CF` : ""}</option>)}
+                <option value="">— No truck —</option>{trucksList.map(tk => <option key={tk.id} value={tk.id}>{tk.name}{tk.capacity_cf ? ` · ${Number(tk.capacity_cf).toLocaleString()} CF` : ""}</option>)}
               </select>
             </Field>
             <Field label="Driver">
@@ -9402,7 +9402,7 @@ export default function App() {
                 <option value="">— Sin driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </Field>
-            <Field label="Estado">
+            <Field label="Status">
               <div style={{ ...inp, display:"flex", alignItems:"center", gap:8, background:"#fafafa", color:"#888" }}>
                 <TripBadge status={editingTripId ? (tripForm.status || "loading") : "loading"} />
                 <span style={{ fontSize:11 }}>se cambia con los botones del trip</span>
@@ -9419,10 +9419,10 @@ export default function App() {
                 </div>
                 <div style={{ background:"#e8e8e8", borderRadius:6, height:10, overflow:"hidden" }}><div style={{ background:occColor(pct), height:10, width:`${pct}%` }} /></div>
               </>
-            ) : <div style={{ fontSize:12, color:"#888" }}>Cargá la capacidad del camión para ver la ocupación · {Math.round(loadCf).toLocaleString()} CF seleccionados</div>}
+            ) : <div style={{ fontSize:12, color:"#888" }}>Set the truck capacity to see occupancy · {Math.round(loadCf).toLocaleString()} CF seleccionados</div>}
           </div>
 
-          <SectionLabel>Stops — orden de entrega{tripForm.job_keys.length ? ` (${tripForm.job_keys.length})` : ""}</SectionLabel>
+          <SectionLabel>Stops — delivery order{tripForm.job_keys.length ? ` (${tripForm.job_keys.length})` : ""}</SectionLabel>
           {tripForm.job_keys.length > 0 && (
             <div style={{ border:"1px solid #e5e5e5", borderRadius:8, marginBottom:8 }}>
               {tripForm.job_keys.map((k, i) => { const j = repFor(k); if (!j) return null; return (
@@ -9439,11 +9439,11 @@ export default function App() {
               ); })}
             </div>
           )}
-          <input style={{ ...inp, marginBottom:8 }} value={tripJobSearch} onChange={e => setTripJobSearch(e.target.value)} placeholder="Buscar job # / cliente / storage para agregar..." />
+          <input style={{ ...inp, marginBottom:8 }} value={tripJobSearch} onChange={e => setTripJobSearch(e.target.value)} placeholder="Search job # / client / storage to add..." />
           <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:180, overflowY:"auto", background:"#fff" }}>
             {(() => {
               const q = tripJobSearch.trim().toLowerCase();
-              if (!q) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>Buscá un job para agregarlo al trip.</div>;
+              if (!q) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>Search for a job to add it to the trip.</div>;
               const seen2 = new Set(); const rows = [];
               for (const j of jobs) { const k = jobKey(j); if (seen2.has(k)) continue; seen2.add(k);
                 const s = storageById[j.storage_id] || {};
@@ -9461,7 +9461,7 @@ export default function App() {
                     <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
                     <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                     <span style={{ color:"#888" }}>{Math.round(parseCf(j.volume))} CF</span>
-                    {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="En otro trip activo — se moverá a este">en {otherTrip.trip_number || "#"+otherTrip.id}</span>}
+                    {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="On another active trip — will move here">en {otherTrip.trip_number || "#"+otherTrip.id}</span>}
                   </label>
                 );
               });
@@ -9473,10 +9473,10 @@ export default function App() {
       })()}
 
       {showCsModal && (
-        <Modal title={editingCsId ? "Editar closing sheet" : "Nuevo closing sheet"} onClose={() => setShowCsModal(false)}
+        <Modal title={editingCsId ? "Edit closing sheet" : "New closing sheet"} onClose={() => setShowCsModal(false)}
           footer={<>
-            <Btn onClick={() => setShowCsModal(false)}>Cancelar</Btn>
-            <Btn primary disabled={csSaving} onClick={saveCs}>{csSaving ? "Guardando..." : (editingCsId ? "Guardar cambios" : "Crear")}</Btn>
+            <Btn onClick={() => setShowCsModal(false)}>Cancel</Btn>
+            <Btn primary disabled={csSaving} onClick={saveCs}>{csSaving ? "Saving..." : (editingCsId ? "Save changes" : "Create")}</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="CS number"><input style={inp} value={csForm.closing_sheet_number} onChange={e => setCsForm(f => ({...f, closing_sheet_number:e.target.value}))} placeholder="CS-1024" /></Field>
@@ -9491,24 +9491,24 @@ export default function App() {
                 <option value="">— Sin driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </Field>
-            <Field label="Estado">
+            <Field label="Status">
               <select style={inp} value={csForm.status} onChange={e => setCsForm(f => ({...f, status:e.target.value}))}>
                 <option value="open">Open</option><option value="settled">Settled</option><option value="disputed">Disputed</option>
               </select>
             </Field>
           </div>
 
-          <SectionLabel>Documento (foto o PDF)</SectionLabel>
+          <SectionLabel>Document (photo or PDF)</SectionLabel>
           <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:10, padding:"12px", textAlign:"center", cursor:"pointer", background:"#fafafa" }}
             onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, null); }}>
             <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], null)} />
             {docUploading ? <span style={{ fontSize:12, color:"#888" }}>Subiendo…</span>
-              : csForm.document_url ? <span style={{ fontSize:12, color:"#3B6D11" }}>✓ Documento cargado — clic para reemplazar</span>
-              : <span style={{ fontSize:12, color:"#999" }}>Arrastrá o hacé clic para subir</span>}
+              : csForm.document_url ? <span style={{ fontSize:12, color:"#3B6D11" }}>✓ Document uploaded — click to replace</span>
+              : <span style={{ fontSize:12, color:"#999" }}>Drag or click to upload</span>}
           </label>
 
           <SectionLabel>Jobs en este closing sheet{csForm.job_keys.length ? ` (${csForm.job_keys.length})` : ""}</SectionLabel>
-          <input style={{ ...inp, marginBottom:8 }} value={csJobSearch} onChange={e => setCsJobSearch(e.target.value)} placeholder="Buscar job # o cliente para agregar..." />
+          <input style={{ ...inp, marginBottom:8 }} value={csJobSearch} onChange={e => setCsJobSearch(e.target.value)} placeholder="Search job # or client to add..." />
           <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:180, overflowY:"auto", background:"#fff" }}>
             {(() => {
               const q = csJobSearch.trim().toLowerCase();
@@ -9520,7 +9520,7 @@ export default function App() {
                 if (!q && !csForm.job_keys.includes(k)) continue; // when not searching, show only selected
                 rows.push({ j, k, inOther });
               }
-              if (!rows.length) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>{q ? "Sin resultados." : "Buscá un job para agregarlo."}</div>;
+              if (!rows.length) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>{q ? "No results." : "Search for a job to add it."}</div>;
               return rows.slice(0, 60).map(({ j, k, inOther }) => {
                 const checked = csForm.job_keys.includes(k);
                 return (
@@ -9539,33 +9539,33 @@ export default function App() {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Cargo por pad faltante ($)"><input style={inp} type="number" value={csForm.charge_per_pad} onChange={e => setCsForm(f => ({...f, charge_per_pad:e.target.value}))} placeholder="7" /></Field>
           </div>
-          <div style={{ fontSize:11, color:"#999", marginTop:4 }}>Los pads enviados/devueltos se cargan por job (sección Pads del job) y se suman acá automáticamente.</div>
+          <div style={{ fontSize:11, color:"#999", marginTop:4 }}>Sent/returned pads are entered per job (job Pads section) and summed here automatically.</div>
 
           <SectionLabel>Deducciones del broker</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Trip cost ($)"><input style={inp} type="number" value={csForm.trip_cost} onChange={e => setCsForm(f => ({...f, trip_cost:e.target.value}))} placeholder="0" /></Field>
             <Field label="Labor charges ($)"><input style={inp} type="number" value={csForm.labor_charges} onChange={e => setCsForm(f => ({...f, labor_charges:e.target.value}))} placeholder="0" /></Field>
             <Field label="Other fees ($)"><input style={inp} type="number" value={csForm.other_fees} onChange={e => setCsForm(f => ({...f, other_fees:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Descripción other fees"><input style={inp} value={csForm.other_fees_description} onChange={e => setCsForm(f => ({...f, other_fees_description:e.target.value}))} placeholder="ej: detention" /></Field>
+            <Field label="Other fees description"><input style={inp} value={csForm.other_fees_description} onChange={e => setCsForm(f => ({...f, other_fees_description:e.target.value}))} placeholder="ej: detention" /></Field>
             <Field label="Notas" full><input style={inp} value={csForm.notes} onChange={e => setCsForm(f => ({...f, notes:e.target.value}))} placeholder="Notas" /></Field>
           </div>
-          {editingCsId && <div style={{ marginTop:12 }}><Btn danger onClick={() => { setShowCsModal(false); deleteCs(closingSheets.find(x=>x.id===editingCsId)); }}>Eliminar closing sheet</Btn></div>}
+          {editingCsId && <div style={{ marginTop:12 }}><Btn danger onClick={() => { setShowCsModal(false); deleteCs(closingSheets.find(x=>x.id===editingCsId)); }}>Delete closing sheet</Btn></div>}
         </Modal>
       )}
 
       {payModal && (
-        <Modal title="Registrar cobro (BOL)" onClose={() => setPayModal(null)}
+        <Modal title="Record collection (BOL)" onClose={() => setPayModal(null)}
           footer={<>
-            <Btn onClick={() => setPayModal(null)}>Cancelar</Btn>
-            <Btn primary onClick={savePayment}>Guardar cobro</Btn>
+            <Btn onClick={() => setPayModal(null)}>Cancel</Btn>
+            <Btn primary onClick={savePayment}>Save collection</Btn>
           </>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Monto cobrado ($)"><input style={inp} type="number" value={payModal.amount} onChange={e => setPayModal(p => ({...p, amount:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Fecha de cobro"><input style={inp} type="date" value={payModal.date} onChange={e => setPayModal(p => ({...p, date:e.target.value}))} /></Field>
-            <Field label="Método de pago" full>
+            <Field label="Amount collected ($)"><input style={inp} type="number" value={payModal.amount} onChange={e => setPayModal(p => ({...p, amount:e.target.value}))} placeholder="0" /></Field>
+            <Field label="Collection date"><input style={inp} type="date" value={payModal.date} onChange={e => setPayModal(p => ({...p, date:e.target.value}))} /></Field>
+            <Field label="Payment method" full>
               <PaymentMethodSelect style={inp} value={payModal.method} onChange={v => setPayModal(p => ({...p, method: v || ""}))} />
             </Field>
-            <Field label="Notas" full><input style={inp} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Notas del cobro (ej: split cash + zelle)" /></Field>
+            <Field label="Notas" full><input style={inp} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Collection notes (e.g. split cash + zelle)" /></Field>
           </div>
         </Modal>
       )}
@@ -9595,19 +9595,19 @@ export default function App() {
         return (
           <>
             {brokerD && (
-              <Modal title={`Broker · ${brokerD.name}`} onClose={() => setBrokerDetailId(null)} footer={<Btn primary onClick={() => setBrokerDetailId(null)}>Cerrar</Btn>}>
+              <Modal title={`Broker · ${brokerD.name}`} onClose={() => setBrokerDetailId(null)} footer={<Btn primary onClick={() => setBrokerDetailId(null)}>Close</Btn>}>
                 <DetailRow label="Contacto" value={brokerD.contact_name} />
-                <DetailRow label="Teléfono" value={brokerD.contact_phone} />
+                <DetailRow label="Phone" value={brokerD.contact_phone} />
                 <DetailRow label="Email" value={brokerD.contact_email} />
                 <SectionLabel>Jobs del broker</SectionLabel>
                 <JobsPanel predicate={j => j.broker_id === brokerD.id} />
               </Modal>
             )}
             {driverD && (
-              <Modal title={`Driver · ${driverD.name}`} onClose={() => setDriverDetailId(null)} footer={<Btn primary onClick={() => setDriverDetailId(null)}>Cerrar</Btn>}>
-                <DetailRow label="Teléfono" value={driverD.phone} />
+              <Modal title={`Driver · ${driverD.name}`} onClose={() => setDriverDetailId(null)} footer={<Btn primary onClick={() => setDriverDetailId(null)}>Close</Btn>}>
+                <DetailRow label="Phone" value={driverD.phone} />
                 <DetailRow label="Truck" value={driverD.truck_id} />
-                {driverD.whatsapp_group_link && <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}><span style={{ color:"#888", minWidth:150 }}>Grupo WhatsApp</span><a href={driverD.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Abrir grupo ↗</a></div>}
+                {driverD.whatsapp_group_link && <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}><span style={{ color:"#888", minWidth:150 }}>Grupo WhatsApp</span><a href={driverD.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Open group ↗</a></div>}
                 {!paymentsMissing && (() => {
                   const mine = paymentRows.filter(p => [p.cash_with_whom, p.received_by].some(v => (v || "").trim() && (v || "").trim() === driverD.name));
                   const holding = mine.filter(p => isPhysical(p.method) && p.received && !p.banked);
@@ -9615,7 +9615,7 @@ export default function App() {
                   const history = mine.filter(p => p.received).sort((a, b) => (b.received_date || b.payment_date || "").localeCompare(a.received_date || a.payment_date || ""));
                   return (
                     <>
-                      <SectionLabel>En circulación</SectionLabel>
+                      <SectionLabel>In circulation</SectionLabel>
                       <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6 }}>
                         <span>Tiene en mano: <b style={{ color: heldTotal > 0 ? "#E24B4A" : "#1A8A4E", fontSize:15 }}>${Math.round(heldTotal).toLocaleString()}</b></span>
                         {heldTotal > 0 && <span style={{ fontSize:11, color:"#888" }}>({holding.length} pago{holding.length !== 1 ? "s" : ""} sin depositar)</span>}
@@ -9640,7 +9640,7 @@ export default function App() {
               </Modal>
             )}
             {clientDetail && (
-              <Modal title={`Cliente · ${clientDetail}`} onClose={() => setClientDetail(null)} footer={<Btn primary onClick={() => setClientDetail(null)}>Cerrar</Btn>}>
+              <Modal title={`Client · ${clientDetail}`} onClose={() => setClientDetail(null)} footer={<Btn primary onClick={() => setClientDetail(null)}>Close</Btn>}>
                 <SectionLabel>Jobs del cliente</SectionLabel>
                 <JobsPanel predicate={j => (j.customer || "").trim().toLowerCase() === clientDetail.trim().toLowerCase()} />
               </Modal>
@@ -9652,7 +9652,7 @@ export default function App() {
       {payPhotoView && (
         <div onClick={() => setPayPhotoView(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.8)", zIndex:60, display:"flex", alignItems:"center", justifyContent:"center", padding:24, cursor:"zoom-out" }}>
           {payPhotoView.toLowerCase().includes(".pdf")
-            ? <div style={{ background:"#fff", borderRadius:10, padding:24, textAlign:"center" }}><div style={{ fontSize:40 }}>📄</div><a href={payPhotoView} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Abrir PDF en pestaña nueva ↗</a></div>
+            ? <div style={{ background:"#fff", borderRadius:10, padding:24, textAlign:"center" }}><div style={{ fontSize:40 }}>📄</div><a href={payPhotoView} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Open PDF in new tab ↗</a></div>
             : <img src={payPhotoView} alt="documento" style={{ maxWidth:"92%", maxHeight:"92%", borderRadius:8, boxShadow:"0 8px 40px rgba(0,0,0,0.4)" }} onClick={e => e.stopPropagation()} />}
         </div>
       )}
