@@ -2135,20 +2135,40 @@ Format: numbered list, each recommendation in 2-3 lines max. Start directly with
   );
 }
 
+// Card shell shared by the login / set-password / deactivated screens.
+function AuthCard({ children }) {
+  return (
+    <div style={{ minHeight:"100vh", background:"#fafafa", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"system-ui,sans-serif" }}>
+      <div style={{ background:"#fff", borderRadius:16, border:"1px solid #efefef", padding:"36px 32px", width:"100%", maxWidth:380, boxShadow:"0 4px 24px rgba(0,0,0,0.06)" }}>
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>No Borders Moving and Storage</div>
+          <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>Storage Manager</h1>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const authInp = { fontSize:14, padding:"10px 14px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", outline:"none", marginBottom:10, boxSizing:"border-box" };
+const authBtn = (loading) => ({ width:"100%", padding:"11px", borderRadius:8, border:"none", background:"#111", color:"#fff", fontSize:14, fontWeight:600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginBottom:14 });
+
 function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [forgot, setForgot] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
 
   async function handleSubmit() {
     setLoading(true); setError(null); setMessage(null);
-    if (isSignUp) {
-      const { error } = await supabase.auth.signUp({ email, password });
+    if (forgot) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin + "/?reset=1",
+      });
       if (error) setError(error.message);
-      else setMessage("Account created. Check your email to confirm.");
+      else setMessage("If that email exists, a reset link is on its way.");
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) setError("Incorrect email or password.");
@@ -2156,32 +2176,72 @@ function LoginScreen() {
     setLoading(false);
   }
 
-  const inp2 = { fontSize:14, padding:"10px 14px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", outline:"none", marginBottom:10, boxSizing:"border-box" };
+  return (
+    <AuthCard>
+      <p style={{ fontSize:13, color:"#888", margin:"-16px 0 18px" }}>{forgot ? "Reset your password" : "Sign in to continue"}</p>
+      {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
+      {message && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{message}</div>}
+      <input style={authInp} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+      {!forgot && <input style={{ ...authInp, marginBottom:16 }} type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />}
+      <button onClick={handleSubmit} disabled={loading || !email || (!forgot && !password)} style={authBtn(loading)}>
+        {loading ? "Loading..." : forgot ? "Send reset link" : "Sign in"}
+      </button>
+      <p style={{ textAlign:"center", fontSize:13, color:"#888", margin:0 }}>
+        <span onClick={() => { setForgot(!forgot); setError(null); setMessage(null); }} style={{ color:"#111", fontWeight:600, cursor:"pointer", textDecoration:"underline" }}>
+          {forgot ? "Back to sign in" : "Forgot your password?"}
+        </span>
+      </p>
+    </AuthCard>
+  );
+}
+
+// Shown when a user arrives from an invite or password-reset email link.
+function SetPasswordScreen({ onDone }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  async function handleSubmit() {
+    if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (password !== confirm) { setError("Passwords do not match."); return; }
+    setLoading(true); setError(null);
+    const { error } = await supabase.auth.updateUser({ password });
+    setLoading(false);
+    if (error) setError(error.message);
+    else setDone(true);
+  }
+
+  if (done) return (
+    <AuthCard>
+      <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"12px", fontSize:13, color:"#166534", marginBottom:16 }}>Password set. You're all set to use the app.</div>
+      <button onClick={onDone} style={authBtn(false)}>Continue</button>
+    </AuthCard>
+  );
 
   return (
-    <div style={{ minHeight:"100vh", background:"#fafafa", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"system-ui,sans-serif" }}>
-      <div style={{ background:"#fff", borderRadius:16, border:"1px solid #efefef", padding:"36px 32px", width:"100%", maxWidth:380, boxShadow:"0 4px 24px rgba(0,0,0,0.06)" }}>
-        <div style={{ marginBottom:24 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>No Borders Moving and Storage</div>
-          <h1 style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:"-0.02em" }}>Storage Manager</h1>
-          <p style={{ fontSize:13, color:"#888", marginTop:6 }}>{isSignUp ? "Create your account to sign in" : "Sign in to continue"}</p>
-        </div>
-        {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
-        {message && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{message}</div>}
-        <input style={inp2} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
-        <input style={{ ...inp2, marginBottom:16 }} type="password" placeholder="Contrasena" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
-        <button onClick={handleSubmit} disabled={loading || !email || !password}
-          style={{ width:"100%", padding:"11px", borderRadius:8, border:"none", background:"#111", color:"#fff", fontSize:14, fontWeight:600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, marginBottom:14 }}>
-          {loading ? "Loading..." : isSignUp ? "Create account" : "Sign in"}
-        </button>
-        <p style={{ textAlign:"center", fontSize:13, color:"#888", margin:0 }}>
-          {isSignUp ? "Already have an account? " : "Don't have an account? "}
-          <span onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null); }} style={{ color:"#111", fontWeight:600, cursor:"pointer", textDecoration:"underline" }}>
-            {isSignUp ? "Sign in" : "Sign up"}
-          </span>
-        </p>
+    <AuthCard>
+      <p style={{ fontSize:13, color:"#888", margin:"-16px 0 18px" }}>Set your password</p>
+      {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
+      <input style={authInp} type="password" placeholder="New password" value={password} onChange={e => setPassword(e.target.value)} />
+      <input style={{ ...authInp, marginBottom:16 }} type="password" placeholder="Confirm password" value={confirm} onChange={e => setConfirm(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+      <button onClick={handleSubmit} disabled={loading || !password || !confirm} style={authBtn(loading)}>
+        {loading ? "Saving..." : "Set password"}
+      </button>
+    </AuthCard>
+  );
+}
+
+// Shown when the signed-in account is deactivated or has no sections granted.
+function DeactivatedScreen({ onSignOut, message }) {
+  return (
+    <AuthCard>
+      <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"12px", fontSize:13, color:"#b91c1c", marginBottom:16 }}>
+        {message || "Your account doesn't have access yet. Contact an administrator."}
       </div>
-    </div>
+      <button onClick={onSignOut} style={authBtn(false)}>Sign out</button>
+    </AuthCard>
   );
 }
 
@@ -2383,10 +2443,18 @@ const NAV = [
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
     { id:"analytics", label:"Analytics", icon:"📊" },
+    { id:"users", label:"Users", icon:"👤" },
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
 ];
-function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates, lang = "en", setLang }) {
+
+// Flat list of every CRM section id (drives the permissions grid + page fallback).
+const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
+function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates, lang = "en", setLang, can = () => true, isAdmin = false }) {
+  // Only show sections the user can view; the Users section is admin-only.
+  const visibleNav = NAV
+    .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : can(it.id, "view")) }))
+    .filter(group => group.items.length > 0);
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
       <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3" }}>
@@ -2394,7 +2462,7 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDu
         <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
       </div>
       <div style={{ flex:1, overflowY:"auto", padding:"10px" }}>
-        {NAV.map(group => (
+        {visibleNav.map(group => (
           <div key={group.section} style={{ marginBottom:12 }}>
             <div style={{ fontSize:10, fontWeight:600, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.07em", padding:"6px 10px 4px" }}>{group.section}</div>
             {group.items.map(it => {
@@ -2447,11 +2515,209 @@ const PAGE_META = {
   trips:       { title:"Trips / Live Load", sub:"Live load per truck" },
   compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
   analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
+  users:       { title:"Users", sub:"Team members, roles and permissions" },
   settings:    { title:"Settings", sub:"Operation settings" },
 };
 
+// Sections that carry per-section permissions (everything except the admin-only Users section).
+const PERMISSION_SECTIONS = NAV.flatMap(g => g.items).filter(it => it.id !== "users");
+const PERM_LEVELS = ["view", "edit", "create"];
+const EMPTY_PERMS = () => Object.fromEntries(PERMISSION_SECTIONS.map(s => [s.id, { view:false, edit:false, create:false }]));
+
+// Admin-only section: list users, invite new ones (email + per-section permissions),
+// edit roles/permissions, activate/deactivate, and send password-reset emails.
+function UsersSection({ session }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [modal, setModal] = useState(null); // null | { mode, id, email, full_name, role, permissions, active }
+  const [busy, setBusy] = useState(false);
+
+  const api = useCallback(async (action, payload) => {
+    const res = await fetch("/api/admin-users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+      body: JSON.stringify({ action, payload }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `Error ${res.status}`);
+    return json;
+  }, [session]);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try { const { users } = await api("list"); setUsers(users || []); }
+    catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [api]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function openNew() {
+    setModal({ mode:"new", email:"", full_name:"", role:"member", permissions: EMPTY_PERMS(), active:true });
+  }
+  function openEdit(u) {
+    const permissions = EMPTY_PERMS();
+    for (const s of PERMISSION_SECTIONS) {
+      const p = u.permissions?.[s.id]; if (p) permissions[s.id] = { view:!!p.view, edit:!!p.edit, create:!!p.create };
+    }
+    setModal({ mode:"edit", id:u.id, email:u.email, full_name:u.full_name || "", role:u.role, permissions, active:u.active !== false });
+  }
+
+  function togglePerm(sectionId, level) {
+    setModal(m => {
+      const cur = m.permissions[sectionId];
+      const next = { ...cur, [level]: !cur[level] };
+      // Editing or creating implies being able to view the section.
+      if ((level === "edit" || level === "create") && next[level]) next.view = true;
+      if (level === "view" && !next.view) { next.edit = false; next.create = false; }
+      return { ...m, permissions: { ...m.permissions, [sectionId]: next } };
+    });
+  }
+  function setAll(value) {
+    setModal(m => ({ ...m, permissions: Object.fromEntries(PERMISSION_SECTIONS.map(s => [s.id, { view:value, edit:value, create:value }])) }));
+  }
+
+  async function save() {
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      if (modal.mode === "new") {
+        await api("invite", { email: modal.email.trim(), full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions });
+        setNotice(`Invitation sent to ${modal.email.trim()}.`);
+      } else {
+        await api("update", { id: modal.id, full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions, active: modal.active });
+        setNotice("User updated.");
+      }
+      setModal(null);
+      await load();
+    } catch (e) { setError(e.message); }
+    setBusy(false);
+  }
+
+  async function toggleActive(u) {
+    setBusy(true); setError(null); setNotice(null);
+    try { await api("update", { id: u.id, active: !(u.active !== false) }); await load(); }
+    catch (e) { setError(e.message); }
+    setBusy(false);
+  }
+
+  async function sendReset(u) {
+    setError(null); setNotice(null);
+    const { error } = await supabase.auth.resetPasswordForEmail(u.email, { redirectTo: window.location.origin + "/?reset=1" });
+    if (error) setError(error.message); else setNotice(`Password reset email sent to ${u.email}.`);
+  }
+
+  const td = { padding:"10px 12px", fontSize:13, borderBottom:"1px solid #f3f3f3", textAlign:"left", verticalAlign:"middle" };
+  const th = { ...td, fontSize:11, fontWeight:600, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em" };
+
+  function permSummary(u) {
+    if (u.role === "admin") return "Full access (admin)";
+    const ids = PERMISSION_SECTIONS.filter(s => u.permissions?.[s.id]?.view).map(s => s.label);
+    return ids.length ? ids.join(", ") : "No access";
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:12 }}>
+        <Btn primary onClick={openNew}>+ New user</Btn>
+      </div>
+      {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
+      {notice && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{notice}</div>}
+
+      <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr>
+            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>Status</th><th style={th}></th>
+          </tr></thead>
+          <tbody>
+            {loading ? (
+              <tr><td style={td} colSpan={6}>Loading…</td></tr>
+            ) : users.length === 0 ? (
+              <tr><td style={td} colSpan={6}>No users yet.</td></tr>
+            ) : users.map(u => (
+              <tr key={u.id}>
+                <td style={td}>{u.email}</td>
+                <td style={td}>{u.full_name || "—"}</td>
+                <td style={td}>
+                  <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: u.role==="admin" ? "#EAF3DE" : "#f1f1f1", color: u.role==="admin" ? "#3B6D11" : "#888" }}>{u.role}</span>
+                </td>
+                <td style={{ ...td, color:"#888", maxWidth:280 }}>{permSummary(u)}</td>
+                <td style={td}>{u.active !== false ? <span style={{ color:"#3B6D11" }}>Active</span> : <span style={{ color:"#b91c1c" }}>Inactive</span>}</td>
+                <td style={{ ...td, whiteSpace:"nowrap", textAlign:"right" }}>
+                  <button onClick={() => openEdit(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Edit</button>
+                  <button onClick={() => sendReset(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Send reset</button>
+                  <button onClick={() => toggleActive(u)} disabled={busy} style={{ padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12, color: u.active !== false ? "#b91c1c" : "#3B6D11" }}>{u.active !== false ? "Deactivate" : "Activate"}</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, padding:20 }} onClick={() => !busy && setModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:560, maxHeight:"90vh", overflowY:"auto", padding:24 }}>
+            <h2 style={{ fontSize:18, fontWeight:700, margin:"0 0 16px" }}>{modal.mode === "new" ? "Invite new user" : "Edit user"}</h2>
+            <label style={{ fontSize:12, fontWeight:600, color:"#888" }}>Email</label>
+            <input style={{ ...authInp, marginTop:4 }} type="email" value={modal.email} disabled={modal.mode === "edit"} onChange={e => setModal(m => ({ ...m, email: e.target.value }))} placeholder="user@example.com" />
+            <label style={{ fontSize:12, fontWeight:600, color:"#888" }}>Full name</label>
+            <input style={{ ...authInp, marginTop:4 }} value={modal.full_name} onChange={e => setModal(m => ({ ...m, full_name: e.target.value }))} placeholder="Optional" />
+            <label style={{ fontSize:12, fontWeight:600, color:"#888" }}>Role</label>
+            <select style={{ ...authInp, marginTop:4 }} value={modal.role} onChange={e => setModal(m => ({ ...m, role: e.target.value }))}>
+              <option value="member">Member</option>
+              <option value="admin">Admin (full access)</option>
+            </select>
+
+            {modal.role === "admin" ? (
+              <div style={{ background:"#EAF3DE", border:"1px solid #cfe3b6", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#3B6D11", margin:"6px 0 12px" }}>
+                Admins have full access to every section, including user management.
+              </div>
+            ) : (
+              <>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", margin:"14px 0 6px" }}>
+                  <label style={{ fontSize:12, fontWeight:600, color:"#888" }}>Permissions per section</label>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <button onClick={() => setAll(true)} style={{ padding:"3px 8px", borderRadius:6, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:11 }}>Select all</button>
+                    <button onClick={() => setAll(false)} style={{ padding:"3px 8px", borderRadius:6, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:11 }}>Clear</button>
+                  </div>
+                </div>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead><tr>
+                    <th style={{ ...th, padding:"6px 8px" }}>Section</th>
+                    {PERM_LEVELS.map(l => <th key={l} style={{ ...th, padding:"6px 8px", textAlign:"center", width:64 }}>{l}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {PERMISSION_SECTIONS.map(s => (
+                      <tr key={s.id}>
+                        <td style={{ ...td, padding:"6px 8px" }}>{s.icon} {s.label}</td>
+                        {PERM_LEVELS.map(l => (
+                          <td key={l} style={{ ...td, padding:"6px 8px", textAlign:"center" }}>
+                            <input type="checkbox" checked={!!modal.permissions[s.id][l]} onChange={() => togglePerm(s.id, l)} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:18 }}>
+              <button onClick={() => setModal(null)} disabled={busy} style={{ padding:"9px 16px", borderRadius:8, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:13 }}>Cancel</button>
+              <Btn primary disabled={busy || !modal.email} onClick={save}>{busy ? "Saving…" : modal.mode === "new" ? "Send invitation" : "Save changes"}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined);
+  const [profile, setProfile] = useState(undefined); // undefined=loading, null=none, obj=loaded
+  const [pwRecovery, setPwRecovery] = useState(false); // invite / reset-password landing
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2647,10 +2913,43 @@ export default function App() {
   const toastRef = useRef(null);
 
   useEffect(() => {
+    // Invite/reset links land back here; show the "set your password" panel.
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("invited") || sp.get("reset")) setPwRecovery(true);
+    } catch {}
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") setPwRecovery(true);
+      setSession(session);
+    });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Load the current user's profile (role + per-section permissions) alongside session.
+  useEffect(() => {
+    if (!session) { setProfile(session === null ? null : undefined); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
+      if (!cancelled) setProfile(data || null);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const isAdmin = profile?.role === "admin";
+  const can = useCallback((id, level = "view") =>
+    (profile?.role === "admin") || !!profile?.permissions?.[id]?.[level], [profile]);
+
+  // Keep `page` pointed at a section the user is actually allowed to see.
+  useEffect(() => {
+    if (!profile) return;
+    const allowed = (id) => id === "users" ? isAdmin : can(id, "view");
+    if (!allowed(page)) {
+      const first = SECTION_IDS.find(allowed);
+      if (first) setPage(first);
+    }
+  }, [profile, page, isAdmin, can]);
 
   const loadData = useCallback(async () => {
     const { data, error } = await supabase.from("storages").select("*").order("date_opened", { ascending: false });
@@ -5556,7 +5855,23 @@ export default function App() {
   const impTabStyle = (t) => ({ flex:1, fontSize:13, padding:"8px", borderRadius:7, cursor:"pointer", border:"none", background: importTab === t ? "#fff" : "none", color: importTab === t ? "#111" : "#888", fontWeight: importTab === t ? 600 : 400, boxShadow: importTab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none" });
 
   if (session === undefined) return null;
+  // Invite / password-reset landing: user arrived from an email link.
+  if (pwRecovery) {
+    if (!session) return null; // session still being established from the link token
+    return <SetPasswordScreen onDone={() => { setPwRecovery(false); window.history.replaceState({}, "", window.location.pathname); }} />;
+  }
   if (!session) return <LoginScreen />;
+  if (profile === undefined) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", flexDirection:"column", gap:12, color:"#888", fontFamily:"system-ui,sans-serif" }}>
+      <div style={{ width:32, height:32, border:"3px solid #f0f0f0", borderTop:"3px solid #111", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <span style={{ fontSize:14 }}>Loading…</span>
+    </div>
+  );
+  if (profile && profile.active === false) return <DeactivatedScreen onSignOut={() => supabase.auth.signOut()} message="Your account is deactivated. Contact an administrator for access." />;
+  // Signed in but no sections granted yet (no profile row, or empty permissions).
+  const hasAnyAccess = isAdmin || SECTION_IDS.some(id => id === "users" ? isAdmin : can(id, "view"));
+  if (!hasAnyAccess) return <DeactivatedScreen onSignOut={() => supabase.auth.signOut()} />;
 
   if (loading) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", flexDirection:"column", gap:12, color:"#888", fontFamily:"system-ui,sans-serif" }}>
@@ -5576,7 +5891,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} lang={lang} setLang={setLang} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} lang={lang} setLang={setLang} can={can} isAdmin={isAdmin} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
@@ -5590,19 +5905,19 @@ export default function App() {
           <div style={{ fontSize:13, color:"#999", marginTop:2 }}>{PAGE_META[page].sub}</div>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          {page === "storage" && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
-          {page === "storage" && <Btn onClick={openAdd}>+ Unit</Btn>}
-          {page === "storage" && storageTab === "storage_units" && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
-          {page === "drivers" && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
-          {page === "brokers" && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
-          {page === "settlements" && !csDetailId && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
-          {page === "trips" && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
-          {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
-          {page === "extras" && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
-          {page === "payments" && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
-          {page === "compliance" && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
-          {page === "billing" && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
-          {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
+          {page === "storage" && can("storage","create") && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
+          {page === "storage" && can("storage","create") && <Btn onClick={openAdd}>+ Unit</Btn>}
+          {page === "storage" && storageTab === "storage_units" && can("storage","create") && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
+          {page === "drivers" && can("drivers","create") && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
+          {page === "brokers" && can("brokers","create") && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
+          {page === "settlements" && !csDetailId && can("settlements","create") && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
+          {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
+          {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
+          {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
+          {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
+          {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
+          {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
+          {(page === "dispatching" || page === "jobs" || page === "calendario") && (can("jobs","create") || can("dispatching","create") || can("calendario","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
       </div>
 
@@ -5667,6 +5982,9 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ───────────────────────── USERS (admin) ───────────────────────── */}
+      {page === "users" && isAdmin && <UsersSection session={session} />}
 
       {/* ───────────────────────── DISPATCHING ───────────────────────── */}
       {page === "dispatching" && (
