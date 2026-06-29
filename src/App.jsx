@@ -2099,7 +2099,6 @@ export default function App() {
   const [toast, setToast] = useState(null);               // brief success notification
   const fileRef = useRef();
   const autoGenRef = useRef(false);
-  const tripCompleteRef = useRef(false);
   const toastRef = useRef(null);
 
   useEffect(() => {
@@ -3230,18 +3229,9 @@ export default function App() {
 
   const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length]);
 
-  // Auto-complete a trip once all its jobs are delivered.
-  useEffect(() => {
-    if (!session || tripsMissing || tripCompleteRef.current) return;
-    const toComplete = trips.filter(t => TRIP_ACTIVE(t.status) && tripCalc(t).allDelivered).map(t => t.id);
-    if (!toComplete.length) return;
-    tripCompleteRef.current = true;
-    (async () => {
-      await supabase.from("trips").update({ status: "completed" }).in("id", toComplete);
-      await loadTrips();
-      tripCompleteRef.current = false;
-    })();
-  }, [session, tripsMissing, trips, jobs, tripCalc, loadTrips]);
+  // Trip status is MANUAL only — never auto-changed from job delivery state.
+  // The `allDelivered` flag (from tripCalc) is used solely to surface a
+  // non-blocking "ready to complete?" suggestion inside the trip detail.
 
   // ── Extras & commissions derived data ──
   const empById = useMemo(() => { const m = {}; for (const e of employees) m[e.id] = e; return m; }, [employees]);
@@ -3936,7 +3926,10 @@ export default function App() {
     if (error) { window.alert(error.message); return; }
     setShowTripModal(false); loadTrips(); loadJobs();
   }
+  // Manual trip status change — always dispatcher-initiated and confirmed.
   async function setTripStatus(t, status) {
+    const label = (TRIP_STATUS[status]?.l) || status;
+    if (!window.confirm(`¿Cambiar el estado del trip ${t.trip_number || "#"+t.id} a "${label}"?`)) return;
     await supabase.from("trips").update({ status }).eq("id", t.id); loadTrips();
   }
   async function deleteTrip(t) {
@@ -8595,7 +8588,8 @@ export default function App() {
           <Modal title={`Trip ${t.trip_number || "#"+t.id}`} onClose={() => { setTripDetailId(null); setTripAction(null); setStorageDropJob(null); setTripWaLink(null); }}
             footer={<>
               {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Salir (en tránsito)</Btn>}
-              {(inTransit || c.allDelivered) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Completar trip…</Btn>}
+              {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Completar trip…</Btn>}
+              {TRIP_ACTIVE(t.status) && <Btn danger onClick={() => setTripStatus(t, "cancelled")}>Cancelar trip</Btn>}
               <Btn onClick={() => { setTripDetailId(null); setTripAction(null); }}>Cerrar</Btn>
             </>}>
             <div style={{ fontSize:12.5, color:"#888", marginTop:-4, marginBottom:10 }}>
@@ -8622,6 +8616,17 @@ export default function App() {
               </div>
             ) : <div style={{ fontSize:12, color:"#999", marginBottom:6 }}>Camión sin capacidad cargada · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
             {over > 0 && <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:8, padding:"8px 11px", fontSize:12.5, fontWeight:700, color:"#A32D2D", margin:"8px 0" }}>⚠️ Over capacity by {over.toLocaleString()} CF</div>}
+
+            {/* Read-only delivery progress indicator (never changes trip status) */}
+            {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>📦 Entregados: <b style={{ color: c.allDelivered ? "#3B6D11" : "#111" }}>{c.delivered}/{c.count}</b>{c.delivered < c.count ? ` · ${c.count - c.delivered} pendiente(s)` : ""}</div>}
+
+            {/* Non-blocking suggestion — trip stays as-is until the dispatcher acts */}
+            {c.allDelivered && TRIP_ACTIVE(t.status) && (
+              <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"10px 12px", margin:"8px 0", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ Todos los jobs entregados — ¿marcar el trip como completado?</span>
+                <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Marcar completado</Btn>
+              </div>
+            )}
 
             {/* in-transit action buttons */}
             {inTransit && !tripAction && !storageDropJob && (
