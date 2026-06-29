@@ -398,6 +398,18 @@ const I18N_ES = {
   "Complete trip…": "Completar trip…",
   "Cancel trip": "Cancelar trip",
   "Mark completed": "Marcar completado",
+  "Mark as In Transit": "Marcar en tránsito",
+  "Mark as Loading": "Marcar cargando",
+  "Mark as Completed": "Marcar completado",
+  "Reopen (mark as In Transit)": "Reabrir (marcar en tránsito)",
+  "Reopen (mark as Loading)": "Reabrir (marcar cargando)",
+  "Cancel Trip": "Cancelar trip",
+  "New trips start as Loading": "Los trips nuevos empiezan en Cargando",
+  "Manage": "Gestionar",
+  "Add job to trip": "Agregar job al trip",
+  "Unplanned pickup": "Pickup no previsto",
+  "No jobs available.": "Sin jobs disponibles.",
+  "No jobs on this trip.": "Sin jobs en este trip.",
   "Add event": "Agregar evento",
   "Save event": "Guardar evento",
   "Delete job": "Eliminar job",
@@ -1735,8 +1747,8 @@ function tripUpdateWaText(trip, g, totalCf) {
 const tripUpdateWaLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripUpdateWaText(...args));
 // Trip event-log metadata: label + icon + who-by-default.
 const TRIP_EVENT_META = {
-  job_added:          { l:"Job agregado", icon:"➕" },
-  job_removed:        { l:"Job quitado", icon:"➖" },
+  job_added:          { l:"Job added", icon:"➕" },
+  job_removed:        { l:"Job removed", icon:"➖" },
   storage_drop:       { l:"Dropped at storage", icon:"📦" },
   storage_pickup:     { l:"Loaded from storage", icon:"🔼" },
   unplanned_pickup:   { l:"Unplanned pickup", icon:"🆕" },
@@ -4116,7 +4128,7 @@ export default function App() {
     setWhPickerSaving(false);
     if (error) { window.alert(error.message); return; }
     setWhPicker(null);
-    showToast(`Job ${tmpl.job_number || ""} agregado a ${name}`.replace(/\s+/g, " ").trim());
+    showToast(`Job ${tmpl.job_number || ""} added to ${name}`.replace(/\s+/g, " ").trim());
     loadJobs();
   }
   // Top-level: open the "add a job to a unit" picker.
@@ -4684,6 +4696,15 @@ export default function App() {
     if (!window.confirm(`Change the status of trip ${t.trip_number || "#"+t.id} to "${label}"?`)) return;
     await supabase.from("trips").update({ status }).eq("id", t.id); loadTrips();
   }
+  // Manual trip status change from the edit form — applies immediately on button
+  // click (no confirm) and persists to Supabase. The ONLY automatic rule is that
+  // a brand-new trip is created as "loading"; nothing else ever changes status.
+  async function setEditTripStatus(status) {
+    if (!editingTripId) return;
+    setTripForm(f => ({ ...f, status }));
+    await supabase.from("trips").update({ status }).eq("id", editingTripId);
+    loadTrips();
+  }
   async function deleteTrip(t) {
     if (!window.confirm(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`)) return;
     await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null }).eq("trip_id", t.id);
@@ -4726,8 +4747,8 @@ export default function App() {
     const newTotal = tripCalc(trip).totalCf + parseCf(rows[0].volume);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
-    setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} agregado` });
-    showToast(`Job agregado al trip`);
+    setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} added` });
+    showToast(`Job added to the trip`);
   }
   // Drop a job at a storage unit / warehouse: unlink from trip, set location, status in_storage.
   async function tripDropAtStorage(trip, k, target) {
@@ -4753,7 +4774,7 @@ export default function App() {
     await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: jobs.find(j => jobKey(j) === k)?.job_number || "" });
     await loadJobs();
     setTripBusy(false); setTripAction(null);
-    showToast(`Job cargado al trip`);
+    showToast(`Job loaded onto the trip`);
   }
   // Create an unplanned new job and immediately add it to the trip.
   async function saveUnplannedPickup(trip) {
@@ -4774,7 +4795,7 @@ export default function App() {
     const newTotal = tripCalc(trip).totalCf + parseCf(f.volume);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setUnplannedForm(EMPTY_UNPLANNED);
-    setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Pickup no previsto: ${f.job_number || f.customer || ""}` });
+    setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
     showToast("Unplanned pickup added");
   }
   // Complete a trip: optionally drop the still-on-truck jobs at a storage, then mark completed.
@@ -4791,7 +4812,7 @@ export default function App() {
     await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id);
     setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget("");
     loadTrips(); loadJobs();
-    showToast(`Trip ${trip.trip_number || trip.id} completado`);
+    showToast(`Trip ${trip.trip_number || trip.id} completed`);
   }
 
   // ── Manual job timeline events ──
@@ -4820,7 +4841,7 @@ export default function App() {
         loadJobs();
       }
     }
-    showToast("Evento agregado");
+    showToast("Event added");
   }
   async function deleteJobEvent(ev) {
     if (!window.confirm("Delete this timeline event?")) return;
@@ -5743,7 +5764,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {dispatchGroups.length === 0 ? (
-                    <tr><td colSpan={17} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs para despachar en este filtro.</td></tr>
+                    <tr><td colSpan={17} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>No jobs to dispatch in this filter.</td></tr>
                   ) : dispatchGroups.map(g => {
                     const stores = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
                     const storeLabel = stores.join(" · ");
@@ -6489,14 +6510,14 @@ export default function App() {
                           <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "no truck"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
                         </div>
                         <div style={{ display:"flex", gap:6 }}>
-                          <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Gestionar</Btn>
+                          <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Manage</Btn>
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit</Btn>
                         </div>
                       </div>
                       {c.cap > 0 ? (
                         <div style={{ marginBottom:10 }}>
                           <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:4 }}>
-                            <b style={{ color: occColor(c.occPct || 0) }}>{c.occPct}% ocupado</b>
+                            <b style={{ color: occColor(c.occPct || 0) }}>{c.occPct}% occupied</b>
                             <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
                           </div>
                           <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}><div style={{ background: occColor(c.occPct || 0), height:12, width:`${Math.min(100, c.occPct || 0)}%`, transition:"width .4s" }} /></div>
@@ -7153,7 +7174,7 @@ export default function App() {
               ))
             ) : compTab === "drivers" ? (
               driversList.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin drivers. Se cargan al asignarlos a jobs.</div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No drivers. They appear when assigned to jobs.</div>
               ) : driversList.map(dr => (
                 <div key={dr.id} style={cardStyle}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
@@ -7516,7 +7537,7 @@ export default function App() {
                 const counts = {}; const seen = new Set();
                 for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const s = j.status || "scheduled"; counts[s] = (counts[s]||0)+1; }
                 const total = Object.values(counts).reduce((a,b)=>a+b,0);
-                if (!total) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Sin jobs</p>;
+                if (!total) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>No jobs</p>;
                 let acc = 0; const segs = [];
                 for (const st of STATUSES) { const c = counts[st.v]||0; if (!c) continue; const from = acc/total*360; acc += c; const to = acc/total*360; segs.push(`${st.dot} ${from}deg ${to}deg`); }
                 return (
@@ -7663,7 +7684,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {unitJobRows.length === 0 ? (
-                    <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs activos en unidades alquiladas.</td></tr>
+                    <tr><td colSpan={12} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>No active jobs in rented units.</td></tr>
                   ) : unitJobRows.slice(listPage*PAGE_SIZE, (listPage+1)*PAGE_SIZE).map(j => {
                     const s = j.storage || {};
                     return (
@@ -7724,7 +7745,7 @@ export default function App() {
               {cap != null ? (
                 <div>
                   <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:6 }}>
-                    <span style={{ fontWeight:700, color:occColor(pct) }}>{pct}% ocupado</span>
+                    <span style={{ fontWeight:700, color:occColor(pct) }}>{pct}% occupied</span>
                     <span style={{ color:"#888" }}>{Math.round(used).toLocaleString()} used · {Math.round(free).toLocaleString()} free · {cap.toLocaleString()} CF total</span>
                   </div>
                   <div style={{ background:"#f0f0f0", borderRadius:8, height:16, overflow:"hidden" }}>
@@ -7751,7 +7772,7 @@ export default function App() {
                   </thead>
                   <tbody>
                     {byJob.length === 0 ? (
-                      <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin jobs activos en este warehouse.</td></tr>
+                      <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>No active jobs in this warehouse.</td></tr>
                     ) : byJob.map(j => (
                       <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
@@ -9355,7 +9376,7 @@ export default function App() {
                   <input style={inp} value={payJobSearch} onChange={e => setPayJobSearch(e.target.value)} placeholder="Search by job # or client…" />
                   {q && (
                     <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:160, overflowY:"auto" }}>
-                      {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>Sin resultados.</div>
+                      {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>No results.</div>
                         : matches.map(g => (
                           <button key={g.key} onClick={() => { setF({ job_id: g.repId }); setPayJobSearch(""); }} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
                             <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(no #)"}</span> · {g.customer || "—"}
@@ -9788,7 +9809,7 @@ export default function App() {
           <Modal title={`Trip ${t.trip_number || "#"+t.id}`} onClose={() => { setTripDetailId(null); setTripAction(null); setStorageDropJob(null); setTripWaLink(null); }}
             footer={<>
               {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart (in transit)</Btn>}
-              {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Completar trip…</Btn>}
+              {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Complete trip…</Btn>}
               {TRIP_ACTIVE(t.status) && <Btn danger onClick={() => setTripStatus(t, "cancelled")}>Cancel trip</Btn>}
               <Btn onClick={() => { setTripDetailId(null); setTripAction(null); }}>Close</Btn>
             </>}>
@@ -9809,12 +9830,12 @@ export default function App() {
             {c.cap > 0 ? (
               <div style={{ marginBottom:6 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
-                  <b style={{ color: occColor(pct) }}>{pct}% ocupado</b>
+                  <b style={{ color: occColor(pct) }}>{pct}% occupied</b>
                   <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
                 </div>
                 <div style={{ background:"#f0f0f0", borderRadius:6, height:14, overflow:"hidden" }}><div style={{ background: occColor(pct), height:14, width:`${Math.min(100, pct)}%`, transition:"width .4s" }} /></div>
               </div>
-            ) : <div style={{ fontSize:12, color:"#999", marginBottom:6 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
+            ) : <div style={{ fontSize:12, color:"#999", marginBottom:6 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF on the trip</div>}
             {over > 0 && <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:8, padding:"8px 11px", fontSize:12.5, fontWeight:700, color:"#A32D2D", margin:"8px 0" }}>⚠️ Over capacity by {over.toLocaleString()} CF</div>}
 
             {/* Read-only delivery progress indicator (never changes trip status) */}
@@ -9824,7 +9845,7 @@ export default function App() {
             {c.allDelivered && TRIP_ACTIVE(t.status) && (
               <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"10px 12px", margin:"8px 0", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ All jobs delivered — mark trip as completed?</span>
-                <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Marcar completado</Btn>
+                <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Mark completed</Btn>
               </div>
             )}
 
@@ -9833,17 +9854,17 @@ export default function App() {
               <div style={{ display:"flex", gap:8, margin:"12px 0", flexWrap:"wrap" }}>
                 <Btn primary onClick={() => { setTripAction("add"); setTripAddJobSearch(""); }} style={bigBtn}>➕ Add job</Btn>
                 <Btn onClick={() => setTripAction("pickup")} style={bigBtn}>🔼 Load from storage</Btn>
-                <Btn onClick={() => { setUnplannedForm(EMPTY_UNPLANNED); setTripAction("unplanned"); }} style={bigBtn}>🆕 Pick up no previsto</Btn>
+                <Btn onClick={() => { setUnplannedForm(EMPTY_UNPLANNED); setTripAction("unplanned"); }} style={bigBtn}>🆕 Unplanned pickup</Btn>
               </div>
             )}
 
             {/* action panel: add existing job */}
             {tripAction === "add" && (
               <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Add job al trip</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Add job to trip</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
                 <input style={inp} value={tripAddJobSearch} onChange={e => setTripAddJobSearch(e.target.value)} placeholder="Search by job # or client…" />
                 <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:8, maxHeight:230, overflowY:"auto", background:"#fff" }}>
-                  {addableFiltered.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>Sin jobs disponibles.</div>
+                  {addableFiltered.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No jobs available.</div>
                     : addableFiltered.map(j => (
                       <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
                         <div style={{ flex:1, minWidth:0 }}>
@@ -9864,7 +9885,7 @@ export default function App() {
             {/* action panel: pick up from storage */}
             {tripAction === "pickup" && (
               <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Load a job from storage</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Load a job from storage</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
                 <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:230, overflowY:"auto", background:"#fff" }}>
                   {jobsInStorage.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No hay jobs en storage para cargar.</div>
                     : jobsInStorage.map(j => (
@@ -9883,7 +9904,7 @@ export default function App() {
             {/* action panel: unplanned pickup quick form */}
             {tripAction === "unplanned" && (
               <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Pick up no previsto</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Pick up no previsto</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                   <Field label="Job #"><input style={inp} value={unplannedForm.job_number} onChange={e => setU({ job_number:e.target.value })} placeholder="Job #" /></Field>
                   <Field label="Client"><input style={inp} value={unplannedForm.customer} onChange={e => setU({ customer:e.target.value })} placeholder="Client" /></Field>
@@ -9895,14 +9916,14 @@ export default function App() {
                   <Field label="Sticker"><input style={inp} list="sticker-colors-list" value={unplannedForm.sticker_color} onChange={e => setU({ sticker_color:e.target.value })} placeholder="Color" /></Field>
                   <Field label="Lot #"><input style={inp} value={unplannedForm.lot_number} onChange={e => setU({ lot_number:e.target.value })} placeholder="Lot" /></Field>
                 </div>
-                <div style={{ marginTop:10, textAlign:"right" }}><Btn primary disabled={tripBusy || (!unplannedForm.job_number && !unplannedForm.customer)} onClick={() => saveUnplannedPickup(t)}>Add al trip</Btn></div>
+                <div style={{ marginTop:10, textAlign:"right" }}><Btn primary disabled={tripBusy || (!unplannedForm.job_number && !unplannedForm.customer)} onClick={() => saveUnplannedPickup(t)}>Add to trip</Btn></div>
               </div>
             )}
 
             {/* per-job storage drop panel */}
             {storageDropJob && storageDropJob.tripId === t.id && (
               <div style={{ border:"1px solid #EF9F27", borderRadius:10, padding:"12px", margin:"10px 0", background:"#FFF8F0" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Drop at storage: {storageDropJob.label}</b><button onClick={() => setStorageDropJob(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Drop at storage: {storageDropJob.label}</b><button onClick={() => setStorageDropJob(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                   <select id="drop-target-sel" style={{ ...inp, flex:1, minWidth:180 }} defaultValue="">
                     <option value="">— Choose storage / warehouse —</option>
@@ -9916,7 +9937,7 @@ export default function App() {
             {/* stops */}
             <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"6px 0 6px" }}>Stops ({c.count})</div>
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-              {c.jobsIn.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"8px" }}>Sin jobs en este trip.</div>
+              {c.jobsIn.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"8px" }}>No jobs on this trip.</div>
                 : c.jobsIn.map((j, i) => {
                   const delivered = !!j.date_out || j.status === "delivered";
                   const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
@@ -9994,10 +10015,10 @@ export default function App() {
         ];
         const dur = t.departure_date ? Math.max(0, Math.round((new Date(today() + "T00:00:00") - new Date(t.departure_date + "T00:00:00")) / 86400000)) : null;
         return (
-          <Modal title={`Completar trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
+          <Modal title={`Complete trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
             footer={<>
               <Btn onClick={() => setTripCompleteModal(null)}>Cancel</Btn>
-              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(jobKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Marcar completado"}</Btn>
+              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(jobKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
               {[
@@ -10052,14 +10073,31 @@ export default function App() {
             </Field>
             <Field label="Driver">
               <select style={inp} value={tripForm.driver_id} onChange={e => setTripForm(f => ({...f, driver_id:e.target.value}))}>
-                <option value="">— Sin driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="">— No driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </Field>
-            <Field label="Status">
-              <div style={{ ...inp, display:"flex", alignItems:"center", gap:8, background:"#fafafa", color:"#888" }}>
-                <TripBadge status={editingTripId ? (tripForm.status || "loading") : "loading"} />
-                <span style={{ fontSize:11 }}>se cambia con los botones del trip</span>
-              </div>
+            <Field label="Status" full>
+              {editingTripId ? (() => {
+                const st = tripForm.status || "loading";
+                return (
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <TripBadge status={st} />
+                    {st === "loading" && <Btn onClick={() => setEditTripStatus("in_transit")}>Mark as In Transit</Btn>}
+                    {st === "in_transit" && <>
+                      <Btn onClick={() => setEditTripStatus("loading")}>Mark as Loading</Btn>
+                      <Btn primary onClick={() => setEditTripStatus("completed")}>Mark as Completed</Btn>
+                    </>}
+                    {st === "completed" && <Btn onClick={() => setEditTripStatus("in_transit")}>Reopen (mark as In Transit)</Btn>}
+                    {st === "cancelled" && <Btn onClick={() => setEditTripStatus("loading")}>Reopen (mark as Loading)</Btn>}
+                    {st !== "cancelled" && <Btn danger onClick={() => setEditTripStatus("cancelled")}>Cancel Trip</Btn>}
+                  </div>
+                );
+              })() : (
+                <div style={{ ...inp, display:"flex", alignItems:"center", gap:8, background:"#fafafa", color:"#888" }}>
+                  <TripBadge status="loading" />
+                  <span style={{ fontSize:11 }}>New trips start as Loading</span>
+                </div>
+              )}
             </Field>
           </div>
 
@@ -10068,11 +10106,11 @@ export default function App() {
               <>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:5 }}>
                   <b style={{ color: occColor(pct) }}>{pct}% · {Math.round(loadCf).toLocaleString()} CF</b>
-                  <span style={{ color: remaining < 0 ? "#A32D2D" : "#888" }}>Quedan {Math.round(remaining).toLocaleString()} CF</span>
+                  <span style={{ color: remaining < 0 ? "#A32D2D" : "#888" }}>{Math.round(remaining).toLocaleString()} CF left</span>
                 </div>
                 <div style={{ background:"#e8e8e8", borderRadius:6, height:10, overflow:"hidden" }}><div style={{ background:occColor(pct), height:10, width:`${pct}%` }} /></div>
               </>
-            ) : <div style={{ fontSize:12, color:"#888" }}>Set the truck capacity to see occupancy · {Math.round(loadCf).toLocaleString()} CF seleccionados</div>}
+            ) : <div style={{ fontSize:12, color:"#888" }}>Set the truck capacity to see occupancy · {Math.round(loadCf).toLocaleString()} CF selected</div>}
           </div>
 
           <SectionLabel>Stops — delivery order{tripForm.job_keys.length ? ` (${tripForm.job_keys.length})` : ""}</SectionLabel>
@@ -10105,7 +10143,7 @@ export default function App() {
                 const otherTrip = j.trip_id && j.trip_id !== editingTripId ? tripById[j.trip_id] : null;
                 rows.push({ j, k, otherTrip });
               }
-              if (!rows.length) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>Sin resultados.</div>;
+              if (!rows.length) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No results.</div>;
               return rows.slice(0, 50).map(({ j, k, otherTrip }) => {
                 const checked = tripForm.job_keys.includes(k);
                 return (
@@ -10114,7 +10152,7 @@ export default function App() {
                     <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
                     <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                     <span style={{ color:"#888" }}>{Math.round(parseCf(j.volume))} CF</span>
-                    {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="On another active trip — will move here">en {otherTrip.trip_number || "#"+otherTrip.id}</span>}
+                    {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="On another active trip — will move here">on {otherTrip.trip_number || "#"+otherTrip.id}</span>}
                   </label>
                 );
               });
@@ -10141,7 +10179,7 @@ export default function App() {
             </Field>
             <Field label="Driver">
               <select style={inp} value={csForm.driver_id} onChange={e => setCsForm(f => ({...f, driver_id:e.target.value}))}>
-                <option value="">— Sin driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="">— No driver —</option>{driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </Field>
             <Field label="Status">
@@ -10229,7 +10267,7 @@ export default function App() {
           const map = new Map();
           for (const j of jobs) { if (!predicate(j)) continue; const k = jobKey(j); if (!map.has(k)) map.set(k, j); }
           const rows = [...map.values()];
-          if (!rows.length) return <div style={{ fontSize:13, color:"#bbb", padding:"10px 0" }}>Sin jobs.</div>;
+          if (!rows.length) return <div style={{ fontSize:13, color:"#bbb", padding:"10px 0" }}>No jobs.</div>;
           return (
             <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:8 }}>
               {rows.map(j => (
