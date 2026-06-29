@@ -4106,17 +4106,19 @@ export default function App() {
   }
   async function saveTrip() {
     setTripSaving(true);
+    // NOTE: status is deliberately NOT part of the edit payload. Trip status only
+    // ever changes through the explicit buttons (setTripStatus / completeTrip).
+    // A new trip always starts as "loading".
     const payload = {
       trip_number: tripForm.trip_number || null,
       truck_id: tripForm.truck_id ? Number(tripForm.truck_id) : null,
       driver_id: tripForm.driver_id ? Number(tripForm.driver_id) : null,
       departure_date: tripForm.departure_date || null,
-      status: tripForm.status || "loading",
       notes: tripForm.notes || null,
     };
     let tripId = editingTripId, error = null;
     if (editingTripId) ({ error } = await supabase.from("trips").update(payload).eq("id", editingTripId));
-    else { const { data, error: insErr } = await supabase.from("trips").insert([payload]).select("id").single(); error = insErr; tripId = data?.id; }
+    else { const { data, error: insErr } = await supabase.from("trips").insert([{ ...payload, status: "loading" }]).select("id").single(); error = insErr; tripId = data?.id; }
     if (!error && tripId) {
       const wanted = tripForm.job_keys;
       // Assign trip_id + stop order in the chosen sequence; clear de-selected jobs.
@@ -9401,9 +9403,10 @@ export default function App() {
               </select>
             </Field>
             <Field label="Estado">
-              <select style={inp} value={tripForm.status} onChange={e => setTripForm(f => ({...f, status:e.target.value}))}>
-                {Object.entries(TRIP_STATUS).map(([v,o]) => <option key={v} value={v}>{o.l}</option>)}
-              </select>
+              <div style={{ ...inp, display:"flex", alignItems:"center", gap:8, background:"#fafafa", color:"#888" }}>
+                <TripBadge status={editingTripId ? (tripForm.status || "loading") : "loading"} />
+                <span style={{ fontSize:11 }}>se cambia con los botones del trip</span>
+              </div>
             </Field>
           </div>
 
