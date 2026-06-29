@@ -770,6 +770,24 @@ do $$ begin alter publication supabase_realtime add table public.trucks; excepti
 do $$ begin alter publication supabase_realtime add table public.trips; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.trip_events; exception when others then null; end $$;`;
 
+// Manual per-job timeline events (logged directly on a job, no formal trip needed).
+const JOB_EVENTS_SQL = `create table if not exists public.job_events (
+  id bigint generated always as identity primary key,
+  job_id bigint references public.storage_jobs(id) on delete cascade,
+  event_date date,
+  event_type text,
+  notes text,
+  storage_id bigint references public.storages(id),
+  storage_label text,
+  trip_ref text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.job_events enable row level security;
+drop policy if exists "job_events_all" on public.job_events;
+create policy "job_events_all" on public.job_events for all to anon, authenticated using (true) with check (true);
+do $$ begin alter publication supabase_realtime add table public.job_events; exception when others then null; end $$;`;
+
 // Extras & Commissions: employees (reps) + per-job extras with commission split.
 const EXTRAS_SQL = `create table if not exists public.employees (
   id bigint generated always as identity primary key,
@@ -1206,6 +1224,21 @@ const TRIP_EVENT_META = {
 };
 const tripEventLabel = (v) => TRIP_EVENT_META[v]?.l || v;
 const EMPTY_UNPLANNED = { job_number:"", customer:"", volume:"", pickup_address:"", delivery_address:"", fadd:"", broker_id:"", sticker_color:"", lot_number:"" };
+
+// Manual job-timeline event types (logged directly on a job). `status` = the job
+// status this event optionally suggests; `storage` = show the storage selector.
+const JOB_EVENT_TYPES = [
+  { v:"picked_up", l:"Picked up", icon:"📦", status:"picked_up" },
+  { v:"loaded_to_truck", l:"Loaded to truck", icon:"🚚", status:"out_for_delivery", storage:true },
+  { v:"dropped_at_storage", l:"Dropped at storage", icon:"🏬", status:"in_storage", storage:true },
+  { v:"loaded_from_storage", l:"Loaded from storage to truck", icon:"🔼", storage:true },
+  { v:"delivered", l:"Delivered", icon:"✅", status:"delivered" },
+  { v:"on_hold", l:"On hold", icon:"⏸️" },
+  { v:"attempted_delivery", l:"Attempted delivery — not home", icon:"🚪" },
+  { v:"redispatched", l:"Redispatched", icon:"🔁" },
+  { v:"other", l:"Other", icon:"📝" },
+];
+const jobEventMeta = (v) => JOB_EVENT_TYPES.find(t => t.v === v) || { l: v || "Evento", icon:"•" };
 
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
@@ -1969,6 +2002,10 @@ export default function App() {
   const [tripDetailId, setTripDetailId] = useState(null);     // trip detail modal
   const [tripEvents, setTripEvents] = useState([]);
   const [tripEventsMissing, setTripEventsMissing] = useState(false);
+  // Manual job timeline events
+  const [jobEvents, setJobEvents] = useState([]);
+  const [jobEventsMissing, setJobEventsMissing] = useState(false);
+  const [jobEventForm, setJobEventForm] = useState(null);     // null = closed; else the add-event form
   const [tripLogOpen, setTripLogOpen] = useState(false);
   const [tripAddJobSearch, setTripAddJobSearch] = useState("");
   const [tripAction, setTripAction] = useState(null);         // "add" | "pickup" | "unplanned" | null
@@ -2086,6 +2123,10 @@ export default function App() {
   const loadTripEvents = useCallback(async () => {
     const { data, error } = await supabase.from("trip_events").select("*").order("created_at", { ascending: true });
     if (!error) setTripEvents(data || []);
+  }, []);
+  const loadJobEvents = useCallback(async () => {
+    const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
+    if (!error) setJobEvents(data || []);
   }, []);
   const loadExtras = useCallback(async () => {
     const { data, error } = await supabase.from("job_extras").select("*").order("created_at", { ascending: false });
@@ -2335,6 +2376,34 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session, tripsMissing, loadTripEvents]);
+
+  // Probe the job_events table (manual per-job timeline; needs storage_jobs).
+  useEffect(() => {
+    if (!session || !dbReady) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("job_events").select("id").limit(1);
+      if (cancelled) return;
+      if (!error) { loadJobEvents(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: JOB_EVENTS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadJobEvents();
+      else setJobEventsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, dbReady, loadJobEvents]);
+
+  useEffect(() => {
+    if (!session || jobEventsMissing) return;
+    const channel = supabase.channel("job-events-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_events" }, () => loadJobEvents())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, jobEventsMissing, loadJobEvents]);
 
   // Probe the truck vehicle-info columns (added after the initial Trucks release).
   useEffect(() => {
@@ -3931,6 +4000,41 @@ export default function App() {
     loadTrips(); loadJobs();
     showToast(`Trip ${trip.trip_number || trip.id} completado`);
   }
+
+  // ── Manual job timeline events ──
+  // Save a manual event on a job; optionally prompt to align the job status.
+  async function saveJobEvent(jobKeyStr, repId) {
+    const f = jobEventForm; if (!f) return;
+    const meta = jobEventMeta(f.event_type);
+    const payload = {
+      job_id: repId, event_date: f.event_date || today(), event_type: f.event_type,
+      notes: f.notes || null,
+      storage_id: f.storage_id && !String(f.storage_id).startsWith("wh:") ? Number(f.storage_id) : null,
+      storage_label: f.storage_label || null,
+      trip_ref: f.trip_ref || null, created_by: userEmail,
+    };
+    const { error } = await supabase.from("job_events").insert([payload]);
+    if (error) { window.alert(error.message); return; }
+    setJobEventForm(null);
+    await loadJobEvents();
+    // Optional status alignment (never forced).
+    if (meta.status) {
+      const ids = jobs.filter(j => jobKey(j) === jobKeyStr).map(j => j.id);
+      if (ids.length && window.confirm(`¿Actualizar el estado del job a "${statusMeta(meta.status).l}"?`)) {
+        const patch = { status: meta.status, updated_by: userEmail, updated_at: new Date().toISOString() };
+        if (meta.status === "delivered") patch.date_out = f.event_date || today();
+        await supabase.from("storage_jobs").update(patch).in("id", ids);
+        loadJobs();
+      }
+    }
+    showToast("Evento agregado");
+  }
+  async function deleteJobEvent(ev) {
+    if (!window.confirm("¿Eliminar este evento del timeline?")) return;
+    await supabase.from("job_events").delete().eq("id", ev.id);
+    loadJobEvents();
+  }
+
   // ── Extras & commissions handlers ──
   // Build a job_extras payload. For Extra CF the amount = total charged (CF + fuel)
   // and commissions are computed on the chosen base (with/without fuel surcharge).
@@ -6876,6 +6980,91 @@ export default function App() {
             );
           })()}
 
+          {(() => {
+            const partIds = jobDetail.parts.map(p => p.id);
+            const partSet = new Set(partIds);
+            const repId = Math.min(...partIds);
+            const storageTargets = [
+              ...records.filter(r => r.space_type !== "warehouse").map(r => ({ key:String(r.id), id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unidad #${r.id}` })),
+              ...WAREHOUSES.map(w => ({ key:"wh:"+w, id:null, label:`Warehouse ${w}` })),
+            ];
+            // Merge automatic trip_events + manual job_events for this job, oldest → newest.
+            const items = [];
+            if (!tripEventsMissing) for (const e of tripEvents) {
+              if (!partSet.has(e.job_id)) continue;
+              const m = TRIP_EVENT_META[e.event_type] || { l:e.event_type, icon:"•" };
+              items.push({ id:"t"+e.id, source:"trip", icon:m.icon, label:m.l, date:e.created_at, sort:(e.created_at || "").slice(0,10)+"|"+(e.created_at || ""), notes:e.notes, by:e.created_by, tripBadge: e.trip_id ? (tripById[e.trip_id]?.trip_number || "#"+e.trip_id) : null, storageBadge: e.storage_id ? (storageById[e.storage_id]?.brand || "storage") : null });
+            }
+            if (!jobEventsMissing) for (const e of jobEvents) {
+              if (!partSet.has(e.job_id)) continue;
+              const m = jobEventMeta(e.event_type);
+              items.push({ id:"j"+e.id, source:"manual", raw:e, icon:m.icon, label:m.l, date:e.event_date || e.created_at, sort:(e.event_date || (e.created_at || "").slice(0,10))+"|"+(e.created_at || ""), notes:e.notes, by:e.created_by, tripBadge: e.trip_ref || null, storageBadge: e.storage_label || (e.storage_id ? (storageById[e.storage_id]?.brand || "storage") : null) });
+            }
+            items.sort((a, b) => a.sort.localeCompare(b.sort));
+            const setJE = (fields) => setJobEventForm(f => ({ ...f, ...fields }));
+            const meta = jobEventForm ? jobEventMeta(jobEventForm.event_type) : null;
+            return (
+              <>
+                <SectionLabel>Timeline {items.length ? `(${items.length})` : ""}</SectionLabel>
+                {jobEventsMissing && (
+                  <div style={{ fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
+                    Corré el SQL actualizado para guardar eventos manuales del job. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
+                  </div>
+                )}
+                {items.length === 0 && !jobEventForm ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin eventos todavía.</div>
+                  : <div style={{ display:"flex", flexDirection:"column" }}>
+                      {items.map((it, i) => (
+                        <div key={it.id} style={{ display:"flex", gap:10, padding:"8px 0", borderBottom: i < items.length-1 ? "1px solid #f4f4f4" : "none" }}>
+                          <div style={{ fontSize:16, lineHeight:1.2 }}>{it.icon}</div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                              <b style={{ fontSize:13 }}>{it.label}</b>
+                              {it.source === "trip" && <span style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>auto</span>}
+                              {it.tripBadge && <span style={{ fontSize:9.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px", fontFamily:"monospace" }}>🛣️ {it.tripBadge}</span>}
+                              {it.storageBadge && <span style={{ fontSize:9.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>📦 {it.storageBadge}</span>}
+                            </div>
+                            {it.notes && <div style={{ fontSize:12, color:"#555", marginTop:2 }}>{it.notes}</div>}
+                            <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{(it.date || "").replace("T", " ").slice(0, 16)}{it.by ? ` · ${it.by}` : ""}</div>
+                          </div>
+                          {it.source === "manual" && <button onClick={() => deleteJobEvent(it.raw)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
+                        </div>
+                      ))}
+                    </div>}
+
+                {jobEventForm ? (
+                  <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", marginTop:10, background:"#fafafa" }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                      <Field label="Fecha *"><input style={inp} type="date" value={jobEventForm.event_date} onChange={e => setJE({ event_date:e.target.value })} /></Field>
+                      <Field label="Tipo de evento *">
+                        <select style={inp} value={jobEventForm.event_type} onChange={e => setJE({ event_type:e.target.value })}>
+                          {JOB_EVENT_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
+                        </select>
+                      </Field>
+                      {meta?.storage && (
+                        <Field label="Storage / warehouse (opcional)">
+                          <select style={inp} value={jobEventForm.storage_id} onChange={e => { const tgt = storageTargets.find(s => s.key === e.target.value); setJE({ storage_id: e.target.value, storage_label: tgt?.label || "" }); }}>
+                            <option value="">— Ninguno —</option>
+                            {storageTargets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                          </select>
+                        </Field>
+                      )}
+                      <Field label="Trip # (opcional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Ref. histórica" /></Field>
+                      <Field label="Notas" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="Qué pasó" /></Field>
+                    </div>
+                    <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10 }}>
+                      <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancelar</Btn>
+                      <Btn primary onClick={() => saveJobEvent(jobDetail.key, repId)} style={{ padding:"5px 12px", fontSize:12 }}>Guardar evento</Btn>
+                    </div>
+                  </div>
+                ) : !jobEventsMissing && (
+                  <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
+                    <Btn onClick={() => setJobEventForm({ event_date: today(), event_type:"picked_up", notes:"", storage_id:"", storage_label:"", trip_ref:"" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar evento</Btn>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
           <SectionLabel>{jobDetail.parts.length === 1 ? "Dónde está guardado" : `Dónde está guardado (${jobDetail.parts.length})`}</SectionLabel>
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {jobDetail.parts.map(p => {
@@ -7428,7 +7617,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
         return (
         <Modal title="Configuración de base de datos" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
