@@ -384,7 +384,7 @@ const I18N_ES = {
   "+ Add event": "+ Agregar evento",
   "+ Add extra": "+ Agregar extra",
   "Reps / Employees": "Reps / Empleados",
-  "Mark all delivered": "Marcar todo entregado",
+  "Mark all delivered": "Mark all delivered",
   "Send manifest to driver": "Enviar manifest al driver",
   "Request deposit": "Pedir depósito",
   "Crear pago": "Crear pago",
@@ -403,7 +403,33 @@ const I18N_ES = {
   "Delete job": "Eliminar job",
   "Total": "Total",
   "Expected": "Esperado",
-  "Collected (job)": "Cobrado (job)"
+  "Collected (job)": "Cobrado (job)",
+  "Storage Billing": "Storage Billing",
+  "Add billing": "Activar billing",
+  "+ Add billing": "+ Activar billing",
+  "Mark as paid": "Marcar pagado",
+  "Send reminder": "Enviar recordatorio",
+  "Edit rate": "Editar tarifa",
+  "Activate billing for a job": "Activar billing para un job",
+  "No active storage billing clients": "Sin clientes de storage billing activos",
+  "Active storage clients": "Clientes de storage activos",
+  "Outstanding this month": "Pendiente este mes",
+  "Due this week": "Vence esta semana",
+  "Collected this month": "Cobrado este mes",
+  "Overdue": "Vencido",
+  "Activate storage billing": "Activar storage billing",
+  "Edit storage billing": "Editar storage billing",
+  "Monthly rate ($)": "Tarifa mensual ($)",
+  "Billing start date": "Fecha de inicio de billing",
+  "First month free": "Primer mes gratis",
+  "1st month free": "1er mes gratis",
+  "Optional notes": "Notas opcionales",
+  "Activate billing": "Activar billing",
+  "Billing start:": "Inicio de billing:",
+  "Current period:": "Período actual:",
+  "Amount due this period:": "Monto de este período:",
+  "Search by job # or client name…": "Buscar por job # o cliente…",
+  "Billing records for each 30-day period are generated automatically.": "Los registros de cada período de 30 días se generan automáticamente."
 };
 const i18nCache = new WeakMap();   // text node -> original English value
 function i18nApply() {
@@ -1072,6 +1098,7 @@ alter table public.storage_jobs
   add column if not exists client_monthly_rate numeric,
   add column if not exists first_month_free boolean default false,
   add column if not exists billing_start_date date,
+  add column if not exists billing_notes text,
   add column if not exists billing_active boolean default false;
 
 create table if not exists public.storage_billing (
@@ -1636,12 +1663,19 @@ const BILLING_STATUS = {
   overdue: { l:"Overdue", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
   paid:    { l:"Paid", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
 };
+// Activate / edit monthly storage billing for a job.
+const EMPTY_BILLING_FORM = { jobKey:"", job_id:"", customer:"", job_number:"", client_monthly_rate:"", first_month_free:false, billing_start_date:"", billing_notes:"", editing:false };
 function BillingBadge({ status }) {
   const c = BILLING_STATUS[status] || BILLING_STATUS.pending;
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
 }
+// Client-facing reminder — NEVER mentions storage location / unit / brand / warehouse.
+// Just the amount due, the period, and a contact request.
 function billingReminderLink(b) {
-  const txt = `Hi ${b.customer || "there"}, this is a reminder that your storage fee of $${Number(b.amount || 0).toLocaleString()} for job ${b.job_number || "-"} is due on ${b.billing_period_end || "-"}. Please contact us to arrange payment. Thank you - No Borders Moving`;
+  const amount = Number(b.amount || 0).toLocaleString();
+  const ps = b.billing_period_start || b.period_start || "-";
+  const pe = b.billing_period_end || b.period_end || "-";
+  const txt = `Hi ${b.customer || "there"}, this is a reminder that your monthly storage fee of $${amount} is due for the period ${ps} to ${pe}. Please contact us to arrange payment. Thank you — No Borders Moving & Storage`;
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
 function settlementWaLink(sheet, calc, brokerName, driverName) {
@@ -2170,7 +2204,7 @@ function JobCard({ job, onDeliver }) {
         <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:600 }}>{job.job_number || "—"}</span>
         <span style={{ flex:1 }} />
         {!delivered && (
-          <Btn onClick={() => onDeliver(job)} style={{ padding:"4px 10px", fontSize:12 }}>Marcar entregado</Btn>
+          <Btn onClick={() => onDeliver(job)} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
         )}
       </div>
       <div style={{ fontSize:12, color:"#666", display:"flex", flexWrap:"wrap", gap:"2px 12px" }}>
@@ -2335,7 +2369,7 @@ const NAV = [
   ]},
   { section:"Finanzas", items:[
     { id:"brokers", label:"Brokers", icon:"🏦" },
-    { id:"billing", label:"Billing", icon:"🧾" },
+    { id:"billing", label:"Storage Billing", icon:"🧾" },
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
@@ -2403,7 +2437,7 @@ const PAGE_META = {
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
   brokers:     { title:"Brokers", sub:"Brokers and outstanding balances" },
-  billing:     { title:"Billing", sub:"Client storage collection" },
+  billing:     { title:"Storage Billing", sub:"Monthly storage billing for clients" },
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
@@ -2471,8 +2505,13 @@ export default function App() {
   const [jobColsMissing, setJobColsMissing] = useState(false);
   const [crmV2Missing, setCrmV2Missing] = useState(false);
   const [billingMissing, setBillingMissing] = useState(false);
+  const [billingNotesMissing, setBillingNotesMissing] = useState(false);
   const [billingLoaded, setBillingLoaded] = useState(false);
   const [billing, setBilling] = useState([]);
+  const [showBillingModal, setShowBillingModal] = useState(false);
+  const [billingForm, setBillingForm] = useState(EMPTY_BILLING_FORM);
+  const [billingJobSearch, setBillingJobSearch] = useState("");
+  const [billingSaving, setBillingSaving] = useState(false);
   const [storageTab, setStorageTab] = useState("storage_units");  // storage_units | <warehouse name>
   const [unitsSubTab, setUnitsSubTab] = useState("units");        // units | unit_jobs (inside Storage Units)
   const [storageView, setStorageView] = useState("list");         // list | map (units sub-tab)
@@ -3222,6 +3261,23 @@ export default function App() {
     })();
   }, [session, billingMissing, billingLoaded, jobs, billing, loadBilling]);
 
+  // Probe the storage_jobs.billing_notes column (added with the Storage Billing redesign).
+  useEffect(() => {
+    if (!session || billingMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("billing_notes").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storage_jobs add column if not exists billing_notes text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setBillingNotesMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, billingMissing]);
+
   useEffect(() => {
     if (!session) return;
     loadData();
@@ -3562,6 +3618,35 @@ export default function App() {
       return { ...b, customer: j?.customer || "—", job_number: j?.job_number || "—", location: loc, date_in: dateIn, daysIn };
     });
   }, [billing, jobs, storageById]);
+
+  // One card per active-billing job (deduped), enriched with its latest billing period.
+  const billingClients = useMemo(() => {
+    const latest = {};   // job_id -> latest billing record (by period start)
+    for (const b of billing) {
+      const cur = latest[b.job_id];
+      if (!cur || (b.billing_period_start || "") > (cur.billing_period_start || "")) latest[b.job_id] = b;
+    }
+    const seen = new Set(); const out = [];
+    for (const j of jobs) {
+      if (j.date_out || j.status === "cancelled" || !j.billing_active) continue;
+      const k = jobKey(j); if (seen.has(k)) continue; seen.add(k);
+      const rec = latest[j.id] || null;
+      const s = storageById[j.storage_id];
+      const location = j.warehouse ? `Warehouse ${j.warehouse}`
+        : (s ? [s.brand, s.unit && "U" + s.unit, s.state].filter(Boolean).join(" ") : "—");
+      const daysIn = j.date_in ? Math.max(0, Math.round((startOfToday() - new Date(j.date_in + "T00:00:00")) / ONE_DAY)) : null;
+      const rate = Number(j.client_monthly_rate) || 0;
+      out.push({
+        id: j.id, jobKey: k, rec, job: j,
+        customer: j.customer || "—", job_number: j.job_number || "—", location, daysIn,
+        rate, first_month_free: !!j.first_month_free, billing_start_date: j.billing_start_date || null,
+        status: rec?.status || "pending",
+        period_start: rec?.billing_period_start || null, period_end: rec?.billing_period_end || null,
+        amount: rec ? Number(rec.amount || 0) : rate,
+      });
+    }
+    return out.sort((a, b) => (a.customer || "").localeCompare(b.customer || ""));
+  }, [jobs, billing, storageById]);
 
   const billingMetrics = useMemo(() => {
     const td = today();
@@ -5270,8 +5355,59 @@ export default function App() {
     setCapTarget(null);
   }
   async function markBillingPaid(b) {
+    if (!b?.id) return;
     await supabase.from("storage_billing").update({ status: "paid", paid_date: today() }).eq("id", b.id);
     loadBilling();
+  }
+  // Default billing start: first-month-free → date_in + 30, else date_in.
+  function defaultBillingStart(job) {
+    const di = job?.date_in || today();
+    return job?.first_month_free ? addDaysStr(di, 30) : di;
+  }
+  function openAddBilling() {
+    setBillingForm({ ...EMPTY_BILLING_FORM });
+    setBillingJobSearch(""); setShowBillingModal(true);
+  }
+  // Edit the monthly rate / settings of an already-active billing client.
+  function openEditBillingRate(c) {
+    const job = c.job;
+    setBillingForm({
+      jobKey: c.jobKey, job_id: job.id, customer: c.customer, job_number: c.job_number,
+      client_monthly_rate: job.client_monthly_rate ?? "", first_month_free: !!job.first_month_free,
+      billing_start_date: job.billing_start_date || defaultBillingStart(job),
+      billing_notes: job.billing_notes || "", editing: true,
+    });
+    setBillingJobSearch(""); setShowBillingModal(true);
+  }
+  // Pick a job in the Add-billing search; default rate/start from the job.
+  function pickBillingJob(g) {
+    const rep = jobs.filter(j => jobKey(j) === g.key)[0] || {};
+    setBillingForm(f => ({
+      ...f, jobKey: g.key, job_id: rep.id, customer: g.customer || "", job_number: g.job_number || "",
+      client_monthly_rate: rep.client_monthly_rate ?? f.client_monthly_rate,
+      first_month_free: f.first_month_free,
+      billing_start_date: f.billing_start_date || defaultBillingStart(rep),
+    }));
+    setBillingJobSearch("");
+  }
+  async function saveBilling() {
+    const f = billingForm;
+    if (!f.jobKey) { window.alert("Pick a job first."); return; }
+    setBillingSaving(true);
+    const ids = jobs.filter(j => jobKey(j) === f.jobKey).map(j => j.id);
+    const start = f.billing_start_date || defaultBillingStart(jobs.find(j => j.id === ids[0]) || {});
+    const fields = {
+      billing_active: true,
+      client_monthly_rate: f.client_monthly_rate !== "" ? Number(f.client_monthly_rate) : null,
+      first_month_free: !!f.first_month_free,
+      billing_start_date: start || null,
+      updated_by: userEmail, updated_at: new Date().toISOString(),
+    };
+    if (!billingNotesMissing) fields.billing_notes = f.billing_notes || null;
+    if (ids.length) await supabase.from("storage_jobs").update(fields).in("id", ids);
+    setBillingSaving(false); setShowBillingModal(false);
+    showToast(f.editing ? "Billing updated" : "Billing activated");
+    loadJobs(); loadBilling();
   }
 
   // Per-broker stats: active jobs count + pending balance (distinct jobs).
@@ -5464,7 +5600,8 @@ export default function App() {
           {page === "trucks" && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
           {page === "extras" && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
           {page === "payments" && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
-          {page === "compliance" && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Documento</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
+          {page === "compliance" && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
+          {page === "billing" && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario") && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
       </div>
@@ -5500,21 +5637,21 @@ export default function App() {
       {crmV2Missing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span>For Brokers and pickup/delivery balances, run this SQL once in Supabase (SQL Editor).</span>
-          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
         </div>
       )}
 
       {billingMissing && page !== "billing" && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span>For Billing and storage occupancy (CF capacity), run the setup SQL once in Supabase.</span>
-          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
         </div>
       )}
 
       {crmV3Missing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span>For Drivers, multi-assignment, rep and the new financial fields, run the setup SQL once in Supabase.</span>
-          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
         </div>
       )}
 
@@ -5905,7 +6042,7 @@ export default function App() {
           {settlementsMissing && (
             <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
               <span>For Carrier Settlements (closing sheets + BOL collections + document upload), run the setup SQL once in Supabase.</span>
-              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
             </div>
           )}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
@@ -6232,7 +6369,7 @@ export default function App() {
             {tripsMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span>For Trips / Live Load (trucks, trips and live load), run the setup SQL once in Supabase.</span>
-                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
@@ -6269,7 +6406,7 @@ export default function App() {
                   {truckLocMissing && (
                     <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                       <span>To save truck locations, run the updated setup SQL once in Supabase.</span>
-                      <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+                      <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
                     </div>
                   )}
                   <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 360px) 1fr", gap:14, alignItems:"start" }}>
@@ -6477,7 +6614,7 @@ export default function App() {
             {extrasMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span>For Extras & Commissions (job_extras + employees/reps), run the setup SQL once in Supabase.</span>
-                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
             {pendingComm.length > 0 && (
@@ -6760,7 +6897,7 @@ export default function App() {
             {paymentsMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span>For Payments (collections, circulation and deposits), run the setup SQL once in Supabase.</span>
-                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10, marginBottom:16 }}>
@@ -6931,7 +7068,7 @@ export default function App() {
             {complianceMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span>For Legal & Compliance (companies + documents), run the setup SQL once in Supabase.</span>
-                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10, marginBottom:16 }}>
@@ -7103,76 +7240,82 @@ export default function App() {
       )}
 
       {/* ───────────────────────── BILLING ───────────────────────── */}
-      {page === "billing" && (
+      {page === "billing" && (() => {
+        const cards = billingClients.filter(c => billingTab === "all" || c.status === billingTab);
+        const m = billingMetrics;
+        const metricDefs = [
+          { label:"Active storage clients", value: billingClients.length, color:"#185FA5" },
+          { label:"Outstanding this month", value:"$"+Math.round(m.pending).toLocaleString(), color:"#A32D2D" },
+          { label:"Overdue", value:`${m.overdueCount} · $${Math.round(m.overdueSum).toLocaleString()}`, color:"#A32D2D" },
+          { label:"Due this week", value:`${m.weekCount} · $${Math.round(m.weekSum).toLocaleString()}`, color:"#C2410C" },
+          { label:"Collected this month", value:"$"+Math.round(m.collected).toLocaleString(), color:"#1A8A4E" },
+        ];
+        return (
         <>
           {billingMissing && (
             <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-              <span>For the billing module, run the setup SQL once in Supabase.</span>
-              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+              <span>For Storage Billing, run the setup SQL once in Supabase.</span>
+              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
             </div>
           )}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
-            {[
-              { label:"Total outstanding", value:"$"+billingMetrics.pending.toLocaleString(), color:"#A32D2D" },
-              { label:"Overdue", value:`${billingMetrics.overdueCount} · $${billingMetrics.overdueSum.toLocaleString()}`, color:"#A32D2D" },
-              { label:"Due this week", value:`${billingMetrics.weekCount} · $${billingMetrics.weekSum.toLocaleString()}`, color:"#C2410C" },
-              { label:"Collected this month", value:"$"+billingMetrics.collected.toLocaleString(), color:"#1A8A4E" },
-            ].map(m => (
-              <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
-                <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
-                <div style={{ fontSize:20, fontWeight:700, color:m.color }}>{m.value}</div>
+            {metricDefs.map(mt => (
+              <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{mt.label}</div>
+                <div style={{ fontSize:20, fontWeight:700, color:mt.color }}>{mt.value}</div>
               </div>
             ))}
           </div>
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","All"],["pending","Pending"],["overdue","Overdue"],["paid","Pagados"]].map(([t,l]) => (
+            {[["all","All"],["pending","Pending"],["overdue","Overdue"],["paid","Paid"]].map(([t,l]) => (
               <button key={t} onClick={() => setBillingTab(t)}
                 style={{ fontSize:13, fontWeight: billingTab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: billingTab === t ? "#111" : "#999", borderBottom: billingTab === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
           </div>
 
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-                <thead>
-                  <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Status","Client","Job #","Storage","Days in storage","Period","Amount","Actions"].map((h,i) => (
-                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(() => {
-                    const rows = billingRows.filter(b => billingTab === "all" || b.status === billingTab);
-                    if (rows.length === 0) return <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{billingMissing ? "Run the SQL to enable billing." : "No billing records."}</td></tr>;
-                    return rows.map(b => (
-                      <tr key={b.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                        <td style={{ padding:"12px" }}><BillingBadge status={b.status} /></td>
-                        <td style={{ padding:"12px" }}>{b.customer}</td>
-                        <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{b.job_number}</td>
-                        <td style={{ padding:"12px", fontSize:12, color:"#555" }}>{b.location}</td>
-                        <td style={{ padding:"12px" }}>{b.daysIn != null ? `${b.daysIn} days` : "—"}</td>
-                        <td style={{ padding:"12px", fontSize:12, color:"#555", whiteSpace:"nowrap" }}>{b.billing_period_start || "—"} → {b.billing_period_end || "—"}</td>
-                        <td style={{ padding:"12px", fontWeight:600 }}>${Number(b.amount || 0).toLocaleString()}</td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-                            {b.status !== "paid"
-                              ? <Btn onClick={() => markBillingPaid(b)} style={{ padding:"4px 9px", fontSize:11 }}>Marcar pagado</Btn>
-                              : <span style={{ fontSize:11, color:"#888" }}>{b.paid_date ? `Pagado ${b.paid_date}` : "Pagado"}</span>}
-                            {b.status !== "paid" && <a href={billingReminderLink(b)} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 Recordatorio</a>}
-                          </div>
-                        </td>
-                      </tr>
-                    ));
-                  })()}
-                </tbody>
-              </table>
+          {cards.length === 0 ? (
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"48px 24px", textAlign:"center" }}>
+              <div style={{ fontSize:32, marginBottom:8 }}>🧾</div>
+              <div style={{ fontSize:15, fontWeight:600, color:"#444", marginBottom:4 }}>{billingTab === "all" ? "No active storage billing clients" : `No ${billingTab} billing clients`}</div>
+              {billingTab === "all" && <div style={{ marginTop:12 }}><Btn primary disabled={billingMissing} onClick={openAddBilling}>Activate billing for a job</Btn></div>}
             </div>
-            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{billingRows.filter(b => billingTab === "all" || b.status === billingTab).length} registro(s)</div>
-          </div>
+          ) : (
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(310px,1fr))", gap:14 }}>
+              {cards.map(c => (
+                <div key={c.jobKey} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"14px 16px", display:"flex", flexDirection:"column", gap:8 }}>
+                  <div style={{ display:"flex", alignItems:"flex-start", gap:8 }}>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:15, fontWeight:700, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.customer}</div>
+                      <button onClick={() => setJobDetailKey(c.jobKey)} style={{ fontFamily:"monospace", fontWeight:600, fontSize:12, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{c.job_number}</button>
+                    </div>
+                    <BillingBadge status={c.status} />
+                  </div>
+                  {/* internal view only — location is never sent to clients */}
+                  <div style={{ fontSize:11.5, color:"#999" }}>📍 {c.location}{c.daysIn != null ? ` · ${c.daysIn} days in storage` : ""}</div>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
+                    <span style={{ fontSize:13, fontWeight:700 }}>${Number(c.rate).toLocaleString()}/mo</span>
+                    {c.first_month_free && <span style={{ fontSize:9.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 8px" }}>1st month free</span>}
+                  </div>
+                  <div style={{ fontSize:11.5, color:"#666", borderTop:"1px solid #f3f3f3", paddingTop:8 }}>
+                    <div>Billing start: <b>{c.billing_start_date || "—"}</b></div>
+                    <div>Current period: <b>{c.period_start || "—"} → {c.period_end || "—"}</b></div>
+                    <div style={{ marginTop:3 }}>Amount due this period: <b style={{ color: c.status === "paid" ? "#3B6D11" : c.status === "overdue" ? "#A32D2D" : "#92760B" }}>${Math.round(c.amount).toLocaleString()}</b></div>
+                  </div>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:"auto", paddingTop:6 }}>
+                    {c.rec && c.status !== "paid"
+                      ? <Btn primary onClick={() => markBillingPaid(c.rec)} style={{ padding:"5px 10px", fontSize:11.5 }}>Mark as paid</Btn>
+                      : c.status === "paid" ? <span style={{ fontSize:11, color:"#3B6D11", alignSelf:"center" }}>✓ Paid{c.rec?.paid_date ? ` ${c.rec.paid_date}` : ""}</span> : null}
+                    {c.status !== "paid" && <a href={billingReminderLink(c)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn style={{ padding:"5px 10px", fontSize:11.5 }}>💬 Send reminder</Btn></a>}
+                    <Btn onClick={() => openEditBillingRate(c)} style={{ padding:"5px 10px", fontSize:11.5 }}>Edit rate</Btn>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
-      )}
+        );
+      })()}
 
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
       {page === "analytics" && (
@@ -7767,7 +7910,7 @@ export default function App() {
                       </>
                     ) : (
                       <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                        <Btn onClick={() => deliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Marcar entregado</Btn>
+                        <Btn onClick={() => deliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Mark delivered</Btn>
                         <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
                       </td>
                     )}
@@ -7795,7 +7938,7 @@ export default function App() {
             <Btn onClick={() => window.open(waLink(jobDetail, (jobDetail.parts||[]).map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean).join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail)), "_blank")}>💬 WhatsApp</Btn>
             {nextStatus(jobDetail) && <Btn onClick={() => advanceStatus(jobDetail)}>→ {statusMeta(nextStatus(jobDetail)).l}</Btn>}
             {jobDetail.parts.some(p => !p.date_out) && (
-              <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Marcar todo entregado</Btn>
+              <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Mark all delivered</Btn>
             )}
             {jobDetail.parts.some(p => p.date_out) && (
               <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Desentregar todo</Btn>
@@ -7843,7 +7986,7 @@ export default function App() {
           )}
           <EditRow label="Client billing">
             {jobDetail.billing_active
-              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · desde ${jobDetail.billing_start_date}` : ""}</span>
+              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · since ${jobDetail.billing_start_date}` : ""}</span>
               : <span style={{ color:"#bbb" }}>No se cobra storage</span>}
           </EditRow>
           <EditRow label="Notes"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
@@ -8052,7 +8195,7 @@ export default function App() {
                 <SectionLabel>Timeline {items.length ? `(${items.length})` : ""}</SectionLabel>
                 {jobEventsMissing && (
                   <div style={{ fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
-                    Run the updated SQL to save manual job events. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
+                    Run the updated SQL to save manual job events. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>View SQL</button>
                   </div>
                 )}
                 {items.length === 0 && !jobEventForm ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No events yet.</div>
@@ -8125,7 +8268,7 @@ export default function App() {
                     <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
                     <span style={{ flex:1 }} />
                     {!delivered
-                      ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Marcar entregado</Btn>
+                      ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
                       : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Desentregar</Btn>}
                   </div>
                   <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
@@ -8641,7 +8784,7 @@ export default function App() {
       )}
 
       {showImport && (
-        <Modal title="Importar desde WhatsApp" onClose={() => setShowImport(false)}
+        <Modal title="Import from WhatsApp" onClose={() => setShowImport(false)}
           footer={<>
             <Btn onClick={() => setShowImport(false)}>Cancel</Btn>
             {importTab === "paste" && <Btn onClick={previewPaste}>Previsualizar</Btn>}
@@ -8753,6 +8896,57 @@ export default function App() {
         </Modal>
       )}
 
+      {showBillingModal && (() => {
+        const f = billingForm;
+        const setF = (fields) => setBillingForm(p => ({ ...p, ...fields }));
+        const q = billingJobSearch.trim().toLowerCase();
+        const groups = [...extraJobGroups.values()];
+        const matches = (q ? groups.filter(g => (g.job_number || "").toLowerCase().includes(q) || (g.customer || "").toLowerCase().includes(q)) : groups).slice(0, 40);
+        return (
+          <Modal title={f.editing ? "Edit storage billing" : "Activate storage billing"} onClose={() => setShowBillingModal(false)}
+            footer={<>
+              <Btn onClick={() => setShowBillingModal(false)}>Cancel</Btn>
+              <Btn primary disabled={billingSaving || !f.jobKey} onClick={saveBilling}>{billingSaving ? "Saving..." : (f.editing ? "Save changes" : "Activate billing")}</Btn>
+            </>}>
+            <Field label="Job">
+              {f.jobKey ? (
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                  <span style={{ fontFamily:"monospace", fontWeight:700 }}>{f.job_number || "(no #)"}</span>
+                  <span style={{ fontSize:12, color:"#666" }}>{f.customer || "—"}</span>
+                  {!f.editing && <button onClick={() => setF({ jobKey:"", job_id:"", customer:"", job_number:"" })} style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:12, textDecoration:"underline" }}>change</button>}
+                </div>
+              ) : (
+                <>
+                  <input style={inp} value={billingJobSearch} onChange={e => setBillingJobSearch(e.target.value)} placeholder="Search by job # or client name…" />
+                  {q && (
+                    <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:170, overflowY:"auto" }}>
+                      {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>No results.</div>
+                        : matches.map(g => (
+                          <button key={g.key} onClick={() => pickBillingJob(g)} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
+                            <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(no #)"}</span> · {g.customer || "—"}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </Field>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
+              <Field label="Monthly rate ($)"><input style={inp} type="number" value={f.client_monthly_rate} onChange={e => setF({ client_monthly_rate:e.target.value })} placeholder="e.g. 150" /></Field>
+              <Field label="Billing start date">
+                <input style={inp} type="date" value={f.billing_start_date} onChange={e => setF({ billing_start_date:e.target.value })} />
+              </Field>
+            </div>
+            <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", marginTop:10 }}>
+              <input type="checkbox" checked={!!f.first_month_free} onChange={e => setF({ first_month_free: e.target.checked })} />
+              First month free
+            </label>
+            {!billingNotesMissing && <Field label="Notes" full><input style={{ ...inp, marginTop:10 }} value={f.billing_notes} onChange={e => setF({ billing_notes:e.target.value })} placeholder="Optional notes" /></Field>}
+            <div style={{ marginTop:10, fontSize:11.5, color:"#999" }}>Billing records for each 30-day period are generated automatically.</div>
+          </Modal>
+        );
+      })()}
+
       {showTruckModal && (
         <Modal title={editingTruckId ? "Edit truck" : "New truck"} onClose={() => setShowTruckModal(false)}
           footer={<>
@@ -8773,7 +8967,7 @@ export default function App() {
           {truckColsMissing && (
             <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"8px 11px", marginBottom:10, fontSize:12, color:"#854F0B", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
               <span>Run the setup SQL once to save this data.</span>
-              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:6, padding:"3px 9px", cursor:"pointer", fontSize:11 }}>Ver SQL</button>
+              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:6, padding:"3px 9px", cursor:"pointer", fontSize:11 }}>View SQL</button>
             </div>
           )}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
@@ -9117,7 +9311,7 @@ export default function App() {
                 <span>Driver commission ({numv(quickExtra.driver_commission_pct)}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
                 <span>Rep commission ({numv(quickExtra.rep_commission_pct)}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
                 {bsPct > 0 && <span>Broker share: <b style={{ color:"#C2410C" }}>{money(brokerShare) || "$0"}</b></span>}
-                <span>Net empresa: <b style={{ color:"#EF9F27" }}>{money(netAmt - dc - rc) || "$0"}</b></span>
+                <span>Net to company: <b style={{ color:"#EF9F27" }}>{money(netAmt - dc - rc) || "$0"}</b></span>
               </div>
             </div>
           </Modal>
@@ -9236,7 +9430,7 @@ export default function App() {
 
             {payColsMissing && (
               <div style={{ marginTop:8, fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px" }}>
-                Run the updated SQL to save check / money order / CC fee details. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
+                Run the updated SQL to save check / money order / CC fee details. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>View SQL</button>
               </div>
             )}
 
@@ -10100,7 +10294,7 @@ export default function App() {
             )}
             {clientDetail && (
               <Modal title={`Client · ${clientDetail}`} onClose={() => setClientDetail(null)} footer={<Btn primary onClick={() => setClientDetail(null)}>Close</Btn>}>
-                <SectionLabel>Jobs del cliente</SectionLabel>
+                <SectionLabel>Client jobs</SectionLabel>
                 <JobsPanel predicate={j => (j.customer || "").trim().toLowerCase() === clientDetail.trim().toLowerCase()} />
               </Modal>
             )}
