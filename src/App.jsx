@@ -665,6 +665,7 @@ create table if not exists public.trips (
   created_at timestamptz default now()
 );
 alter table public.trips enable row level security;
+alter table public.trips add column if not exists trip_log jsonb default '[]'::jsonb;
 drop policy if exists "trips_all" on public.trips;
 create policy "trips_all" on public.trips for all to anon, authenticated using (true) with check (true);
 
@@ -672,8 +673,24 @@ alter table public.storage_jobs
   add column if not exists trip_id bigint references public.trips(id),
   add column if not exists trip_stop_order integer;
 
+-- Audit trail of dynamic changes while a trip is in transit.
+create table if not exists public.trip_events (
+  id bigint generated always as identity primary key,
+  trip_id bigint references public.trips(id) on delete cascade,
+  event_type text,
+  job_id bigint references public.storage_jobs(id),
+  storage_id bigint references public.storages(id),
+  notes text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.trip_events enable row level security;
+drop policy if exists "trip_events_all" on public.trip_events;
+create policy "trip_events_all" on public.trip_events for all to anon, authenticated using (true) with check (true);
+
 do $$ begin alter publication supabase_realtime add table public.trucks; exception when others then null; end $$;
-do $$ begin alter publication supabase_realtime add table public.trips; exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.trips; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.trip_events; exception when others then null; end $$;`;
 
 // Extras & Commissions: employees (reps) + per-job extras with commission split.
 const EXTRAS_SQL = `create table if not exists public.employees (
@@ -1033,6 +1050,33 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
   return lines.join("\n");
 }
 const tripManifestLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripManifestText(...args));
+
+// WhatsApp "trip update" sent to the driver group when a job is added mid-trip.
+function tripUpdateWaText(trip, g, totalCf) {
+  const dest = [g.delivery_address, g.delivery_city, g.delivery_state].filter(Boolean).join(", ");
+  const pick = [g.pickup_address, g.pickup_city, g.pickup_state].filter(Boolean).join(", ");
+  return [
+    `🔄 TRIP #${trip.trip_number || trip.id} UPDATE`,
+    `New job added to your trip:`,
+    `Job: ${g.job_number || "-"} — ${g.customer || "-"}`,
+    `Pickup/delivery: ${dest || pick || "-"}`,
+    `CF: ${Math.round(parseCf(g.volume))} | Sticker: ${g.sticker_color || "-"} Lot ${g.lot_number || "-"}`,
+    `Balance to collect: $${numv(g.bol_balance).toLocaleString()}`,
+    `Updated total load: ${Math.round(totalCf || 0)} CF`,
+  ].join("\n");
+}
+const tripUpdateWaLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripUpdateWaText(...args));
+// Trip event-log metadata: label + icon + who-by-default.
+const TRIP_EVENT_META = {
+  job_added:          { l:"Job agregado", icon:"➕" },
+  job_removed:        { l:"Job quitado", icon:"➖" },
+  storage_drop:       { l:"Dejado en storage", icon:"📦" },
+  storage_pickup:     { l:"Cargado de storage", icon:"🔼" },
+  unplanned_pickup:   { l:"Pickup no previsto", icon:"🆕" },
+  delivery_completed: { l:"Entregado", icon:"✅" },
+};
+const tripEventLabel = (v) => TRIP_EVENT_META[v]?.l || v;
+const EMPTY_UNPLANNED = { job_number:"", customer:"", volume:"", pickup_address:"", delivery_address:"", fadd:"", broker_id:"", sticker_color:"", lot_number:"" };
 
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
@@ -1792,6 +1836,19 @@ export default function App() {
   const [editingTripId, setEditingTripId] = useState(null);
   const [tripSaving, setTripSaving] = useState(false);
   const [tripJobSearch, setTripJobSearch] = useState("");
+  // Dynamic in-transit trip management
+  const [tripDetailId, setTripDetailId] = useState(null);     // trip detail modal
+  const [tripEvents, setTripEvents] = useState([]);
+  const [tripEventsMissing, setTripEventsMissing] = useState(false);
+  const [tripLogOpen, setTripLogOpen] = useState(false);
+  const [tripAddJobSearch, setTripAddJobSearch] = useState("");
+  const [tripAction, setTripAction] = useState(null);         // "add" | "pickup" | "unplanned" | null
+  const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
+  const [unplannedForm, setUnplannedForm] = useState(EMPTY_UNPLANNED);
+  const [tripBusy, setTripBusy] = useState(false);
+  const [tripCompleteModal, setTripCompleteModal] = useState(null); // { trip } completion summary
+  const [completeDropTarget, setCompleteDropTarget] = useState("");
+  const [tripWaLink, setTripWaLink] = useState(null);         // { href, label } pending driver notification
   const [showTruckModal, setShowTruckModal] = useState(false);
   const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
   const [editingTruckId, setEditingTruckId] = useState(null);
@@ -1892,6 +1949,10 @@ export default function App() {
   const loadTrucks = useCallback(async () => {
     const { data, error } = await supabase.from("trucks").select("*").order("name", { ascending: true });
     if (!error) setTrucksList(data || []);
+  }, []);
+  const loadTripEvents = useCallback(async () => {
+    const { data, error } = await supabase.from("trip_events").select("*").order("created_at", { ascending: true });
+    if (!error) setTripEvents(data || []);
   }, []);
   const loadExtras = useCallback(async () => {
     const { data, error } = await supabase.from("job_extras").select("*").order("created_at", { ascending: false });
@@ -2116,9 +2177,31 @@ export default function App() {
     const channel = supabase.channel("trips-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, () => loadTrips())
       .on("postgres_changes", { event: "*", schema: "public", table: "trucks" }, () => loadTrucks())
+      .on("postgres_changes", { event: "*", schema: "public", table: "trip_events" }, () => loadTripEvents())
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [session, tripsMissing, loadTrips, loadTrucks]);
+  }, [session, tripsMissing, loadTrips, loadTrucks, loadTripEvents]);
+
+  // Probe the trip_events table (dynamic in-transit changes; added after the initial Trips release).
+  useEffect(() => {
+    if (!session || tripsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("trip_events").select("id").limit(1);
+      if (cancelled) return;
+      if (!error) { loadTripEvents(); return; }
+      let created = false;
+      const sql = "alter table public.trips add column if not exists trip_log jsonb default '[]'::jsonb; create table if not exists public.trip_events (id bigint generated always as identity primary key, trip_id bigint references public.trips(id) on delete cascade, event_type text, job_id bigint, storage_id bigint, notes text, created_by text, created_at timestamptz default now()); alter table public.trip_events enable row level security; drop policy if exists \"trip_events_all\" on public.trip_events; create policy \"trip_events_all\" on public.trip_events for all to anon, authenticated using (true) with check (true);";
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadTripEvents();
+      else setTripEventsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, tripsMissing, loadTripEvents]);
 
   // Probe the truck vehicle-info columns (added after the initial Trucks release).
   useEffect(() => {
@@ -2793,6 +2876,25 @@ export default function App() {
     for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
     return { activeCount, cfTransit, bolTransit, deliveredToday };
   }, [trips, jobs, tripCalc]);
+  // Trip events grouped by trip (newest first) for the audit log.
+  const tripEventsByTrip = useMemo(() => {
+    const m = {};
+    for (const e of tripEvents) { (m[e.trip_id] = m[e.trip_id] || []).push(e); }
+    for (const id of Object.keys(m)) m[id].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    return m;
+  }, [tripEvents]);
+  // Jobs sitting in storage / a warehouse and not on any trip — candidates to "pick up".
+  const jobsInStorage = useMemo(() => {
+    const m = new Map();
+    for (const j of jobs) {
+      if (j.date_out || j.trip_id) continue;
+      if (j.status !== "in_storage" && !j.storage_id && !j.warehouse) continue;
+      if (j.status === "delivered" || j.status === "cancelled") continue;
+      const k = jobKey(j);
+      if (!m.has(k)) m.set(k, j);
+    }
+    return [...m.values()];
+  }, [jobs]);
 
   // ── Legal & Compliance derived data (declared before sidebarBadgesPlus, which reads it) ──
   const companyById = useMemo(() => { const m = {}; for (const c of companies) m[c.id] = c; return m; }, [companies]);
@@ -3566,10 +3668,99 @@ export default function App() {
     loadJobs();
   }
   // Mark one trip job delivered (stamps date_out + status across its rows).
-  async function tripMarkDelivered(j) {
+  async function tripMarkDelivered(j, trip) {
     const ids = jobs.filter(x => jobKey(x) === jobKey(j)).map(x => x.id);
     await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (trip) await logTripEvent(trip.id, "delivery_completed", { job_id: Math.min(...ids), notes: j.job_number || "" });
     loadJobs();
+  }
+
+  // ── Dynamic in-transit trip changes ──
+  // All storage_jobs row ids that make up a job (by jobKey).
+  const jobRowIds = (k) => jobs.filter(j => jobKey(j) === k).map(j => j.id);
+  async function logTripEvent(tripId, event_type, opts = {}) {
+    if (tripEventsMissing) return;
+    await supabase.from("trip_events").insert([{ trip_id: tripId, event_type, job_id: opts.job_id ?? null, storage_id: opts.storage_id ?? null, notes: opts.notes || null, created_by: opts.created_by || "dispatcher" }]);
+    loadTripEvents();
+  }
+  // Add an existing (non-trip) job to a trip in transit, log it, queue a driver WA update.
+  async function tripAddExistingJob(trip, k) {
+    const rows = jobs.filter(j => jobKey(j) === k);
+    if (!rows.length) return;
+    setTripBusy(true);
+    const ids = rows.map(j => j.id);
+    const order = (jobsByTrip[trip.id] || []).length + 1;
+    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: rows[0].date_out ? rows[0].status : "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: rows[0].job_number || "" });
+    const newTotal = tripCalc(trip).totalCf + parseCf(rows[0].volume);
+    await loadJobs();
+    setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
+    setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} agregado` });
+    showToast(`Job agregado al trip`);
+  }
+  // Drop a job at a storage unit / warehouse: unlink from trip, set location, status in_storage.
+  async function tripDropAtStorage(trip, k, target) {
+    const ids = jobRowIds(k);
+    if (!ids.length || !target) return;
+    setTripBusy(true);
+    const patch = { trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() };
+    if (target.kind === "warehouse") { patch.warehouse = target.name; patch.storage_id = null; }
+    else { patch.storage_id = target.id; patch.warehouse = null; }
+    await supabase.from("storage_jobs").update(patch).in("id", ids);
+    await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label });
+    await loadJobs();
+    setTripBusy(false); setStorageDropJob(null);
+    showToast(`Job dropped at ${target.label}`);
+  }
+  // Pick a job up from storage onto the trip: link to trip, status out_for_delivery.
+  async function tripPickupFromStorage(trip, k) {
+    const ids = jobRowIds(k);
+    if (!ids.length) return;
+    setTripBusy(true);
+    const order = (jobsByTrip[trip.id] || []).length + 1;
+    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: jobs.find(j => jobKey(j) === k)?.job_number || "" });
+    await loadJobs();
+    setTripBusy(false); setTripAction(null);
+    showToast(`Job cargado al trip`);
+  }
+  // Create an unplanned new job and immediately add it to the trip.
+  async function saveUnplannedPickup(trip) {
+    const f = unplannedForm;
+    setTripBusy(true);
+    const order = (jobsByTrip[trip.id] || []).length + 1;
+    const payload = {
+      job_number: f.job_number || null, customer: f.customer || null, volume: f.volume || null,
+      pickup_address: f.pickup_address || null, delivery_address: f.delivery_address || null,
+      fadd: f.fadd || null, broker_id: f.broker_id ? Number(f.broker_id) : null,
+      sticker_color: f.sticker_color || null, lot_number: f.lot_number || null,
+      job_type: "direct", status: "out_for_delivery", trip_id: trip.id, trip_stop_order: order,
+      created_by: userEmail,
+    };
+    const { data, error } = await supabase.from("storage_jobs").insert([payload]).select("id").single();
+    if (error) { setTripBusy(false); window.alert(error.message); return; }
+    await logTripEvent(trip.id, "unplanned_pickup", { job_id: data?.id, notes: f.job_number || f.customer || "" });
+    const newTotal = tripCalc(trip).totalCf + parseCf(f.volume);
+    await loadJobs();
+    setTripBusy(false); setTripAction(null); setUnplannedForm(EMPTY_UNPLANNED);
+    setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Pickup no previsto: ${f.job_number || f.customer || ""}` });
+    showToast("Pickup no previsto agregado");
+  }
+  // Complete a trip: optionally drop the still-on-truck jobs at a storage, then mark completed.
+  async function completeTrip(trip, undeliveredKeys, dropTarget) {
+    setTripBusy(true);
+    if (undeliveredKeys.length && dropTarget) {
+      const t = dropTarget.kind === "warehouse" ? { warehouse: dropTarget.name, storage_id: null } : { storage_id: dropTarget.id, warehouse: null };
+      for (const k of undeliveredKeys) {
+        const ids = jobRowIds(k);
+        await supabase.from("storage_jobs").update({ ...t, trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+        await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: dropTarget.kind === "warehouse" ? null : dropTarget.id, notes: dropTarget.label });
+      }
+    }
+    await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id);
+    setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget("");
+    loadTrips(); loadJobs();
+    showToast(`Trip ${trip.trip_number || trip.id} completado`);
   }
   // ── Extras & commissions handlers ──
   // Build a job_extras payload from amount + percentages (computes split amounts).
@@ -4903,12 +5094,13 @@ export default function App() {
                       <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:10, marginBottom:10 }}>
                         <div>
                           <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                            <span style={{ fontSize:15, fontWeight:800, fontFamily:"monospace" }}>{t.trip_number || `#${t.id}`}</span>
+                            <button onClick={() => setTripDetailId(t.id)} style={{ fontSize:15, fontWeight:800, fontFamily:"monospace", color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button>
                             <TripBadge status={t.status} />
                           </div>
                           <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "sin camión"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
                         </div>
                         <div style={{ display:"flex", gap:6 }}>
+                          <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Gestionar</Btn>
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Editar</Btn>
                         </div>
                       </div>
@@ -4948,7 +5140,7 @@ export default function App() {
                     <tbody>
                       {shown.map(t => { const c = tripCalc(t); return (
                         <tr key={t.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700 }}>{t.trip_number || `#${t.id}`}</td>
+                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700 }}><button onClick={() => setTripDetailId(t.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button></td>
                           <td style={{ padding:"12px" }}>{truckById[t.truck_id]?.name || "—"}</td>
                           <td style={{ padding:"12px" }}>{driverById[t.driver_id]?.name || "—"}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{t.departure_date || "—"}</td>
@@ -4957,7 +5149,8 @@ export default function App() {
                           <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }}>${Math.round(c.totalBol).toLocaleString()}</td>
                           <td style={{ padding:"12px" }}><TripBadge status={t.status} /></td>
                           <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                            <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 10px", fontSize:12 }}>Editar</Btn>
+                            <Btn onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 10px", fontSize:12 }}>Abrir</Btn>
+                            <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Editar</Btn>
                             <Btn danger onClick={() => deleteTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Eliminar</Btn>
                           </td>
                         </tr>
@@ -7408,6 +7601,264 @@ export default function App() {
             <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
             <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Neto: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
             <datalist id="who-list">{whoList.map((n, i) => <option key={i} value={n} />)}</datalist>
+          </Modal>
+        );
+      })()}
+
+      {/* ── Trip detail / live-load management (mobile-friendly) ── */}
+      {tripDetailId && (() => {
+        const t = trips.find(x => x.id === tripDetailId);
+        if (!t) return null;
+        const c = tripCalc(t);
+        const truck = truckById[t.truck_id];
+        const driverNm = driverById[t.driver_id]?.name || "";
+        const inTransit = t.status === "in_transit";
+        const over = c.cap > 0 ? Math.max(0, Math.round(c.totalCf - c.cap)) : 0;
+        const pct = c.occPct || 0;
+        const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
+        const events = tripEventsByTrip[t.id] || [];
+        const dropTargets = [
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unidad #${r.id}` })),
+          ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
+        ];
+        // Jobs that can be added (not on any trip, not delivered).
+        const addableSeen = new Set(); const addable = [];
+        for (const j of jobs) {
+          if (j.trip_id || j.date_out || j.status === "delivered" || j.status === "cancelled") continue;
+          const k = jobKey(j); if (addableSeen.has(k)) continue; addableSeen.add(k);
+          addable.push(j);
+        }
+        const q = tripAddJobSearch.trim().toLowerCase();
+        const addableFiltered = (q ? addable.filter(j => [j.job_number, j.customer].join(" ").toLowerCase().includes(q)) : addable).slice(0, 40);
+        const bigBtn = { flex:1, justifyContent:"center", padding:"11px 10px", fontSize:13 };
+        const setU = (fields) => setUnplannedForm(f => ({ ...f, ...fields }));
+        return (
+          <Modal title={`Trip ${t.trip_number || "#"+t.id}`} onClose={() => { setTripDetailId(null); setTripAction(null); setStorageDropJob(null); setTripWaLink(null); }}
+            footer={<>
+              {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Salir (en tránsito)</Btn>}
+              {(inTransit || c.allDelivered) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Completar trip…</Btn>}
+              <Btn onClick={() => { setTripDetailId(null); setTripAction(null); }}>Cerrar</Btn>
+            </>}>
+            <div style={{ fontSize:12.5, color:"#888", marginTop:-4, marginBottom:10 }}>
+              <TripBadge status={t.status} /> &nbsp;🚛 {truck?.name || "sin camión"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}
+            </div>
+
+            {/* pending driver WhatsApp update */}
+            {tripWaLink && (
+              <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"9px 12px", marginBottom:12, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>{tripWaLink.label} — avisá al driver</span>
+                <a href={tripWaLink.href} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ padding:"5px 11px", fontSize:12 }}>📲 Enviar update</Btn></a>
+                <button onClick={() => setTripWaLink(null)} style={{ border:"none", background:"none", cursor:"pointer", color:"#3B6D11", fontSize:16 }}>×</button>
+              </div>
+            )}
+
+            {/* live load bar */}
+            {c.cap > 0 ? (
+              <div style={{ marginBottom:6 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
+                  <b style={{ color: occColor(pct) }}>{pct}% ocupado</b>
+                  <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
+                </div>
+                <div style={{ background:"#f0f0f0", borderRadius:6, height:14, overflow:"hidden" }}><div style={{ background: occColor(pct), height:14, width:`${Math.min(100, pct)}%`, transition:"width .4s" }} /></div>
+              </div>
+            ) : <div style={{ fontSize:12, color:"#999", marginBottom:6 }}>Camión sin capacidad cargada · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
+            {over > 0 && <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:8, padding:"8px 11px", fontSize:12.5, fontWeight:700, color:"#A32D2D", margin:"8px 0" }}>⚠️ Over capacity by {over.toLocaleString()} CF</div>}
+
+            {/* in-transit action buttons */}
+            {inTransit && !tripAction && !storageDropJob && (
+              <div style={{ display:"flex", gap:8, margin:"12px 0", flexWrap:"wrap" }}>
+                <Btn primary onClick={() => { setTripAction("add"); setTripAddJobSearch(""); }} style={bigBtn}>➕ Agregar job</Btn>
+                <Btn onClick={() => setTripAction("pickup")} style={bigBtn}>🔼 Cargar de storage</Btn>
+                <Btn onClick={() => { setUnplannedForm(EMPTY_UNPLANNED); setTripAction("unplanned"); }} style={bigBtn}>🆕 Pick up no previsto</Btn>
+              </div>
+            )}
+
+            {/* action panel: add existing job */}
+            {tripAction === "add" && (
+              <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Agregar job al trip</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <input style={inp} value={tripAddJobSearch} onChange={e => setTripAddJobSearch(e.target.value)} placeholder="Buscar por job # o cliente…" />
+                <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:8, maxHeight:230, overflowY:"auto", background:"#fff" }}>
+                  {addableFiltered.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>Sin jobs disponibles.</div>
+                    : addableFiltered.map(j => (
+                      <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div><b className="mono" style={{ fontFamily:"monospace" }}>{j.job_number || "(sin #)"}</b> · {j.customer || "—"}</div>
+                          <div style={{ color:"#888", marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
+                            <span>{Math.round(parseCf(j.volume))} CF</span><FaddBadge fadd={j.fadd} />
+                            {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} />}
+                            {(j.storage_id || j.warehouse) && <span>📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unidad")}</span>}
+                          </div>
+                        </div>
+                        <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Agregar</Btn>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* action panel: pick up from storage */}
+            {tripAction === "pickup" && (
+              <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Cargar un job desde storage</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:230, overflowY:"auto", background:"#fff" }}>
+                  {jobsInStorage.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No hay jobs en storage para cargar.</div>
+                    : jobsInStorage.map(j => (
+                      <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div><b style={{ fontFamily:"monospace" }}>{j.job_number || "(sin #)"}</b> · {j.customer || "—"}</div>
+                          <div style={{ color:"#888", marginTop:2 }}>{Math.round(parseCf(j.volume))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unidad")}</div>
+                        </div>
+                        <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Cargar</Btn>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* action panel: unplanned pickup quick form */}
+            {tripAction === "unplanned" && (
+              <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Pick up no previsto</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                  <Field label="Job #"><input style={inp} value={unplannedForm.job_number} onChange={e => setU({ job_number:e.target.value })} placeholder="Job #" /></Field>
+                  <Field label="Cliente"><input style={inp} value={unplannedForm.customer} onChange={e => setU({ customer:e.target.value })} placeholder="Cliente" /></Field>
+                  <Field label="CF"><input style={inp} value={unplannedForm.volume} onChange={e => setU({ volume:e.target.value })} placeholder="ej: 600" /></Field>
+                  <Field label="FADD"><input style={inp} type="date" value={unplannedForm.fadd} onChange={e => setU({ fadd:e.target.value })} /></Field>
+                  <Field label="Pickup"><input style={inp} value={unplannedForm.pickup_address} onChange={e => setU({ pickup_address:e.target.value })} placeholder="Dirección pickup" /></Field>
+                  <Field label="Delivery"><input style={inp} value={unplannedForm.delivery_address} onChange={e => setU({ delivery_address:e.target.value })} placeholder="Dirección delivery" /></Field>
+                  <Field label="Broker"><select style={inp} value={unplannedForm.broker_id} onChange={e => setU({ broker_id:e.target.value })}><option value="">— Broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></Field>
+                  <Field label="Sticker"><input style={inp} list="sticker-colors-list" value={unplannedForm.sticker_color} onChange={e => setU({ sticker_color:e.target.value })} placeholder="Color" /></Field>
+                  <Field label="Lot #"><input style={inp} value={unplannedForm.lot_number} onChange={e => setU({ lot_number:e.target.value })} placeholder="Lot" /></Field>
+                </div>
+                <div style={{ marginTop:10, textAlign:"right" }}><Btn primary disabled={tripBusy || (!unplannedForm.job_number && !unplannedForm.customer)} onClick={() => saveUnplannedPickup(t)}>Agregar al trip</Btn></div>
+              </div>
+            )}
+
+            {/* per-job storage drop panel */}
+            {storageDropJob && storageDropJob.tripId === t.id && (
+              <div style={{ border:"1px solid #EF9F27", borderRadius:10, padding:"12px", margin:"10px 0", background:"#FFF8F0" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Dejar en storage: {storageDropJob.label}</b><button onClick={() => setStorageDropJob(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancelar</button></div>
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                  <select id="drop-target-sel" style={{ ...inp, flex:1, minWidth:180 }} defaultValue="">
+                    <option value="">— Elegí storage / warehouse —</option>
+                    {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+                  </select>
+                  <Btn primary disabled={tripBusy} onClick={() => { const sel = document.getElementById("drop-target-sel"); const idx = sel?.value; if (idx === "" || idx == null) { window.alert("Elegí un destino."); return; } tripDropAtStorage(t, storageDropJob.jobKey, dropTargets[Number(idx)]); }}>Confirmar drop</Btn>
+                </div>
+              </div>
+            )}
+
+            {/* stops */}
+            <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"6px 0 6px" }}>Stops ({c.count})</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {c.jobsIn.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"8px" }}>Sin jobs en este trip.</div>
+                : c.jobsIn.map((j, i) => {
+                  const delivered = !!j.date_out || j.status === "delivered";
+                  const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
+                  return (
+                    <div key={j.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff", opacity: delivered ? 0.75 : 1 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                        <span style={{ width:22, height:22, borderRadius:"50%", background:"#111", color:"#fff", fontSize:11, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i + 1}</span>
+                        <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                        <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
+                        {fromTo && <span style={{ fontSize:11, color:"#888" }}>· {fromTo}</span>}
+                        {delivered && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 9px" }}>Delivered</span>}
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
+                        <span>{Math.round(parseCf(j.volume))} CF</span>
+                        {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
+                        {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
+                        <FaddBadge fadd={j.fadd} />
+                        {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                      </div>
+                      {!delivered && (
+                        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                          <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
+                          {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Dejar en storage</Btn>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
+              <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
+              <span style={{ color:"#666" }}>A cobrar: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+            </div>
+            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Enviar manifest al driver</Btn></a>
+
+            {/* event log */}
+            <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
+              <span style={{ fontSize:11.5, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.06em" }}>Registro del trip ({events.length})</span>
+              <span style={{ marginLeft:"auto", color:"#bbb", fontSize:11, transform: tripLogOpen ? "rotate(90deg)" : "none", transition:"transform .15s" }}>▸</span>
+            </button>
+            {tripLogOpen && (
+              tripEventsMissing ? <div style={{ fontSize:12, color:"#999", padding:"4px 0" }}>Corré el SQL actualizado para activar el registro de eventos.</div>
+              : events.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"4px 0" }}>Sin eventos registrados todavía.</div>
+              : <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                  {events.map(e => {
+                    const j = e.job_id ? jobs.find(x => x.id === e.job_id) : null;
+                    return (
+                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, padding:"6px 0", borderBottom:"1px solid #f6f6f6", flexWrap:"wrap" }}>
+                        <span>{TRIP_EVENT_META[e.event_type]?.icon || "•"}</span>
+                        <b>{tripEventLabel(e.event_type)}</b>
+                        {(j?.job_number || e.notes) && <span style={{ fontFamily:"monospace", color:"#185FA5" }}>{j?.job_number || e.notes}</span>}
+                        <span style={{ fontSize:10.5, color:"#999", background:"#f1f1f1", borderRadius:20, padding:"1px 7px" }}>{e.created_by || "dispatcher"}</span>
+                        <span style={{ marginLeft:"auto", color:"#aaa", fontSize:11 }}>{(e.created_at || "").replace("T", " ").slice(0, 16)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+            )}
+          </Modal>
+        );
+      })()}
+
+      {tripCompleteModal && (() => {
+        const t = tripCompleteModal.trip;
+        const c = tripCalc(t);
+        const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
+        const deliveredJobs = c.jobsIn.filter(j => j.date_out || j.status === "delivered");
+        const cfDelivered = deliveredJobs.reduce((s, j) => s + parseCf(j.volume), 0);
+        const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
+        const bolPending = c.jobsIn.reduce((s, j) => s + Math.max(0, numv(j.bol_balance) - numv(j.bol_collected)), 0);
+        const dropTargets = [
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unidad #${r.id}` })),
+          ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
+        ];
+        const dur = t.departure_date ? Math.max(0, Math.round((new Date(today() + "T00:00:00") - new Date(t.departure_date + "T00:00:00")) / 86400000)) : null;
+        return (
+          <Modal title={`Completar trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
+            footer={<>
+              <Btn onClick={() => setTripCompleteModal(null)}>Cancelar</Btn>
+              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(jobKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Guardando..." : "Marcar completado"}</Btn>
+            </>}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+              {[
+                { l:"Jobs entregados", v:`${deliveredJobs.length} / ${c.count}` },
+                { l:"CF entregados", v:`${Math.round(cfDelivered).toLocaleString()} CF` },
+                { l:"BOL cobrado", v:`$${Math.round(bolCollected).toLocaleString()}` },
+                { l:"Balance pendiente", v:`$${Math.round(bolPending).toLocaleString()}` },
+                { l:"Duración", v: dur != null ? `${dur} día(s)` : "—" },
+              ].map(x => (
+                <div key={x.l} style={{ border:"1px solid #efefef", borderRadius:9, padding:"10px 12px" }}>
+                  <div style={{ fontSize:10.5, color:"#aaa", fontWeight:600 }}>{x.l}</div>
+                  <div style={{ fontSize:16, fontWeight:800, marginTop:2 }}>{x.v}</div>
+                </div>
+              ))}
+            </div>
+            {undelivered.length > 0 && (
+              <div style={{ background:"#FFF8F0", border:"1px solid #EF9F27", borderRadius:9, padding:"11px 13px" }}>
+                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {undelivered.length} job(s) sin entregar en el camión. ¿Mandar a storage?</div>
+                <div style={{ fontSize:11.5, color:"#888", marginBottom:8 }}>{undelivered.map(j => j.job_number || j.customer).filter(Boolean).join(", ")}</div>
+                <select style={inp} value={completeDropTarget} onChange={e => setCompleteDropTarget(e.target.value)}>
+                  <option value="">— Elegí storage / warehouse para los no entregados —</option>
+                  {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+                </select>
+              </div>
+            )}
           </Modal>
         );
       })()}
