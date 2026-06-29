@@ -72,6 +72,20 @@ const EXTRA_TYPES = [
   { v:"other", l:"Other" },
 ];
 const extraTypeLabel = (v) => EXTRA_TYPES.find(t => t.v === v)?.l || v;
+// Colored pill per extra type (for the commissions page chips).
+const EXTRA_TYPE_COLORS = {
+  extra_cf:     { bg:"#E6F1FB", fg:"#185FA5" },
+  shuttle:      { bg:"#EDE9FE", fg:"#6D28D9" },
+  long_carry:   { bg:"#FDE3CF", fg:"#C2410C" },
+  stairs:       { bg:"#FCE7F3", fg:"#BE185D" },
+  packing:      { bg:"#EAF3DE", fg:"#3B6D11" },
+  flight_charge:{ bg:"#FEF3C7", fg:"#92760B" },
+  other:        { bg:"#F1F1F1", fg:"#666" },
+};
+function ExtraTypeChip({ type, amount }) {
+  const c = EXTRA_TYPE_COLORS[type] || EXTRA_TYPE_COLORS.other;
+  return <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.fg, whiteSpace:"nowrap" }}>{extraTypeLabel(type)}{amount != null ? ` $${Math.round(amount).toLocaleString()}` : ""}</span>;
+}
 const GEN_BY = [
   { v:"driver_only", l:"Driver only" },
   { v:"driver_and_rep", l:"Driver + Rep" },
@@ -409,7 +423,7 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
   );
 }
 
-const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -573,7 +587,9 @@ const JOB_COLS_SQL = `alter table public.storage_jobs
   add column if not exists pickup_state text,
   add column if not exists pickup_zip text,
   add column if not exists delivery_date date,
-  add column if not exists delivery_city text;`;
+  add column if not exists delivery_city text,
+  add column if not exists broker_job_share_pct numeric default 0,
+  add column if not exists broker_job_share_amount numeric;`;
 // brokers table + broker/balance columns on storage_jobs (CRM v2). The app probes
 // the brokers table and the pickup_balance column; if missing it shows this SQL.
 const CRM_V2_SQL = `create table if not exists public.brokers (
@@ -857,6 +873,9 @@ alter table public.job_extras add column if not exists commission_base text;
 alter table public.job_extras add column if not exists commission_base_amount numeric;
 alter table public.job_extras add column if not exists source text default 'manual';
 alter table public.job_extras add column if not exists payment_id bigint;
+alter table public.job_extras add column if not exists broker_share_pct numeric default 0;
+alter table public.job_extras add column if not exists broker_share_amount numeric;
+alter table public.job_extras add column if not exists net_amount numeric;
 alter table public.job_extras enable row level security;
 drop policy if exists "job_extras_all" on public.job_extras;
 create policy "job_extras_all" on public.job_extras for all to anon, authenticated using (true) with check (true);
@@ -2085,12 +2104,15 @@ export default function App() {
   // Extras & commissions
   const [extrasMissing, setExtrasMissing] = useState(false);
   const [extrasColsMissing, setExtrasColsMissing] = useState(false);  // extra-CF / fuel columns
+  const [brokerShareMissing, setBrokerShareMissing] = useState(false);  // broker-share columns (job_extras + storage_jobs)
+  const [extrasTabExpanded, setExtrasTabExpanded] = useState(() => new Set());  // collapsible driver/month cards
   const [jobExtras, setJobExtras] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [exDriver, setExDriver] = useState("");           // filter: driver id
   const [exRep, setExRep] = useState("");                 // filter: rep id
   const [exMonth, setExMonth] = useState(today().slice(0, 7)); // "YYYY-MM"
   const [exType, setExType] = useState("");               // filter: extra type
+  const [exSearch, setExSearch] = useState("");           // filter: job # search
   const [extrasTab, setExtrasTab] = useState("drivers");  // drivers | reps
   const [showEmpModal, setShowEmpModal] = useState(false);
   const [empForm, setEmpForm] = useState(EMPTY_EMPLOYEE);
@@ -2547,6 +2569,26 @@ export default function App() {
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled && !created) setExtrasColsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, extrasMissing]);
+
+  // Probe the broker-share columns (job_extras + storage_jobs).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: e1 } = extrasMissing ? { error: null } : await supabase.from("job_extras").select("broker_share_pct").limit(1);
+      const { error: e2 } = await supabase.from("storage_jobs").select("broker_job_share_pct").limit(1);
+      if (cancelled || (!e1 && !e2)) return;
+      let created = false;
+      const sql = (extrasMissing ? "" : "alter table public.job_extras add column if not exists broker_share_pct numeric default 0, add column if not exists broker_share_amount numeric, add column if not exists net_amount numeric; ") +
+        "alter table public.storage_jobs add column if not exists broker_job_share_pct numeric default 0, add column if not exists broker_job_share_amount numeric;";
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setBrokerShareMissing(true);
     })();
     return () => { cancelled = true; };
   }, [session, extrasMissing]);
@@ -3486,7 +3528,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
@@ -3595,6 +3637,7 @@ export default function App() {
       delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "",
       billing_active: !!jd.billing_active, client_monthly_rate: jd.client_monthly_rate ?? "", first_month_free: !!jd.first_month_free, billing_start_date: jd.billing_start_date || "",
       closing_sheet_id: jd.closing_sheet_id ?? "", carrier_rate_per_cf: jd.carrier_rate_per_cf ?? "", bol_balance: jd.bol_balance ?? "", bol_collected: jd.bol_collected ?? "", bol_payment_method: jd.bol_payment_method || "", bol_payment_notes: jd.bol_payment_notes || "", bol_collected_date: jd.bol_collected_date || "", pads_received: jd.pads_received ?? "", pads_returned: jd.pads_returned ?? "",
+      broker_job_share_pct: jd.broker_job_share_pct ?? "", broker_job_share_enabled: numv(jd.broker_job_share_pct) > 0,
       notes: jd.notes || "",
     });
     setJobErr(null); setJobDetailKey(null); setShowAddJob(true);
@@ -3684,6 +3727,12 @@ export default function App() {
       fields.bol_collected_date = jobForm.bol_collected_date || null;
       fields.pads_received = jobForm.pads_received !== "" ? parseInt(jobForm.pads_received) : 0;
       fields.pads_returned = jobForm.pads_returned !== "" ? parseInt(jobForm.pads_returned) : 0;
+    }
+    if (!brokerShareMissing) {
+      const bjPct = jobForm.broker_job_share_pct !== "" ? Number(jobForm.broker_job_share_pct) : 0;
+      const collected = numv(jobForm.bol_collected) || (numv(jobForm.pickup_balance) + numv(jobForm.delivery_balance));
+      fields.broker_job_share_pct = bjPct;
+      fields.broker_job_share_amount = collected * bjPct / 100;
     }
 
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
@@ -4241,7 +4290,15 @@ export default function App() {
     const cf = isCf ? extraCfCalc(o) : null;
     // The "amount" stored = total charged to the client (= CF total w/ fuel for extra_cf).
     const a = isCf ? cf.total : numv(o.amount);
-    const commBase = isCf ? cf.base : a;   // what the commission % applies to
+    // Broker share: % the broker keeps from this extra.
+    const bsPct = (o.broker_share_pct === "" || o.broker_share_pct == null) ? 0 : numv(o.broker_share_pct);
+    const brokerShareAmount = a * bsPct / 100;
+    const netAmount = a - brokerShareAmount;
+    // Commission base: extra_cf keeps the fuel choice (with/without fuel); everything
+    // else uses gross (full amount) or net (after broker share).
+    let commissionBaseVal, commBase;
+    if (isCf) { commissionBaseVal = cf.commissionBase; commBase = cf.base; }
+    else { commissionBaseVal = (o.commission_base === "net") ? "net" : "gross"; commBase = (commissionBaseVal === "net") ? netAmount : a; }
     const dPct = (o.driver_commission_pct === "" || o.driver_commission_pct == null) ? null : numv(o.driver_commission_pct);
     const rPct = (o.rep_commission_pct === "" || o.rep_commission_pct == null) ? null : numv(o.rep_commission_pct);
     const dc = commBase * numv(dPct) / 100, rc = commBase * numv(rPct) / 100;
@@ -4253,7 +4310,7 @@ export default function App() {
       rep_id: (o.generated_by === "driver_only") ? null : (o.rep_id || null),
       driver_commission_pct: dPct, rep_commission_pct: rPct,
       driver_commission_amount: dc, rep_commission_amount: rc,
-      company_amount: a - dc - rc, active: o.active !== false,
+      company_amount: netAmount - dc - rc, active: o.active !== false,
       notes: o.notes || null,
     };
     if (!extrasColsMissing) {
@@ -4263,13 +4320,21 @@ export default function App() {
       payload.fuel_surcharge_pct = isCf ? cf.fuelPct : null;
       payload.fuel_surcharge_amount = isCf ? cf.fuelAmt : null;
       payload.extra_total_with_fuel = isCf ? cf.total : null;
-      payload.commission_base = isCf ? cf.commissionBase : null;
-      payload.commission_base_amount = isCf ? cf.base : null;
+      payload.commission_base = commissionBaseVal;
+      payload.commission_base_amount = commBase;
+    }
+    if (!brokerShareMissing) {
+      payload.broker_share_pct = bsPct;
+      payload.broker_share_amount = brokerShareAmount;
+      payload.net_amount = netAmount;
     }
     return payload;
   }
-  // The amount the commission % applies to (CF base for extra_cf, else amount).
-  const extraCommBase = (e) => e.extra_type === "extra_cf" ? numv(e.commission_base_amount) : numv(e.amount);
+  // The amount the commission % applies to (stored base if present, else amount).
+  const extraCommBase = (e) => e.commission_base_amount != null ? numv(e.commission_base_amount) : (e.extra_type === "extra_cf" ? numv(e.commission_base_amount) : numv(e.amount));
+  // Broker share kept from an extra (live fallback if not yet stored).
+  const extraBrokerShare = (e) => e.broker_share_amount != null ? numv(e.broker_share_amount) : (numv(e.amount) * numv(e.broker_share_pct) / 100);
+  const extraNet = (e) => e.net_amount != null ? numv(e.net_amount) : (numv(e.amount) - extraBrokerShare(e));
   // A payment-split extra whose commission was never assigned (no driver/rep yet).
   const extraPending = (e) => e.source === "payment_split" && !e.driver_id && !e.rep_id;
   // Create an extra of a given type for a (job, driver). Pcts auto-fill from rules.
@@ -4306,6 +4371,7 @@ export default function App() {
   }
   // Open the extra modal pre-filled from an existing extra (used to edit Extra CF details).
   function openEditExtra(e) {
+    const isCf = (e.extra_type || "extra_cf") === "extra_cf";
     setQuickExtra({
       id: e.id, jobId: e.job_id, extra_type: e.extra_type || "extra_cf", description: e.description || "",
       amount: e.amount ?? "", generated_by: e.generated_by || "driver_only",
@@ -4313,7 +4379,8 @@ export default function App() {
       driver_commission_pct: e.driver_commission_pct ?? "", rep_commission_pct: e.rep_commission_pct ?? "",
       notes: e.notes || "",
       extra_cf_count: e.extra_cf_count ?? "", extra_cf_rate: e.extra_cf_rate ?? "",
-      fuel_surcharge_pct: e.fuel_surcharge_pct ?? "", commission_base: e.commission_base || "with_fuel",
+      fuel_surcharge_pct: e.fuel_surcharge_pct ?? "", commission_base: e.commission_base || (isCf ? "with_fuel" : "gross"),
+      broker_share_pct: e.broker_share_pct ?? "", broker_share_enabled: numv(e.broker_share_pct) > 0,
     });
   }
   // ── Employees (reps) CRUD ──
@@ -4765,6 +4832,53 @@ export default function App() {
     return m;
   }, [jobs]);
 
+  // Broker share kept per broker: job-balance share (by job, deduped) + extras share.
+  const brokerShareByBroker = useMemo(() => {
+    const m = {}; const seen = new Set();
+    for (const j of jobs) {
+      if (!j.broker_id) continue;
+      const k = jobKey(j); const sk = j.broker_id + "|" + k;
+      if (seen.has(sk)) continue; seen.add(sk);
+      const collected = numv(j.bol_collected) || (numv(j.pickup_balance) + numv(j.delivery_balance));
+      const share = j.broker_job_share_amount != null ? numv(j.broker_job_share_amount) : (collected * numv(j.broker_job_share_pct) / 100);
+      if (share) m[j.broker_id] = (m[j.broker_id] || 0) + share;
+    }
+    for (const e of jobExtras) {
+      if (e.active === false) continue;
+      const k = jobKeyByRowId[e.job_id]; if (!k) continue;
+      const g = extraJobGroups.get(k); const bid = g?.broker_id;
+      if (!bid) continue;
+      const share = extraBrokerShare(e);
+      if (share) m[bid] = (m[bid] || 0) + share;
+    }
+    return m;
+  }, [jobs, jobExtras, jobKeyByRowId, extraJobGroups]);
+
+  // Gross vs net revenue (after broker shares) + per-broker-per-month broker share.
+  const revenueAnalytics = useMemo(() => {
+    let grossJob = 0, brokerJob = 0, grossExtras = 0, brokerExtras = 0;
+    const seen = new Set();
+    const monthly = {}; // month -> { brokerId -> amount }
+    const addMonthly = (mo, bid, amt) => { if (!amt || !bid || !mo) return; (monthly[mo] = monthly[mo] || {}); monthly[mo][bid] = (monthly[mo][bid] || 0) + amt; };
+    for (const j of jobs) {
+      const k = jobKey(j); const sk = (j.broker_id || "x") + "|" + k; if (seen.has(sk)) continue; seen.add(sk);
+      const collected = numv(j.bol_collected) || (numv(j.pickup_balance) + numv(j.delivery_balance));
+      grossJob += collected;
+      const share = j.broker_job_share_amount != null ? numv(j.broker_job_share_amount) : (collected * numv(j.broker_job_share_pct) / 100);
+      brokerJob += share;
+      addMonthly((j.date_in || j.delivery_date || (j.created_at || "")).slice(0, 7), j.broker_id, share);
+    }
+    for (const e of jobExtras) {
+      if (e.active === false) continue;
+      grossExtras += numv(e.amount);
+      const share = extraBrokerShare(e); brokerExtras += share;
+      const k = jobKeyByRowId[e.job_id]; const g = k ? extraJobGroups.get(k) : null;
+      addMonthly((g?.date_in || (e.created_at || "")).slice(0, 7), g?.broker_id, share);
+    }
+    const gross = grossJob + grossExtras, broker = brokerJob + brokerExtras;
+    return { gross, broker, net: gross - broker, grossJob, grossExtras, brokerJob, brokerExtras, monthly };
+  }, [jobs, jobExtras, jobKeyByRowId, extraJobGroups]);
+
   // Mark every part of a job (all its units) as delivered.
   async function deliverJobs(ids) {
     if (!ids || !ids.length) return;
@@ -5210,14 +5324,14 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Broker","Contacto","Teléfono","Jobs","Balance pend.","CS abiertos","Nos debe","Le debemos","Net","" ].map((h, i) => (
+                    {["Broker","Contacto","Teléfono","Jobs","Balance pend.","Broker share","CS abiertos","Nos debe","Le debemos","Net","" ].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {brokers.length === 0 ? (
-                    <tr><td colSpan={10} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV2Missing ? "Corré el SQL de configuración para activar brokers." : "Sin brokers cargados."}</td></tr>
+                    <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV2Missing ? "Corré el SQL de configuración para activar brokers." : "Sin brokers cargados."}</td></tr>
                   ) : brokers.map(b => {
                     const st = brokerStats[b.id] || { jobs:new Set(), balance:0 };
                     const count = st.jobs.size;
@@ -5230,6 +5344,7 @@ export default function App() {
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{b.contact_phone ? <a href={`tel:${b.contact_phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{b.contact_phone}</a> : "—"}</td>
                         <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: count>0?"#EAF3DE":"#f5f5f5", color: count>0?"#3B6D11":"#bbb" }}>{count}</span></td>
                         <td style={{ padding:"12px", fontWeight:600, color: st.balance>0 ? "#1A8A4E" : "#bbb", whiteSpace:"nowrap" }}>${st.balance.toLocaleString()}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap", color: (brokerShareByBroker[b.id]||0)>0 ? "#C2410C" : "#bbb", fontWeight:600 }}>${Math.round(brokerShareByBroker[b.id]||0).toLocaleString()}</td>
                         <td style={{ padding:"12px" }}>{ss.open || "—"}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap", color: ss.owesUs>0?"#1A8A4E":"#bbb" }}>${Math.round(ss.owesUs).toLocaleString()}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap", color: ss.weOwe>0?"#A32D2D":"#bbb" }}>${Math.round(ss.weOwe).toLocaleString()}</td>
@@ -5843,41 +5958,49 @@ export default function App() {
 
       {/* ───────────────────────── EXTRAS & COMMISSIONS ───────────────────────── */}
       {page === "extras" && (() => {
-        const monthLabel = (() => { const [y, m] = exMonth.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : exMonth; })();
+        const monthLabel = (() => { if (!exMonth) return "Todos los meses"; const [y, m] = exMonth.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : exMonth; })();
         const pendingComm = jobExtras.filter(e => e.active !== false && extraPending(e));
-        const typesToShow = exType ? EXTRA_TYPES.filter(t => t.v === exType) : EXTRA_TYPES;
         const driverIds = exDriver ? [Number(exDriver)] : driversList.map(d => d.id);
-        const groupsArr = [...extraJobGroups.values()].filter(g => groupMonth(g) === exMonth);
+        const allGroups = [...extraJobGroups.values()];
+        const searchQ = exSearch.trim().toLowerCase();
+        const curMonth = today().slice(0, 7);
+        const toggleExp = (key) => setExtrasTabExpanded(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+        const initials = (name) => (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?";
+        // Driver sections → grouped by month → one entry per job (with that driver's active extras).
         const sections = driverIds.map(did => {
           const driver = driverById[did];
           if (!driver) return null;
-          const jobsForDriver = [];
-          for (const g of groupsArr) {
-            const exsAll = (extrasByJobKey[g.key] || []).filter(e => e.driver_id === did);
-            const assigned = (g.driver_ids || []).includes(did);
-            if (exRep && !exsAll.some(e => String(e.rep_id) === String(exRep))) continue;
-            if (exType && !exsAll.some(e => e.extra_type === exType && e.active !== false)) continue;
-            if (!assigned && !exsAll.length) continue;
-            const byType = {};
-            for (const e of exsAll) { if (!byType[e.extra_type]) byType[e.extra_type] = e; }
-            jobsForDriver.push({ g, byType, exsAll });
+          const byMonth = {};
+          let totalAmt = 0, totalComm = 0;
+          for (const g of allGroups) {
+            if (searchQ && !((g.job_number || "").toLowerCase().includes(searchQ) || (g.customer || "").toLowerCase().includes(searchQ))) continue;
+            const mo = groupMonth(g);
+            if (exMonth && mo !== exMonth) continue;
+            const exs = (extrasByJobKey[g.key] || []).filter(e => e.driver_id === did && e.active !== false
+              && (!exRep || String(e.rep_id) === String(exRep)) && (!exType || e.extra_type === exType));
+            if (!exs.length) continue;
+            const amt = exs.reduce((s, e) => s + numv(e.amount), 0);
+            const comm = exs.reduce((s, e) => s + numv(e.driver_commission_amount), 0);
+            const pending = exs.some(e => extraPending(e));
+            totalAmt += amt; totalComm += comm;
+            (byMonth[mo] = byMonth[mo] || []).push({ g, exs, amt, comm, pending });
           }
-          jobsForDriver.sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
-          let totalAmt = 0, totalComm = 0, cfRevenue = 0, fuelRevenue = 0, commBaseTotal = 0;
-          for (const jd of jobsForDriver) for (const e of jd.exsAll) if (e.active !== false) {
-            totalAmt += numv(e.amount); totalComm += numv(e.driver_commission_amount);
-            commBaseTotal += extraCommBase(e);
-            if (e.extra_type === "extra_cf") { cfRevenue += numv(e.extra_cf_subtotal); fuelRevenue += numv(e.fuel_surcharge_amount); }
-          }
-          return { driver, did, jobsForDriver, totalAmt, totalComm, cfRevenue, fuelRevenue, commBaseTotal };
-        }).filter(Boolean).filter(s => s.jobsForDriver.length);
+          const months = Object.keys(byMonth).sort().reverse().map(mo => {
+            const mjobs = byMonth[mo].sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
+            const [y, m] = mo.split("-");
+            return { mo, label: m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : mo, jobs: mjobs, totalAmt: mjobs.reduce((s, j) => s + j.amt, 0), totalComm: mjobs.reduce((s, j) => s + j.comm, 0) };
+          });
+          return { driver, did, months, totalAmt, totalComm };
+        }).filter(Boolean).filter(s => s.months.length);
         // Rep / back-office view: group by rep employee → jobs they were involved in.
         const repIds = exRep ? [Number(exRep)] : employees.map(em => em.id);
         const repSections = repIds.map(rid => {
           const emp = empById[rid];
           if (!emp) return null;
           const jobsForRep = [];
-          for (const g of groupsArr) {
+          for (const g of allGroups) {
+            if (exMonth && groupMonth(g) !== exMonth) continue;
+            if (searchQ && !((g.job_number || "").toLowerCase().includes(searchQ) || (g.customer || "").toLowerCase().includes(searchQ))) continue;
             const exs = (extrasByJobKey[g.key] || []).filter(e => e.active !== false && String(e.rep_id) === String(rid)
               && (!exType || e.extra_type === exType) && (!exDriver || String(e.driver_id) === String(exDriver)));
             if (exs.length) jobsForRep.push({ g, extras: exs });
@@ -5940,10 +6063,12 @@ export default function App() {
                 {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
               </select>
               <input type="month" value={exMonth} onChange={e => setExMonth(e.target.value)} style={{ ...inp, width:"auto" }} />
+              {exMonth ? <button onClick={() => setExMonth("")} style={{ ...inp, width:"auto", cursor:"pointer", background:"#fff", color:"#888" }}>Todos los meses ✕</button> : <span style={{ fontSize:12, color:"#888", alignSelf:"center" }}>Todos los meses</span>}
               <select value={exType} onChange={e => setExType(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
                 <option value="">Todos los tipos</option>
                 {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
               </select>
+              <input value={exSearch} onChange={e => setExSearch(e.target.value)} placeholder="Buscar job # o cliente…" style={{ ...inp, width:"auto", minWidth:170 }} />
             </div>
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
@@ -6020,65 +6145,68 @@ export default function App() {
             ) : extrasMissing ? null : driversList.length === 0 ? (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No hay drivers todavía. Cargá drivers y asignalos a jobs.</div>
             ) : sections.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin extras ni jobs asignados para {monthLabel} con estos filtros.</div>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin extras para {exMonth ? monthLabel : "ningún mes"} con estos filtros.</div>
             ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
                 {sections.map(sec => {
-                  const jobsData = sec.jobsForDriver.map(jd => ({ job_number: jd.g.job_number, customer: jd.g.customer, extras: jd.exsAll.filter(e => e.active !== false) }));
+                  const dExpanded = extrasTabExpanded.has("d:" + sec.did);
+                  const allJobsData = sec.months.flatMap(mn => mn.jobs.map(j => ({ job_number: j.g.job_number, customer: j.g.customer, extras: j.exs })));
+                  const periodLabel = exMonth ? monthLabel : "Todos los meses";
+                  const toggleMonth = (mKey, isOpen) => setExtrasTabExpanded(prev => { const n = new Set(prev); if (isOpen) { n.delete(mKey); n.add("c:" + mKey); } else { n.delete("c:" + mKey); n.add(mKey); } return n; });
                   return (
                     <div key={sec.did} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:"1px solid #f0f0f0", flexWrap:"wrap", background:"#fafafa" }}>
-                        <span style={{ fontSize:15, fontWeight:700 }}>🧑‍✈️ {sec.driver.name}</span>
+                      {/* Driver header — collapsible */}
+                      <div onClick={() => toggleExp("d:" + sec.did)} style={{ display:"flex", alignItems:"center", gap:11, padding:"12px 16px", cursor:"pointer", background:"#fafafa", borderBottom: dExpanded ? "1px solid #f0f0f0" : "none", flexWrap:"wrap" }}>
+                        <span style={{ width:34, height:34, borderRadius:"50%", background:"#111", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700, flexShrink:0 }}>{initials(sec.driver.name)}</span>
+                        <span style={{ fontSize:15, fontWeight:700 }}>{sec.driver.name}</span>
+                        <span style={{ fontSize:11, color:"#aaa" }}>{dExpanded ? "▾" : "▸"}</span>
                         <span style={{ flex:1 }} />
-                        <span style={{ fontSize:12, color:"#666" }}>Extras: <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
-                        <span style={{ fontSize:12, color:"#1A8A4E" }}>Comisión: <b>${Math.round(sec.totalComm).toLocaleString()}</b></span>
-                        <Btn onClick={() => copyDriverExtras(sec.driver.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>📋 Copiar</Btn>
-                        <Btn onClick={() => printDriverExtras(sec.driver.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>🖨️ PDF</Btn>
+                        <span style={{ fontSize:12, color:"#666" }}>Extras <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
+                        <span style={{ fontSize:11.5, fontWeight:700, color:"#1A8A4E", background:"#EAF3DE", borderRadius:20, padding:"3px 11px" }}>Comisión ${Math.round(sec.totalComm).toLocaleString()}</span>
                       </div>
-                      <div style={{ padding:"6px 12px 12px" }}>
-                        {sec.jobsForDriver.map(jd => (
-                          <div key={jd.g.key} style={{ marginTop:12 }}>
-                            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4, paddingLeft:2 }}>
-                              <button onClick={() => setJobDetailKey(jd.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{jd.g.job_number || "(ver)"}</button>
-                              <span style={{ fontSize:13 }}>{jd.g.customer || "—"}</span>
-                              {brokerName(jd.g.broker_id) && <span style={{ fontSize:11, color:"#888" }}>· {brokerName(jd.g.broker_id)}</span>}
-                              {jd.g.date_in && <span style={{ fontSize:11, color:"#aaa" }}>· {jd.g.date_in}</span>}
-                            </div>
-                            <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
-                              <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                                <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                  {["", "Tipo", "Monto", "Driver", "Generado por", "Rep", "Driver %", "Rep %", "Com. driver", "Com. rep", ""].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
-                                </tr></thead>
-                                <tbody>
-                                  {typesToShow.map(t => {
-                                    const extra = jd.byType[t.v] || null;
-                                    return <ExtraRow key={t.v} type={t.v} extra={extra} driverId={sec.did} drivers={driversList} employees={employees}
-                                      onActivate={(type) => activateExtra(jd.g.repId, sec.did, type)}
-                                      onPatch={patchExtra} onToggle={toggleExtraActive} onDelete={deleteExtra} onEdit={openEditExtra} />;
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
+                      {dExpanded && (
+                        <div style={{ padding:"8px 12px 12px" }}>
+                          <div style={{ display:"flex", justifyContent:"flex-end", gap:6, marginBottom:6 }}>
+                            <Btn onClick={() => copyDriverExtras(sec.driver.name, periodLabel, allJobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>📋 Copiar</Btn>
+                            <Btn onClick={() => printDriverExtras(sec.driver.name, periodLabel, allJobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>🖨️ PDF</Btn>
                           </div>
-                        ))}
-                        <div style={{ marginTop:14, borderTop:"2px solid #eee" }}>
-                          {(sec.cfRevenue > 0 || sec.fuelRevenue > 0) && (
-                            <div style={{ display:"flex", gap:18, flexWrap:"wrap", padding:"6px 10px", fontSize:12, color:"#666" }}>
-                              <span>Extra CF revenue: <b>${Math.round(sec.cfRevenue).toLocaleString()}</b></span>
-                              <span>Fuel surcharge revenue: <b style={{ color:"#854F0B" }}>${Math.round(sec.fuelRevenue).toLocaleString()}</b></span>
-                            </div>
-                          )}
-                          <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:600, color:"#444" }}>
-                            <span>TOTAL EXTRAS (cobrado al cliente)</span><span>${Math.round(sec.totalAmt).toLocaleString()}</span>
-                          </div>
-                          <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 10px", fontSize:12, color:"#888" }}>
-                            <span>Base de comisión</span><span>${Math.round(sec.commBaseTotal).toLocaleString()}</span>
-                          </div>
-                          <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:700, background:"#FEF9C3", borderRadius:8 }}>
-                            <span>COMISIÓN {sec.driver.name}</span><span style={{ color:"#1A8A4E" }}>${Math.round(sec.totalComm).toLocaleString()}</span>
-                          </div>
+                          {sec.months.map(mn => {
+                            const mKey = "m:" + sec.did + ":" + mn.mo;
+                            const open = extrasTabExpanded.has(mKey) ? true : extrasTabExpanded.has("c:" + mKey) ? false : (mn.mo === curMonth);
+                            return (
+                              <div key={mn.mo} style={{ border:"1px solid #f0f0f0", borderRadius:9, marginBottom:8, overflow:"hidden" }}>
+                                <div onClick={() => toggleMonth(mKey, open)} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", cursor:"pointer", background:"#fbfbfb" }}>
+                                  <span style={{ fontSize:11, color:"#aaa" }}>{open ? "▾" : "▸"}</span>
+                                  <span style={{ fontSize:12.5, fontWeight:700 }}>{mn.label}</span>
+                                  <span style={{ flex:1 }} />
+                                  <span style={{ fontSize:11.5, color:"#666" }}>Extras <b>${Math.round(mn.totalAmt).toLocaleString()}</b></span>
+                                  <span style={{ fontSize:11.5, color:"#1A8A4E" }}>Comisión <b>${Math.round(mn.totalComm).toLocaleString()}</b></span>
+                                </div>
+                                {open && (
+                                  <div>
+                                    {mn.jobs.map(j => (
+                                      <div key={j.g.key} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", borderTop:"1px solid #f6f6f6", flexWrap:"wrap" }}>
+                                        <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:12.5, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(ver)"}</button>
+                                        <span style={{ fontSize:12.5, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.g.customer || "—"}</span>
+                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Editar extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>)}</span>
+                                        <span style={{ flex:1 }} />
+                                        <span style={{ fontSize:12.5, color:"#666" }} title="Total cobrado">${Math.round(j.amt).toLocaleString()}</span>
+                                        <span style={{ fontSize:12.5, fontWeight:700, color:"#1A8A4E" }} title="Comisión driver">${Math.round(j.comm).toLocaleString()}</span>
+                                        <span title={j.pending ? "Comisión pendiente" : "Comisión asignada"}>{j.pending ? "⚠️" : "✅"}</span>
+                                        <button onClick={() => setJobDetailKey(j.g.key)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+                                      </div>
+                                    ))}
+                                    <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 11px", borderTop:"2px solid #eee", fontSize:12.5, fontWeight:700, background:"#FEF9C3" }}>
+                                      <span>Total {mn.label}</span>
+                                      <span>Extras ${Math.round(mn.totalAmt).toLocaleString()} · Comisión <span style={{ color:"#1A8A4E" }}>${Math.round(mn.totalComm).toLocaleString()}</span></span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
-                      </div>
+                      )}
                     </div>
                   );
                 })}
@@ -6605,6 +6733,49 @@ export default function App() {
           </div>
         ))}
       </div>
+      )}
+
+      {/* ANALYTICS — revenue: gross vs net + broker share */}
+      {page === "analytics" && !brokerShareMissing && (revenueAnalytics.broker > 0 || revenueAnalytics.gross > 0) && (
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Revenue bruto vs neto</div>
+            <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Después de lo que se queda el broker</div>
+            {(() => {
+              const { gross, broker, net } = revenueAnalytics;
+              const rows = [["Bruto (cobrado + extras)", gross, "#185FA5"], ["− Broker share", broker, "#C2410C"], ["Neto para la empresa", net, "#1A8A4E"]];
+              const max = Math.max(gross, 1);
+              return rows.map(([l, v, c]) => (
+                <div key={l} style={{ marginBottom:12 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:4 }}><span style={{ fontWeight:500 }}>{l}</span><span style={{ color:c, fontWeight:700 }}>${Math.round(v).toLocaleString()}</span></div>
+                  <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}><div style={{ background:c, borderRadius:6, height:8, width:`${Math.min(100, (Math.abs(v)/max)*100)}%`, transition:"width .4s" }} /></div>
+                </div>
+              ));
+            })()}
+          </div>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Broker share por broker / mes</div>
+            <div style={{ fontSize:12, color:"#bbb", marginBottom:14 }}>Lo retenido por cada broker, por mes</div>
+            {(() => {
+              const months = Object.keys(revenueAnalytics.monthly).sort().slice(-3);
+              if (!months.length) return <p style={{ fontSize:12, color:"#bbb", textAlign:"center", marginTop:20 }}>Sin broker share registrado.</p>;
+              const monthNames = {"01":"Ene","02":"Feb","03":"Mar","04":"Abr","05":"May","06":"Jun","07":"Jul","08":"Ago","09":"Sep","10":"Oct","11":"Nov","12":"Dic"};
+              return months.reverse().map(mo => {
+                const [y, m] = mo.split("-");
+                const entries = Object.entries(revenueAnalytics.monthly[mo]).sort((a, b) => b[1] - a[1]);
+                const tot = entries.reduce((s, [, v]) => s + v, 0);
+                return (
+                  <div key={mo} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, fontWeight:700, marginBottom:5, borderBottom:"1px solid #f3f3f3", paddingBottom:3 }}><span>{monthNames[m]} {y}</span><span style={{ color:"#C2410C" }}>${Math.round(tot).toLocaleString()}</span></div>
+                    {entries.map(([bid, v]) => (
+                      <div key={bid} style={{ display:"flex", justifyContent:"space-between", fontSize:11.5, color:"#666", padding:"1px 0" }}><span>{brokerName(Number(bid)) || "Broker #" + bid}</span><span>${Math.round(v).toLocaleString()}</span></div>
+                    ))}
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </div>
       )}
 
       {/* ANALYTICS CHARTS */}
@@ -7296,7 +7467,7 @@ export default function App() {
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8 }}>
                   {exs.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total extras: <b>${Math.round(totAmt).toLocaleString()}</b></span>}
                   <span style={{ flex:1 }} />
-                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar extra</Btn>
+                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar extra</Btn>
                 </div>
               </>
             );
@@ -7320,6 +7491,12 @@ export default function App() {
             const byType = {};
             for (const p of extraPays) { const t = p.extra_type || "extra"; byType[t] = (byType[t] || 0) + paymentNet(p); }
             const typeEntries = Object.entries(byType);
+            // Broker share deductions (job balance + extras) → net revenue to the company.
+            const jobBrokerSharePct = numv(jobDetail.broker_job_share_pct);
+            const jobBrokerShare = jobCollected * jobBrokerSharePct / 100;
+            const extrasBrokerShare = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false).reduce((s, e) => s + extraBrokerShare(e), 0);
+            const totalBrokerShare = jobBrokerShare + extrasBrokerShare;
+            const netRevenue = (jobCollected + extrasCollected) - totalBrokerShare;
             const repId = Math.min(...jobDetail.parts.map(p => p.id));
             const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
             return (
@@ -7344,6 +7521,18 @@ export default function App() {
                     </div>
                   )}
                   {ccFeeTotal > 0 && <div style={{ fontSize:12, marginTop:6, color:"#854F0B" }}>CC fees cobrados: <b>${Math.round(ccFeeTotal).toLocaleString()}</b></div>}
+                  {totalBrokerShare > 0 && (
+                    <div style={{ marginTop:6, paddingTop:6, borderTop:"1px solid #eee", fontSize:12.5 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", color:"#C2410C" }}>
+                        <span>− Broker share{jobBrokerSharePct > 0 ? ` (job ${jobBrokerSharePct}%)` : ""}</span>
+                        <span><b>−${Math.round(totalBrokerShare).toLocaleString()}</b></span>
+                      </div>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginTop:3, fontWeight:700 }}>
+                        <span>Revenue neto (post broker)</span>
+                        <span style={{ color:"#1A8A4E" }}>${Math.round(netRevenue).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  )}
                   <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, paddingTop:8, borderTop:"1px solid #eee", fontSize:13.5, fontWeight:800 }}>
                     <span>Saldo total pendiente</span>
                     <span style={{ color: totalOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
@@ -7819,6 +8008,26 @@ export default function App() {
               </FormSection>
             );
 
+            // Broker keeps a % of the collected job balance (reduces net job revenue).
+            const brokerJobShareBlock = !brokerShareMissing && (() => {
+              const on = numv(jobForm.broker_job_share_pct) > 0 || jobForm.broker_job_share_enabled;
+              const collected = numv(jobForm.bol_collected) || (numv(jobForm.pickup_balance) + numv(jobForm.delivery_balance));
+              const shareAmt = collected * numv(jobForm.broker_job_share_pct) / 100;
+              return (
+                <div style={{ gridColumn:"1/-1", padding:"10px 12px", background:"#FFF8F0", border:"1px solid #FAE6CF", borderRadius:9, marginTop:4 }}>
+                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
+                    <input type="checkbox" checked={on} onChange={e => setJobForm(f => ({ ...f, broker_job_share_enabled: e.target.checked, broker_job_share_pct: e.target.checked ? f.broker_job_share_pct : "" }))} />
+                    🤝 El broker se queda con un % del balance del job
+                  </label>
+                  {on && (
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
+                      <Field label="Broker share % del balance"><input style={inp} type="number" value={jobForm.broker_job_share_pct} onChange={u("broker_job_share_pct")} placeholder="0" /></Field>
+                      <Field label="Broker share amount (auto)"><div style={{ ...inp, background:"#fafafa", fontWeight:700, color:"#C2410C" }}>{money(shareAmt) || "$0"}</div></Field>
+                    </div>
+                  )}
+                </div>
+              );
+            })();
             const financialsFull = (
               <FormSection title="Financiero">
                 <div style={fgrid}>
@@ -7828,6 +8037,7 @@ export default function App() {
                   <Field label="Balance en delivery ($)"><input style={inp} type="number" value={jobForm.delivery_balance} onChange={u("delivery_balance")} placeholder="0" /></Field>
                   <Field label="Precio / CF ($)"><input style={inp} type="number" value={jobForm.price_per_cf} onChange={u("price_per_cf")} placeholder="0.65" /></Field>
                   <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={jobForm.fuel_surcharge_pct} onChange={u("fuel_surcharge_pct")} placeholder="5" /></Field>
+                  {brokerJobShareBlock}
                 </div>
               </FormSection>
             );
@@ -7852,6 +8062,7 @@ export default function App() {
                   <Field label="BOL cobrado ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={u("bol_collected")} placeholder="0" /></Field>
                   <Field label="Método de pago"><PaymentMethodSelect style={inp} value={jobForm.bol_payment_method} onChange={v => setJobForm(f => ({...f, bol_payment_method: v || ""}))} /></Field>
                   <Field label="Fecha de cobro"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={u("bol_collected_date")} /></Field>
+                  {brokerJobShareBlock}
                 </div>
               </FormSection>
             );
@@ -8336,7 +8547,12 @@ export default function App() {
         const onGen = (v) => { const d = commissionDefaults(quickExtra.extra_type, v); setQ({ generated_by:v, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: v === "driver_only" ? "" : quickExtra.rep_id }); };
         const cf = extraCfCalc(quickExtra);
         const a = isCf ? cf.total : numv(quickExtra.amount);
-        const base = isCf ? cf.base : a;
+        const bsOn = !brokerShareMissing && !!quickExtra.broker_share_enabled;
+        const bsPct = bsOn ? numv(quickExtra.broker_share_pct) : 0;
+        const brokerShare = a * bsPct / 100;
+        const netAmt = a - brokerShare;
+        const commBaseVal = isCf ? cf.commissionBase : (quickExtra.commission_base === "net" ? "net" : "gross");
+        const base = isCf ? cf.base : (commBaseVal === "net" ? netAmt : a);
         const dc = base * numv(quickExtra.driver_commission_pct) / 100, rc = base * numv(quickExtra.rep_commission_pct) / 100;
         return (
           <Modal title={quickExtra.id ? "Editar extra" : "Agregar extra"} onClose={() => setQuickExtra(null)}
@@ -8401,12 +8617,46 @@ export default function App() {
               </div>
             )}
 
+            {/* Broker share (collapsible) */}
+            {!brokerShareMissing && (
+              <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF8F0", border:"1px solid #FAE6CF", borderRadius:9 }}>
+                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
+                  <input type="checkbox" checked={bsOn} onChange={e => setQ({ broker_share_enabled: e.target.checked, broker_share_pct: e.target.checked && (quickExtra.broker_share_pct === "" || quickExtra.broker_share_pct == null) ? "" : quickExtra.broker_share_pct })} />
+                  🤝 El broker se queda con un % de este extra
+                </label>
+                {bsOn && (
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginTop:10 }}>
+                    <Field label="Broker share %"><input style={inp} type="number" value={quickExtra.broker_share_pct} onChange={e => setQ({ broker_share_pct:e.target.value })} placeholder="0" /></Field>
+                    <Field label="Broker share amount"><input style={{ ...inp, background:"#f3f3f3", color:"#666" }} value={money(brokerShare) || "$0"} readOnly /></Field>
+                    <Field label="Net amount"><input style={{ ...inp, background:"#f3f3f3", fontWeight:700 }} value={money(netAmt) || "$0"} readOnly /></Field>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Commission base selector (gross vs net) — only for non-CF when broker share applies */}
+            {!isCf && bsOn && bsPct > 0 && (
+              <div style={{ marginTop:10 }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Base de comisión</div>
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                  {[["gross", "Sobre el monto bruto", a], ["net", "Sobre el neto (post broker)", netAmt]].map(([v, l, amt]) => {
+                    const on = commBaseVal === v;
+                    return <button key={v} onClick={() => setQ({ commission_base: v })} style={{ flex:1, minWidth:150, textAlign:"left", padding:"8px 11px", borderRadius:8, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#e5e5e5"}`, background: on ? "#E6F1FB" : "#fff", color:"#111" }}>
+                      <div style={{ fontSize:12.5, fontWeight:600 }}>{on ? "◉" : "○"} {l}</div>
+                      <div style={{ fontSize:11, color:"#888", marginTop:2 }}>Comisión sobre {money(amt) || "$0"}</div>
+                    </button>;
+                  })}
+                </div>
+              </div>
+            )}
+
             <div style={{ marginTop:12, background:"#fafafa", borderRadius:8, padding:"9px 12px", fontSize:12.5 }}>
-              <div style={{ marginBottom:5, color:"#666" }}>Base de comisión: <b>{money(base) || "$0"}</b>{isCf ? ` (${cf.commissionBase === "without_fuel" ? "sin" : "con"} fuel)` : ""}</div>
+              <div style={{ marginBottom:5, color:"#666" }}>Base de comisión: <b>{money(base) || "$0"}</b>{isCf ? ` (${cf.commissionBase === "without_fuel" ? "sin" : "con"} fuel)` : bsPct > 0 ? ` (${commBaseVal === "net" ? "neto" : "bruto"})` : ""}</div>
               <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
                 <span>Comisión driver ({numv(quickExtra.driver_commission_pct)}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
                 <span>Comisión rep ({numv(quickExtra.rep_commission_pct)}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
-                <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(a - dc - rc) || "$0"}</b></span>
+                {bsPct > 0 && <span>Broker share: <b style={{ color:"#C2410C" }}>{money(brokerShare) || "$0"}</b></span>}
+                <span>Net empresa: <b style={{ color:"#EF9F27" }}>{money(netAmt - dc - rc) || "$0"}</b></span>
               </div>
             </div>
           </Modal>
