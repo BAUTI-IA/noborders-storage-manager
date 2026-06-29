@@ -94,13 +94,25 @@ function commissionDefaults(extraType, generatedBy) {
   if (generatedBy === "rep_only") return { driver:0, rep:10 };
   return { driver:0, rep:0 };
 }
+// Extra CF math: CF×rate subtotal, fuel surcharge, total, and the commission base.
+function extraCfCalc(o) {
+  const cfCount = numv(o.extra_cf_count), cfRate = numv(o.extra_cf_rate);
+  const cfSub = cfCount * cfRate;
+  const fuelPct = numv(o.fuel_surcharge_pct);
+  const fuelAmt = cfSub * fuelPct / 100;
+  const total = cfSub + fuelAmt;
+  const commissionBase = o.commission_base === "without_fuel" ? "without_fuel" : "with_fuel";
+  const base = commissionBase === "without_fuel" ? cfSub : total;
+  return { cfCount, cfRate, cfSub, fuelPct, fuelAmt, total, commissionBase, base };
+}
 const EMPTY_EMPLOYEE = { name:"", role:"", phone:"", email:"", active:true };
 
 // One row of the per-job extras matrix. A row is "active" when an extra exists for
 // this (job, type, driver). Editing amount/% persists on blur; selects persist on change.
-function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPatch, onToggle, onDelete }) {
+function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPatch, onToggle, onDelete, onEdit }) {
   const active = !!extra && extra.active !== false;
   const locked = EXTRA_LOCKED_DRIVER(type);
+  const isCf = type === "extra_cf";
   const [amount, setAmount] = useState(extra?.amount ?? "");
   const [dPct, setDPct] = useState(extra?.driver_commission_pct ?? "");
   const [rPct, setRPct] = useState(extra?.rep_commission_pct ?? "");
@@ -112,8 +124,10 @@ function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPat
   const gen = extra?.generated_by || "driver_only";
   const cell = { padding:"5px 6px", fontSize:12, verticalAlign:"middle" };
   const miniInp = { fontSize:12, padding:"4px 6px", borderRadius:6, border:"1px solid #e5e5e5", width:62, outline:"none" };
-  const dc = numv(amount) * numv(dPct) / 100;
-  const rc = numv(amount) * numv(rPct) / 100;
+  // Extra CF commissions apply to the chosen base; everything else to the amount.
+  const commBase = isCf ? (numv(extra?.commission_base_amount) || numv(amount)) : numv(amount);
+  const dc = commBase * numv(dPct) / 100;
+  const rc = commBase * numv(rPct) / 100;
   return (
     <tr style={{ borderBottom:"1px solid #f6f6f6", background: active ? "#fff" : "#fcfcfc" }}>
       <td style={{ ...cell, textAlign:"center" }}>
@@ -124,7 +138,17 @@ function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPat
         {extraTypeLabel(type)}
         {type === "other" && active && <input value={desc} onChange={e => setDesc(e.target.value)} onBlur={() => onPatch(extra, { description: desc })} placeholder="Detalle" style={{ ...miniInp, width:120, marginLeft:6 }} />}
       </td>
-      <td style={cell}>{active ? <input value={amount} onChange={e => setAmount(e.target.value)} onBlur={() => onPatch(extra, { amount })} placeholder="$" style={{ ...miniInp, width:78 }} /> : <span style={{ color:"#ccc" }}>—</span>}</td>
+      <td style={{ ...cell, minWidth: active && isCf ? 190 : undefined }}>{!active ? <span style={{ color:"#ccc" }}>—</span> : isCf ? (
+        <div style={{ display:"flex", alignItems:"flex-start", gap:6 }}>
+          <div style={{ lineHeight:1.45, fontSize:10.5 }}>
+            <div><b>{numv(extra.extra_cf_count).toLocaleString()} CF</b> × {money(extra.extra_cf_rate) || "$0"} = {money(extra.extra_cf_subtotal) || "$0"}</div>
+            <div style={{ color:"#888" }}>fuel {numv(extra.fuel_surcharge_pct)}% +{money(extra.fuel_surcharge_amount) || "$0"}</div>
+            <div>Total c/fuel: <b>{money(extra.extra_total_with_fuel) || "$0"}</b></div>
+            <div style={{ color:"#854F0B" }}>Base com.: <b>{money(extra.commission_base_amount) || "$0"}</b> ({extra.commission_base === "without_fuel" ? "s/fuel" : "c/fuel"})</div>
+          </div>
+          <button onClick={() => onEdit(extra)} title="Editar Extra CF" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✎</button>
+        </div>
+      ) : <input value={amount} onChange={e => setAmount(e.target.value)} onBlur={() => onPatch(extra, { amount })} placeholder="$" style={{ ...miniInp, width:78 }} />}</td>
       <td style={cell}>{active ? (
         <select value={extra?.driver_id || ""} onChange={e => onPatch(extra, { driver_id: e.target.value || null })} style={{ ...miniInp, width:112, borderColor: extra?.driver_id ? "#e5e5e5" : "#fca5a5" }}>
           <option value="">— Select —</option>
@@ -776,8 +800,24 @@ create table if not exists public.job_extras (
   company_amount numeric,
   active boolean default true,
   notes text,
+  extra_cf_count numeric,
+  extra_cf_rate numeric,
+  extra_cf_subtotal numeric,
+  fuel_surcharge_pct numeric default 0,
+  fuel_surcharge_amount numeric,
+  extra_total_with_fuel numeric,
+  commission_base text,
+  commission_base_amount numeric,
   created_at timestamptz default now()
 );
+alter table public.job_extras add column if not exists extra_cf_count numeric;
+alter table public.job_extras add column if not exists extra_cf_rate numeric;
+alter table public.job_extras add column if not exists extra_cf_subtotal numeric;
+alter table public.job_extras add column if not exists fuel_surcharge_pct numeric default 0;
+alter table public.job_extras add column if not exists fuel_surcharge_amount numeric;
+alter table public.job_extras add column if not exists extra_total_with_fuel numeric;
+alter table public.job_extras add column if not exists commission_base text;
+alter table public.job_extras add column if not exists commission_base_amount numeric;
 alter table public.job_extras enable row level security;
 drop policy if exists "job_extras_all" on public.job_extras;
 create policy "job_extras_all" on public.job_extras for all to anon, authenticated using (true) with check (true);
@@ -1946,6 +1986,7 @@ export default function App() {
   const [truckDetailId, setTruckDetailId] = useState(null);          // truck detail modal
   // Extras & commissions
   const [extrasMissing, setExtrasMissing] = useState(false);
+  const [extrasColsMissing, setExtrasColsMissing] = useState(false);  // extra-CF / fuel columns
   const [jobExtras, setJobExtras] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [exDriver, setExDriver] = useState("");           // filter: driver id
@@ -2359,6 +2400,24 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, extrasMissing, loadExtras, loadEmployees]);
+
+  // Probe the Extra-CF / fuel-surcharge columns on job_extras (later release).
+  useEffect(() => {
+    if (!session || extrasMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("job_extras").select("extra_cf_count").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      const sql = "alter table public.job_extras add column if not exists extra_cf_count numeric, add column if not exists extra_cf_rate numeric, add column if not exists extra_cf_subtotal numeric, add column if not exists fuel_surcharge_pct numeric default 0, add column if not exists fuel_surcharge_amount numeric, add column if not exists extra_total_with_fuel numeric, add column if not exists commission_base text, add column if not exists commission_base_amount numeric;";
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setExtrasColsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, extrasMissing]);
 
   // Probe the Payments module (payments + payment_accounts tables).
   useEffect(() => {
@@ -3873,15 +3932,20 @@ export default function App() {
     showToast(`Trip ${trip.trip_number || trip.id} completado`);
   }
   // ── Extras & commissions handlers ──
-  // Build a job_extras payload from amount + percentages (computes split amounts).
+  // Build a job_extras payload. For Extra CF the amount = total charged (CF + fuel)
+  // and commissions are computed on the chosen base (with/without fuel surcharge).
   function extraPayload(o) {
-    const a = numv(o.amount);
+    const isCf = o.extra_type === "extra_cf";
+    const cf = isCf ? extraCfCalc(o) : null;
+    // The "amount" stored = total charged to the client (= CF total w/ fuel for extra_cf).
+    const a = isCf ? cf.total : numv(o.amount);
+    const commBase = isCf ? cf.base : a;   // what the commission % applies to
     const dPct = (o.driver_commission_pct === "" || o.driver_commission_pct == null) ? null : numv(o.driver_commission_pct);
     const rPct = (o.rep_commission_pct === "" || o.rep_commission_pct == null) ? null : numv(o.rep_commission_pct);
-    const dc = a * numv(dPct) / 100, rc = a * numv(rPct) / 100;
-    return {
+    const dc = commBase * numv(dPct) / 100, rc = commBase * numv(rPct) / 100;
+    const payload = {
       extra_type: o.extra_type, description: o.description || null,
-      amount: (o.amount === "" || o.amount == null) ? null : a,
+      amount: isCf ? a : ((o.amount === "" || o.amount == null) ? null : a),
       generated_by: o.generated_by || "driver_only",
       driver_id: o.driver_id || null,
       rep_id: (o.generated_by === "driver_only") ? null : (o.rep_id || null),
@@ -3890,7 +3954,20 @@ export default function App() {
       company_amount: a - dc - rc, active: o.active !== false,
       notes: o.notes || null,
     };
+    if (!extrasColsMissing) {
+      payload.extra_cf_count = isCf ? ((o.extra_cf_count === "" || o.extra_cf_count == null) ? null : cf.cfCount) : null;
+      payload.extra_cf_rate = isCf ? ((o.extra_cf_rate === "" || o.extra_cf_rate == null) ? null : cf.cfRate) : null;
+      payload.extra_cf_subtotal = isCf ? cf.cfSub : null;
+      payload.fuel_surcharge_pct = isCf ? cf.fuelPct : null;
+      payload.fuel_surcharge_amount = isCf ? cf.fuelAmt : null;
+      payload.extra_total_with_fuel = isCf ? cf.total : null;
+      payload.commission_base = isCf ? cf.commissionBase : null;
+      payload.commission_base_amount = isCf ? cf.base : null;
+    }
+    return payload;
   }
+  // The amount the commission % applies to (CF base for extra_cf, else amount).
+  const extraCommBase = (e) => e.extra_type === "extra_cf" ? numv(e.commission_base_amount) : numv(e.amount);
   // Create an extra of a given type for a (job, driver). Pcts auto-fill from rules.
   async function activateExtra(jobId, driverId, type) {
     const gen = "driver_only";
@@ -3918,9 +3995,22 @@ export default function App() {
     loadExtras();
   }
   async function saveQuickExtra() {
-    const q = quickExtra; if (!q || !q.jobId) return;
-    await supabase.from("job_extras").insert([{ job_id: q.jobId, ...extraPayload(q) }]);
+    const q = quickExtra; if (!q || (!q.jobId && !q.id)) return;
+    if (q.id) await supabase.from("job_extras").update(extraPayload(q)).eq("id", q.id);
+    else await supabase.from("job_extras").insert([{ job_id: q.jobId, ...extraPayload(q) }]);
     setQuickExtra(null); loadExtras();
+  }
+  // Open the extra modal pre-filled from an existing extra (used to edit Extra CF details).
+  function openEditExtra(e) {
+    setQuickExtra({
+      id: e.id, jobId: e.job_id, extra_type: e.extra_type || "extra_cf", description: e.description || "",
+      amount: e.amount ?? "", generated_by: e.generated_by || "driver_only",
+      driver_id: e.driver_id || "", rep_id: e.rep_id || "",
+      driver_commission_pct: e.driver_commission_pct ?? "", rep_commission_pct: e.rep_commission_pct ?? "",
+      notes: e.notes || "",
+      extra_cf_count: e.extra_cf_count ?? "", extra_cf_rate: e.extra_cf_rate ?? "",
+      fuel_surcharge_pct: e.fuel_surcharge_pct ?? "", commission_base: e.commission_base || "with_fuel",
+    });
   }
   // ── Employees (reps) CRUD ──
   async function saveEmployee() {
@@ -5362,9 +5452,13 @@ export default function App() {
             jobsForDriver.push({ g, byType, exsAll });
           }
           jobsForDriver.sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
-          let totalAmt = 0, totalComm = 0;
-          for (const jd of jobsForDriver) for (const e of jd.exsAll) if (e.active !== false) { totalAmt += numv(e.amount); totalComm += numv(e.driver_commission_amount); }
-          return { driver, did, jobsForDriver, totalAmt, totalComm };
+          let totalAmt = 0, totalComm = 0, cfRevenue = 0, fuelRevenue = 0, commBaseTotal = 0;
+          for (const jd of jobsForDriver) for (const e of jd.exsAll) if (e.active !== false) {
+            totalAmt += numv(e.amount); totalComm += numv(e.driver_commission_amount);
+            commBaseTotal += extraCommBase(e);
+            if (e.extra_type === "extra_cf") { cfRevenue += numv(e.extra_cf_subtotal); fuelRevenue += numv(e.fuel_surcharge_amount); }
+          }
+          return { driver, did, jobsForDriver, totalAmt, totalComm, cfRevenue, fuelRevenue, commBaseTotal };
         }).filter(Boolean).filter(s => s.jobsForDriver.length);
         // Rep / back-office view: group by rep employee → jobs they were involved in.
         const repIds = exRep ? [Number(exRep)] : employees.map(em => em.id);
@@ -5529,7 +5623,7 @@ export default function App() {
                                     const extra = jd.byType[t.v] || null;
                                     return <ExtraRow key={t.v} type={t.v} extra={extra} driverId={sec.did} drivers={driversList} employees={employees}
                                       onActivate={(type) => activateExtra(jd.g.repId, sec.did, type)}
-                                      onPatch={patchExtra} onToggle={toggleExtraActive} onDelete={deleteExtra} />;
+                                      onPatch={patchExtra} onToggle={toggleExtraActive} onDelete={deleteExtra} onEdit={openEditExtra} />;
                                   })}
                                 </tbody>
                               </table>
@@ -5537,8 +5631,17 @@ export default function App() {
                           </div>
                         ))}
                         <div style={{ marginTop:14, borderTop:"2px solid #eee" }}>
+                          {(sec.cfRevenue > 0 || sec.fuelRevenue > 0) && (
+                            <div style={{ display:"flex", gap:18, flexWrap:"wrap", padding:"6px 10px", fontSize:12, color:"#666" }}>
+                              <span>Extra CF revenue: <b>${Math.round(sec.cfRevenue).toLocaleString()}</b></span>
+                              <span>Fuel surcharge revenue: <b style={{ color:"#854F0B" }}>${Math.round(sec.fuelRevenue).toLocaleString()}</b></span>
+                            </div>
+                          )}
                           <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:600, color:"#444" }}>
-                            <span>TOTAL EXTRAS</span><span>${Math.round(sec.totalAmt).toLocaleString()}</span>
+                            <span>TOTAL EXTRAS (cobrado al cliente)</span><span>${Math.round(sec.totalAmt).toLocaleString()}</span>
+                          </div>
+                          <div style={{ display:"flex", justifyContent:"space-between", padding:"4px 10px", fontSize:12, color:"#888" }}>
+                            <span>Base de comisión</span><span>${Math.round(sec.commBaseTotal).toLocaleString()}</span>
                           </div>
                           <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:700, background:"#FEF9C3", borderRadius:8 }}>
                             <span>COMISIÓN {sec.driver.name}</span><span style={{ color:"#1A8A4E" }}>${Math.round(sec.totalComm).toLocaleString()}</span>
@@ -6721,7 +6824,7 @@ export default function App() {
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8 }}>
                   {exs.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total extras: <b>${Math.round(totAmt).toLocaleString()}</b></span>}
                   <span style={{ flex:1 }} />
-                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar extra</Btn>
+                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar extra</Btn>
                 </div>
               </>
             );
@@ -7628,16 +7731,21 @@ export default function App() {
 
       {quickExtra && (() => {
         const locked = EXTRA_LOCKED_DRIVER(quickExtra.extra_type);
+        const isCf = quickExtra.extra_type === "extra_cf";
         const setQ = (fields) => setQuickExtra(q => ({ ...q, ...fields }));
-        // Re-apply default %s whenever type or generated_by changes.
-        const onType = (v) => { const gen = EXTRA_LOCKED_DRIVER(v) ? "driver_only" : quickExtra.generated_by; const d = commissionDefaults(v, gen); setQ({ extra_type:v, generated_by:gen, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: gen === "driver_only" ? "" : quickExtra.rep_id }); };
+        const jobFuel = jobs.find(j => j.id === Number(quickExtra.jobId))?.fuel_surcharge_pct;
+        // Re-apply default %s whenever type or generated_by changes; pull job fuel% for extra_cf.
+        const onType = (v) => { const gen = EXTRA_LOCKED_DRIVER(v) ? "driver_only" : quickExtra.generated_by; const d = commissionDefaults(v, gen); setQ({ extra_type:v, generated_by:gen, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: gen === "driver_only" ? "" : quickExtra.rep_id, fuel_surcharge_pct: v === "extra_cf" && (quickExtra.fuel_surcharge_pct === "" || quickExtra.fuel_surcharge_pct == null) ? (jobFuel ?? "") : quickExtra.fuel_surcharge_pct }); };
         const onGen = (v) => { const d = commissionDefaults(quickExtra.extra_type, v); setQ({ generated_by:v, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: v === "driver_only" ? "" : quickExtra.rep_id }); };
-        const a = numv(quickExtra.amount), dc = a * numv(quickExtra.driver_commission_pct) / 100, rc = a * numv(quickExtra.rep_commission_pct) / 100;
+        const cf = extraCfCalc(quickExtra);
+        const a = isCf ? cf.total : numv(quickExtra.amount);
+        const base = isCf ? cf.base : a;
+        const dc = base * numv(quickExtra.driver_commission_pct) / 100, rc = base * numv(quickExtra.rep_commission_pct) / 100;
         return (
-          <Modal title="Agregar extra" onClose={() => setQuickExtra(null)}
+          <Modal title={quickExtra.id ? "Editar extra" : "Agregar extra"} onClose={() => setQuickExtra(null)}
             footer={<>
               <Btn onClick={() => setQuickExtra(null)}>Cancelar</Btn>
-              <Btn primary disabled={!quickExtra.driver_id} onClick={saveQuickExtra}>Guardar extra</Btn>
+              <Btn primary disabled={!quickExtra.driver_id} onClick={saveQuickExtra}>{quickExtra.id ? "Guardar cambios" : "Guardar extra"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               <Field label="Tipo">
@@ -7645,7 +7753,7 @@ export default function App() {
                   {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
                 </select>
               </Field>
-              <Field label="Monto ($)"><input style={inp} type="number" value={quickExtra.amount} onChange={e => setQ({ amount:e.target.value })} placeholder="0" /></Field>
+              {!isCf && <Field label="Monto ($)"><input style={inp} type="number" value={quickExtra.amount} onChange={e => setQ({ amount:e.target.value })} placeholder="0" /></Field>}
               {quickExtra.extra_type === "other" && <Field label="Descripción" full><input style={inp} value={quickExtra.description} onChange={e => setQ({ description:e.target.value })} placeholder="Detalle del extra" /></Field>}
               <Field label="Generado por">
                 <select style={inp} value={quickExtra.generated_by} disabled={locked} onChange={e => onGen(e.target.value)}>
@@ -7669,10 +7777,40 @@ export default function App() {
               <Field label="Driver %"><input style={inp} type="number" value={quickExtra.driver_commission_pct} onChange={e => setQ({ driver_commission_pct:e.target.value })} /></Field>
               <Field label="Rep %"><input style={inp} type="number" value={quickExtra.rep_commission_pct} onChange={e => setQ({ rep_commission_pct:e.target.value })} /></Field>
             </div>
-            <div style={{ display:"flex", gap:16, marginTop:12, fontSize:13, flexWrap:"wrap" }}>
-              <span>Comisión driver: <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
-              <span>Comisión rep: <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
-              <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(a - dc - rc) || "$0"}</b></span>
+
+            {/* Extra CF: CF × rate + fuel surcharge + commission base */}
+            {isCf && (
+              <div style={{ marginTop:10, padding:"10px 12px", background:"#F2F7FC", border:"1px solid #D6E6F5", borderRadius:9 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+                  <Field label="Extra CF count"><input style={inp} type="number" value={quickExtra.extra_cf_count} onChange={e => setQ({ extra_cf_count:e.target.value })} placeholder="0" /></Field>
+                  <Field label="Rate per CF ($)"><input style={inp} type="number" value={quickExtra.extra_cf_rate} onChange={e => setQ({ extra_cf_rate:e.target.value })} placeholder="0" /></Field>
+                  <Field label="CF subtotal"><input style={{ ...inp, background:"#f3f3f3", color:"#666" }} value={money(cf.cfSub) || "$0"} readOnly /></Field>
+                  <Field label="Fuel surcharge %"><input style={inp} type="number" value={quickExtra.fuel_surcharge_pct} onChange={e => setQ({ fuel_surcharge_pct:e.target.value })} placeholder="0" /></Field>
+                  <Field label="Fuel surcharge amount"><input style={{ ...inp, background:"#f3f3f3", color:"#666" }} value={money(cf.fuelAmt) || "$0"} readOnly /></Field>
+                  <Field label="Total charged"><input style={{ ...inp, background:"#f3f3f3", fontWeight:700 }} value={money(cf.total) || "$0"} readOnly /></Field>
+                </div>
+                <div style={{ marginTop:10 }}>
+                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Base de comisión</div>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                    {[["with_fuel", "Con fuel surcharge", cf.total], ["without_fuel", "Sin fuel surcharge", cf.cfSub]].map(([v, l, amt]) => {
+                      const on = cf.commissionBase === v;
+                      return <button key={v} onClick={() => setQ({ commission_base: v })} style={{ flex:1, minWidth:140, textAlign:"left", padding:"8px 11px", borderRadius:8, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#e5e5e5"}`, background: on ? "#E6F1FB" : "#fff", color:"#111" }}>
+                        <div style={{ fontSize:12.5, fontWeight:600 }}>{on ? "◉" : "○"} {l}</div>
+                        <div style={{ fontSize:11, color:"#888", marginTop:2 }}>Comisión sobre {money(amt) || "$0"}</div>
+                      </button>;
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ marginTop:12, background:"#fafafa", borderRadius:8, padding:"9px 12px", fontSize:12.5 }}>
+              <div style={{ marginBottom:5, color:"#666" }}>Base de comisión: <b>{money(base) || "$0"}</b>{isCf ? ` (${cf.commissionBase === "without_fuel" ? "sin" : "con"} fuel)` : ""}</div>
+              <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
+                <span>Comisión driver ({numv(quickExtra.driver_commission_pct)}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
+                <span>Comisión rep ({numv(quickExtra.rep_commission_pct)}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
+                <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(a - dc - rc) || "$0"}</b></span>
+              </div>
             </div>
           </Modal>
         );
