@@ -1449,6 +1449,35 @@ const Field = ({ label, children, full }) => (
   </div>
 );
 
+// Debounce a value: returns [debouncedValue, pending]. `pending` is true while the
+// user is still typing (within the delay window) — used to show a checking spinner.
+function useDebounced(value, delay = 500) {
+  const [debounced, setDebounced] = useState(value);
+  const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (value === debounced) { setPending(false); return; }
+    setPending(true);
+    const t = setTimeout(() => { setDebounced(value); setPending(false); }, delay);
+    return () => clearTimeout(t);
+  }, [value, delay, debounced]);
+  return [debounced, pending];
+}
+// Inline, non-blocking duplicate hint shown below a form field. Never a popup.
+function DupHint({ checking, tone = "warn", children }) {
+  if (checking) return (
+    <div style={{ fontSize:11, color:"#999", marginTop:4, display:"flex", alignItems:"center", gap:6 }}>
+      <span style={{ width:11, height:11, border:"2px solid #eee", borderTop:"2px solid #999", borderRadius:"50%", display:"inline-block", animation:"spin 0.7s linear infinite" }} />
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      Verificando…
+    </div>
+  );
+  if (!children) return null;
+  const c = tone === "ok" ? { bg:"#EAF3DE", bd:"#639922", fg:"#3B6D11" }
+    : tone === "danger" ? { bg:"#FCEBEB", bd:"#E24B4A", fg:"#A32D2D" }
+    : { bg:"#FFF6E8", bd:"#F4DDB0", fg:"#B45309" };
+  return <div style={{ fontSize:11.5, marginTop:5, background:c.bg, border:`1px solid ${c.bd}`, color:c.fg, borderRadius:7, padding:"6px 9px", lineHeight:1.45 }}>{children}</div>;
+}
+
 // Collapsible titled section for the job form. Responsive grids stack on mobile.
 function FormSection({ title, defaultOpen = true, children }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -1862,7 +1891,7 @@ const NAV = [
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
 ];
-function Sidebar({ page, setPage, onSignOut, badges = {} }) {
+function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates }) {
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
       <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3" }}>
@@ -1891,6 +1920,11 @@ function Sidebar({ page, setPage, onSignOut, badges = {} }) {
         ))}
       </div>
       <div style={{ padding:"12px", borderTop:"1px solid #f3f3f3" }}>
+        {dupCount > 0 && (
+          <button onClick={onShowDuplicates} title="Revisar posibles duplicados" style={{ width:"100%", marginBottom:8, padding:"8px", borderRadius:8, border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#B45309", fontSize:12, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+            🔍 {dupCount} duplicado{dupCount === 1 ? "" : "s"}
+          </button>
+        )}
         <button onClick={onSignOut} style={{ width:"100%", padding:"8px", borderRadius:8, border:"1px solid #eee", background:"#fff", color:"#888", fontSize:12, cursor:"pointer" }}>Salir</button>
       </div>
     </div>
@@ -1924,6 +1958,8 @@ export default function App() {
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
   const [page, setPage] = useState("dispatching");   // sidebar navigation
+  const [showDupModal, setShowDupModal] = useState(false);  // duplicates review modal
+  const [dismissedDups, setDismissedDups] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem("dismissedDups") || "[]")); } catch { return new Set(); } });
   const [tab, setTab] = useState("active");           // jobs page sub-tab: active/delivered/wh:*
   const [dispatchFilter, setDispatchFilter] = useState("all"); // all/pickups/deliveries/longhaul/nofadd
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -3325,6 +3361,122 @@ export default function App() {
     return Object.values(m).sort((a, b) => b.total - a.total);
   }, [paymentRows]);
 
+  // ── Duplicate detection ──────────────────────────────────────────────
+  const dismissDup = useCallback((key) => setDismissedDups(prev => {
+    const n = new Set(prev); n.add(key);
+    try { localStorage.setItem("dismissedDups", JSON.stringify([...n])); } catch { /* ignore */ }
+    return n;
+  }), []);
+  // The job number shown for a payment row.
+  const payJobNumber = useCallback((p) => {
+    const k = jobKeyByRowId[p.job_id]; const g = k ? extraJobGroups.get(k) : null;
+    return g?.job_number || (p.job_id ? "#" + p.job_id : "—");
+  }, [jobKeyByRowId, extraJobGroups]);
+  // Real-time finders (run against in-memory, realtime-synced data).
+  const findJobNumberDup = useCallback((num) => {
+    const n = (num || "").trim(); if (!n) return null;
+    const nl = n.toLowerCase();
+    const match = jobs.find(j => (j.job_number || "").trim().toLowerCase() === nl && jobKey(j) !== editingJobKey);
+    if (!match) return null;
+    const k = jobKey(match);
+    const group = jobs.filter(j => jobKey(j) === k);
+    const rep = group[0];
+    const delivered = group.some(j => j.date_out) || rep.status === "delivered";
+    const dateOut = group.map(j => j.date_out).filter(Boolean).sort().slice(-1)[0] || null;
+    return { key: k, job_number: rep.job_number, customer: rep.customer, status: rep.status, date: rep.date_in || (rep.created_at || "").slice(0, 10) || "—", delivered, dateOut };
+  }, [jobs, editingJobKey]);
+  const findCheckSerialDup = useCallback((serial) => {
+    const s = (serial || "").trim(); if (!s) return null;
+    const sl = s.toLowerCase();
+    const match = payments.find(p => (p.check_serial || "").trim().toLowerCase() === sl && p.id !== editingPayId);
+    if (!match) return null;
+    return { id: match.id, serial: match.check_serial, amount: numv(match.amount), date: match.payment_date || (match.created_at || "").slice(0, 10) || "—", job_number: payJobNumber(match), job_key: jobKeyByRowId[match.job_id] || null };
+  }, [payments, editingPayId, payJobNumber, jobKeyByRowId]);
+  const findMoSerialDup = useCallback((serial) => {
+    const s = (serial || "").trim(); if (!s) return null;
+    const sl = s.toLowerCase();
+    const match = payments.find(p => (p.mo_serial || "").trim().toLowerCase() === sl && p.id !== editingPayId);
+    if (!match) return null;
+    return { id: match.id, serial: match.mo_serial, amount: numv(match.amount), date: match.payment_date || (match.created_at || "").slice(0, 10) || "—", job_number: payJobNumber(match), job_key: jobKeyByRowId[match.job_id] || null };
+  }, [payments, editingPayId, payJobNumber, jobKeyByRowId]);
+  const findStorageDup = useCallback((brand, unit, state) => {
+    const bl = (brand || "").trim().toLowerCase(), ul = (unit || "").trim().toLowerCase(), stl = (state || "").trim().toLowerCase();
+    if (!bl || !ul) return null;
+    const match = records.find(r => r.space_type !== "warehouse" && (r.situation || "Open") !== "Close"
+      && (r.brand || "").trim().toLowerCase() === bl && (r.unit || "").trim().toLowerCase() === ul && (r.state || "").trim().toLowerCase() === stl);
+    if (!match) return null;
+    return { id: match.id, brand: match.brand, unit: match.unit, state: match.state };
+  }, [records]);
+
+  // Debounced real-time field checks for the open forms.
+  const [jobNumDeb, jobNumChecking] = useDebounced(jobForm.job_number || "");
+  const jobNumberDup = useMemo(() => findJobNumberDup(jobNumDeb), [jobNumDeb, findJobNumberDup]);
+  const [chkSerialDeb, chkSerialChecking] = useDebounced(payForm.check_serial || "");
+  const checkSerialDup = useMemo(() => payForm.method === "check" ? findCheckSerialDup(chkSerialDeb) : null, [chkSerialDeb, payForm.method, findCheckSerialDup]);
+  const [moSerialDeb, moSerialChecking] = useDebounced(payForm.mo_serial || "");
+  const moSerialDup = useMemo(() => payForm.method === "money_order" ? findMoSerialDup(moSerialDeb) : null, [moSerialDeb, payForm.method, findMoSerialDup]);
+  const [stBrandDeb, stBrandChecking] = useDebounced(`${form.brand || ""}|${form.unit || ""}|${form.state || ""}`);
+  const storageDup = useMemo(() => {
+    if (editId) return null;            // only warn for NEW units
+    const [b, u, st] = stBrandDeb.split("|");
+    return findStorageDup(b, u, st);
+  }, [stBrandDeb, editId, findStorageDup]);
+
+  // Global duplicate report (jobs / payments / storages), minus dismissed ones.
+  const duplicateReport = useMemo(() => {
+    // Jobs: same job_number used for ≥2 different customers (multi-unit jobs share a customer).
+    const byNum = {};
+    for (const j of jobs) { const n = (j.job_number || "").trim().toLowerCase(); if (!n) continue; (byNum[n] = byNum[n] || []).push(j); }
+    const jobDups = [];
+    for (const rows of Object.values(byNum)) {
+      const byCust = {};
+      for (const r of rows) { const c = (r.customer || "").trim() || "(sin cliente)"; (byCust[c] = byCust[c] || []).push(r); }
+      if (Object.keys(byCust).length >= 2) {
+        const variants = Object.entries(byCust).map(([customer, rs]) => ({ customer, ids: rs.map(r => r.id), status: rs[0].status, date: rs[0].date_in || (rs[0].created_at || "").slice(0, 10), key: jobKey(rs[0]) }));
+        jobDups.push({ key: "job:" + (rows[0].job_number || "").toLowerCase(), number: rows[0].job_number, variants });
+      }
+    }
+    // Payments: same check/MO serial across ≥2 logical payments (split lines share a serial legitimately).
+    const serials = {};
+    for (const p of payments) {
+      const s = (p.check_serial || p.mo_serial || "").trim(); if (!s) continue;
+      const kind = p.check_serial ? "Check" : "MO";
+      const key = (p.check_serial ? "chk:" : "mo:") + s.toLowerCase();
+      const logical = p.split_group || ("p" + p.id);
+      if (!serials[key]) serials[key] = { serial: s, kind, rows: [], logical: new Set() };
+      serials[key].rows.push(p); serials[key].logical.add(logical);
+    }
+    const payDups = [];
+    for (const [key, v] of Object.entries(serials)) if (v.logical.size >= 2) payDups.push({ key: "pay:" + key, serial: v.serial, kind: v.kind, rows: v.rows });
+    // Storages: ≥2 open units sharing brand + unit + state.
+    const stKeys = {};
+    for (const r of records) {
+      if (r.space_type === "warehouse") continue;
+      if ((r.situation || "Open") === "Close") continue;
+      const b = (r.brand || "").trim().toLowerCase(), u = (r.unit || "").trim().toLowerCase(), st = (r.state || "").trim().toLowerCase();
+      if (!b || !u) continue;
+      const k = `${b}|${u}|${st}`; (stKeys[k] = stKeys[k] || []).push(r);
+    }
+    const stDups = [];
+    for (const [k, rows] of Object.entries(stKeys)) if (rows.length >= 2) stDups.push({ key: "st:" + k, rows });
+    const f = (arr) => arr.filter(d => !dismissedDups.has(d.key));
+    const jobsF = f(jobDups), paymentsF = f(payDups), storagesF = f(stDups);
+    return { jobs: jobsF, payments: paymentsF, storages: storagesF, total: jobsF.length + paymentsF.length + storagesF.length };
+  }, [jobs, payments, records, dismissedDups]);
+
+  // Delete specific storage_jobs rows (a duplicate variant), cleaning up links.
+  async function deleteJobRows(ids, label) {
+    if (!ids || !ids.length) return;
+    if (!window.confirm(`¿Eliminar ${label || "estas filas del job"}? Esta acción no se puede deshacer.`)) return;
+    if (!extrasMissing) await supabase.from("job_extras").delete().in("job_id", ids);
+    if (!paymentsMissing) await supabase.from("payments").delete().in("job_id", ids);
+    await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids);
+    const { error } = await supabase.from("storage_jobs").delete().in("id", ids);
+    if (error) { window.alert(error.message); return; }
+    setJobs(prev => prev.filter(j => !ids.includes(j.id)));
+    showToast("Registro duplicado eliminado");
+    loadJobs(); if (!paymentsMissing) loadPayments(); if (!extrasMissing) loadExtras();
+  }
 
   const detail = records.find(r => r.id === detailId);
 
@@ -3346,6 +3498,11 @@ export default function App() {
   }
 
   async function saveForm() {
+    // New unit duplicating an existing open unit → block with confirmation.
+    if (!editId) {
+      const dup = findStorageDup(form.brand, form.unit, form.state);
+      if (dup && !window.confirm(`${dup.brand} Unidad ${dup.unit}${dup.state ? ` en ${dup.state}` : ""} ya está abierta en el sistema.\n\n¿Seguro que querés crear un duplicado?`)) return;
+    }
     setSaving(true);
     const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, phone:form.phone||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
     // Auto-set payment due date (date_opened + 30) when empty — only if the column exists.
@@ -4427,6 +4584,9 @@ export default function App() {
   }
   async function savePaymentRow() {
     const f = payForm;
+    // Duplicate check / money-order serial → block with an explicit confirmation.
+    const serialDup = f.method === "check" ? findCheckSerialDup(f.check_serial) : f.method === "money_order" ? findMoSerialDup(f.mo_serial) : null;
+    if (serialDup && !window.confirm(`El número ${serialDup.serial} ya fue registrado ($${Math.round(serialDup.amount).toLocaleString()} el ${serialDup.date}, job ${serialDup.job_number}).\n\nEste número de serie ya está en el sistema. ¿Seguro que querés guardar un duplicado?`)) return;
     if (f.split_enabled && !editingPayId && !splitMissing) { await saveSplitPayment(f); return; }
     setPaySaving(true);
     const payload = payPayload(f);
@@ -4705,7 +4865,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
@@ -4816,6 +4976,15 @@ export default function App() {
               </div>
             ))}
           </div>
+
+          {duplicateReport.total > 0 && (
+            <div onClick={() => setShowDupModal(true)} style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#B45309", display:"flex", alignItems:"center", gap:8, cursor:"pointer", flexWrap:"wrap" }}>
+              <span style={{ fontSize:16 }}>🔍</span>
+              <b>{duplicateReport.total} posible{duplicateReport.total === 1 ? "" : "s"} duplicado{duplicateReport.total === 1 ? "" : "s"}</b>
+              <span style={{ color:"#a07d3a" }}>· Jobs {duplicateReport.jobs.length} · Pagos {duplicateReport.payments.length} · Storages {duplicateReport.storages.length}</span>
+              <span style={{ marginLeft:"auto", textDecoration:"underline", fontWeight:600 }}>Revisar →</span>
+            </div>
+          )}
 
           {dispatchAlerts.length > 0 && !bannerDismissed && (
             <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:13, color:"#A32D2D", display:"flex", alignItems:"flex-start", gap:10 }}>
@@ -7406,7 +7575,12 @@ export default function App() {
             <Field label="Estado"><input style={inp} list="states-list" value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value.toUpperCase()}))} placeholder="TN" /></Field>
             <Field label="Zip code"><input style={inp} value={form.zip} onChange={e => setForm(f => ({...f, zip:e.target.value}))} placeholder="38555" /></Field>
             <Field label="Direccion" full><input style={inp} value={form.address} onChange={e => setForm(f => ({...f, address:e.target.value}))} placeholder="1870 West Ave, Crossville, TN 38555" /></Field>
-            <Field label="Unidad #"><input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" /></Field>
+            <Field label="Unidad #">
+              <input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" />
+              <DupHint checking={stBrandChecking && (form.brand || "").trim() !== "" && (form.unit || "").trim() !== ""} tone="danger">
+                {storageDup && <span>⚠️ {storageDup.brand} Unidad {storageDup.unit}{storageDup.state ? ` en ${storageDup.state}` : ""} ya está abierta en el sistema. <a onClick={() => { setShowAdd(false); setDetailId(storageDup.id); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver storage</a></span>}
+              </DupHint>
+            </Field>
             <Field label="Tamano"><input style={inp} list="sizes-list" value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
             <Field label="Gate Code"><input style={inp} value={form.gate_code} onChange={e => setForm(f => ({...f, gate_code:e.target.value}))} placeholder="*130438#" /></Field>
             <Field label="Lock / Combo"><input style={inp} value={form.lock} onChange={e => setForm(f => ({...f, lock:e.target.value}))} placeholder="use 8141 to unlock..." /></Field>
@@ -7541,7 +7715,16 @@ export default function App() {
             const basicInfo = (
               <FormSection title="Información básica">
                 <div style={fgrid}>
-                  <Field label="Job # *"><input style={inp} value={jobForm.job_number} onChange={u("job_number")} placeholder="B8417142" /></Field>
+                  <Field label="Job # *">
+                    <input style={inp} value={jobForm.job_number} onChange={u("job_number")} placeholder="B8417142" />
+                    <DupHint checking={jobNumChecking && (jobForm.job_number || "").trim() !== ""} tone={jobNumberDup?.delivered ? "ok" : "warn"}>
+                      {jobNumberDup && (jobNumberDup.delivered ? (
+                        <span>ℹ️ Este job ya fue entregado el {jobNumberDup.dateOut || jobNumberDup.date} — ¿seguro? <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
+                      ) : (
+                        <span>⚠️ Job {jobNumberDup.job_number} ya existe — {jobNumberDup.customer || "sin cliente"}, {statusMeta(jobNumberDup.status).l}, {jobNumberDup.date}. <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
+                      ))}
+                    </DupHint>
+                  </Field>
                   <Field label="Tipo de job *">
                     <select style={inp} value={jobForm.job_type} onChange={u("job_type")}>
                       {JOB_TYPES.map(x => <option key={x.v} value={x.v}>{x.l}{x.v==="full"?" (pickup → storage → delivery)":x.v==="direct"?" (pickup → delivery)":" (solo delivery)"}</option>)}
@@ -8357,7 +8540,12 @@ export default function App() {
                   </div>
                   {!ck ? <div style={{ fontSize:12, color:"#888" }}>Elegí el tipo de cheque.</div> : isPersonal ? (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Check number (serial)"><input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" /></Field>
+                      <Field label="Check number (serial)">
+                        <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
+                        <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
+                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} ya registrado — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                        </DupHint>
+                      </Field>
                       <Field label="From (titular)"><input style={inp} value={payForm.check_from} onChange={e => setF({ check_from:e.target.value })} placeholder="Account holder" /></Field>
                       <Field label="Bank name"><input style={inp} value={payForm.check_bank} onChange={e => setF({ check_bank:e.target.value })} placeholder="Banco" /></Field>
                       <Field label="Date on check"><input style={inp} type="date" value={payForm.check_date} onChange={e => setF({ check_date:e.target.value })} /></Field>
@@ -8367,7 +8555,12 @@ export default function App() {
                     </div>
                   ) : (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Check number (serial)"><input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" /></Field>
+                      <Field label="Check number (serial)">
+                        <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
+                        <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
+                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} ya registrado — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                        </DupHint>
+                      </Field>
                       <Field label="Transaction number"><input style={inp} value={payForm.check_transaction_number} onChange={e => setF({ check_transaction_number:e.target.value })} placeholder="Transaction #" /></Field>
                       <Field label="Remitter (quién compró)"><input style={inp} value={payForm.check_remitter} onChange={e => setF({ check_remitter:e.target.value })} placeholder="Remitter" /></Field>
                       <Field label="Purchased by"><input style={inp} value={payForm.check_purchased_by} onChange={e => setF({ check_purchased_by:e.target.value })} placeholder="Comprador" /></Field>
@@ -8396,7 +8589,12 @@ export default function App() {
                   </div>
                   {isUsps ? (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Serial number"><input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" /></Field>
+                      <Field label="Serial number">
+                        <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
+                        <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
+                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} ya registrado — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                        </DupHint>
+                      </Field>
                       <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
                       <Field label="Post office #"><input style={inp} value={payForm.mo_post_office} onChange={e => setF({ mo_post_office:e.target.value })} placeholder="Post office" /></Field>
                       <Field label="From name"><input style={inp} value={payForm.mo_from_name} onChange={e => setF({ mo_from_name:e.target.value })} placeholder="From" /></Field>
@@ -8404,7 +8602,12 @@ export default function App() {
                     </div>
                   ) : (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Serial number"><input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" /></Field>
+                      <Field label="Serial number">
+                        <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
+                        <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
+                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} ya registrado — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                        </DupHint>
+                      </Field>
                       <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
                       <Field label="Purchaser name"><input style={inp} value={payForm.mo_from_name} onChange={e => setF({ mo_from_name:e.target.value })} placeholder="Comprador" /></Field>
                       <Field label="Pay to the order of"><input style={inp} value={payForm.mo_from_address} onChange={e => setF({ mo_from_address:e.target.value })} placeholder="Pay to…" /></Field>
@@ -8553,6 +8756,98 @@ export default function App() {
                 <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(base - dc - rc) || "$0"}</b></span>
               </div>
             </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ── Duplicates review ── */}
+      {showDupModal && (() => {
+        const R = duplicateReport;
+        const card = { border:"1px solid #eee", borderRadius:9, padding:"10px 12px", background:"#fff", flex:"1 1 200px", minWidth:180 };
+        const rowWrap = { display:"flex", gap:8, flexWrap:"wrap", alignItems:"stretch", marginBottom:8 };
+        const groupBox = { border:"1px solid #F4DDB0", background:"#FFFCF5", borderRadius:11, padding:"12px 14px", marginBottom:12 };
+        const miniBtn = { padding:"3px 9px", fontSize:11.5 };
+        const sectionTitle = (icon, label, n) => <div style={{ fontSize:13, fontWeight:800, margin:"4px 0 8px", display:"flex", alignItems:"center", gap:7 }}>{icon} {label} <span style={{ fontSize:11, fontWeight:700, color:"#B45309", background:"#FFF1D6", borderRadius:20, padding:"1px 8px" }}>{n}</span></div>;
+        return (
+          <Modal title="Revisión de duplicados" onClose={() => setShowDupModal(false)}
+            footer={<Btn onClick={() => setShowDupModal(false)}>Cerrar</Btn>}>
+            <p style={{ fontSize:12.5, color:"#666", marginTop:-4, marginBottom:14 }}>Posibles duplicados detectados en el sistema. Revisá cada uno: <b>eliminá</b> el registro repetido o <b>descartá</b> si es un falso positivo.</p>
+            {R.total === 0 && <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:10, padding:"16px", textAlign:"center", color:"#3B6D11", fontSize:13 }}>✅ No hay duplicados pendientes. Todo limpio.</div>}
+
+            {R.jobs.length > 0 && <div style={{ marginBottom:8 }}>
+              {sectionTitle("💼", "Jobs con mismo número", R.jobs.length)}
+              {R.jobs.map(d => (
+                <div key={d.key} style={groupBox}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                    <b style={{ fontFamily:"monospace", fontSize:13 }}>{d.number || "(sin #)"}</b>
+                    <span style={{ fontSize:11, color:"#999" }}>· {d.variants.length} clientes distintos con este número</span>
+                    <span style={{ marginLeft:"auto" }}><Btn onClick={() => dismissDup(d.key)} style={miniBtn}>Descartar</Btn></span>
+                  </div>
+                  <div style={rowWrap}>
+                    {d.variants.map((v, i) => (
+                      <div key={i} style={card}>
+                        <div style={{ fontWeight:700, fontSize:12.5 }}>{v.customer}</div>
+                        <div style={{ fontSize:11, color:"#777", margin:"3px 0 8px" }}><StatusBadge status={v.status} /> · {v.date || "—"} · {v.ids.length} fila(s)</div>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <Btn onClick={() => { setShowDupModal(false); setJobDetailKey(v.key); }} style={miniBtn}>Ver</Btn>
+                          <Btn danger onClick={() => deleteJobRows(v.ids, `${d.number} · ${v.customer}`)} style={miniBtn}>Eliminar este</Btn>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>}
+
+            {R.payments.length > 0 && <div style={{ marginBottom:8 }}>
+              {sectionTitle("💰", "Pagos con mismo serial", R.payments.length)}
+              {R.payments.map(d => (
+                <div key={d.key} style={groupBox}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                    <b style={{ fontFamily:"monospace", fontSize:13 }}>{d.kind} #{d.serial}</b>
+                    <span style={{ fontSize:11, color:"#999" }}>· {d.rows.length} pagos</span>
+                    <span style={{ marginLeft:"auto" }}><Btn onClick={() => dismissDup(d.key)} style={miniBtn}>Descartar</Btn></span>
+                  </div>
+                  <div style={rowWrap}>
+                    {d.rows.map(p => { const k = jobKeyByRowId[p.job_id]; return (
+                      <div key={p.id} style={card}>
+                        <div style={{ fontWeight:800, fontSize:13, color:"#1A8A4E" }}>${Math.round(numv(p.amount)).toLocaleString()}</div>
+                        <div style={{ fontSize:11, color:"#777", margin:"3px 0 8px" }}><PaymentMethodBadge method={p.method} /> · {p.payment_date || "—"} · job {payJobNumber(p)}{p.split_group ? " · split" : ""}</div>
+                        <div style={{ display:"flex", gap:6 }}>
+                          {k && <Btn onClick={() => { setShowDupModal(false); setJobDetailKey(k); }} style={miniBtn}>Ver</Btn>}
+                          <Btn danger onClick={() => deletePaymentRow(p)} style={miniBtn}>Eliminar este</Btn>
+                        </div>
+                      </div>
+                    ); })}
+                  </div>
+                </div>
+              ))}
+            </div>}
+
+            {R.storages.length > 0 && <div style={{ marginBottom:8 }}>
+              {sectionTitle("🏬", "Storages abiertos repetidos", R.storages.length)}
+              {R.storages.map(d => (
+                <div key={d.key} style={groupBox}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                    <b style={{ fontSize:13 }}>{d.rows[0].brand} · Unidad {d.rows[0].unit}{d.rows[0].state ? ` · ${d.rows[0].state}` : ""}</b>
+                    <span style={{ fontSize:11, color:"#999" }}>· {d.rows.length} abiertos</span>
+                    <span style={{ marginLeft:"auto" }}><Btn onClick={() => dismissDup(d.key)} style={miniBtn}>Descartar</Btn></span>
+                  </div>
+                  <div style={rowWrap}>
+                    {d.rows.map(r => (
+                      <div key={r.id} style={card}>
+                        <div style={{ fontWeight:700, fontSize:12.5 }}>{r.brand} {r.unit}</div>
+                        <div style={{ fontSize:11, color:"#777", margin:"3px 0 8px" }}>{r.state || "—"}{r.account ? ` · ${r.account}` : ""}{r.date_opened ? ` · abierto ${r.date_opened}` : ""}</div>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <Btn onClick={() => { setShowDupModal(false); setDetailId(r.id); }} style={miniBtn}>Ver</Btn>
+                          <Btn danger onClick={() => deleteRecord(r.id)} style={miniBtn}>Eliminar este</Btn>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>}
           </Modal>
         );
       })()}
