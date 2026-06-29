@@ -410,6 +410,20 @@ const I18N_ES = {
   "Unplanned pickup": "Pickup no previsto",
   "No jobs available.": "Sin jobs disponibles.",
   "No jobs on this trip.": "Sin jobs en este trip.",
+  "Today": "Hoy",
+  "➕ Add existing job": "➕ Agregar job existente",
+  "Add existing job to calendar": "Agregar job existente al calendario",
+  "Add to calendar": "Agregar al calendario",
+  "Edit pickup date": "Editar fecha de pickup",
+  "Remove from calendar": "Quitar del calendario",
+  "Pickup date from": "Fecha de pickup desde",
+  "Pickup date to (optional)": "Fecha de pickup hasta (opcional)",
+  "Pickup date": "Fecha de pickup",
+  "Pickup date saved": "Fecha de pickup guardada",
+  "Removed from calendar": "Quitado del calendario",
+  "🆕 Create new job on this day": "🆕 Crear job nuevo en este día",
+  "📋 Add an existing job to this day": "📋 Agregar un job existente a este día",
+  "Search": "Buscar",
   "Add event": "Agregar evento",
   "Save event": "Guardar evento",
   "Delete job": "Eliminar job",
@@ -2825,6 +2839,11 @@ export default function App() {
   const [docUploading, setDocUploading] = useState(false);
   const [calView, setCalView] = useState("week");      // week | month
   const [calAnchor, setCalAnchor] = useState(today());  // ISO date inside the visible range
+  const [calDayMenu, setCalDayMenu] = useState(null);   // ISO date — "what to add" menu for a clicked day
+  const [calAddExisting, setCalAddExisting] = useState(null); // { date } — search existing jobs to put on the calendar
+  const [calAddSearch, setCalAddSearch] = useState("");
+  const [calAddDate, setCalAddDate] = useState("");
+  const [pickupEditor, setPickupEditor] = useState(null); // { from, to } — inline pickup-date editor inside job detail
   // Trips / Live Load + trucks
   const [tripsMissing, setTripsMissing] = useState(false);
   const [truckLocMissing, setTruckLocMissing] = useState(false); // live-load location columns not yet in DB
@@ -4375,6 +4394,9 @@ export default function App() {
     return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
+  // Close the inline pickup-date editor whenever the open job detail changes.
+  useEffect(() => { setPickupEditor(null); }, [jobDetailKey]);
+
   const userEmail = session?.user?.email || null;
   // Apply / revert the Spanish UI overlay whenever the language changes.
   useEffect(() => {
@@ -4449,6 +4471,34 @@ export default function App() {
     loadJobs();
   }
   function openAddJobDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, pickup_date: dateStr, pickup_date_from: dateStr }); setJobErr(null); setShowAddJob(true); }
+  // Open the "add existing job to the calendar" search modal, optionally seeded with a day.
+  function openCalAddExisting(dateStr) {
+    setCalDayMenu(null);
+    setCalAddSearch("");
+    setCalAddDate(dateStr || today());
+    setCalAddExisting({ date: dateStr || "" });
+  }
+  // Set a job's pickup window (from + optional to) across all of its rows. Empty `from`
+  // clears the job off the calendar. `to` is optional.
+  async function setJobPickup(ids, from, to) {
+    if (!ids?.length) return;
+    const patch = {
+      pickup_date_from: from || null,
+      pickup_date: from || null,
+      pickup_date_to: (from && to && to >= from) ? to : null,
+      updated_by: userEmail, updated_at: new Date().toISOString(),
+    };
+    await supabase.from("storage_jobs").update(patch).in("id", ids);
+    loadJobs();
+  }
+  // Add an existing (no-pickup-date) job to the calendar on the chosen date.
+  async function addExistingJobToCalendar(g, dateStr) {
+    const date = dateStr || today();
+    const ids = jobs.filter(j => jobKey(j) === g.key).map(j => j.id);
+    await setJobPickup(ids, date, "");
+    setCalAddExisting(null);
+    showToast(`Job ${g.job_number || ""} added to the calendar`.replace(/\s+/g, " ").trim());
+  }
   function showToast(msg) {
     setToast(msg);
     if (toastRef.current) clearTimeout(toastRef.current);
@@ -6191,10 +6241,11 @@ export default function App() {
           <>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
               <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, -step))}>←</Btn>
-              <Btn onClick={() => setCalAnchor(today())}>Hoy</Btn>
+              <Btn onClick={() => setCalAnchor(today())}>Today</Btn>
               <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, step))}>→</Btn>
               <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
               <span style={{ flex:1 }} />
+              <Btn onClick={() => openCalAddExisting("")}>➕ Add existing job</Btn>
               <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
                 {[["week","Week"],["month","Month"]].map(([v,l]) => (
                   <button key={v} onClick={() => setCalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: calView===v?"#fff":"none", color: calView===v?"#111":"#888", fontWeight: calView===v?600:400, boxShadow: calView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
@@ -6216,7 +6267,7 @@ export default function App() {
                   const isToday = ds === today();
                   return (
                     <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday?"#378ADD":"#efefef"}`, borderRadius:10, minHeight:160, display:"flex", flexDirection:"column" }}>
-                      <div onClick={() => openAddJobDate(ds)} title="Create pickup" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <div onClick={() => setCalDayMenu(ds)} title="Add to this day" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                         <span style={{ fontSize:11, fontWeight:600 }}>{DOW_ES[d.getDay()]} {d.getDate()}</span>
                         <span style={{ color:"#bbb", fontSize:13 }}>+</span>
                       </div>
@@ -6237,7 +6288,7 @@ export default function App() {
                     const isToday = date === today();
                     return (
                       <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth?"#fff":"#fafafa", opacity: inMonth?1:0.6 }}>
-                        <div onClick={() => openAddJobDate(date)} style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
+                        <div onClick={() => setCalDayMenu(date)} title="Add to this day" style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
                         {evs.slice(0,3).map(g => <Event key={g.key} g={g} />)}
                         {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} more</div>}
                       </div>
@@ -6247,6 +6298,66 @@ export default function App() {
               </div>
             )}
           </>
+        );
+      })()}
+
+      {/* Calendar: "what do you want to add to this day?" menu */}
+      {calDayMenu && (
+        <Modal title={`Add to ${calDayMenu}`} onClose={() => setCalDayMenu(null)}
+          footer={<><Btn onClick={() => setCalDayMenu(null)}>Cancel</Btn></>}>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <Btn primary onClick={() => { const d = calDayMenu; setCalDayMenu(null); openAddJobDate(d); }} style={{ justifyContent:"center", padding:"12px" }}>🆕 Create new job on this day</Btn>
+            <Btn onClick={() => openCalAddExisting(calDayMenu)} style={{ justifyContent:"center", padding:"12px" }}>📋 Add an existing job to this day</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Calendar: search existing jobs (no pickup date yet) and put them on a date */}
+      {calAddExisting && (() => {
+        const q = calAddSearch.trim().toLowerCase();
+        const seen = new Set(); const results = [];
+        for (const j of jobs) {
+          if (j.pickup_date_from || j.pickup_date) continue;       // only jobs not on the calendar yet
+          if (j.date_out || j.status === "cancelled") continue;    // skip closed/cancelled jobs
+          const k = jobKey(j); if (seen.has(k)) continue; seen.add(k);
+          const names = jobDriverNames(j);
+          const hay = [j.job_number, j.customer, j.driver, names].filter(Boolean).join(" ").toLowerCase();
+          if (q && !hay.includes(q)) continue;
+          results.push({ key:k, job_number:j.job_number, customer:j.customer, status:j.status, drivers:names });
+        }
+        const shown = results.slice(0, 60);
+        return (
+          <Modal title="Add existing job to calendar" onClose={() => setCalAddExisting(null)}
+            footer={<><Btn onClick={() => setCalAddExisting(null)}>Close</Btn></>}>
+            <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", marginBottom:10 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Pickup date</label>
+                <input style={inp} type="date" value={calAddDate} onChange={e => setCalAddDate(e.target.value)} />
+              </div>
+              <div style={{ flex:1, minWidth:180, display:"flex", flexDirection:"column", gap:3 }}>
+                <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Search</label>
+                <input style={inp} value={calAddSearch} onChange={e => setCalAddSearch(e.target.value)} placeholder="Search job # / client / driver…" autoFocus />
+              </div>
+            </div>
+            <div style={{ fontSize:11.5, color:"#999", marginBottom:8 }}>Only jobs without a pickup date are listed. Pick a date above, then click a job to put it on the calendar.</div>
+            <div style={{ border:"1px solid #eee", borderRadius:9, maxHeight:340, overflowY:"auto", background:"#fff" }}>
+              {shown.length === 0 ? (
+                <div style={{ padding:"16px", fontSize:12.5, color:"#bbb", textAlign:"center" }}>{q ? "No matching jobs without a pickup date." : "No jobs pending a pickup date."}</div>
+              ) : shown.map(g => (
+                <div key={g.key} onClick={() => addExistingJobToCalendar(g, calAddDate)}
+                  style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderBottom:"1px solid #f6f6f6", cursor:"pointer", fontSize:12.5 }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#f7faf1"} onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div><b style={{ fontFamily:"monospace" }}>{g.job_number || "(no #)"}</b> · {g.customer || "—"}</div>
+                    <div style={{ color:"#999", marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
+                      <StatusBadge status={g.status} />{g.drivers && <span>🧑‍✈️ {g.drivers}</span>}
+                    </div>
+                  </div>
+                  <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={(e) => { e.stopPropagation(); addExistingJobToCalendar(g, calAddDate); }}>Add</Btn>
+                </div>
+              ))}
+            </div>
+          </Modal>
         );
       })()}
 
@@ -8284,6 +8395,45 @@ export default function App() {
             )}
             <Btn primary onClick={() => setJobDetailKey(null)}>Close</Btn>
           </>}>
+          {/* Calendar / pickup-date block (Add to calendar + Edit pickup date) */}
+          {(() => {
+            const ids = jobDetail.parts.map(p => p.id);
+            const from = jobDetail.pickup_date_from || jobDetail.pickup_date || "";
+            const to = jobDetail.pickup_date_to || "";
+            const onCal = !!from;
+            return (
+              <div style={{ background: onCal ? "#EAF3DE" : "#F5F7FA", border:`1px solid ${onCal ? "#cfe3b3" : "#e3e8ef"}`, borderRadius:10, padding:"10px 12px", marginBottom:12 }}>
+                {!pickupEditor ? (
+                  <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:12.5, color: onCal ? "#3B6D11" : "#667", flex:1 }}>
+                      {onCal
+                        ? <>📅 On calendar: <b>{from}</b>{to && to !== from ? <> → <b>{to}</b></> : null}</>
+                        : <>📅 Not on the calendar yet — this job has no pickup date.</>}
+                    </span>
+                    {onCal
+                      ? <Btn style={{ padding:"5px 11px", fontSize:12 }} onClick={() => setPickupEditor({ from, to })}>Edit pickup date</Btn>
+                      : <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={() => setPickupEditor({ from:"", to:"" })}>Add to calendar</Btn>}
+                  </div>
+                ) : (
+                  <div style={{ display:"flex", alignItems:"flex-end", gap:10, flexWrap:"wrap" }}>
+                    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                      <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Pickup date from</label>
+                      <input style={inp} type="date" value={pickupEditor.from} onChange={e => setPickupEditor(p => ({ ...p, from:e.target.value }))} />
+                    </div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                      <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Pickup date to (optional)</label>
+                      <input style={inp} type="date" value={pickupEditor.to} onChange={e => setPickupEditor(p => ({ ...p, to:e.target.value }))} />
+                    </div>
+                    <Btn primary style={{ padding:"7px 12px", fontSize:12 }} disabled={!pickupEditor.from}
+                      onClick={async () => { await setJobPickup(ids, pickupEditor.from, pickupEditor.to); setPickupEditor(null); showToast("Pickup date saved"); }}>Save</Btn>
+                    {onCal && <Btn danger style={{ padding:"7px 12px", fontSize:12 }}
+                      onClick={async () => { await setJobPickup(ids, "", ""); setPickupEditor(null); showToast("Removed from calendar"); }}>Remove from calendar</Btn>}
+                    <Btn style={{ padding:"7px 12px", fontSize:12 }} onClick={() => setPickupEditor(null)}>Cancel</Btn>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <SectionLabel>Job data <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:"#bbb" }}>· click to edit</span></SectionLabel>
           {(() => { const P = jobDetail.parts; const set = (f) => (v) => updateJobField(P, f, v); return (
           <>
