@@ -218,10 +218,29 @@ const EMPTY_PAY_ACCOUNT = { name:"", bank_name:"", account_type:"", account_last
 const PAY_CONCEPTS = [
   { v:"job", l:"Job", bg:"#E6F1FB", text:"#185FA5" },
   { v:"extra", l:"Extra", bg:"#EDE9FE", text:"#6D28D9" },
-  { v:"cc_fee", l:"CC Fee", bg:"#F3E8FF", text:"#7C3AED" },
+  { v:"cc_fee", l:"CC Fee", bg:"#FAEEDA", text:"#854F0B" },   // amber
   { v:"storage", l:"Storage", bg:"#EAF3DE", text:"#3B6D11" },
   { v:"other", l:"Other", bg:"#F1F1F1", text:"#666" },
 ];
+// Detailed check / money order options.
+const CHECK_TYPES = [
+  { v:"cashiers_check", l:"Cashier's check" },
+  { v:"personal_check", l:"Personal check" },
+  { v:"official_check", l:"Official check" },
+];
+const checkTypeLabel = (v) => CHECK_TYPES.find(c => c.v === v)?.l || v || "";
+const MO_TYPES = [
+  { v:"usps", l:"USPS" },
+  { v:"western_union", l:"Western Union" },
+  { v:"moneygram", l:"MoneyGram" },
+  { v:"other", l:"Other" },
+];
+const moTypeLabel = (v) => MO_TYPES.find(m => m.v === v)?.l || v || "";
+const CHECK_BANKS = ["Chase/JPMorgan", "Bank of America", "Wells Fargo", "Fifth Third Bank", "Citibank", "TD Bank", "US Bank", "PNC", "Truist", "Other"];
+// Reference number, issuer and attached photo for a payment (check/MO aware).
+const payRef = (p) => p.check_serial || p.mo_serial || p.method_id || "";
+const payIssuer = (p) => p.method === "check" ? (p.check_bank || "") : p.method === "money_order" ? moTypeLabel(p.mo_type) : "";
+const payPhotoUrl = (p) => p.check_photo_url || p.mo_photo_url || "";
 const payConceptLabel = (v) => PAY_CONCEPTS.find(c => c.v === v)?.l || v;
 function ConceptBadge({ concept }) {
   const c = PAY_CONCEPTS.find(x => x.v === concept) || PAY_CONCEPTS[4];
@@ -234,13 +253,48 @@ function PaymentMethodBadge({ method }) {
   const hex = PAY_METHOD_META[method] || "#666";
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10.5, fontWeight:600, padding:"2px 8px", borderRadius:20, background:hex+"1a", color:hex, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:hex }} />{payMethodLabel(method)}</span>;
 }
+// Drag-and-drop / click photo box for a check or money-order document (jpg/png/heic/pdf).
+function PayPhotoBox({ url, onFile, uploading, label }) {
+  const [drag, setDrag] = useState(false);
+  const ref = useRef();
+  const isPdf = (url || "").toLowerCase().includes(".pdf");
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>{label || "Foto / archivo"}</div>
+      <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+        onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
+        onClick={() => ref.current?.click()}
+        style={{ border:`2px dashed ${drag ? "#378ADD" : "#ddd"}`, borderRadius:10, padding: url ? "8px" : "14px", textAlign:"center", background: drag ? "#E6F1FB" : "#fafafa", cursor:"pointer", fontSize:12, color:"#888" }}>
+        {uploading ? "Subiendo…" : url ? (
+          <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
+            {isPdf ? <span style={{ fontSize:28 }}>📄</span> : <img src={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} />}
+            <span style={{ color:"#185FA5" }}>Reemplazar archivo</span>
+          </div>
+        ) : "Arrastrá o tocá para subir foto/PDF (jpg, png, heic, pdf)"}
+      </div>
+      <input ref={ref} type="file" accept="image/*,.heic,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) onFile(f); e.target.value = ""; }} />
+    </div>
+  );
+}
 // Cash, check and money order are physically held; everything else is digital.
 const PHYSICAL_METHODS = ["cash", "check", "money_order"];
 const isPhysical = (m) => PHYSICAL_METHODS.includes(m);
 const isDigitalMethod = (m) => !!m && !PHYSICAL_METHODS.includes(m);
 const paymentNet = (p) => numv(p.amount) - numv(p.discount);
 const daysSince = (dateStr) => { if (!dateStr) return 0; const d = new Date(dateStr + "T00:00:00"); return Math.floor((Date.now() - d.getTime()) / 86400000); };
-const EMPTY_PAYMENT = { job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"", discount:"", discount_reason:"", received:false, received_date:"", received_by:"", cash_with_whom:"", banked:false, banked_date:"", bank_account:"", payment_stage:"", notes:"" };
+const EMPTY_PAYMENT = {
+  job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"",
+  discount:"", discount_reason:"", received:false, received_date:"", received_by:"", cash_with_whom:"",
+  banked:false, banked_date:"", bank_account:"", payment_stage:"", notes:"",
+  // check
+  check_serial:"", check_transaction_number:"", check_remitter:"", check_purchased_by:"", check_bank:"",
+  check_from:"", check_routing:"", check_account_last4:"", check_date:"", check_memo:"", check_photo_url:"",
+  // money order
+  mo_type:"usps", mo_serial:"", mo_date:"", mo_post_office:"", mo_from_name:"", mo_from_address:"",
+  mo_payment_for:"", mo_issuer_location:"", mo_photo_url:"",
+  // credit-card fee
+  cc_fee_enabled:true, cc_fee_pct:"3", cc_fee_amount:"", cc_fee_payment_id:null,
+};
 
 // ── Legal & Compliance module ──
 const EMPTY_COMPANY = { name:"", dot_number:"", mc_number:"", ein:"", state:"", address:"", phone:"", email:"", active:true, notes:"" };
@@ -772,9 +826,44 @@ create table if not exists public.payments (
   created_at timestamptz default now()
 );
 alter table public.payments add column if not exists payment_stage text;
+-- Detailed check / money order tracking + credit-card fee fields.
+alter table public.payments add column if not exists check_serial text;
+alter table public.payments add column if not exists check_transaction_number text;
+alter table public.payments add column if not exists check_remitter text;
+alter table public.payments add column if not exists check_purchased_by text;
+alter table public.payments add column if not exists check_bank text;
+alter table public.payments add column if not exists check_from text;
+alter table public.payments add column if not exists check_routing text;
+alter table public.payments add column if not exists check_account_last4 text;
+alter table public.payments add column if not exists check_date date;
+alter table public.payments add column if not exists check_memo text;
+alter table public.payments add column if not exists check_photo_url text;
+alter table public.payments add column if not exists mo_type text;
+alter table public.payments add column if not exists mo_serial text;
+alter table public.payments add column if not exists mo_date date;
+alter table public.payments add column if not exists mo_post_office text;
+alter table public.payments add column if not exists mo_from_name text;
+alter table public.payments add column if not exists mo_from_address text;
+alter table public.payments add column if not exists mo_payment_for text;
+alter table public.payments add column if not exists mo_issuer_location text;
+alter table public.payments add column if not exists mo_photo_url text;
+alter table public.payments add column if not exists cc_fee_enabled boolean default false;
+alter table public.payments add column if not exists cc_fee_pct numeric default 3;
+alter table public.payments add column if not exists cc_fee_amount numeric;
+alter table public.payments add column if not exists cc_fee_payment_id bigint;
 alter table public.payments enable row level security;
 drop policy if exists "payments_all" on public.payments;
 create policy "payments_all" on public.payments for all to anon, authenticated using (true) with check (true);
+
+insert into storage.buckets (id, name, public)
+  values ('payment-docs', 'payment-docs', true)
+  on conflict (id) do update set public = true;
+drop policy if exists "paydocs_read" on storage.objects;
+create policy "paydocs_read" on storage.objects for select to anon, authenticated using (bucket_id = 'payment-docs');
+drop policy if exists "paydocs_write" on storage.objects;
+create policy "paydocs_write" on storage.objects for insert to anon, authenticated with check (bucket_id = 'payment-docs');
+drop policy if exists "paydocs_update" on storage.objects;
+create policy "paydocs_update" on storage.objects for update to anon, authenticated using (bucket_id = 'payment-docs');
 
 do $$ begin alter publication supabase_realtime add table public.payment_accounts; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.payments; exception when others then null; end $$;`;
@@ -1872,6 +1961,9 @@ export default function App() {
   // Payments
   const [paymentsMissing, setPaymentsMissing] = useState(false);
   const [payStageMissing, setPayStageMissing] = useState(false);
+  const [payColsMissing, setPayColsMissing] = useState(false);   // detailed check/MO/CC columns
+  const [payDocUploading, setPayDocUploading] = useState(false);
+  const [payPhotoView, setPayPhotoView] = useState(null);        // url of photo viewed full-size
   const [payments, setPayments] = useState([]);
   const [payAccounts, setPayAccounts] = useState([]);
   const [payTab, setPayTab] = useState("all");            // all | pending | received | circulation | banked
@@ -2341,6 +2433,24 @@ export default function App() {
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled && !created) setPayStageMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, paymentsMissing]);
+
+  // Probe the detailed check / money-order / CC-fee columns (later Payments release).
+  useEffect(() => {
+    if (!session || paymentsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("payments").select("check_serial").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      const sql = "alter table public.payments add column if not exists check_serial text, add column if not exists check_transaction_number text, add column if not exists check_remitter text, add column if not exists check_purchased_by text, add column if not exists check_bank text, add column if not exists check_from text, add column if not exists check_routing text, add column if not exists check_account_last4 text, add column if not exists check_date date, add column if not exists check_memo text, add column if not exists check_photo_url text, add column if not exists mo_type text, add column if not exists mo_serial text, add column if not exists mo_date date, add column if not exists mo_post_office text, add column if not exists mo_from_name text, add column if not exists mo_from_address text, add column if not exists mo_payment_for text, add column if not exists mo_issuer_location text, add column if not exists mo_photo_url text, add column if not exists cc_fee_enabled boolean default false, add column if not exists cc_fee_pct numeric default 3, add column if not exists cc_fee_amount numeric, add column if not exists cc_fee_payment_id bigint;";
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setPayColsMissing(true);
     })();
     return () => { cancelled = true; };
   }, [session, paymentsMissing]);
@@ -3909,8 +4019,30 @@ export default function App() {
       received: !!p.received, received_date: p.received_date || "", received_by: p.received_by || "",
       cash_with_whom: p.cash_with_whom || "", banked: !!p.banked, banked_date: p.banked_date || "",
       bank_account: p.bank_account || "", payment_stage: p.payment_stage || "", notes: p.notes || "",
+      check_serial: p.check_serial || "", check_transaction_number: p.check_transaction_number || "", check_remitter: p.check_remitter || "",
+      check_purchased_by: p.check_purchased_by || "", check_bank: p.check_bank || "", check_from: p.check_from || "",
+      check_routing: p.check_routing || "", check_account_last4: p.check_account_last4 || "", check_date: p.check_date || "",
+      check_memo: p.check_memo || "", check_photo_url: p.check_photo_url || "",
+      mo_type: p.mo_type || "usps", mo_serial: p.mo_serial || "", mo_date: p.mo_date || "", mo_post_office: p.mo_post_office || "",
+      mo_from_name: p.mo_from_name || "", mo_from_address: p.mo_from_address || "", mo_payment_for: p.mo_payment_for || "",
+      mo_issuer_location: p.mo_issuer_location || "", mo_photo_url: p.mo_photo_url || "",
+      cc_fee_enabled: p.cc_fee_enabled !== false, cc_fee_pct: p.cc_fee_pct ?? "3", cc_fee_amount: p.cc_fee_amount ?? "", cc_fee_payment_id: p.cc_fee_payment_id || null,
     });
     setPayJobSearch(""); setShowPayModal(true);
+  }
+  // Upload a check / money-order photo to the payment-docs bucket; stash url in the form field.
+  async function uploadPaymentDoc(file, field) {
+    if (!file) return;
+    setPayDocUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const path = `pay-${editingPayId || "new"}-${field}-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("payment-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) { window.alert("Error al subir: " + error.message); setPayDocUploading(false); return; }
+      const { data } = supabase.storage.from("payment-docs").getPublicUrl(path);
+      setPayForm(f => ({ ...f, [field]: data?.publicUrl || "" }));
+    } catch (e) { window.alert("Error: " + e.message); }
+    setPayDocUploading(false);
   }
   // The driver name assigned to a job (by job_id row), used to default who holds the cash.
   function jobDriverNameFor(jobId) {
@@ -3935,7 +4067,7 @@ export default function App() {
       concept: f.concept || "job",
       method: f.method || null,
       method_id: f.method_id || null,
-      check_type: (f.method === "check" || f.method === "money_order") ? (f.check_type || null) : null,
+      check_type: (f.method === "check") ? (f.check_type || null) : null,
       discount: f.discount === "" ? 0 : numv(f.discount),
       discount_reason: f.discount_reason || null,
       received, received_date: received ? (f.received_date || today()) : null,
@@ -3946,20 +4078,63 @@ export default function App() {
       notes: f.notes || null,
     };
     if (!payStageMissing) payload.payment_stage = f.payment_stage || null;
+    if (!payColsMissing) {
+      const isCheck = f.method === "check", isMo = f.method === "money_order", isCC = f.method === "credit_card";
+      payload.check_serial = isCheck ? (f.check_serial || null) : null;
+      payload.check_transaction_number = isCheck ? (f.check_transaction_number || null) : null;
+      payload.check_remitter = isCheck ? (f.check_remitter || null) : null;
+      payload.check_purchased_by = isCheck ? (f.check_purchased_by || null) : null;
+      payload.check_bank = isCheck ? (f.check_bank || null) : null;
+      payload.check_from = isCheck ? (f.check_from || null) : null;
+      payload.check_routing = isCheck ? (f.check_routing || null) : null;
+      payload.check_account_last4 = isCheck ? (f.check_account_last4 || null) : null;
+      payload.check_date = isCheck ? (f.check_date || null) : null;
+      payload.check_memo = isCheck ? (f.check_memo || null) : null;
+      payload.check_photo_url = isCheck ? (f.check_photo_url || null) : null;
+      payload.mo_type = isMo ? (f.mo_type || null) : null;
+      payload.mo_serial = isMo ? (f.mo_serial || null) : null;
+      payload.mo_date = isMo ? (f.mo_date || null) : null;
+      payload.mo_post_office = isMo ? (f.mo_post_office || null) : null;
+      payload.mo_from_name = isMo ? (f.mo_from_name || null) : null;
+      payload.mo_from_address = isMo ? (f.mo_from_address || null) : null;
+      payload.mo_payment_for = isMo ? (f.mo_payment_for || null) : null;
+      payload.mo_issuer_location = isMo ? (f.mo_issuer_location || null) : null;
+      payload.mo_photo_url = isMo ? (f.mo_photo_url || null) : null;
+      const feeEnabled = isCC && !!f.cc_fee_enabled;
+      payload.cc_fee_enabled = feeEnabled;
+      payload.cc_fee_pct = isCC ? (f.cc_fee_pct === "" ? null : numv(f.cc_fee_pct)) : null;
+      payload.cc_fee_amount = feeEnabled ? (numv(f.amount) * numv(f.cc_fee_pct) / 100) : null;
+    }
     return payload;
   }
   async function savePaymentRow() {
     setPaySaving(true);
-    const payload = payPayload(payForm);
-    let error = null;
+    const f = payForm;
+    const payload = payPayload(f);
+    let mainId = editingPayId, error = null;
     if (editingPayId) ({ error } = await supabase.from("payments").update(payload).eq("id", editingPayId));
-    else ({ error } = await supabase.from("payments").insert([payload]));
+    else { const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("id").single(); error = insErr; mainId = data?.id; }
+    // Credit-card fee → keep a SEPARATE linked cc_fee payment record in sync.
+    if (!error && !payColsMissing && mainId && f.concept !== "cc_fee") {
+      const feeEnabled = f.method === "credit_card" && !!f.cc_fee_enabled;
+      const feeAmt = feeEnabled ? (numv(f.amount) * numv(f.cc_fee_pct) / 100) : 0;
+      const existingFeeId = f.cc_fee_payment_id ? Number(f.cc_fee_payment_id) : null;
+      if (feeEnabled && feeAmt > 0) {
+        const d = payload.payment_date || today();
+        const feePayload = { job_id: payload.job_id, payment_date: d, amount: feeAmt, concept: "cc_fee", method: "credit_card", received: true, received_date: payload.received_date || d, banked: true, banked_date: payload.banked_date || d, received_by: payload.received_by || null };
+        if (existingFeeId) await supabase.from("payments").update(feePayload).eq("id", existingFeeId);
+        else { const { data: fd } = await supabase.from("payments").insert([feePayload]).select("id").single(); if (fd?.id) await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId); }
+      } else if (existingFeeId) {
+        await supabase.from("payments").delete().eq("id", existingFeeId);
+        await supabase.from("payments").update({ cc_fee_payment_id: null }).eq("id", mainId);
+      }
+    }
     // Two-way sync: a "job" payment mirrors bol_collected on the storage_job.
-    if (!error && payForm.concept === "job" && payForm.job_id) {
-      const k = jobKeyByRowId[Number(payForm.job_id)];
+    if (!error && f.concept === "job" && f.job_id) {
+      const k = jobKeyByRowId[Number(f.job_id)];
       const idsToSync = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
       if (idsToSync.length) {
-        await supabase.from("storage_jobs").update({ bol_collected: numv(payForm.amount), bol_payment_method: payForm.method || null, bol_collected_date: payForm.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", idsToSync);
+        await supabase.from("storage_jobs").update({ bol_collected: numv(f.amount), bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", idsToSync);
       }
     }
     setPaySaving(false);
@@ -3991,6 +4166,7 @@ export default function App() {
   }
   async function deletePaymentRow(p) {
     if (!window.confirm("¿Eliminar este pago?")) return;
+    if (p.cc_fee_payment_id) await supabase.from("payments").delete().eq("id", p.cc_fee_payment_id);
     await supabase.from("payments").delete().eq("id", p.id); loadPayments();
   }
   async function togglePayReceived(p) {
@@ -5466,15 +5642,26 @@ export default function App() {
                         {person.money_order > 0 && <span style={{ fontSize:11, background:"#E0F2F4", color:"#0E7490", borderRadius:20, padding:"2px 9px", fontWeight:600 }}>Money orders ${Math.round(person.money_order).toLocaleString()}</span>}
                       </div>
                       <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden", marginBottom:10 }}>
-                        {person.items.map(p => (
-                          <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
-                            <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
-                            <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{p._g?.customer || "—"}</span>
-                            <PaymentMethodBadge method={p.method} />
-                            <span style={{ fontWeight:700 }}>${p._net.toLocaleString()}</span>
-                            <span style={{ color:"#999", whiteSpace:"nowrap" }}>{daysSince(p.received_date || p.payment_date)}d</span>
-                          </div>
-                        ))}
+                        {person.items.map(p => {
+                          const detail = p.method === "check"
+                            ? [checkTypeLabel(p.check_type), payRef(p) && `#${payRef(p)}`, p.check_bank].filter(Boolean).join(" · ")
+                            : p.method === "money_order"
+                            ? [moTypeLabel(p.mo_type), payRef(p) && `#${payRef(p)}`].filter(Boolean).join(" · ")
+                            : "";
+                          return (
+                            <div key={p.id} style={{ padding:"7px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
+                                <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{p._g?.customer || "—"}</span>
+                                <PaymentMethodBadge method={p.method} />
+                                {payPhotoUrl(p) && <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="Ver documento" style={{ border:"none", background:"none", cursor:"pointer", fontSize:13 }}>📷</button>}
+                                <span style={{ fontWeight:700 }}>${p._net.toLocaleString()}</span>
+                                <span style={{ color:"#999", whiteSpace:"nowrap" }}>{daysSince(p.received_date || p.payment_date)}d</span>
+                              </div>
+                              {detail && <div style={{ fontSize:10.5, color:"#888", marginTop:2, paddingLeft:2 }}>{detail}</div>}
+                            </div>
+                          );
+                        })}
                       </div>
                       <a href={"https://wa.me/?text=" + encodeURIComponent(`Hi ${person.name}, you currently have $${Math.round(person.total).toLocaleString()} in circulation:\n` + person.items.map(p => `• Job ${p._g?.job_number || p.job_id || "—"} — $${p._net.toLocaleString()} (${payMethodLabel(p.method)})`).join("\n") + `\nPlease deposit or deliver by end of week. Thank you.`)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Pedir depósito</Btn></a>
                     </div>
@@ -5486,11 +5673,11 @@ export default function App() {
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                     <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Cliente","Broker","Driver","Concepto","Método","Monto","Desc.","Neto","Fecha","Recibido","Recibido por","Quién tiene","Depositado","Fecha dep.","Cuenta","Acciones"].map((h, i) => <th key={i} style={th}>{h}</th>)}
+                      {["Job #","Cliente","Broker","Driver","Concepto","Método","Ref #","Issuer","Foto","Monto","Desc.","Neto","Fecha","Recibido","Recibido por","Quién tiene","Depositado","Fecha dep.","Cuenta","Acciones"].map((h, i) => <th key={i} style={th}>{h}</th>)}
                     </tr></thead>
                     <tbody>
                       {rows.length === 0 ? (
-                        <tr><td colSpan={17} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin pagos en este filtro.</td></tr>
+                        <tr><td colSpan={20} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin pagos en este filtro.</td></tr>
                       ) : rows.map(p => (
                         <tr key={p.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"middle" }}>
                           <td style={td2}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
@@ -5498,7 +5685,14 @@ export default function App() {
                           <td style={td2}>{brokerName(p._g?.broker_id) || "—"}</td>
                           <td style={td2}>{p._g ? (jobDriverNames(p._g) || "—") : "—"}</td>
                           <td style={td2}><ConceptBadge concept={p.concept} /></td>
-                          <td style={td2}><PaymentMethodBadge method={p.method} />{p.method_id && <div style={{ fontSize:10, color:"#999", marginTop:2, fontFamily:"monospace" }}>{p.method_id}</div>}</td>
+                          <td style={td2}>
+                            <PaymentMethodBadge method={p.method} />
+                            {p.check_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{checkTypeLabel(p.check_type)}</div>}
+                            {p.mo_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{moTypeLabel(p.mo_type)}</div>}
+                          </td>
+                          <td style={{ ...td2, fontFamily:"monospace", fontSize:11.5, whiteSpace:"nowrap" }}>{payRef(p) || "—"}</td>
+                          <td style={{ ...td2, fontSize:11.5, whiteSpace:"nowrap" }}>{payIssuer(p) || "—"}</td>
+                          <td style={{ ...td2, textAlign:"center" }}>{payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="Ver documento" style={{ border:"none", background:"none", cursor:"pointer", fontSize:15 }}>📷</button> : <span style={{ color:"#ddd" }}>—</span>}</td>
                           <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:600 }}>{money(p.amount) || "$0"}</td>
                           <td style={{ ...td2, whiteSpace:"nowrap", color: numv(p.discount) ? "#E24B4A" : "#ccc" }}>{numv(p.discount) ? "-"+money(p.discount) : "—"}</td>
                           <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
@@ -6537,7 +6731,9 @@ export default function App() {
             const ps = (paymentsByJobKey[jobDetail.key] || []).slice().sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
             const expected = numv(jobDetail.pickup_balance) + numv(jobDetail.delivery_balance) + numv(jobDetail.bol_balance);
             const received = ps.filter(p => p.received).reduce((s, p) => s + paymentNet(p), 0);
-            const outstanding = expected - received;
+            const ccFeeTotal = ps.filter(p => p.received && p.concept === "cc_fee").reduce((s, p) => s + paymentNet(p), 0);
+            const jobPaymentTotal = received - ccFeeTotal;
+            const outstanding = expected - jobPaymentTotal;
             const repId = Math.min(...jobDetail.parts.map(p => p.id));
             const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
             return (
@@ -6545,9 +6741,15 @@ export default function App() {
                 <SectionLabel>Pagos {ps.length ? `(${ps.length})` : ""}</SectionLabel>
                 <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13, marginBottom:6 }}>
                   <span>Esperado: <b>${Math.round(expected).toLocaleString()}</b></span>
-                  <span>Recibido: <b style={{ color:"#1A8A4E" }}>${Math.round(received).toLocaleString()}</b></span>
+                  <span>Cobrado: <b style={{ color:"#1A8A4E" }}>${Math.round(received).toLocaleString()}</b></span>
                   <span>Saldo: <b style={{ color: outstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</b></span>
                 </div>
+                {ccFeeTotal > 0 && (
+                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12, marginBottom:6, color:"#888" }}>
+                    <span>Job payment: <b style={{ color:"#185FA5" }}>${Math.round(jobPaymentTotal).toLocaleString()}</b></span>
+                    <span>+ CC fee: <b style={{ color:"#854F0B" }}>${Math.round(ccFeeTotal).toLocaleString()}</b></span>
+                  </div>
+                )}
                 {ps.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos registrados.</div>
                   : ps.map(p => (
                       <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
@@ -7483,7 +7685,6 @@ export default function App() {
         const selectedG = payForm.job_id ? groups.find(g => String(g.repId) === String(payForm.job_id) || g.ids.includes(Number(payForm.job_id))) : null;
         const digital = isDigitalMethod(payForm.method);
         const physical = isPhysical(payForm.method);
-        const isCheckOrMo = payForm.method === "check" || payForm.method === "money_order";
         const setF = (fields) => setPayForm(f => ({ ...f, ...fields }));
         const net = numv(payForm.amount) - numv(payForm.discount);
         const whoList = [...driversList.map(d => d.name), ...employees.map(e => e.name)].filter(Boolean);
@@ -7524,20 +7725,6 @@ export default function App() {
                   {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
                 </select>
               </Field>
-              <Field label="Método">
-                <select style={inp} value={payForm.method} onChange={e => setF({ method:e.target.value })}>
-                  {PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
-                </select>
-              </Field>
-              {isCheckOrMo && <Field label="Método ID (n° cheque / transacción)"><input style={inp} value={payForm.method_id} onChange={e => setF({ method_id:e.target.value })} placeholder="N° cheque / ID" /></Field>}
-              {isCheckOrMo && <Field label="Tipo de cheque">
-                <select style={inp} value={payForm.check_type} onChange={e => setF({ check_type:e.target.value })}>
-                  <option value="">— Select —</option>
-                  <option value="personal">Personal</option>
-                  <option value="cashier">Cashier</option>
-                  <option value="business">Business</option>
-                </select>
-              </Field>}
               <Field label="Descuento ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>
               <Field label="Razón del descuento"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>
               {!payStageMissing && <Field label="Etapa del pago">
@@ -7549,6 +7736,123 @@ export default function App() {
                 </select>
               </Field>}
             </div>
+
+            {/* Method pill tabs */}
+            <div style={{ marginTop:12 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Método</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {PAY_METHODS.map(pm => {
+                  const on = payForm.method === pm.v;
+                  const hex = PAY_METHOD_META[pm.v] || "#666";
+                  return <button key={pm.v} onClick={() => setF({ method: pm.v })} style={{ fontSize:12, fontWeight:600, padding:"6px 12px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? hex : "#e5e5e5"}`, background: on ? hex+"1a" : "#fff", color: on ? hex : "#666" }}>{pm.l}</button>;
+                })}
+              </div>
+            </div>
+
+            {payColsMissing && (
+              <div style={{ marginTop:8, fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px" }}>
+                Corré el SQL actualizado para guardar los detalles de cheque/money order/CC fee. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>Ver SQL</button>
+              </div>
+            )}
+
+            {/* CHECK details */}
+            {payForm.method === "check" && !payColsMissing && (() => {
+              const ck = payForm.check_type;
+              const isPersonal = ck === "personal_check";
+              return (
+                <div style={{ marginTop:10, padding:"10px 12px", background:"#F2F7FC", border:"1px solid #D6E6F5", borderRadius:9 }}>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
+                    {CHECK_TYPES.map(t => { const on = ck === t.v; return <button key={t.v} onClick={() => setF({ check_type: t.v })} style={{ fontSize:12, fontWeight:600, padding:"5px 11px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#cfe0f0"}`, background: on ? "#185FA5" : "#fff", color: on ? "#fff" : "#185FA5" }}>{t.l}</button>; })}
+                  </div>
+                  {!ck ? <div style={{ fontSize:12, color:"#888" }}>Elegí el tipo de cheque.</div> : isPersonal ? (
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                      <Field label="Check number (serial)"><input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" /></Field>
+                      <Field label="From (titular)"><input style={inp} value={payForm.check_from} onChange={e => setF({ check_from:e.target.value })} placeholder="Account holder" /></Field>
+                      <Field label="Bank name"><input style={inp} value={payForm.check_bank} onChange={e => setF({ check_bank:e.target.value })} placeholder="Banco" /></Field>
+                      <Field label="Date on check"><input style={inp} type="date" value={payForm.check_date} onChange={e => setF({ check_date:e.target.value })} /></Field>
+                      <Field label="Routing (opcional)"><input style={inp} value={payForm.check_routing} onChange={e => setF({ check_routing:e.target.value })} placeholder="Routing" /></Field>
+                      <Field label="Account last 4 (opcional)"><input style={inp} maxLength={4} value={payForm.check_account_last4} onChange={e => setF({ check_account_last4:e.target.value })} placeholder="1234" /></Field>
+                      <Field label="Memo" full><input style={inp} value={payForm.check_memo} onChange={e => setF({ check_memo:e.target.value })} placeholder="Memo" /></Field>
+                    </div>
+                  ) : (
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                      <Field label="Check number (serial)"><input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" /></Field>
+                      <Field label="Transaction number"><input style={inp} value={payForm.check_transaction_number} onChange={e => setF({ check_transaction_number:e.target.value })} placeholder="Transaction #" /></Field>
+                      <Field label="Remitter (quién compró)"><input style={inp} value={payForm.check_remitter} onChange={e => setF({ check_remitter:e.target.value })} placeholder="Remitter" /></Field>
+                      <Field label="Purchased by"><input style={inp} value={payForm.check_purchased_by} onChange={e => setF({ check_purchased_by:e.target.value })} placeholder="Comprador" /></Field>
+                      <Field label="Bank / Issuer">
+                        <select style={inp} value={payForm.check_bank} onChange={e => setF({ check_bank:e.target.value })}>
+                          <option value="">— Select —</option>
+                          {CHECK_BANKS.map(b => <option key={b} value={b}>{b}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Date on check"><input style={inp} type="date" value={payForm.check_date} onChange={e => setF({ check_date:e.target.value })} /></Field>
+                      <Field label="Memo" full><input style={inp} value={payForm.check_memo} onChange={e => setF({ check_memo:e.target.value })} placeholder="Memo" /></Field>
+                    </div>
+                  )}
+                  {ck && <PayPhotoBox url={payForm.check_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "check_photo_url")} label="Foto del cheque" />}
+                </div>
+              );
+            })()}
+
+            {/* MONEY ORDER details */}
+            {payForm.method === "money_order" && !payColsMissing && (() => {
+              const isUsps = payForm.mo_type === "usps";
+              return (
+                <div style={{ marginTop:10, padding:"10px 12px", background:"#F1FAFB", border:"1px solid #CFE9EC", borderRadius:9 }}>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
+                    {MO_TYPES.map(t => { const on = payForm.mo_type === t.v; return <button key={t.v} onClick={() => setF({ mo_type: t.v })} style={{ fontSize:12, fontWeight:600, padding:"5px 11px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? "#0E7490" : "#CFE9EC"}`, background: on ? "#0E7490" : "#fff", color: on ? "#fff" : "#0E7490" }}>{t.l}</button>; })}
+                  </div>
+                  {isUsps ? (
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                      <Field label="Serial number"><input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" /></Field>
+                      <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
+                      <Field label="Post office #"><input style={inp} value={payForm.mo_post_office} onChange={e => setF({ mo_post_office:e.target.value })} placeholder="Post office" /></Field>
+                      <Field label="From name"><input style={inp} value={payForm.mo_from_name} onChange={e => setF({ mo_from_name:e.target.value })} placeholder="From" /></Field>
+                      <Field label="From address" full><input style={inp} value={payForm.mo_from_address} onChange={e => setF({ mo_from_address:e.target.value })} placeholder="Dirección" /></Field>
+                    </div>
+                  ) : (
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                      <Field label="Serial number"><input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" /></Field>
+                      <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
+                      <Field label="Purchaser name"><input style={inp} value={payForm.mo_from_name} onChange={e => setF({ mo_from_name:e.target.value })} placeholder="Comprador" /></Field>
+                      <Field label="Pay to the order of"><input style={inp} value={payForm.mo_from_address} onChange={e => setF({ mo_from_address:e.target.value })} placeholder="Pay to…" /></Field>
+                      <Field label="Payment for / Acct #"><input style={inp} value={payForm.mo_payment_for} onChange={e => setF({ mo_payment_for:e.target.value })} placeholder="Payment for / Acct" /></Field>
+                      <Field label="Issuer location"><input style={inp} value={payForm.mo_issuer_location} onChange={e => setF({ mo_issuer_location:e.target.value })} placeholder="Location" /></Field>
+                    </div>
+                  )}
+                  <PayPhotoBox url={payForm.mo_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "mo_photo_url")} label="Foto del money order" />
+                </div>
+              );
+            })()}
+
+            {/* CREDIT CARD fee */}
+            {payForm.method === "credit_card" && !payColsMissing && (() => {
+              const amt = numv(payForm.amount), pct = numv(payForm.cc_fee_pct), fee = payForm.cc_fee_enabled ? (amt * pct / 100) : 0;
+              return (
+                <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF6EC", border:"1px solid #F4DDB0", borderRadius:9 }}>
+                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
+                    <input type="checkbox" checked={!!payForm.cc_fee_enabled} onChange={e => setF({ cc_fee_enabled: e.target.checked })} />
+                    Cobrar CC fee al cliente
+                  </label>
+                  {payForm.cc_fee_enabled && (
+                    <>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginTop:10 }}>
+                        <Field label="Payment amount ($)"><input style={{ ...inp, background:"#f3f3f3" }} type="number" value={payForm.amount} readOnly /></Field>
+                        <Field label="CC fee %"><input style={inp} type="number" value={payForm.cc_fee_pct} onChange={e => setF({ cc_fee_pct:e.target.value })} /></Field>
+                        <Field label="CC fee amount"><input style={{ ...inp, background:"#f3f3f3" }} value={fee ? `$${fee.toLocaleString(undefined, { maximumFractionDigits:2 })}` : "$0"} readOnly /></Field>
+                      </div>
+                      <div style={{ marginTop:10, background:"#fff", border:"1px solid #f0e0c0", borderRadius:8, padding:"8px 11px", fontSize:12.5 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between" }}><span>Payment amount</span><b>${amt.toLocaleString()}</b></div>
+                        <div style={{ display:"flex", justifyContent:"space-between" }}><span>+ CC fee ({pct}%)</span><b style={{ color:"#854F0B" }}>${fee.toLocaleString(undefined, { maximumFractionDigits:2 })}</b></div>
+                        <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #f0e0c0", marginTop:5, paddingTop:5, fontWeight:800 }}><span>Total to collect</span><span style={{ color:"#1A8A4E" }}>${(amt + fee).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></div>
+                      </div>
+                      <div style={{ fontSize:11, color:"#999", marginTop:6 }}>Se crea un pago separado con concepto <b>CC Fee</b> al guardar.</div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
 
             <div style={{ marginTop:10, padding:"10px 12px", background:"#fafafa", borderRadius:8 }}>
               <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer" }}>
@@ -8136,6 +8440,14 @@ export default function App() {
           </>
         );
       })()}
+
+      {payPhotoView && (
+        <div onClick={() => setPayPhotoView(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.8)", zIndex:60, display:"flex", alignItems:"center", justifyContent:"center", padding:24, cursor:"zoom-out" }}>
+          {payPhotoView.toLowerCase().includes(".pdf")
+            ? <div style={{ background:"#fff", borderRadius:10, padding:24, textAlign:"center" }}><div style={{ fontSize:40 }}>📄</div><a href={payPhotoView} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Abrir PDF en pestaña nueva ↗</a></div>
+            : <img src={payPhotoView} alt="documento" style={{ maxWidth:"92%", maxHeight:"92%", borderRadius:8, boxShadow:"0 8px 40px rgba(0,0,0,0.4)" }} onClick={e => e.stopPropagation()} />}
+        </div>
+      )}
 
       {toast && (
         <div style={{ position:"fixed", bottom:24, left:"50%", transform:"translateX(-50%)", zIndex:100, background:"#111", color:"#fff", fontSize:13.5, fontWeight:600, padding:"11px 20px", borderRadius:10, boxShadow:"0 6px 24px rgba(0,0,0,0.25)", display:"flex", alignItems:"center", gap:8 }}>
