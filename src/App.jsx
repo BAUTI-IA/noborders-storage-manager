@@ -9,6 +9,448 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://szkmktxziojzg
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "sb_publishable_v2VNtyiQ_tTAAmEWDdHwYg_IJ-_IN-5";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ── Lightweight EN→ES UI toggle ──────────────────────────────────────────────
+// The app source is English. When the user picks Spanish, a DOM pass swaps the
+// known UI strings in place (text nodes + placeholder/title), reverting on EN.
+const I18N_ES = {
+  "(choose a unit)": "(elegí una unidad)",
+  "(no #)": "(sin #)",
+  "(no client)": "(sin cliente)",
+  "+ Add": "+ Agregar",
+  "+ Add job": "+ Agregar job",
+  "+ Add to this unit": "+ Agregar a esta unidad",
+  "+ Job to a unit": "+ Job a una unidad",
+  "+ Job to unit": "+ Job a unidad",
+  "AI metrics and recommendations": "Métricas y recomendaciones con IA",
+  "Account": "Cuenta",
+  "Actions": "Acciones",
+  "Active": "Activo",
+  "Active companies": "Empresas activas",
+  "Active jobs": "Jobs activos",
+  "Add": "Agregar",
+  "Add at least one line with an amount.": "Agregá al menos una línea con monto.",
+  "Add drivers in the Drivers section to multi-assign": "Cargá drivers en la sección Drivers para multi-asignar",
+  "Add extra": "Agregar extra",
+  "Add job": "Agregar job",
+  "Add to the unit": "Agregar a la unidad",
+  "Adding...": "Agregando...",
+  "Address": "Direccion",
+  "Address or reference visible in the list": "Dirección o referencia visible en la lista",
+  "All": "Todos",
+  "All documents": "Todos los documentos",
+  "All jobs with full detail": "Todos los trabajos con detalle completo",
+  "All months": "Todos los meses",
+  "Amount": "Monto",
+  "Amount ($)": "Monto ($)",
+  "Amount ($) *": "Monto ($) *",
+  "Amount collected ($)": "Monto cobrado ($)",
+  "Analyze with AI": "Analizar con IA",
+  "Assign commission": "Asignar comisión",
+  "BOL balance to collect": "BOL balance a cobrar",
+  "BOL balance to collect from client ($)": "BOL balance a cobrar al cliente ($)",
+  "BOL collected": "BOL cobrado",
+  "BOL collected ($)": "BOL cobrado ($)",
+  "BOL collection pending": "Cobro BOL pendiente",
+  "BOL in transit": "BOL en tránsito",
+  "Back": "Volver",
+  "Bank account": "Cuenta bancaria",
+  "Basic info": "Información básica",
+  "Broker owes us": "Broker nos debe",
+  "Broker-delivery closing sheets": "Closing sheets de broker deliveries",
+  "Brokers and outstanding balances": "Brokers y balances pendientes",
+  "Brown": "Marrón",
+  "CC fees collected": "CC fees cobrados",
+  "CF delivered": "CF entregados",
+  "CF in transit": "CF en tránsito",
+  "Calendar": "Calendario",
+  "Cancel": "Cancelar",
+  "Cancelled": "Cancelado",
+  "Cash": "Cash",
+  "Check": "Check",
+  "Choose a destination.": "Elegí un destino.",
+  "Choose a unit first": "Elegí una unidad primero",
+  "Choose or type (CubeSmart...)": "Elegí o escribí (CubeSmart...)",
+  "Choose who the document belongs to.": "Elegí a quién pertenece el documento.",
+  "City": "Ciudad",
+  "Client": "Cliente",
+  "Client *": "Cliente *",
+  "Client billing": "Billing al cliente",
+  "Client email": "Email del cliente",
+  "Client name": "Nombre del cliente",
+  "Client phone": "Teléfono del cliente",
+  "Client storage billing (optional)": "Storage billing al cliente (opcional)",
+  "Client storage collection": "Cobro de storage a clientes",
+  "Clients": "Clientes",
+  "Clients and their jobs": "Clientes y sus trabajos",
+  "Close": "Cerrar",
+  "Closed": "Cerrado",
+  "Closing sheet notes...": "Notas del closing sheet...",
+  "Collected": "Cobrado",
+  "Collected this month": "Cobrado este mes",
+  "Collected via split payment": "Cobrado vía pago dividido",
+  "Collection": "Cobro",
+  "Collection date": "Fecha de cobro",
+  "Collection notes (e.g. split cash + zelle)": "Notas del cobro (ej: split cash + zelle)",
+  "Collections, cash in circulation and deposits": "Cobros, efectivo en circulación y depósitos",
+  "Commission": "Comisión",
+  "Commission assigned": "Comisión asignada",
+  "Commission pending": "Comisión pendiente",
+  "Companies, documents and expirations": "Empresas, documentos y vencimientos",
+  "Company": "Empresa",
+  "Completed": "Completado",
+  "Concept": "Concepto",
+  "Confirm": "Confirmar",
+  "Contact": "Contacto",
+  "Copy the summary:": "Copiá el resumen:",
+  "Create": "Crear",
+  "Create account": "Crear cuenta",
+  "Create new": "Crear nuevo",
+  "Create payment": "Crear pago",
+  "Create pickup": "Crear pick up",
+  "Create split payments": "Crear pagos divididos",
+  "Create trip": "Crear trip",
+  "Create your account to sign in": "Crea tu cuenta para acceder",
+  "Database": "Base de datos",
+  "Database setup": "Configuración de base de datos",
+  "Date": "Fecha",
+  "Date *": "Fecha *",
+  "Days in storage": "Días en storage",
+  "Delete": "Eliminar",
+  "Delete job": "Eliminar job",
+  "Delete split": "Eliminar split",
+  "Delete this payment?": "¿Eliminar este pago?",
+  "Delete this storage?": "Eliminar este storage?",
+  "Delete this timeline event?": "¿Eliminar este evento del timeline?",
+  "Delivered": "Entregado",
+  "Delivered jobs": "Jobs entregados",
+  "Delivered today": "Entregados hoy",
+  "Delivery address": "Dirección delivery",
+  "Delivery balance ($)": "Balance en delivery ($)",
+  "Delivery state": "Delivery estado",
+  "Dep. date": "Fecha dep.",
+  "Departure": "Salida",
+  "Deposit date": "Fecha depósito",
+  "Deposited": "Depositado",
+  "Deposited this month": "Depositado este mes",
+  "Deposited this week": "Depositado esta semana",
+  "Description": "Descripción",
+  "Discount": "Descuento",
+  "Discount reason": "Razón del descuento",
+  "Dismiss": "Descartar",
+  "Doc type": "Tipo doc",
+  "Document type": "Tipo de documento",
+  "Drag or tap to upload photo/PDF (jpg, png, heic, pdf)": "Arrastrá o tocá para subir foto/PDF (jpg, png, heic, pdf)",
+  "Drag to reorder": "Arrastrá para reordenar",
+  "Driver (who dropped it off)": "Driver (quién lo dejó)",
+  "Driver + Rep": "Driver + Rep",
+  "Driver commission": "Comisión driver",
+  "Driver commissions": "Comisiones driver",
+  "Driver name": "Nombre del chofer",
+  "Driver only": "Solo driver",
+  "Due date": "Fecha de vencimiento",
+  "Duplicate record deleted": "Registro duplicado eliminado",
+  "Duplicate review": "Revisión de duplicados",
+  "Duration": "Duración",
+  "Edit": "Editar",
+  "Edit Extra CF": "Editar Extra CF",
+  "Edit broker": "Editar broker",
+  "Edit closing sheet": "Editar closing sheet",
+  "Edit company": "Editar empresa",
+  "Edit document": "Editar documento",
+  "Edit driver": "Editar driver",
+  "Edit extra": "Editar extra",
+  "Edit job": "Editar job",
+  "Edit payment": "Editar pago",
+  "Edit trip": "Editar trip",
+  "Edit truck": "Editar camión",
+  "Edit unit": "Editar unidad",
+  "Empty": "Vacio",
+  "Entity": "Entidad",
+  "Entity type": "Tipo de entidad",
+  "Error connecting to the AI. Try again.": "Error al conectar con la IA. Intenta de nuevo.",
+  "Event type *": "Tipo de evento *",
+  "Expected this month": "Esperado este mes",
+  "Expired": "Vencido",
+  "Expiring in 30 days": "Vencen en 30 días",
+  "Expiring soon": "Por vencer",
+  "Expiry": "Vencimiento",
+  "Extras & Commissions": "Extras & Comisiones",
+  "Extras per job and driver/rep commissions": "Extras por job y comisiones de driver/rep",
+  "Fill in at least job, client or driver.": "Completá al menos job, cliente o driver.",
+  "First month free?": "¿Primer mes gratis?",
+  "For the company": "Para la empresa",
+  "Generated by": "Generado por",
+  "Gross (collected + extras)": "Bruto (cobrado + extras)",
+  "Historical ref.": "Ref. histórica",
+  "In circulation": "En circulación",
+  "In circulation (not deposited)": "En circulación (sin depositar)",
+  "In circulation (total)": "En circulación (total)",
+  "In storage": "En storage",
+  "In transit": "En tránsito",
+  "Issue date": "Fecha de emisión",
+  "Issued": "Emisión",
+  "Issuer": "Emisor",
+  "Job type *": "Tipo de job *",
+  "Jobs in units": "Jobs en unidades",
+  "Jobs with the same number": "Jobs con mismo número",
+  "Label / address": "Etiqueta / dirección",
+  "Live load per truck": "Carga en vivo por camión",
+  "Load": "Cargar",
+  "Loading": "Cargando",
+  "Loading...": "Cargando...",
+  "Location": "Ubicación",
+  "Method": "Método",
+  "Missing coordinates (search an address or enter lat/lng).": "Faltan las coordenadas (buscá una dirección o cargá lat/lng).",
+  "Month": "Mes",
+  "Name": "Nombre",
+  "Name / number *": "Nombre / número *",
+  "Net": "Neto",
+  "Net result": "Resultado neto",
+  "Net to company": "Neto para la empresa",
+  "New": "Nuevo",
+  "New broker": "Nuevo broker",
+  "New closing sheet": "Nuevo closing sheet",
+  "New company": "Nueva empresa",
+  "New document": "Nuevo documento",
+  "New driver": "Nuevo driver",
+  "New job": "Nuevo job",
+  "New payment": "Nuevo pago",
+  "New trip": "Nuevo trip",
+  "New truck": "Nuevo camión",
+  "New unit": "Nueva unidad",
+  "No": "No",
+  "No FADD": "Sin FADD",
+  "No active trip": "Sin viaje activo",
+  "No active trips. Create one with “+ Trip”.": "Sin trips activos. Creá uno con “+ Trip”.",
+  "No billing records.": "Sin registros de billing.",
+  "No brokers added.": "Sin brokers cargados.",
+  "No closing sheets. Create one with “+ Closing sheet”.": "Sin closing sheets. Creá uno con “+ Closing sheet”.",
+  "No data": "Sin datos",
+  "No date": "Sin fecha",
+  "No delivered jobs": "Sin jobs entregados",
+  "No driver for today": "Sin driver para hoy",
+  "No drivers. Add one with “+ Driver”.": "Sin drivers. Agregá uno con “+ Driver”.",
+  "No expiry": "Sin vencimiento",
+  "No fuel surcharge": "Sin fuel surcharge",
+  "No jobs in this status.": "Sin jobs en este estado.",
+  "No name": "Sin nombre",
+  "No results.": "Sin resultados.",
+  "No trip assigned": "Sin trip asignado",
+  "No trips.": "Sin trips.",
+  "No trucks. Add one with “+ Truck”.": "Sin camiones. Agregá uno con “+ Camión”.",
+  "No. / policy / certificate": "N° / póliza / certificado",
+  "Notes": "Notas",
+  "Occupancy": "Ocupación",
+  "Occupied units": "Unidades ocupadas",
+  "On another active trip — will move here": "En otro trip activo — se moverá a este",
+  "On hold": "En espera",
+  "On the gross amount": "Sobre el monto bruto",
+  "Open": "Abrir",
+  "Open closing sheets": "Closing sheets abiertos",
+  "Open date": "Fecha de apertura",
+  "Operation drivers": "Choferes de la operación",
+  "Operation settings": "Configuración de la operación",
+  "Other fees description": "Descripción other fees",
+  "Out for delivery": "En entrega",
+  "Outstanding BOL collections": "Cobros BOL pendientes",
+  "Outstanding balance": "Balance pendiente",
+  "Owes us": "Nos debe",
+  "Pads missing (auto)": "Pads faltantes (auto)",
+  "Pads outstanding ($)": "Pads pendientes ($)",
+  "Pads received from broker": "Pads recibidos del broker",
+  "Pads returned (post-delivery)": "Pads devueltos (post-delivery)",
+  "Payment date": "Fecha de pago",
+  "Payment due date": "Vencimiento de pago",
+  "Payment method": "Método de pago",
+  "Payment stage": "Etapa del pago",
+  "Pending": "Pendiente",
+  "Pending collection": "Pendiente de cobro",
+  "Period": "Período",
+  "Phone": "Teléfono",
+  "Photo": "Foto",
+  "Photo / file": "Foto / archivo",
+  "Physical units and occupancy": "Unidades físicas y ocupación",
+  "Pick up + Delivery (same day)": "Pick up + Delivery (mismo día)",
+  "Picked up": "Levantado",
+  "Pickup & delivery dispatch": "Despacho de pickups y deliveries",
+  "Pickup address": "Dirección pickup",
+  "Pickup balance ($)": "Balance en pickup ($)",
+  "Pickup state": "Pickup estado",
+  "Projection if everything is deposited": "Proyección si se deposita todo",
+  "Reason": "Motivo",
+  "Received": "Recibido",
+  "Received by": "Recibido por",
+  "Received date": "Fecha recibido",
+  "Received this month": "Recibido este mes",
+  "Received this week": "Recibido esta semana",
+  "Record collection (BOL)": "Registrar cobro (BOL)",
+  "Remitter (who bought it)": "Remitter (quién compró)",
+  "Remove line": "Quitar línea",
+  "Rep commissions": "Comisiones rep",
+  "Rep only": "Solo rep",
+  "Replace file": "Reemplazar archivo",
+  "Review possible duplicates": "Revisar posibles duplicados",
+  "Run the SQL to enable billing.": "Corré el SQL para activar billing.",
+  "Run the SQL to enable settlements.": "Corré el SQL para activar settlements.",
+  "Run the setup SQL to enable brokers.": "Corré el SQL de configuración para activar brokers.",
+  "Run the setup SQL to enable drivers.": "Corré el SQL de configuración para activar drivers.",
+  "Run the setup SQL to enable trucks.": "Corré el SQL de configuración para activar camiones.",
+  "Sat": "Sáb",
+  "Save": "Guardar",
+  "Save changes": "Guardar cambios",
+  "Save collection": "Guardar cobro",
+  "Save commission": "Guardar comisión",
+  "Save event": "Guardar evento",
+  "Save extra": "Guardar extra",
+  "Save job": "Guardar job",
+  "Save location": "Guardar ubicación",
+  "Saving...": "Guardando...",
+  "Scheduled": "Programados",
+  "Scheduled pickups": "Pick ups programados",
+  "Search": "Buscar",
+  "Search by address / city": "Buscar por dirección / ciudad",
+  "Search by job # or client…": "Buscar por job # o cliente…",
+  "Search by job #, client, driver, company, unit...": "Buscar por job #, cliente, driver, empresa, unidad...",
+  "Search by job #, client, driver, pickup, delivery...": "Buscar por job #, cliente, driver, pickup, delivery...",
+  "Search by job #, client, driver, zip, location...": "Buscar por job #, cliente, driver, zip, ubicación...",
+  "Search company, location, zip, unit...": "Buscar empresa, ubicación, zip, unidad...",
+  "Search for a job to add it.": "Buscá un job para agregarlo.",
+  "Search job # / client / storage to add...": "Buscar job # / cliente / storage para agregar...",
+  "Search job # or client to add...": "Buscar job # o cliente para agregar...",
+  "Search job # or client…": "Buscar job # o cliente…",
+  "Select": "Seleccionar",
+  "Select a job to record the extras and their commissions.": "Seleccioná un job para poder registrar los extras y sus comisiones.",
+  "Sign in": "Iniciar sesión",
+  "Sign in to continue": "Iniciá sesión para continuar",
+  "Sign out": "Salir",
+  "Skip": "Saltar",
+  "Status": "Estado",
+  "Sticker color": "Color del sticker",
+  "Sticker unassigned": "Sticker sin asignar",
+  "That job is already in that unit": "Ese job ya está en esa unidad",
+  "That job is already in this unit.": "Ese job ya está en esta unidad.",
+  "To collect": "A cobrar",
+  "Today": "Hoy",
+  "Total amount ($) *": "Monto total ($) *",
+  "Total collected": "Total cobrado",
+  "Total outstanding": "Total pendiente",
+  "Total to collect": "Total a cobrar",
+  "Truck": "Camión",
+  "Truck fleet": "Flota de camiones",
+  "Type": "Tipo",
+  "Type an address to search.": "Escribí una dirección para buscar.",
+  "US states": "Estados USA",
+  "Unit": "Unidad",
+  "Unit #": "Unidad #",
+  "Unit capacity": "Capacidad de la unidad",
+  "Unit status": "Estado de la unidad",
+  "Units": "Unidades",
+  "Up to date": "Al día",
+  "User": "Usuario",
+  "View": "Ver",
+  "We owe": "Le debemos",
+  "We owe brokers": "Le debemos a brokers",
+  "Wed": "Mié",
+  "Week": "Semana",
+  "What happened": "Qué pasó",
+  "Where it's stored": "Dónde está guardado",
+  "Who has it": "Quién tiene",
+  "Who has the money?": "¿Quién tiene el dinero?",
+  "With fuel surcharge": "Con fuel surcharge",
+  "Without fuel surcharge": "Sin fuel surcharge",
+  "Yes": "Sí",
+  "client@email.com": "cliente@email.com",
+  "just now": "recién",
+  "legal@company.com": "legal@empresa.com",
+  "no broker": "sin broker",
+  "no client": "sin cliente",
+  "no month": "ningún mes",
+  "no truck": "sin camión",
+  "not updated": "sin actualizar",
+  "records": "registros",
+  "unit": "unidad",
+  "units": "unidades",
+  "· 1st month free": "· 1er mes gratis",
+  "— Unassigned —": "— Sin asignar —",
+  "+ New job": "+ Nuevo job",
+  "+ Payment": "+ Pago",
+  "+ Truck": "+ Camión",
+  "+ New broker": "+ Nuevo broker",
+  "+ Company": "+ Empresa",
+  "+ Document": "+ Documento",
+  "+ Closing sheet": "+ Closing sheet",
+  "+ Trip": "+ Trip",
+  "+ Add payment": "+ Agregar pago",
+  "+ Add event": "+ Agregar evento",
+  "+ Add extra": "+ Agregar extra",
+  "Reps / Employees": "Reps / Empleados",
+  "Mark all delivered": "Marcar todo entregado",
+  "Send manifest to driver": "Enviar manifest al driver",
+  "Request deposit": "Pedir depósito",
+  "Crear pago": "Crear pago",
+  "Create payment": "Crear pago",
+  "Create split payments": "Crear pagos divididos",
+  "New payment": "Nuevo pago",
+  "Edit payment": "Editar pago",
+  "Save collection": "Guardar cobro",
+  "Mark as in transit": "Salir (en tránsito)",
+  "Depart (in transit)": "Salir (en tránsito)",
+  "Complete trip…": "Completar trip…",
+  "Cancel trip": "Cancelar trip",
+  "Mark completed": "Marcar completado",
+  "Add event": "Agregar evento",
+  "Save event": "Guardar evento",
+  "Delete job": "Eliminar job",
+  "Total": "Total",
+  "Expected": "Esperado",
+  "Collected (job)": "Cobrado (job)"
+};
+const i18nCache = new WeakMap();   // text node -> original English value
+function i18nApply() {
+  const dict = I18N_ES;
+  if (!document.body) return;
+  const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+  const nodes = []; let n;
+  while ((n = tw.nextNode())) nodes.push(n);
+  for (const t of nodes) {
+    const pn = t.parentNode; if (!pn) continue;
+    const tag = pn.nodeName;
+    if (tag === "SCRIPT" || tag === "STYLE" || tag === "TEXTAREA") continue;
+    const raw = t.nodeValue; const key = raw.trim();
+    if (!key) continue;
+    const tr = dict[key];
+    if (tr && tr !== key) {
+      if (!i18nCache.has(t)) i18nCache.set(t, raw);
+      const lead = raw.match(/^\s*/)[0], trail = raw.match(/\s*$/)[0];
+      t.nodeValue = lead + tr + trail;
+    }
+  }
+  document.querySelectorAll("[placeholder],[title]").forEach(el => {
+    for (const attr of ["placeholder", "title"]) {
+      if (!el.hasAttribute(attr)) continue;
+      const v = el.getAttribute(attr), key = (v || "").trim(), tr = dict[key];
+      if (tr && tr !== key) {
+        const ck = "__i18n_" + attr;
+        if (!el[ck]) el[ck] = v;
+        el.setAttribute(attr, tr);
+      }
+    }
+  });
+}
+function i18nRestore() {
+  if (!document.body) return;
+  const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+  const nodes = []; let n;
+  while ((n = tw.nextNode())) nodes.push(n);
+  for (const t of nodes) { if (i18nCache.has(t)) { t.nodeValue = i18nCache.get(t); i18nCache.delete(t); } }
+  document.querySelectorAll("[placeholder],[title]").forEach(el => {
+    for (const attr of ["placeholder", "title"]) {
+      const ck = "__i18n_" + attr;
+      if (el[ck]) { el.setAttribute(attr, el[ck]); el[ck] = null; }
+    }
+  });
+}
+
 // One physical storage = one row in `storages`. Jobs that pass through a unit are
 // tracked as history in `storage_jobs`. Multiple jobs can be active at once.
 const STORAGE_JOBS_SQL = `create table if not exists public.storage_jobs (
@@ -1910,7 +2352,7 @@ const NAV = [
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
 ];
-function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates }) {
+function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates, lang = "en", setLang }) {
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
       <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3" }}>
@@ -1944,6 +2386,11 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDu
             🔍 {dupCount} duplicate{dupCount === 1 ? "" : "s"}
           </button>
         )}
+        <div style={{ display:"flex", gap:4, marginBottom:8 }}>
+          {["en","es"].map(lc => (
+            <button key={lc} onClick={() => setLang && setLang(lc)} style={{ flex:1, padding:"6px", borderRadius:8, border:"1px solid #eee", cursor:"pointer", fontSize:11, fontWeight:700, background: lang===lc ? "#111" : "#fff", color: lang===lc ? "#fff" : "#888" }}>{lc==="en"?"🇺🇸 EN":"🇪🇸 ES"}</button>
+          ))}
+        </div>
         <button onClick={onSignOut} style={{ width:"100%", padding:"8px", borderRadius:8, border:"1px solid #eee", background:"#fff", color:"#888", fontSize:12, cursor:"pointer" }}>Sign out</button>
       </div>
     </div>
@@ -1977,6 +2424,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
   const [page, setPage] = useState("dispatching");   // sidebar navigation
+  const [lang, setLang] = useState(() => { try { return localStorage.getItem("lang") || "en"; } catch { return "en"; } });
   const [showDupModal, setShowDupModal] = useState(false);  // duplicates review modal
   const [dismissedDups, setDismissedDups] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem("dismissedDups") || "[]")); } catch { return new Set(); } });
   const [tab, setTab] = useState("active");           // jobs page sub-tab: active/delivered/wh:*
@@ -3532,6 +3980,17 @@ export default function App() {
   }, [jobDetailKey, jobs, storageById]);
 
   const userEmail = session?.user?.email || null;
+  // Apply / revert the Spanish UI overlay whenever the language changes.
+  useEffect(() => {
+    try { localStorage.setItem("lang", lang); } catch { /* ignore */ }
+    if (lang !== "es") { i18nRestore(); return; }
+    let scheduled = false; let obs;
+    const OPTS = { childList: true, subtree: true, characterData: true };
+    const run = () => { if (obs) obs.disconnect(); i18nApply(); if (obs) obs.observe(document.body, OPTS); };
+    obs = new MutationObserver(() => { if (scheduled) return; scheduled = true; requestAnimationFrame(() => { scheduled = false; run(); }); });
+    run();
+    return () => { obs.disconnect(); i18nRestore(); };
+  }, [lang]);
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
@@ -4981,7 +5440,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} lang={lang} setLang={setLang} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
