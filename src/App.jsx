@@ -136,6 +136,7 @@ function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPat
       </td>
       <td style={{ ...cell, fontWeight:600, whiteSpace:"nowrap" }}>
         {extraTypeLabel(type)}
+        {extra?.source === "payment_split" && <span title="Cobrado vía pago dividido" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px", marginLeft:5 }}>pago</span>}
         {type === "other" && active && <input value={desc} onChange={e => setDesc(e.target.value)} onBlur={() => onPatch(extra, { description: desc })} placeholder="Detalle" style={{ ...miniInp, width:120, marginLeft:6 }} />}
       </td>
       <td style={{ ...cell, minWidth: active && isCf ? 190 : undefined }}>{!active ? <span style={{ color:"#ccc" }}>—</span> : isCf ? (
@@ -266,6 +267,20 @@ const payRef = (p) => p.check_serial || p.mo_serial || p.method_id || "";
 const payIssuer = (p) => p.method === "check" ? (p.check_bank || "") : p.method === "money_order" ? moTypeLabel(p.mo_type) : "";
 const payPhotoUrl = (p) => p.check_photo_url || p.mo_photo_url || "";
 const payConceptLabel = (v) => PAY_CONCEPTS.find(c => c.v === v)?.l || v;
+// Split-payment line concepts. Each maps to a payment concept and, for extra
+// types, the job_extras extra_type used to auto-link commission tracking.
+const SPLIT_CONCEPTS = [
+  { v:"job",           l:"Job",           pay:"job",    extra:null },
+  { v:"extra_cf",      l:"Extra CF",      pay:"extra",  extra:"extra_cf" },
+  { v:"shuttle",       l:"Shuttle",       pay:"extra",  extra:"shuttle" },
+  { v:"long_carry",    l:"Long carry",    pay:"extra",  extra:"long_carry" },
+  { v:"stairs",        l:"Stairs",        pay:"extra",  extra:"stairs" },
+  { v:"packing",       l:"Packing",       pay:"extra",  extra:"packing" },
+  { v:"flight_charge", l:"Flight charge", pay:"extra",  extra:"flight_charge" },
+  { v:"cc_fee",        l:"CC Fee",        pay:"cc_fee", extra:null },
+  { v:"other",         l:"Other",         pay:"other",  extra:null },
+];
+const splitConcept = (v) => SPLIT_CONCEPTS.find(c => c.v === v) || SPLIT_CONCEPTS[0];
 function ConceptBadge({ concept }) {
   const c = PAY_CONCEPTS.find(x => x.v === concept) || PAY_CONCEPTS[4];
   return <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}>{c.l}</span>;
@@ -318,6 +333,8 @@ const EMPTY_PAYMENT = {
   mo_payment_for:"", mo_issuer_location:"", mo_photo_url:"",
   // credit-card fee
   cc_fee_enabled:true, cc_fee_pct:"3", cc_fee_amount:"", cc_fee_payment_id:null,
+  // split payment (form-only; never sent verbatim)
+  split_enabled:false, split_lines:[{ concept:"job", amount:"", notes:"" }],
 };
 
 // ── Legal & Compliance module ──
@@ -826,6 +843,8 @@ create table if not exists public.job_extras (
   extra_total_with_fuel numeric,
   commission_base text,
   commission_base_amount numeric,
+  source text default 'manual',
+  payment_id bigint,
   created_at timestamptz default now()
 );
 alter table public.job_extras add column if not exists extra_cf_count numeric;
@@ -836,6 +855,8 @@ alter table public.job_extras add column if not exists fuel_surcharge_amount num
 alter table public.job_extras add column if not exists extra_total_with_fuel numeric;
 alter table public.job_extras add column if not exists commission_base text;
 alter table public.job_extras add column if not exists commission_base_amount numeric;
+alter table public.job_extras add column if not exists source text default 'manual';
+alter table public.job_extras add column if not exists payment_id bigint;
 alter table public.job_extras enable row level security;
 drop policy if exists "job_extras_all" on public.job_extras;
 create policy "job_extras_all" on public.job_extras for all to anon, authenticated using (true) with check (true);
@@ -880,10 +901,14 @@ create table if not exists public.payments (
   banked_date date,
   bank_account text,
   payment_stage text,
+  split_group text,
+  extra_type text,
   notes text,
   created_at timestamptz default now()
 );
 alter table public.payments add column if not exists payment_stage text;
+alter table public.payments add column if not exists split_group text;
+alter table public.payments add column if not exists extra_type text;
 -- Detailed check / money order tracking + credit-card fee fields.
 alter table public.payments add column if not exists check_serial text;
 alter table public.payments add column if not exists check_transaction_number text;
@@ -2040,6 +2065,9 @@ export default function App() {
   const [paymentsMissing, setPaymentsMissing] = useState(false);
   const [payStageMissing, setPayStageMissing] = useState(false);
   const [payColsMissing, setPayColsMissing] = useState(false);   // detailed check/MO/CC columns
+  const [splitMissing, setSplitMissing] = useState(false);       // split_group / extra_type / source / payment_id
+  const [expandedSplits, setExpandedSplits] = useState(() => new Set());
+  const [commAssign, setCommAssign] = useState(null);            // pending commission assignment for a payment-split extra
   const [payDocUploading, setPayDocUploading] = useState(false);
   const [payPhotoView, setPayPhotoView] = useState(null);        // url of photo viewed full-size
   const [payments, setPayments] = useState([]);
@@ -2582,6 +2610,26 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session, paymentsMissing]);
+
+  // Probe the split-payment columns (payments.split_group/extra_type + job_extras.source/payment_id).
+  useEffect(() => {
+    if (!session || paymentsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error: e1 } = await supabase.from("payments").select("split_group").limit(1);
+      const { error: e2 } = extrasMissing ? { error: null } : await supabase.from("job_extras").select("source").limit(1);
+      if (cancelled || (!e1 && !e2)) return;
+      let created = false;
+      const sql = "alter table public.payments add column if not exists split_group text, add column if not exists extra_type text;" +
+        (extrasMissing ? "" : " alter table public.job_extras add column if not exists source text default 'manual', add column if not exists payment_id bigint;");
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setSplitMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, paymentsMissing, extrasMissing]);
 
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
@@ -4072,6 +4120,8 @@ export default function App() {
   }
   // The amount the commission % applies to (CF base for extra_cf, else amount).
   const extraCommBase = (e) => e.extra_type === "extra_cf" ? numv(e.commission_base_amount) : numv(e.amount);
+  // A payment-split extra whose commission was never assigned (no driver/rep yet).
+  const extraPending = (e) => e.source === "payment_split" && !e.driver_id && !e.rep_id;
   // Create an extra of a given type for a (job, driver). Pcts auto-fill from rules.
   async function activateExtra(jobId, driverId, type) {
     const gen = "driver_only";
@@ -4201,7 +4251,7 @@ export default function App() {
   // ── Payments handlers ──
   function openAddPayment(prefill = {}) {
     setEditingPayId(null);
-    setPayForm({ ...EMPTY_PAYMENT, payment_date: today(), received: true, received_date: today(), ...prefill });
+    setPayForm({ ...EMPTY_PAYMENT, split_enabled: false, split_lines: [{ concept: "job", amount: "", notes: "" }], payment_date: today(), received: true, received_date: today(), ...prefill });
     setPayJobSearch(""); setShowPayModal(true);
   }
   function openEditPayment(p) {
@@ -4301,9 +4351,91 @@ export default function App() {
     }
     return payload;
   }
-  async function savePaymentRow() {
+  // Build the commission-assignment modal state for a payment-split extra (defaults from rules).
+  function commAssignInit(extra, queue) {
+    const gen = "driver_only";
+    const d = commissionDefaults(extra.extra_type, gen);
+    return { extra, queue: queue || [], generated_by: gen, driver_id: extra.driver_id || "", rep_id: extra.rep_id || "", driver_pct: String(d.driver), rep_pct: String(d.rep) };
+  }
+  function openCommAssign(extra) { setCommAssign(commAssignInit(extra, [])); }
+  function advanceCommQueue() {
+    setCommAssign(ca => (ca && ca.queue.length) ? commAssignInit(ca.queue[0], ca.queue.slice(1)) : null);
+  }
+  async function saveCommAssign() {
+    const ca = commAssign; if (!ca) return;
+    const base = numv(ca.extra.amount);
+    const gen = ca.generated_by;
+    const dPct = ca.driver_pct === "" ? null : numv(ca.driver_pct);
+    const rPct = ca.rep_pct === "" ? null : numv(ca.rep_pct);
+    const dc = base * numv(dPct) / 100, rc = base * numv(rPct) / 100;
+    await supabase.from("job_extras").update({
+      generated_by: gen, driver_id: ca.driver_id || null,
+      rep_id: gen === "driver_only" ? null : (ca.rep_id || null),
+      driver_commission_pct: dPct, rep_commission_pct: rPct,
+      driver_commission_amount: dc, rep_commission_amount: rc,
+      company_amount: base - dc - rc,
+    }).eq("id", ca.extra.id);
+    loadExtras();
+    advanceCommQueue();
+  }
+  // Split payment: one entered total fanned out into several linked payment rows
+  // (same job/date/method/check/MO), with extra lines auto-linked to job_extras.
+  async function saveSplitPayment(f) {
+    const lines = (f.split_lines || []).filter(l => l.amount !== "" && numv(l.amount) !== 0);
+    const total = numv(f.amount);
+    const splitTotal = lines.reduce((s, l) => s + numv(l.amount), 0);
+    if (!lines.length) { window.alert("Agregá al menos una línea con monto."); return; }
+    if (Math.abs(splitTotal - total) > 0.01) { window.alert(`El total de las divisiones ($${splitTotal.toLocaleString()}) no coincide con el monto ingresado ($${total.toLocaleString()}).`); return; }
+    const hasExtra = lines.some(l => splitConcept(l.concept).extra);
+    if (hasExtra && !f.job_id) { window.alert("Seleccioná un job para poder registrar los extras y sus comisiones."); return; }
     setPaySaving(true);
+    const group = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now());
+    const base = payPayload(f);
+    base.discount = 0; base.discount_reason = null;          // discounts not split across lines
+    if (!payColsMissing) { base.cc_fee_enabled = false; base.cc_fee_amount = null; base.cc_fee_payment_id = null; }
+    const createdExtras = [];
+    let jobLineSum = 0, err = null;
+    for (const l of lines) {
+      const sc = splitConcept(l.concept);
+      const linePayload = { ...base, amount: numv(l.amount), concept: sc.pay, notes: l.notes || base.notes };
+      if (!splitMissing) { linePayload.split_group = group; linePayload.extra_type = sc.extra || null; }
+      const { data: pd, error: insErr } = await supabase.from("payments").insert([linePayload]).select("id").single();
+      if (insErr) { err = insErr; break; }
+      if (sc.pay === "job") jobLineSum += numv(l.amount);
+      if (sc.extra && f.job_id && !extrasMissing && !splitMissing) {
+        const exPayload = {
+          job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
+          amount: numv(l.amount), generated_by: "driver_only",
+          driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
+          driver_commission_amount: 0, rep_commission_amount: 0, company_amount: numv(l.amount),
+          active: true, source: "payment_split", payment_id: pd?.id || null,
+        };
+        const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
+        if (ed) createdExtras.push(ed);
+      }
+    }
+    // Two-way sync: job-concept lines mirror bol_collected on the storage_job rows.
+    if (!err && jobLineSum > 0 && f.job_id) {
+      const k = jobKeyByRowId[Number(f.job_id)];
+      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    }
+    setPaySaving(false);
+    if (err) { window.alert(err.message); return; }
+    setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
+    // Prompt to assign commission for each auto-created extra.
+    if (createdExtras.length) {
+      const toAssign = [];
+      for (const e of createdExtras) {
+        if (window.confirm(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} registrado. ¿Asignar comisión ahora?`)) toAssign.push(e);
+      }
+      if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
+    }
+  }
+  async function savePaymentRow() {
     const f = payForm;
+    if (f.split_enabled && !editingPayId && !splitMissing) { await saveSplitPayment(f); return; }
+    setPaySaving(true);
     const payload = payPayload(f);
     let mainId = editingPayId, error = null;
     if (editingPayId) ({ error } = await supabase.from("payments").update(payload).eq("id", editingPayId));
@@ -4361,7 +4493,19 @@ export default function App() {
   async function deletePaymentRow(p) {
     if (!window.confirm("¿Eliminar este pago?")) return;
     if (p.cc_fee_payment_id) await supabase.from("payments").delete().eq("id", p.cc_fee_payment_id);
-    await supabase.from("payments").delete().eq("id", p.id); loadPayments();
+    if (!extrasMissing && !splitMissing) await supabase.from("job_extras").delete().eq("payment_id", p.id);
+    await supabase.from("payments").delete().eq("id", p.id); loadPayments(); loadExtras();
+  }
+  // Delete every payment row in a split group (and any extras / cc-fee children linked to them).
+  async function deleteSplitGroup(rows) {
+    if (!rows.length) return;
+    if (!window.confirm(`¿Eliminar este pago dividido (${rows.length} líneas)?`)) return;
+    const ids = rows.map(r => r.id);
+    const feeIds = rows.map(r => r.cc_fee_payment_id).filter(Boolean);
+    if (!extrasMissing && !splitMissing) await supabase.from("job_extras").delete().in("payment_id", ids);
+    if (feeIds.length) await supabase.from("payments").delete().in("id", feeIds);
+    await supabase.from("payments").delete().in("id", ids);
+    loadPayments(); loadExtras();
   }
   async function togglePayReceived(p) {
     const received = !p.received;
@@ -5538,6 +5682,7 @@ export default function App() {
       {/* ───────────────────────── EXTRAS & COMMISSIONS ───────────────────────── */}
       {page === "extras" && (() => {
         const monthLabel = (() => { const [y, m] = exMonth.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : exMonth; })();
+        const pendingComm = jobExtras.filter(e => e.active !== false && extraPending(e));
         const typesToShow = exType ? EXTRA_TYPES.filter(t => t.v === exType) : EXTRA_TYPES;
         const driverIds = exDriver ? [Number(exDriver)] : driversList.map(d => d.id);
         const groupsArr = [...extraJobGroups.values()].filter(g => groupMonth(g) === exMonth);
@@ -5587,6 +5732,26 @@ export default function App() {
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span>Para Extras & Comisiones (job_extras + empleados/reps), corré el SQL de configuración una sola vez en Supabase.</span>
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver SQL</button>
+              </div>
+            )}
+            {pendingComm.length > 0 && (
+              <div style={{ background:"#FFF8EC", border:"1px solid #F4DDB0", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
+                <div style={{ fontSize:13, fontWeight:700, color:"#854F0B", marginBottom:8 }}>⚠️ Extras cobrados vía pago sin comisión asignada ({pendingComm.length})</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                  {pendingComm.map(e => {
+                    const g = extraJobGroups.get(jobKeyByRowId[e.job_id]);
+                    return (
+                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:"#7A5512", flexWrap:"wrap" }}>
+                        <button onClick={() => g && setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#854F0B", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g?.job_number || ("#"+(e.job_id||"—"))}</button>
+                        <span>{g?.customer || ""}</span>
+                        <span style={{ fontWeight:700 }}>{extraTypeLabel(e.extra_type)}</span>
+                        <span style={{ fontWeight:700 }}>{money(e.amount) || "$0"}</span>
+                        <span style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>Cobrado vía pago</span>
+                        <span style={{ marginLeft:"auto" }}><Btn primary style={{ padding:"4px 11px", fontSize:12 }} onClick={() => openCommAssign(e)}>Asignar comisión</Btn></span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:10, marginBottom:16 }}>
@@ -5791,6 +5956,54 @@ export default function App() {
         const Toggle = ({ on, onClick, disabled }) => (
           <button onClick={onClick} disabled={disabled} style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, border:"none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, background: on ? "#EAF3DE" : "#F1F1F1", color: on ? "#3B6D11" : "#999" }}>{on ? "Sí" : "No"}</button>
         );
+        // One payment row (also used for split children, slightly indented + tinted).
+        const renderPayRow = (p, child = false) => (
+          <tr key={p.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"middle", background: child ? "#FBFAFE" : undefined }}>
+            <td style={{ ...td2, paddingLeft: child ? 26 : td2.padding }}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{child ? "↳ " : ""}{p._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>{child ? "↳ " : ""}—</span>}</td>
+            <td style={td2}>{p._g?.customer || "—"}</td>
+            <td style={td2}>{brokerName(p._g?.broker_id) || "—"}</td>
+            <td style={td2}>{p._g ? (jobDriverNames(p._g) || "—") : "—"}</td>
+            <td style={td2}><ConceptBadge concept={p.concept} />{p.extra_type && p.concept === "extra" && <div style={{ fontSize:9.5, color:"#6D28D9", marginTop:2 }}>{extraTypeLabel(p.extra_type)}</div>}</td>
+            <td style={td2}>
+              <PaymentMethodBadge method={p.method} />
+              {p.check_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{checkTypeLabel(p.check_type)}</div>}
+              {p.mo_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{moTypeLabel(p.mo_type)}</div>}
+            </td>
+            <td style={{ ...td2, fontFamily:"monospace", fontSize:11.5, whiteSpace:"nowrap" }}>{payRef(p) || "—"}</td>
+            <td style={{ ...td2, fontSize:11.5, whiteSpace:"nowrap" }}>{payIssuer(p) || "—"}</td>
+            <td style={{ ...td2, textAlign:"center" }}>{payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="Ver documento" style={{ border:"none", background:"none", cursor:"pointer", fontSize:15 }}>📷</button> : <span style={{ color:"#ddd" }}>—</span>}</td>
+            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:600 }}>{money(p.amount) || "$0"}</td>
+            <td style={{ ...td2, whiteSpace:"nowrap", color: numv(p.discount) ? "#E24B4A" : "#ccc" }}>{numv(p.discount) ? "-"+money(p.discount) : "—"}</td>
+            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
+            <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.payment_date || "—"}</td>
+            <td style={td2}><Toggle on={!!p.received} onClick={() => togglePayReceived(p)} /></td>
+            <td style={td2}>{p.received_by || "—"}</td>
+            <td style={td2}>{!p.banked && isPhysical(p.method) ? (p.cash_with_whom || "—") : "—"}</td>
+            <td style={td2}><Toggle on={!!p.banked} disabled={!p.received} onClick={() => togglePayBanked(p)} /></td>
+            <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.banked_date || "—"}</td>
+            <td style={td2}>{p.bank_account || "—"}</td>
+            <td style={{ ...td2, whiteSpace:"nowrap" }}>
+              <button onClick={() => openEditPayment(p)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+              <button onClick={() => deletePaymentRow(p)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
+            </td>
+          </tr>
+        );
+        // Group split-payment rows (share a split_group) into one expandable parent.
+        const splitMap = {};
+        for (const p of rows) { if (p.split_group) (splitMap[p.split_group] = splitMap[p.split_group] || []).push(p); }
+        const seenSplit = new Set();
+        const displayItems = [];
+        for (const p of rows) {
+          if (p.split_group && (splitMap[p.split_group] || []).length > 1) {
+            if (seenSplit.has(p.split_group)) continue;
+            seenSplit.add(p.split_group);
+            const grp = splitMap[p.split_group];
+            displayItems.push({ type:"group", key:"g"+p.split_group, group:p.split_group, rows:grp, total: grp.reduce((s, x) => s + x._net, 0), rep: grp[0] });
+          } else {
+            displayItems.push({ type:"single", p });
+          }
+        }
+        const toggleSplit = (gid) => setExpandedSplits(prev => { const n = new Set(prev); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
         return (
           <>
             {paymentsMissing && (
@@ -5885,37 +6098,30 @@ export default function App() {
                     <tbody>
                       {rows.length === 0 ? (
                         <tr><td colSpan={20} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin pagos en este filtro.</td></tr>
-                      ) : rows.map(p => (
-                        <tr key={p.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"middle" }}>
-                          <td style={td2}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
-                          <td style={td2}>{p._g?.customer || "—"}</td>
-                          <td style={td2}>{brokerName(p._g?.broker_id) || "—"}</td>
-                          <td style={td2}>{p._g ? (jobDriverNames(p._g) || "—") : "—"}</td>
-                          <td style={td2}><ConceptBadge concept={p.concept} /></td>
-                          <td style={td2}>
-                            <PaymentMethodBadge method={p.method} />
-                            {p.check_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{checkTypeLabel(p.check_type)}</div>}
-                            {p.mo_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{moTypeLabel(p.mo_type)}</div>}
-                          </td>
-                          <td style={{ ...td2, fontFamily:"monospace", fontSize:11.5, whiteSpace:"nowrap" }}>{payRef(p) || "—"}</td>
-                          <td style={{ ...td2, fontSize:11.5, whiteSpace:"nowrap" }}>{payIssuer(p) || "—"}</td>
-                          <td style={{ ...td2, textAlign:"center" }}>{payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="Ver documento" style={{ border:"none", background:"none", cursor:"pointer", fontSize:15 }}>📷</button> : <span style={{ color:"#ddd" }}>—</span>}</td>
-                          <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:600 }}>{money(p.amount) || "$0"}</td>
-                          <td style={{ ...td2, whiteSpace:"nowrap", color: numv(p.discount) ? "#E24B4A" : "#ccc" }}>{numv(p.discount) ? "-"+money(p.discount) : "—"}</td>
-                          <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
-                          <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.payment_date || "—"}</td>
-                          <td style={td2}><Toggle on={!!p.received} onClick={() => togglePayReceived(p)} /></td>
-                          <td style={td2}>{p.received_by || "—"}</td>
-                          <td style={td2}>{!p.banked && isPhysical(p.method) ? (p.cash_with_whom || "—") : "—"}</td>
-                          <td style={td2}><Toggle on={!!p.banked} disabled={!p.received} onClick={() => togglePayBanked(p)} /></td>
-                          <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.banked_date || "—"}</td>
-                          <td style={td2}>{p.bank_account || "—"}</td>
-                          <td style={{ ...td2, whiteSpace:"nowrap" }}>
-                            <button onClick={() => openEditPayment(p)} title="Editar" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
-                            <button onClick={() => deletePaymentRow(p)} title="Eliminar" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
-                          </td>
-                        </tr>
-                      ))}
+                      ) : displayItems.flatMap(it => {
+                        if (it.type === "single") return [renderPayRow(it.p)];
+                        const rep = it.rep, open = expandedSplits.has(it.group);
+                        const parent = (
+                          <tr key={it.key} style={{ borderBottom:"1px solid #f3f0fb", verticalAlign:"middle", background:"#FBFAFE" }}>
+                            <td style={td2}>{rep._key ? <button onClick={() => setJobDetailKey(rep._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{rep._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
+                            <td style={td2}>{rep._g?.customer || "—"}</td>
+                            <td style={td2}>{brokerName(rep._g?.broker_id) || "—"}</td>
+                            <td style={td2}>{rep._g ? (jobDriverNames(rep._g) || "—") : "—"}</td>
+                            <td style={td2}>
+                              <button onClick={() => toggleSplit(it.group)} style={{ border:"none", background:"none", cursor:"pointer", fontSize:12, color:"#6D28D9", fontWeight:700, padding:0 }}>{open ? "▾" : "▸"} <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Split ({it.rows.length})</span></button>
+                            </td>
+                            <td style={td2} colSpan={4}><span style={{ fontSize:11.5, color:"#999" }}><PaymentMethodBadge method={rep.method} /> · {it.rows.length} líneas</span></td>
+                            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700 }}>{money(it.total) || "$0"}</td>
+                            <td style={td2}><span style={{ color:"#ccc" }}>—</span></td>
+                            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:800, color:"#6D28D9" }}>${Math.round(it.total).toLocaleString()}</td>
+                            <td style={td2} colSpan={7}><span style={{ fontSize:11.5, color:"#999" }}>{rep.payment_date || "—"}</span></td>
+                            <td style={{ ...td2, whiteSpace:"nowrap" }}>
+                              <button onClick={() => deleteSplitGroup(it.rows)} title="Eliminar split" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15 }}>×</button>
+                            </td>
+                          </tr>
+                        );
+                        return open ? [parent, ...it.rows.map(p => renderPayRow(p, true))] : [parent];
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -6936,31 +7142,57 @@ export default function App() {
 
           {!paymentsMissing && (() => {
             const ps = (paymentsByJobKey[jobDetail.key] || []).slice().sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+            const recv = ps.filter(p => p.received);
+            // Job balance and extras are tracked independently — never mixed.
             const expected = numv(jobDetail.pickup_balance) + numv(jobDetail.delivery_balance) + numv(jobDetail.bol_balance);
-            const received = ps.filter(p => p.received).reduce((s, p) => s + paymentNet(p), 0);
-            const ccFeeTotal = ps.filter(p => p.received && p.concept === "cc_fee").reduce((s, p) => s + paymentNet(p), 0);
-            const jobPaymentTotal = received - ccFeeTotal;
-            const outstanding = expected - jobPaymentTotal;
+            const jobCollected = recv.filter(p => p.concept === "job").reduce((s, p) => s + paymentNet(p), 0);
+            const jobOutstanding = Math.max(0, expected - jobCollected);
+            const extraPays = recv.filter(p => p.concept === "extra");
+            const extrasCollected = extraPays.reduce((s, p) => s + paymentNet(p), 0);
+            const ccFeeTotal = recv.filter(p => p.concept === "cc_fee").reduce((s, p) => s + paymentNet(p), 0);
+            // Extras owed (from job_extras) vs collected (extra-concept payments).
+            const exsOwed = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false).reduce((s, e) => s + numv(e.amount), 0);
+            const extrasOutstanding = Math.max(0, exsOwed - extrasCollected);
+            const totalOutstanding = jobOutstanding + extrasOutstanding;
+            // Per-extra-type breakdown of what was collected via payments.
+            const byType = {};
+            for (const p of extraPays) { const t = p.extra_type || "extra"; byType[t] = (byType[t] || 0) + paymentNet(p); }
+            const typeEntries = Object.entries(byType);
             const repId = Math.min(...jobDetail.parts.map(p => p.id));
             const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
             return (
               <>
                 <SectionLabel>Pagos {ps.length ? `(${ps.length})` : ""}</SectionLabel>
-                <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13, marginBottom:6 }}>
-                  <span>Esperado: <b>${Math.round(expected).toLocaleString()}</b></span>
-                  <span>Cobrado: <b style={{ color:"#1A8A4E" }}>${Math.round(received).toLocaleString()}</b></span>
-                  <span>Saldo: <b style={{ color: outstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</b></span>
-                </div>
-                {ccFeeTotal > 0 && (
-                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12, marginBottom:6, color:"#888" }}>
-                    <span>Job payment: <b style={{ color:"#185FA5" }}>${Math.round(jobPaymentTotal).toLocaleString()}</b></span>
-                    <span>+ CC fee: <b style={{ color:"#854F0B" }}>${Math.round(ccFeeTotal).toLocaleString()}</b></span>
+                <div style={{ background:"#fafafa", borderRadius:9, padding:"10px 12px", marginBottom:8 }}>
+                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13 }}>
+                    <span>Balance del job: <b>${Math.round(expected).toLocaleString()}</b></span>
+                    <span>Cobrado (job): <b style={{ color:"#1A8A4E" }}>${Math.round(jobCollected).toLocaleString()}</b></span>
+                    <span>Saldo job: <b style={{ color: jobOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(jobOutstanding).toLocaleString()}</b></span>
                   </div>
-                )}
+                  {(exsOwed > 0 || extrasCollected > 0) && (
+                    <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12.5, marginTop:6, paddingTop:6, borderTop:"1px solid #eee", color:"#555" }}>
+                      <span>Extras cobrados: <b style={{ color:"#6D28D9" }}>${Math.round(extrasCollected).toLocaleString()}</b></span>
+                      {exsOwed > 0 && <span>Extras facturados: <b>${Math.round(exsOwed).toLocaleString()}</b></span>}
+                      {extrasOutstanding > 0 && <span>Extras pendientes: <b style={{ color:"#EF9F27" }}>${Math.round(extrasOutstanding).toLocaleString()}</b></span>}
+                    </div>
+                  )}
+                  {typeEntries.length > 0 && (
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
+                      {typeEntries.map(([t, amt]) => <span key={t} style={{ fontSize:10.5, fontWeight:600, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"2px 9px" }}>{extraTypeLabel(t)} ${Math.round(amt).toLocaleString()}</span>)}
+                    </div>
+                  )}
+                  {ccFeeTotal > 0 && <div style={{ fontSize:12, marginTop:6, color:"#854F0B" }}>CC fees cobrados: <b>${Math.round(ccFeeTotal).toLocaleString()}</b></div>}
+                  <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, paddingTop:8, borderTop:"1px solid #eee", fontSize:13.5, fontWeight:800 }}>
+                    <span>Saldo total pendiente</span>
+                    <span style={{ color: totalOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
+                  </div>
+                </div>
                 {ps.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos registrados.</div>
                   : ps.map(p => (
                       <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
                         <ConceptBadge concept={p.concept} />
+                        {p.concept === "extra" && p.extra_type && <span style={{ fontSize:10.5, color:"#6D28D9", fontWeight:600 }}>{extraTypeLabel(p.extra_type)}</span>}
+                        {p.split_group && <span title="Parte de un pago dividido" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px" }}>split</span>}
                         <PaymentMethodBadge method={p.method} />
                         <b>{money(paymentNet(p)) || "$0"}</b>
                         <span style={{ fontSize:11, color:"#888" }}>{p.payment_date || "—"}</span>
@@ -6974,7 +7206,7 @@ export default function App() {
                       </div>
                     ))}
                 <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar pago</Btn>
+                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: jobOutstanding > 0 ? String(Math.round(jobOutstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Agregar pago</Btn>
                 </div>
               </>
             );
@@ -8015,11 +8247,20 @@ export default function App() {
         const setF = (fields) => setPayForm(f => ({ ...f, ...fields }));
         const net = numv(payForm.amount) - numv(payForm.discount);
         const whoList = [...driversList.map(d => d.name), ...employees.map(e => e.name)].filter(Boolean);
+        // Split-payment helpers (only available when creating, with columns present).
+        const canSplit = !editingPayId && !splitMissing;
+        const splitOn = canSplit && payForm.split_enabled;
+        const splitLines = payForm.split_lines || [];
+        const splitSum = splitLines.reduce((s, l) => s + numv(l.amount), 0);
+        const splitMatches = Math.abs(splitSum - numv(payForm.amount)) < 0.01;
+        const setLines = (lines) => setF({ split_lines: lines });
+        const patchLine = (i, fields) => setLines(splitLines.map((l, ix) => ix === i ? { ...l, ...fields } : l));
+        const saveDisabled = paySaving || payForm.amount === "" || (splitOn && (!splitMatches || splitLines.every(l => l.amount === "")));
         return (
           <Modal title={editingPayId ? "Editar pago" : "Nuevo pago"} onClose={() => setShowPayModal(false)}
             footer={<>
               <Btn onClick={() => setShowPayModal(false)}>Cancelar</Btn>
-              <Btn primary disabled={paySaving || payForm.amount === ""} onClick={savePaymentRow}>{paySaving ? "Guardando..." : (editingPayId ? "Guardar cambios" : "Crear pago")}</Btn>
+              <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Guardando..." : (editingPayId ? "Guardar cambios" : splitOn ? "Crear pagos divididos" : "Crear pago")}</Btn>
             </>}>
             <Field label="Job">
               {selectedG ? (
@@ -8046,14 +8287,14 @@ export default function App() {
             </Field>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
               <Field label="Fecha de pago"><input style={inp} type="date" value={payForm.payment_date} onChange={e => setF({ payment_date:e.target.value })} /></Field>
-              <Field label="Monto ($) *"><input style={inp} type="number" value={payForm.amount} onChange={e => setF({ amount:e.target.value })} placeholder="0" /></Field>
-              <Field label="Concepto">
+              <Field label={splitOn ? "Monto total ($) *" : "Monto ($) *"}><input style={inp} type="number" value={payForm.amount} onChange={e => setF({ amount:e.target.value })} placeholder="0" /></Field>
+              {!splitOn && <Field label="Concepto">
                 <select style={inp} value={payForm.concept} onChange={e => setF({ concept:e.target.value })}>
                   {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
                 </select>
-              </Field>
-              <Field label="Descuento ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>
-              <Field label="Razón del descuento"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>
+              </Field>}
+              {!splitOn && <Field label="Descuento ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>}
+              {!splitOn && <Field label="Razón del descuento"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Motivo" /></Field>}
               {!payStageMissing && <Field label="Etapa del pago">
                 <select style={inp} value={payForm.payment_stage} onChange={e => setF({ payment_stage:e.target.value })}>
                   <option value="">— Select —</option>
@@ -8063,6 +8304,36 @@ export default function App() {
                 </select>
               </Field>}
             </div>
+
+            {/* Split payment toggle + builder */}
+            {canSplit && (
+              <div style={{ marginTop:10 }}>
+                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
+                  <input type="checkbox" checked={!!payForm.split_enabled} onChange={e => setF({ split_enabled: e.target.checked, split_lines: e.target.checked && splitLines.length ? splitLines : [{ concept:"job", amount:"", notes:"" }] })} />
+                  ✂️ Dividir el pago (split)
+                </label>
+                {splitOn && (
+                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
+                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Repartí el monto total en conceptos. Las líneas de extra se registran automáticamente para comisiones.</div>
+                    {splitLines.map((l, i) => (
+                      <div key={i} style={{ display:"flex", gap:6, alignItems:"flex-start", marginBottom:7, flexWrap:"wrap" }}>
+                        <select style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.concept} onChange={e => patchLine(i, { concept: e.target.value })}>
+                          {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                        </select>
+                        <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchLine(i, { amount: e.target.value })} placeholder="$" />
+                        <input style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.notes} onChange={e => patchLine(i, { notes: e.target.value })} placeholder="Notas (opcional)" />
+                        <button onClick={() => setLines(splitLines.filter((_, ix) => ix !== i))} disabled={splitLines.length <= 1} title="Quitar línea" style={{ border:"none", background:"none", cursor: splitLines.length <= 1 ? "not-allowed" : "pointer", color: splitLines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
+                      </div>
+                    ))}
+                    <button onClick={() => setLines([...splitLines, { concept:"job", amount:"", notes:"" }])} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Agregar línea</button>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
+                      <span style={{ color:"#666" }}>Split total: <b style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>${splitSum.toLocaleString(undefined, { maximumFractionDigits:2 })}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${numv(payForm.amount).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></span>
+                      <span style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>{splitMatches ? "✓ coincide" : `✗ difiere $${Math.abs(splitSum - numv(payForm.amount)).toLocaleString(undefined, { maximumFractionDigits:2 })}`}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Method pill tabs */}
             <div style={{ marginTop:12 }}>
@@ -8154,7 +8425,7 @@ export default function App() {
             })()}
 
             {/* CREDIT CARD fee */}
-            {payForm.method === "credit_card" && !payColsMissing && (() => {
+            {payForm.method === "credit_card" && !payColsMissing && !splitOn && (() => {
               const amt = numv(payForm.amount), pct = numv(payForm.cc_fee_pct), fee = payForm.cc_fee_enabled ? (amt * pct / 100) : 0;
               return (
                 <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF6EC", border:"1px solid #F4DDB0", borderRadius:9 }}>
@@ -8232,6 +8503,63 @@ export default function App() {
             <Field label="Notas" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notas" /></Field>
             <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Neto: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
             <datalist id="who-list">{whoList.map((n, i) => <option key={i} value={n} />)}</datalist>
+          </Modal>
+        );
+      })()}
+
+      {/* ── Commission assignment for a payment-split extra ── */}
+      {commAssign && (() => {
+        const ca = commAssign;
+        const ex = ca.extra;
+        const k = jobKeyByRowId[ex.job_id];
+        const g = k ? extraJobGroups.get(k) : null;
+        const locked = EXTRA_LOCKED_DRIVER(ex.extra_type);
+        const base = numv(ex.amount);
+        const dPct = numv(ca.driver_pct), rPct = numv(ca.rep_pct);
+        const dc = base * dPct / 100, rc = base * rPct / 100;
+        const setCA = (fields) => setCommAssign(c => ({ ...c, ...fields }));
+        const onGen = (v) => { const d = commissionDefaults(ex.extra_type, v); setCA({ generated_by: v, driver_pct: String(d.driver), rep_pct: String(d.rep), rep_id: v === "driver_only" ? "" : ca.rep_id }); };
+        const remaining = ca.queue.length;
+        return (
+          <Modal title="Asignar comisión" onClose={() => setCommAssign(null)}
+            footer={<>
+              <Btn onClick={advanceCommQueue}>Saltar{remaining ? ` (${remaining} más)` : ""}</Btn>
+              <Btn primary onClick={saveCommAssign}>Guardar comisión</Btn>
+            </>}>
+            <div style={{ background:"#EDE9FE", border:"1px solid #C4B5FD", borderRadius:9, padding:"9px 12px", marginBottom:12, fontSize:13 }}>
+              <b>{extraTypeLabel(ex.extra_type)}</b> · <b style={{ color:"#6D28D9" }}>{money(ex.amount) || "$0"}</b>
+              <span style={{ fontSize:10.5, fontWeight:700, color:"#6D28D9", background:"#fff", borderRadius:20, padding:"1px 8px", marginLeft:8 }}>Cobrado vía pago</span>
+              {g && <div style={{ fontSize:11, color:"#6D28D9", marginTop:3 }}>Job {g.job_number || "—"} · {g.customer || ""}</div>}
+            </div>
+            <Field label="Generado por">
+              <select style={inp} value={ca.generated_by} disabled={locked} onChange={e => onGen(e.target.value)}>
+                {GEN_BY.map(gb => <option key={gb.v} value={gb.v}>{gb.l}</option>)}
+              </select>
+            </Field>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
+              <Field label="Driver">
+                <select style={inp} value={ca.driver_id || ""} onChange={e => setCA({ driver_id: e.target.value })}>
+                  <option value="">— Select —</option>
+                  {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </Field>
+              {ca.generated_by !== "driver_only" && <Field label="Rep">
+                <select style={inp} value={ca.rep_id || ""} onChange={e => setCA({ rep_id: e.target.value })}>
+                  <option value="">— Select —</option>
+                  {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
+                </select>
+              </Field>}
+              <Field label="Driver %"><input style={inp} type="number" value={ca.driver_pct} onChange={e => setCA({ driver_pct: e.target.value })} /></Field>
+              {ca.generated_by !== "driver_only" && <Field label="Rep %"><input style={inp} type="number" value={ca.rep_pct} onChange={e => setCA({ rep_pct: e.target.value })} /></Field>}
+            </div>
+            <div style={{ marginTop:12, background:"#fafafa", borderRadius:8, padding:"9px 12px", fontSize:12.5 }}>
+              <div style={{ marginBottom:5, color:"#666" }}>Base de comisión: <b>{money(base) || "$0"}</b></div>
+              <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
+                <span>Comisión driver ({dPct}%): <b style={{ color:"#1A8A4E" }}>{money(dc) || "$0"}</b></span>
+                <span>Comisión rep ({rPct}%): <b style={{ color:"#185FA5" }}>{money(rc) || "$0"}</b></span>
+                <span>Empresa: <b style={{ color:"#EF9F27" }}>{money(base - dc - rc) || "$0"}</b></span>
+              </div>
+            </div>
           </Modal>
         );
       })()}
