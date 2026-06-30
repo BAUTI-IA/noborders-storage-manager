@@ -29,12 +29,23 @@ const SOURCES = [
   { k: "delivery_date",     l: "Delivery date",        fmt: "date" },
   { k: "volume",            l: "Volume / CF" },
   { k: "price_per_cf",      l: "Price per CF",         fmt: "money" },
+  { k: "cf_total",          l: "CF total (CF × rate)", fmt: "money" },
+  { k: "carrier_rate_per_cf", l: "Carrier rate / CF",  fmt: "money" },
   { k: "fuel_surcharge_pct",l: "Fuel surcharge %",     fmt: "num" },
   { k: "estimate",          l: "Estimate / Total",     fmt: "money" },
   { k: "deposit",           l: "Deposit",              fmt: "money" },
   { k: "pickup_balance",    l: "Pickup balance",       fmt: "money" },
   { k: "delivery_balance",  l: "Delivery balance",     fmt: "money" },
   { k: "bol_balance",       l: "BOL balance",          fmt: "money" },
+  { k: "bol_collected",     l: "BOL collected",        fmt: "money" },
+  { k: "bol_payment_method",l: "Payment method" },
+  { k: "rep",               l: "Rep" },
+  { k: "lot_number",        l: "Lot number" },
+  { k: "sticker_color",     l: "Sticker color" },
+  { k: "extra_stops",       l: "Extra stops" },
+  { k: "pads_received",     l: "Pads received" },
+  { k: "pads_returned",     l: "Pads returned" },
+  { k: "carrier_notes",     l: "Carrier notes" },
   { k: "broker",            l: "Broker name" },
 ];
 const SOURCE_LABEL = Object.fromEntries(SOURCES.map(s => [s.k, s.l]));
@@ -54,9 +65,15 @@ function resolveValue(field, job, brokers) {
   const src = field.source || "";
   if (!src) return "";
   if (src.startsWith("text:")) return src.slice(5);
+  if (src.startsWith("job:")) { const v = job[src.slice(4)]; return v == null ? "" : String(v); }
   if (src === "pickup_cityzip")  return [job.pickup_city, [job.pickup_state, job.pickup_zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
   if (src === "delivery_cityzip") return [job.delivery_city, [job.delivery_state, job.delivery_zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
   if (src === "broker") { const b = brokers.find(b => String(b.id) === String(job.broker_id)); return b ? b.name : ""; }
+  if (src === "cf_total") {  // CF (first number in volume) × price per CF
+    const m = String(job.volume || "").match(/[\d.]+/);
+    const cf = m ? parseFloat(m[0]) : NaN, rate = Number(job.price_per_cf);
+    return (isFinite(cf) && isFinite(rate) && cf && rate) ? fmtMoney(cf * rate) : "";
+  }
   const def = SOURCES.find(s => s.k === src);
   const raw = job[src];
   if (def?.fmt === "date") return fmtDate(raw);
@@ -130,6 +147,9 @@ async function detectFieldsFromText(pdfBytes, pageSizes) {
   if (cuft) {
     cands.push({ source: "volume",       anchorX: cuft.x + 4,   baseline: cuft.y, fs: cuft.fs, side: "R", w: 46 });
     cands.push({ source: "price_per_cf", anchorX: cuft.x + 108, baseline: cuft.y, fs: cuft.fs, side: "R", w: 44 });
+    // CF total amount goes in the "$" column at the end of that row
+    const cd = dollars.filter(dd => Math.abs(dd.y - cuft.y) < 5 && dd.x > cuft.x + 90).sort((a, b) => a.x - b.x)[0];
+    if (cd) cands.push({ source: "cf_total", anchorX: cd.x + 7, baseline: cd.y, fs: 9, side: "R", w: 75 });
   }
   // topmost match wins per (source+side) — keeps both origin & destination boxes
   // for shared sources (e.g. customer name, total) while dropping stray duplicates.
@@ -471,16 +491,22 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                 <>
                   <div style={{ fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", marginBottom: 8 }}>Field</div>
                   <label style={{ fontSize: 12, color: "#888" }}>Maps to</label>
-                  <select value={sel.source.startsWith("text:") ? "__text" : sel.source} onChange={e => {
+                  <select value={sel.source.startsWith("text:") ? "__text" : sel.source.startsWith("job:") ? "__job" : sel.source} onChange={e => {
                       if (e.target.value === "__text") updateField(sel.id, { source: "text:" });
+                      else if (e.target.value === "__job") updateField(sel.id, { source: "job:" });
                       else updateField(sel.id, { source: e.target.value });
                     }} style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13 }}>
                     <option value="">— unmapped —</option>
                     {SOURCES.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}
                     <option value="__text">Fixed text…</option>
+                    <option value="__job">Other job field (advanced)…</option>
                   </select>
                   {sel.source.startsWith("text:") && (
                     <input value={sel.source.slice(5)} onChange={e => updateField(sel.id, { source: "text:" + e.target.value })} placeholder="Fixed text"
+                      style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", marginBottom: 10, fontSize: 13, boxSizing: "border-box" }} />
+                  )}
+                  {sel.source.startsWith("job:") && (
+                    <input value={sel.source.slice(4)} onChange={e => updateField(sel.id, { source: "job:" + e.target.value.trim() })} placeholder="job field name (e.g. lot_number)"
                       style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", marginBottom: 10, fontSize: 13, boxSizing: "border-box" }} />
                   )}
                   <label style={{ fontSize: 12, color: "#888" }}>Align</label>
