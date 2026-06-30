@@ -2824,6 +2824,7 @@ export default function App() {
   const [tab, setTab] = useState("active");           // jobs page sub-tab: active/delivered/wh:*
   const [dispatchFilter, setDispatchFilter] = useState("all"); // all/pickups/deliveries/longhaul/nofadd
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
   const [sortBy, setSortBy] = useState("date-desc");
@@ -6219,16 +6220,19 @@ export default function App() {
         </div>
       )}
 
-      {page === "storage" && duePaymentsSoon.length > 0 && (
-        <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D" }}>
-          <strong>⚠️ {duePaymentsSoon.length} payment(s) due in 3 days or less:</strong>
-          <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
-            {duePaymentsSoon.map(p => (
-              <span key={p.id} onClick={() => setDetailId(p.id)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
-                {p.label} · {p.days < 0 ? "overdue" : p.days === 0 ? "today" : `${p.days}d`}
-              </span>
-            ))}
+      {page === "storage" && duePaymentsSoon.length > 0 && !storageBannerDismissed && (
+        <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D", display:"flex", alignItems:"flex-start", gap:10 }}>
+          <div style={{ flex:1 }}>
+            <strong>⚠️ {duePaymentsSoon.length} payment(s) due in 3 days or less:</strong>
+            <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
+              {duePaymentsSoon.map(p => (
+                <span key={p.id} onClick={() => setDetailId(p.id)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                  {p.label} · {p.days < 0 ? "overdue" : p.days === 0 ? "today" : `${p.days}d`}
+                </span>
+              ))}
+            </div>
           </div>
+          <button onClick={() => setStorageBannerDismissed(true)} title="Dismiss" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#A32D2D", flexShrink:0 }}>×</button>
         </div>
       )}
 
