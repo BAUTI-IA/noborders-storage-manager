@@ -1884,8 +1884,8 @@ function legacyCalKey(g) {
   if (s === "cancelled") return "cancelled";
   if (s === "delivered") return "delivered";
   if (s === "on_hold" || s === "redispatched") return "on_hold";
-  if (g.job_type === "full" && g.pickup_state && g.delivery_state && g.pickup_state !== g.delivery_state) return "long_haul";
-  return "active";
+  if (s === "in_storage" || s === "out_for_delivery") return "long_haul";
+  return "active"; // scheduled, picked_up, unknown / null → green
 }
 // The effective calendar status: the manual field if set, otherwise the legacy seed.
 const calStatusOf = (g) => (calStatusMeta(g.calendar_status) ? g.calendar_status : legacyCalKey(g));
@@ -3272,7 +3272,7 @@ export default function App() {
       "when status = 'cancelled' then 'cancelled' " +
       "when status = 'delivered' then 'delivered' " +
       "when status in ('on_hold','redispatched') then 'on_hold' " +
-      "when job_type = 'full' and pickup_state is not null and delivery_state is not null and pickup_state <> delivery_state then 'long_haul' " +
+      "when status in ('in_storage','out_for_delivery') then 'long_haul' " +
       "else 'active' end where calendar_status is null;";
     (async () => {
       const { error } = await supabase.from("storage_jobs").select("calendar_status").limit(1);
