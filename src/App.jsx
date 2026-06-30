@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker } from "react-simple-maps";
 import { geoCentroid } from "d3-geo";
+import { BolSection } from "./bol.jsx";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -2496,6 +2497,7 @@ const NAV = [
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
     { id:"analytics", label:"Analytics", icon:"📊" },
+    { id:"bol", label:"BOL", icon:"📄" },
     { id:"users", label:"Users", icon:"👤" },
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
@@ -2559,6 +2561,7 @@ const PAGE_META = {
   compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
   analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
   users:       { title:"Users", sub:"Team members, roles and permissions" },
+  bol:         { title:"BOL", sub:"Bill of Lading templates and generation" },
   settings:    { title:"Settings", sub:"Operation settings" },
 };
 
@@ -6238,6 +6241,8 @@ export default function App() {
 
       {/* ───────────────────────── USERS (admin) ───────────────────────── */}
       {page === "users" && isAdmin && <UsersSection session={session} />}
+
+      {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} />}
 
       {/* ───────────────────────── DISPATCHING ───────────────────────── */}
       {page === "dispatching" && (
