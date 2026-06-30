@@ -2503,7 +2503,7 @@ const NAV = [
 
 // Flat list of every CRM section id (drives the permissions grid + page fallback).
 const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
-function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates, lang = "en", setLang, can = () => true, isAdmin = false }) {
+function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates, can = () => true, isAdmin = false }) {
   // Only show sections the user can view; the Users section is admin-only.
   const visibleNav = NAV
     .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : can(it.id, "view")) }))
@@ -2541,11 +2541,6 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDu
             🔍 {dupCount} duplicate{dupCount === 1 ? "" : "s"}
           </button>
         )}
-        <div style={{ display:"flex", gap:4, marginBottom:8 }}>
-          {["en","es"].map(lc => (
-            <button key={lc} onClick={() => setLang && setLang(lc)} style={{ flex:1, padding:"6px", borderRadius:8, border:"1px solid #eee", cursor:"pointer", fontSize:11, fontWeight:700, background: lang===lc ? "#111" : "#fff", color: lang===lc ? "#fff" : "#888" }}>{lc==="en"?"🇺🇸 EN":"🇪🇸 ES"}</button>
-          ))}
-        </div>
         <button onClick={onSignOut} style={{ width:"100%", padding:"8px", borderRadius:8, border:"1px solid #eee", background:"#fff", color:"#888", fontSize:12, cursor:"pointer" }}>Sign out</button>
       </div>
     </div>
@@ -2817,6 +2812,9 @@ function UsersSection({ session }) {
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [profile, setProfile] = useState(undefined); // undefined=loading, null=none, obj=loaded
+  const [nameInput, setNameInput] = useState("");    // editable name in Settings
+  const [savingName, setSavingName] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState(null);
   const [pwRecovery, setPwRecovery] = useState(false); // invite / reset-password landing
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3038,7 +3036,7 @@ export default function App() {
     let cancelled = false;
     (async () => {
       const { data } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
-      if (!cancelled) setProfile(data || null);
+      if (!cancelled) { setProfile(data || null); setNameInput(data?.full_name || ""); }
     })();
     return () => { cancelled = true; };
   }, [session]);
@@ -3046,6 +3044,25 @@ export default function App() {
   const isAdmin = profile?.role === "admin";
   const can = useCallback((id, level = "view") =>
     (profile?.role === "admin") || !!profile?.permissions?.[id]?.[level], [profile]);
+
+  // Save the current user's own display name (any user can edit their own).
+  async function saveMyName() {
+    setSavingName(true); setSettingsNotice(null);
+    try {
+      const res = await fetch("/api/admin-users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+        body: JSON.stringify({ action: "update_self", payload: { full_name: nameInput } }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Error ${res.status}`);
+      const trimmed = nameInput.trim();
+      setProfile(p => p ? { ...p, full_name: trimmed } : p);
+      setNameInput(trimmed);
+      setSettingsNotice("Saved.");
+    } catch (e) { setSettingsNotice(e.message); }
+    setSavingName(false);
+  }
 
   // Keep `page` pointed at a section the user is actually allowed to see.
   useEffect(() => {
@@ -6116,7 +6133,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} lang={lang} setLang={setLang} can={can} isAdmin={isAdmin} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} can={can} isAdmin={isAdmin} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
@@ -7829,22 +7846,31 @@ export default function App() {
 
       {/* ───────────────────────── SETTINGS ───────────────────────── */}
       {page === "settings" && (
-        <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:640 }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:560 }}>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Account</div>
-            <DetailRow label="User" value={userEmail} />
-            <DetailRow label="Database" value={SUPABASE_URL} />
-            <div style={{ marginTop:14 }}><Btn onClick={() => supabase.auth.signOut()}>Sign out</Btn></div>
-          </div>
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Warehouses propios</div>
-            <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
-              {WAREHOUSES.map(w => <span key={w} style={{ background:"#f5f5f5", borderRadius:20, padding:"4px 12px", fontSize:13 }}>🏭 {w}</span>)}
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:14 }}>My account</div>
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Email</label>
+            <div style={{ fontSize:14, color:"#444", marginBottom:16 }}>{userEmail}</div>
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Name</label>
+            <input value={nameInput} onChange={e => setNameInput(e.target.value)} placeholder="Your name"
+              style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box", marginBottom:16 }} />
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Display language</label>
+            <div style={{ display:"flex", gap:8 }}>
+              {[["en","🇺🇸 English"],["es","🇪🇸 Español"]].map(([lc,lbl]) => (
+                <button key={lc} onClick={() => setLang(lc)}
+                  style={{ padding:"8px 16px", borderRadius:8, border:"1px solid #eee", cursor:"pointer", fontSize:13, fontWeight:600, background: lang===lc ? "#111" : "#fff", color: lang===lc ? "#fff" : "#666" }}>{lbl}</button>
+              ))}
             </div>
-          </div>
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Base de datos</div>
-            <Btn onClick={() => setShowSetup(true)}>View setup SQL (storage_jobs, brokers, balances)</Btn>
+
+            <div style={{ marginTop:20, display:"flex", alignItems:"center", gap:12 }}>
+              <Btn primary disabled={savingName} onClick={saveMyName}>{savingName ? "Saving…" : "Save changes"}</Btn>
+              {settingsNotice && <span style={{ fontSize:13, color: settingsNotice === "Saved." ? "#3B6D11" : "#b91c1c" }}>{settingsNotice}</span>}
+              <span style={{ flex:1 }} />
+              <Btn onClick={() => supabase.auth.signOut()}>Sign out</Btn>
+            </div>
           </div>
         </div>
       )}
