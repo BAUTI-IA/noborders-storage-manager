@@ -81,7 +81,7 @@ const TEXT_RULES = [
   { re: /agreed p\/?u date/,          src: "pickup_date_from", w: 80 },
   { re: /available for delivery/,     src: "fadd",            w: 80 },
   { re: /^first avail/,               src: "fadd",            w: 80 },
-  { re: /total estimated charges/,    src: "estimate",        w: 80 },
+  { re: /^total estimated charges/,   src: "estimate",        w: 80 },
 ];
 
 async function detectFieldsFromText(pdfBytes, pageSizes) {
