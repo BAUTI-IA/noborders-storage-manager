@@ -64,7 +64,21 @@ export default async function handler(req, res) {
     if (action === "list") {
       const { data, error } = await admin.from("profiles").select("*").order("created_at", { ascending: true });
       if (error) throw error;
-      res.status(200).json({ users: data });
+      // Merge each user's last sign-in timestamp from Supabase Auth. last_sign_in_at
+      // lives in auth.users and is only readable with the service role, so it can't
+      // come through the RLS profiles query — it's attached here as `last_login`.
+      const lastLogin = {};
+      try {
+        for (let page = 1; ; page++) {
+          const { data: au, error: aErr } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+          if (aErr) break;
+          const list = au?.users || [];
+          for (const u of list) lastLogin[u.id] = u.last_sign_in_at || null;
+          if (list.length < 1000) break;
+        }
+      } catch { /* leave last_login null if the auth listing fails */ }
+      const users = (data || []).map(u => ({ ...u, last_login: lastLogin[u.id] ?? null }));
+      res.status(200).json({ users });
       return;
     }
 

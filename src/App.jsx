@@ -2612,10 +2612,13 @@ function UsersSection({ session }) {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      // Prefer the direct RLS query; fall back to the admin API if it's blocked.
+      // Prefer the admin API: it returns the profiles plus each user's last_login
+      // (auth.users.last_sign_in_at), which the RLS profiles query can't expose.
+      // Fall back to the direct RLS query if the function is unavailable (then
+      // last_login is simply absent).
       let list;
-      try { list = await listProfiles(); }
-      catch (e1) { const r = await api("list"); list = r.users || []; }
+      try { const r = await api("list"); list = r.users || []; }
+      catch (e1) { list = await listProfiles(); }
       setUsers(list);
     } catch (e) { setError(e.message); }
     setLoading(false);
@@ -2718,13 +2721,13 @@ function UsersSection({ session }) {
       <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead><tr>
-            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>Status</th><th style={th}></th>
+            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>Last login</th><th style={th}>Status</th><th style={th}></th>
           </tr></thead>
           <tbody>
             {loading ? (
-              <tr><td style={td} colSpan={6}>Loading…</td></tr>
+              <tr><td style={td} colSpan={7}>Loading…</td></tr>
             ) : users.length === 0 ? (
-              <tr><td style={td} colSpan={6}>No users yet.</td></tr>
+              <tr><td style={td} colSpan={7}>No users yet.</td></tr>
             ) : users.map(u => (
               <tr key={u.id}>
                 <td style={td}>{u.email}</td>
@@ -2733,6 +2736,7 @@ function UsersSection({ session }) {
                   <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: u.role==="admin" ? "#EAF3DE" : "#f1f1f1", color: u.role==="admin" ? "#3B6D11" : "#888" }}>{u.role}</span>
                 </td>
                 <td style={{ ...td, color:"#888", maxWidth:280 }}>{permSummary(u)}</td>
+                <td style={{ ...td, color:"#888", whiteSpace:"nowrap" }}>{fmtTs(u.last_login) || "—"}</td>
                 <td style={td}>{u.active !== false ? <span style={{ color:"#3B6D11" }}>Active</span> : <span style={{ color:"#b91c1c" }}>Inactive</span>}</td>
                 <td style={{ ...td, whiteSpace:"nowrap", textAlign:"right" }}>
                   <button onClick={() => openEdit(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Edit</button>
