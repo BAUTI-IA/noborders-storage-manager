@@ -2598,12 +2598,35 @@ function UsersSection({ session }) {
     return json;
   }, [session]);
 
+  // Read every profile straight through the RLS-protected client. The
+  // profiles_select policy lets an admin (is_admin(), SECURITY DEFINER) read all
+  // rows, so the list works without the serverless function — which only the
+  // invite flow strictly needs (creating a login needs the service role).
+  const listProfiles = useCallback(async () => {
+    const { data, error } = await supabase.from("profiles").select("*").order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }, []);
+
+  // Self-lockout guard, mirrored from the server, for direct profile writes.
+  const writeProfile = useCallback(async (id, patch) => {
+    if (id === session.user.id && (patch.role === "member" || patch.active === false))
+      throw new Error("You can't remove your own admin access.");
+    const { error } = await supabase.from("profiles").update(patch).eq("id", id);
+    if (error) throw error;
+  }, [session]);
+
   const load = useCallback(async () => {
     setLoading(true); setError(null);
-    try { const { users } = await api("list"); setUsers(users || []); }
-    catch (e) { setError(e.message); }
+    try {
+      // Prefer the direct RLS query; fall back to the admin API if it's blocked.
+      let list;
+      try { list = await listProfiles(); }
+      catch (e1) { const r = await api("list"); list = r.users || []; }
+      setUsers(list);
+    } catch (e) { setError(e.message); }
     setLoading(false);
-  }, [api]);
+  }, [listProfiles, api]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -2636,10 +2659,18 @@ function UsersSection({ session }) {
     setBusy(true); setError(null); setNotice(null);
     try {
       if (modal.mode === "new") {
-        await api("invite", { email: modal.email.trim(), full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions });
+        // Creating a login requires the service role → must go through the API.
+        try {
+          await api("invite", { email: modal.email.trim(), full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions });
+        } catch (e) {
+          throw new Error(`Couldn't invite ${modal.email.trim()}: ${e.message}. Inviting a new login needs the admin service configured in Vercel (SUPABASE_SERVICE_ROLE_KEY + SUPABASE_URL). Existing users can still be edited here.`);
+        }
         setNotice(`Invitation sent to ${modal.email.trim()}.`);
       } else {
-        await api("update", { id: modal.id, full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions, active: modal.active });
+        const patch = { full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions, active: modal.active };
+        // Try the API; fall back to a direct RLS-protected update if it's down.
+        try { await api("update", { id: modal.id, ...patch }); }
+        catch { await writeProfile(modal.id, patch); }
         setNotice("User updated.");
       }
       setModal(null);
@@ -2650,7 +2681,12 @@ function UsersSection({ session }) {
 
   async function toggleActive(u) {
     setBusy(true); setError(null); setNotice(null);
-    try { await api("update", { id: u.id, active: !(u.active !== false) }); await load(); }
+    const next = !(u.active !== false);
+    try {
+      try { await api("update", { id: u.id, active: next }); }
+      catch { await writeProfile(u.id, { active: next }); }
+      await load();
+    }
     catch (e) { setError(e.message); }
     setBusy(false);
   }
