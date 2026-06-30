@@ -29,11 +29,11 @@ export default async function handler(req, res) {
     if (error || !user) { res.status(401).json({ error: "No autorizado." }); return; }
   }
 
-  const { pdf_base64, pages } = req.body || {};
-  if (!pdf_base64) { res.status(400).json({ error: "Falta el PDF." }); return; }
+  const { image_base64, pages } = req.body || {};
+  if (!image_base64) { res.status(400).json({ error: "Falta la imagen." }); return; }
   const page0 = (pages && pages[0]) || { w: 612, h: 792 };
 
-  const prompt = `This is the first page of a moving company's Interstate Bill of Lading form. ` +
+  const prompt = `This image is the first page of a moving company's Interstate Bill of Lading form. ` +
     `Identify the BLANK fields that a mover fills in per shipment (customer/shipper name, addresses, city/state/zip, phone, email, order/job number, dates like pickup and 1st available delivery, cubic feet, rate per cu.ft, fuel surcharge, charge amounts, totals, deposit, balances). ` +
     `For each field return its location as a box in NORMALIZED coordinates from 0 to 1 measured from the TOP-LEFT of the page (nx,ny = top-left of the box; nw,nh = width/height). ` +
     `Also map each to one of these source keys when it clearly fits, else "": ${SOURCE_KEYS.join(", ")}. ` +
@@ -45,7 +45,7 @@ export default async function handler(req, res) {
       model: "claude-opus-4-8",
       max_tokens: 4096,
       messages: [{ role: "user", content: [
-        { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf_base64 } },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image_base64 } },
         { type: "text", text: prompt },
       ] }],
     });

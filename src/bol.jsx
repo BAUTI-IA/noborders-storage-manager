@@ -260,17 +260,20 @@ function TemplateEditor({ supabase, session, template, onClose }) {
     if (!pdfBytes) return;
     setAiBusy(true); setMsg(null);
     try {
-      // Send only page 1 to the analyzer (keeps payload small; most fields live there).
-      const src = await PDFDocument.load(pdfBytes);
-      const one = await PDFDocument.create();
-      const [p0] = await one.copyPages(src, [0]);
-      one.addPage(p0);
-      const oneBytes = await one.save();
-      let bin = ""; for (let i = 0; i < oneBytes.length; i++) bin += String.fromCharCode(oneBytes[i]);
-      const b64 = btoa(bin);
+      // Render page 1 to a JPEG and send that — tiny payload (vs the multi-MB PDF
+      // that blows Vercel's body limit) and Claude does bounding boxes well on images.
+      const doc = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
+      const pg = await doc.getPage(1);
+      const base = pg.getViewport({ scale: 1 });
+      const rscale = 1200 / base.width;
+      const vp = pg.getViewport({ scale: rscale });
+      const cnv = document.createElement("canvas");
+      cnv.width = vp.width; cnv.height = vp.height;
+      await pg.render({ canvasContext: cnv.getContext("2d"), viewport: vp }).promise;
+      const b64 = cnv.toDataURL("image/jpeg", 0.82).split(",")[1];
       const res = await fetch("/api/bol-analyze", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
-        body: JSON.stringify({ pdf_base64: b64, pages: [pageSizes[0]] }),
+        body: JSON.stringify({ image_base64: b64, pages: [pageSizes[0]] }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "AI error");
