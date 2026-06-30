@@ -2820,6 +2820,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
   const [page, setPage] = useState("dispatching");   // sidebar navigation
+  const [bolJobNumber, setBolJobNumber] = useState(null); // job to pre-select in the BOL generator
   const [lang, setLang] = useState(() => { try { return localStorage.getItem("lang") || "en"; } catch { return "en"; } });
   const [showDupModal, setShowDupModal] = useState(false);  // duplicates review modal
   const [dupFocus, setDupFocus] = useState(null);           // null = all; "jobs" | "payments" | "storages" scopes the modal to one section
@@ -6242,7 +6243,7 @@ export default function App() {
       {/* ───────────────────────── USERS (admin) ───────────────────────── */}
       {page === "users" && isAdmin && <UsersSection session={session} />}
 
-      {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} />}
+      {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
       {/* ───────────────────────── DISPATCHING ───────────────────────── */}
       {page === "dispatching" && (
@@ -8586,6 +8587,7 @@ export default function App() {
         <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
           footer={<>
             <Btn onClick={() => openEditJob(jobDetail)}>Edit</Btn>
+            {can("bol","view") && <Btn primary onClick={() => { const jn = jobDetail.job_number; setJobDetailKey(null); setBolJobNumber(jn || ""); setPage("bol"); }}>📄 Generate BOL</Btn>}
             <Btn danger onClick={() => deleteJob(jobDetail)}>🗑 Delete job</Btn>
             <Btn onClick={() => window.open(waLink(jobDetail, (jobDetail.parts||[]).map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean).join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail)), "_blank")}>💬 WhatsApp</Btn>
             {nextStatus(jobDetail) && <Btn onClick={() => advanceStatus(jobDetail)}>→ {statusMeta(nextStatus(jobDetail)).l}</Btn>}
