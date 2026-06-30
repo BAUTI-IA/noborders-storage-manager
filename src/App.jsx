@@ -925,7 +925,7 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
   );
 }
 
-const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -1167,7 +1167,8 @@ const CRM_V3_SQL = `alter table public.storage_jobs
   add column if not exists client_email text,
   add column if not exists driver_ids bigint[],
   add column if not exists pickup_date_from date,
-  add column if not exists pickup_date_to date;
+  add column if not exists pickup_date_to date,
+  add column if not exists calendar_status text;
 
 alter table public.storages add column if not exists payment_due_date date;
 
@@ -1865,14 +1866,32 @@ function monthGrid(anchorStr) {
 function shiftDate(anchorStr, days) { const x = new Date(anchorStr + "T00:00:00"); x.setDate(x.getDate() + days); return fmtDateLocal(x); }
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const DOW_ES = ["Dom","Lun","Mar","Wed","Jue","Vie","Sat"];
-function calEventColor(g) {
+// Calendar colour is driven ONLY by this manual field — never inferred from the
+// workflow status, delivery, or trip actions. The five options match the legend.
+const CALENDAR_STATUSES = [
+  { v:"active",    l:"Active",                bg:"#EAF3DE", text:"#3B6D11", bar:"#639922" }, // green
+  { v:"on_hold",   l:"On hold / Redispatch",  bg:"#FEF9C3", text:"#854D0E", bar:"#FACC15" }, // yellow
+  { v:"cancelled", l:"Cancelled",             bg:"#FCEBEB", text:"#A32D2D", bar:"#E24B4A" }, // red
+  { v:"long_haul", l:"Long haul",             bg:"#EDE9FE", text:"#6D28D9", bar:"#7C3AED" }, // purple
+  { v:"delivered", l:"Delivered",             bg:"#E6F1FB", text:"#185FA5", bar:"#378ADD" }, // blue
+];
+const calStatusMeta = (v) => CALENDAR_STATUSES.find(s => s.v === v) || null;
+// Legacy fallback used ONLY to seed a calendar_status for jobs created before the
+// field existed (and to keep their current colour until the user changes it). Once
+// a job has an explicit calendar_status, this is never consulted again.
+function legacyCalKey(g) {
   const s = g.status || "scheduled";
-  if (s === "cancelled") return { bg:"#FCEBEB", text:"#A32D2D", bar:"#E24B4A" };       // red
-  if (s === "delivered") return { bg:"#E6F1FB", text:"#185FA5", bar:"#378ADD" };       // blue
-  if (s === "on_hold" || s === "redispatched") return { bg:"#FEF9C3", text:"#854D0E", bar:"#FACC15" }; // yellow
-  if (g.job_type === "full" && g.pickup_state && g.delivery_state && g.pickup_state !== g.delivery_state)
-    return { bg:"#EDE9FE", text:"#6D28D9", bar:"#7C3AED" };                            // purple (long haul)
-  return { bg:"#EAF3DE", text:"#3B6D11", bar:"#639922" };                              // green (active)
+  if (s === "cancelled") return "cancelled";
+  if (s === "delivered") return "delivered";
+  if (s === "on_hold" || s === "redispatched") return "on_hold";
+  if (g.job_type === "full" && g.pickup_state && g.delivery_state && g.pickup_state !== g.delivery_state) return "long_haul";
+  return "active";
+}
+// The effective calendar status: the manual field if set, otherwise the legacy seed.
+const calStatusOf = (g) => (calStatusMeta(g.calendar_status) ? g.calendar_status : legacyCalKey(g));
+function calEventColor(g) {
+  const c = calStatusMeta(calStatusOf(g)) || CALENDAR_STATUSES[0];
+  return { bg:c.bg, text:c.text, bar:c.bar };
 }
 function waLink(g, storeLabel, brokerName, groupLink) {
   const pickup = [g.pickup_address, g.pickup_city, g.pickup_state, g.pickup_zip].filter(Boolean).join(", ");
@@ -2825,6 +2844,7 @@ export default function App() {
   const [brokerSaving, setBrokerSaving] = useState(false);
   // CRM v3: drivers table, calendar, clientes
   const [crmV3Missing, setCrmV3Missing] = useState(false);
+  const [calStatusMissing, setCalStatusMissing] = useState(false);
   const [driversList, setDriversList] = useState([]);
   const [showDriverModal, setShowDriverModal] = useState(false);
   const [driverForm, setDriverForm] = useState(EMPTY_DRIVER);
@@ -3204,6 +3224,45 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, crmV3Missing, loadDrivers]);
+
+  // Probe the manual calendar_status column (drives calendar colour). If it does
+  // not exist yet, create it; then backfill any null rows from the legacy colour
+  // logic so existing jobs keep their current colour and become fully manual.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    const runRpc = async (sql) => { for (const fn of ["exec_sql", "exec", "execute_sql"]) { const { error } = await supabase.rpc(fn, { sql }); if (!error) return true; } return false; };
+    const BACKFILL = "update public.storage_jobs set calendar_status = case " +
+      "when status = 'cancelled' then 'cancelled' " +
+      "when status = 'delivered' then 'delivered' " +
+      "when status in ('on_hold','redispatched') then 'on_hold' " +
+      "when job_type = 'full' and pickup_state is not null and delivery_state is not null and pickup_state <> delivery_state then 'long_haul' " +
+      "else 'active' end where calendar_status is null;";
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("calendar_status").limit(1);
+      if (cancelled) return;
+      if (error) {
+        // Column missing → add it, then backfill.
+        const ok = await runRpc("alter table public.storage_jobs add column if not exists calendar_status text; " + BACKFILL);
+        if (cancelled) return;
+        if (ok) loadJobs(); else setCalStatusMissing(true);
+        return;
+      }
+      // Column exists → backfill only the rows still null (one-time, harmless if none).
+      const { data } = await supabase.from("storage_jobs").select("id").is("calendar_status", null).limit(1);
+      if (cancelled || !data || data.length === 0) return;
+      const ok = await runRpc(BACKFILL);
+      if (cancelled) return;
+      if (ok) loadJobs();
+      else {
+        // No SQL RPC — backfill row by row through the JS client.
+        const { data: rows } = await supabase.from("storage_jobs").select("id, status, job_type, pickup_state, delivery_state").is("calendar_status", null);
+        for (const r of (rows || [])) { if (cancelled) return; await supabase.from("storage_jobs").update({ calendar_status: legacyCalKey(r) }).eq("id", r.id); }
+        if (!cancelled) loadJobs();
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadJobs]);
 
   // Probe the Carrier Settlements module (closing_sheets table + BOL columns).
   useEffect(() => {
@@ -3927,7 +3986,7 @@ export default function App() {
       const from = j.pickup_date_from || j.pickup_date;
       if (!from) continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, pickup_date:j.pickup_date, pickup_date_from:from, pickup_date_to:(j.pickup_date_to || from), pickup_state:j.pickup_state, delivery_state:j.delivery_state });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, calendar_status:j.calendar_status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, pickup_date:j.pickup_date, pickup_date_from:from, pickup_date_to:(j.pickup_date_to || from), pickup_state:j.pickup_state, delivery_state:j.delivery_state });
     }
     for (const g of map.values()) {
       let d = g.pickup_date_from;
@@ -4437,7 +4496,7 @@ export default function App() {
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
     const f = parts[0];
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, calendar_status:f.calendar_status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   // Close the inline pickup-date editor whenever the open job detail changes.
@@ -4579,7 +4638,7 @@ export default function App() {
       job_number: jd.job_number || "", customer: jd.customer || "", driver: jd.driver || "",
       date_in: jd.date_in || "", fadd: jd.fadd || "", volume: jd.volume || "", lot_number: jd.lot_number || "",
       sticker_color: jd.sticker_color || "",
-      job_type: jd.job_type || "full", status: jd.status || "scheduled",
+      job_type: jd.job_type || "full", status: jd.status || "scheduled", calendar_status: calStatusOf(jd),
       broker_id: jd.broker_id || "", rep: jd.rep || "", client_phone: jd.client_phone || "", client_email: jd.client_email || "",
       extra_stops: jd.extra_stops || "", price_per_cf: jd.price_per_cf ?? "", fuel_surcharge_pct: jd.fuel_surcharge_pct ?? "", estimate: jd.estimate ?? "", deposit: jd.deposit ?? "",
       carrier_notes: jd.carrier_notes || "",
@@ -4617,6 +4676,8 @@ export default function App() {
       notes: jobForm.notes || null,
     };
     if (!faddColMissing) fields.fadd = jobForm.fadd || null;
+    // Calendar colour: explicit, manual-only field. Never inferred from status.
+    if (!calStatusMissing) fields.calendar_status = jobForm.calendar_status || "active";
     if (!jobColsMissing) {
       fields.job_type = jobForm.job_type || null;
       fields.status = jobForm.status || "scheduled";
@@ -8500,6 +8561,17 @@ export default function App() {
           </EditRow>
           <EditRow label="Type"><TypeBadge type={jobDetail.job_type} /></EditRow>
           <EditRow label="Status"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
+          <EditRow label="Calendar status (color)">
+            {(() => { const cur = calStatusOf(jobDetail); const cm = calStatusMeta(cur) || CALENDAR_STATUSES[0]; return (
+              <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}>
+                <span title="Calendar color" style={{ width:14, height:14, borderRadius:4, background:cm.bar, border:"1px solid rgba(0,0,0,0.1)", flexShrink:0 }} />
+                <select value={cur} disabled={calStatusMissing} onChange={e => updateJobField(P, "calendar_status", e.target.value)}
+                  style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
+                  {CALENDAR_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                </select>
+              </span>
+            ); })()}
+          </EditRow>
           <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
           <EditRow label="Volumen (CF)"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
           <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
@@ -9075,6 +9147,16 @@ export default function App() {
                   <Field label="Rep (interno)"><input style={inp} value={jobForm.rep} onChange={u("rep")} placeholder="Rep" /></Field>
                   <Field label="Status">
                     <select style={inp} value={jobForm.status} onChange={u("status")}>{STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}</select>
+                  </Field>
+                  <Field label="Calendar status (color)">
+                    {(() => { const cm = calStatusMeta(jobForm.calendar_status) || CALENDAR_STATUSES[0]; return (
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <span title="Calendar color" style={{ width:14, height:14, borderRadius:4, background:cm.bar, border:"1px solid rgba(0,0,0,0.1)", flexShrink:0 }} />
+                        <select style={{ ...inp, flex:1 }} value={jobForm.calendar_status || "active"} onChange={u("calendar_status")}>
+                          {CALENDAR_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                        </select>
+                      </div>
+                    ); })()}
                   </Field>
                 </div>
                 <div style={{ marginTop:10 }}>
