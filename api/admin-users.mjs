@@ -39,6 +39,19 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Any authenticated user can edit their OWN profile (name only). Handled before
+  // the admin gate. The id is taken from the verified token, never the payload,
+  // and only full_name is writable here — no privilege escalation possible.
+  if ((req.body || {}).action === "update_self") {
+    const { full_name } = (req.body.payload) || {};
+    const { error } = await admin.from("profiles")
+      .update({ full_name: typeof full_name === "string" ? full_name.trim() : null })
+      .eq("id", user.id);
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.status(200).json({ ok: true });
+    return;
+  }
+
   // 2) Authorize: the caller must be an active admin (checked server-side).
   const { data: me } = await admin.from("profiles").select("role,active").eq("id", user.id).single();
   if (!me || me.role !== "admin" || !me.active) {
