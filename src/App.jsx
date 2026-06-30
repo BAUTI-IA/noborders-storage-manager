@@ -9152,11 +9152,16 @@ export default function App() {
                     {(() => { const cm = calStatusMeta(jobForm.calendar_status) || CALENDAR_STATUSES[0]; return (
                       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                         <span title="Calendar color" style={{ width:14, height:14, borderRadius:4, background:cm.bar, border:"1px solid rgba(0,0,0,0.1)", flexShrink:0 }} />
-                        <select style={{ ...inp, flex:1 }} value={jobForm.calendar_status || "active"} onChange={u("calendar_status")}>
+                        <select style={{ ...inp, flex:1 }} value={jobForm.calendar_status || "active"} disabled={calStatusMissing} onChange={u("calendar_status")}>
                           {CALENDAR_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
                         </select>
                       </div>
                     ); })()}
+                    {calStatusMissing && (
+                      <div style={{ fontSize:11, color:"#A35200", marginTop:4 }}>
+                        Falta la columna <code>calendar_status</code> en la base. <button type="button" onClick={() => setShowSetup(true)} style={{ background:"none", border:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0, fontSize:11 }}>Ver SQL</button> para activarla.
+                      </div>
+                    )}
                   </Field>
                 </div>
                 <div style={{ marginTop:10 }}>
