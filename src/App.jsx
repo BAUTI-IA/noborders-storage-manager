@@ -2503,7 +2503,7 @@ const NAV = [
 
 // Flat list of every CRM section id (drives the permissions grid + page fallback).
 const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
-function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDuplicates, can = () => true, isAdmin = false }) {
+function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAdmin = false }) {
   // Only show sections the user can view; the Users section is admin-only.
   const visibleNav = NAV
     .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : can(it.id, "view")) }))
@@ -2536,11 +2536,6 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, dupCount = 0, onShowDu
         ))}
       </div>
       <div style={{ padding:"12px", borderTop:"1px solid #f3f3f3" }}>
-        {dupCount > 0 && (
-          <button onClick={onShowDuplicates} title="Review possible duplicates" style={{ width:"100%", marginBottom:8, padding:"8px", borderRadius:8, border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#B45309", fontSize:12, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-            🔍 {dupCount} duplicate{dupCount === 1 ? "" : "s"}
-          </button>
-        )}
         <button onClick={onSignOut} style={{ width:"100%", padding:"8px", borderRadius:8, border:"1px solid #eee", background:"#fff", color:"#888", fontSize:12, cursor:"pointer" }}>Sign out</button>
       </div>
     </div>
@@ -2824,6 +2819,7 @@ export default function App() {
   const [page, setPage] = useState("dispatching");   // sidebar navigation
   const [lang, setLang] = useState(() => { try { return localStorage.getItem("lang") || "en"; } catch { return "en"; } });
   const [showDupModal, setShowDupModal] = useState(false);  // duplicates review modal
+  const [dupFocus, setDupFocus] = useState(null);           // null = all; "jobs" | "payments" | "storages" scopes the modal to one section
   const [dismissedDups, setDismissedDups] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem("dismissedDups") || "[]")); } catch { return new Set(); } });
   const [tab, setTab] = useState("active");           // jobs page sub-tab: active/delivered/wh:*
   const [dispatchFilter, setDispatchFilter] = useState("all"); // all/pickups/deliveries/longhaul/nofadd
@@ -6133,7 +6129,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} dupCount={duplicateReport.total} onShowDuplicates={() => setShowDupModal(true)} can={can} isAdmin={isAdmin} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} can={can} isAdmin={isAdmin} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
@@ -6147,6 +6143,17 @@ export default function App() {
           <div style={{ fontSize:13, color:"#999", marginTop:2 }}>{PAGE_META[page].sub}</div>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          {(() => {
+            // Per-section duplicate alert: shown top-right only when this section has duplicates.
+            const dupSection = page === "jobs" ? "jobs" : page === "payments" ? "payments" : page === "storage" ? "storages" : null;
+            const n = dupSection ? duplicateReport[dupSection].length : 0;
+            if (!dupSection || n === 0) return null;
+            return (
+              <button onClick={() => { setDupFocus(dupSection); setShowDupModal(true); }} title="Review possible duplicates" style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#B45309", fontSize:13, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6 }}>
+                🔍 {n} duplicate{n === 1 ? "" : "s"}
+              </button>
+            );
+          })()}
           {page === "storage" && can("storage","create") && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
           {page === "storage" && can("storage","create") && <Btn onClick={openAdd}>+ Unit</Btn>}
           {page === "storage" && storageTab === "storage_units" && can("storage","create") && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
@@ -6250,7 +6257,7 @@ export default function App() {
           </div>
 
           {duplicateReport.total > 0 && (
-            <div onClick={() => setShowDupModal(true)} style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#B45309", display:"flex", alignItems:"center", gap:8, cursor:"pointer", flexWrap:"wrap" }}>
+            <div onClick={() => { setDupFocus(null); setShowDupModal(true); }} style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#B45309", display:"flex", alignItems:"center", gap:8, cursor:"pointer", flexWrap:"wrap" }}>
               <span style={{ fontSize:16 }}>🔍</span>
               <b>{duplicateReport.total} posible{duplicateReport.total === 1 ? "" : "s"} duplicate{duplicateReport.total === 1 ? "" : "s"}</b>
               <span style={{ color:"#a07d3a" }}>· Jobs {duplicateReport.jobs.length} · Payments {duplicateReport.payments.length} · Storages {duplicateReport.storages.length}</span>
@@ -10375,12 +10382,12 @@ export default function App() {
         const miniBtn = { padding:"3px 9px", fontSize:11.5 };
         const sectionTitle = (icon, label, n) => <div style={{ fontSize:13, fontWeight:800, margin:"4px 0 8px", display:"flex", alignItems:"center", gap:7 }}>{icon} {label} <span style={{ fontSize:11, fontWeight:700, color:"#B45309", background:"#FFF1D6", borderRadius:20, padding:"1px 8px" }}>{n}</span></div>;
         return (
-          <Modal title="Duplicate review" onClose={() => setShowDupModal(false)}
-            footer={<Btn onClick={() => setShowDupModal(false)}>Close</Btn>}>
+          <Modal title="Duplicate review" onClose={() => { setShowDupModal(false); setDupFocus(null); }}
+            footer={<Btn onClick={() => { setShowDupModal(false); setDupFocus(null); }}>Close</Btn>}>
             <p style={{ fontSize:12.5, color:"#666", marginTop:-4, marginBottom:14 }}>Possible duplicates detected in the system. Review each one: <b>delete</b> the repeated record or <b>dismiss</b> if it is a false positive.</p>
-            {R.total === 0 && <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:10, padding:"16px", textAlign:"center", color:"#3B6D11", fontSize:13 }}>✅ No pending duplicates. All clean.</div>}
+            {(dupFocus ? R[dupFocus].length === 0 : R.total === 0) && <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:10, padding:"16px", textAlign:"center", color:"#3B6D11", fontSize:13 }}>✅ No pending duplicates. All clean.</div>}
 
-            {R.jobs.length > 0 && <div style={{ marginBottom:8 }}>
+            {(!dupFocus || dupFocus === "jobs") && R.jobs.length > 0 && <div style={{ marginBottom:8 }}>
               {sectionTitle("💼", "Jobs with the same number", R.jobs.length)}
               {R.jobs.map(d => (
                 <div key={d.key} style={groupBox}>
@@ -10405,7 +10412,7 @@ export default function App() {
               ))}
             </div>}
 
-            {R.payments.length > 0 && <div style={{ marginBottom:8 }}>
+            {(!dupFocus || dupFocus === "payments") && R.payments.length > 0 && <div style={{ marginBottom:8 }}>
               {sectionTitle("💰", "Payments with the same serial", R.payments.length)}
               {R.payments.map(d => (
                 <div key={d.key} style={groupBox}>
@@ -10430,7 +10437,7 @@ export default function App() {
               ))}
             </div>}
 
-            {R.storages.length > 0 && <div style={{ marginBottom:8 }}>
+            {(!dupFocus || dupFocus === "storages") && R.storages.length > 0 && <div style={{ marginBottom:8 }}>
               {sectionTitle("🏬", "Storages abiertos repetidos", R.storages.length)}
               {R.storages.map(d => (
                 <div key={d.key} style={groupBox}>
