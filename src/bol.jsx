@@ -64,6 +64,71 @@ function resolveValue(field, job, brokers) {
   return raw == null ? "" : String(raw);
 }
 
+// ── Text-layer auto-detect (accurate for digital PDFs) ─────────────────────
+// Reads the real position of each label from the PDF text layer and drops a
+// field box right next to it — exact, instant, free. Returns null when the page
+// has no usable text (scanned), so the caller can fall back to AI vision.
+const TEXT_RULES = [
+  { re: /^name\b/,                    side: true, left: "customer",        right: "customer",         col: true },
+  { re: /^shipper name\b/,            src: "customer",        col: true },
+  { re: /^consignee name\b/,          src: "customer",        col: true },
+  { re: /^address\b/,                 side: true, left: "pickup_address",  right: "delivery_address", col: true },
+  { re: /city\s*\/\s*state\s*\/\s*zip/, side: true, left: "pickup_cityzip", right: "delivery_cityzip", col: true },
+  { re: /^phone\b/,                   side: true, left: "client_phone",    right: "",                 w: 120 },
+  { re: /order\s*(no|#)/,            src: "job_number",      w: 80 },
+  { re: /^job\s*#/,                   src: "job_number",      w: 80 },
+  { re: /^pickup date/,               src: "pickup_date_from", w: 80 },
+  { re: /agreed p\/?u date/,          src: "pickup_date_from", w: 80 },
+  { re: /available for delivery/,     src: "fadd",            w: 80 },
+  { re: /^first avail/,               src: "fadd",            w: 80 },
+  { re: /total estimated charges/,    src: "estimate",        w: 80 },
+];
+
+async function detectFieldsFromText(pdfBytes, pageSizes) {
+  const doc = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
+  const page = await doc.getPage(1);
+  const tc = await page.getTextContent();
+  const items = (tc.items || []).filter(i => i.str && i.str.trim());
+  if (items.length < 12) return null;            // scanned / no real text layer
+  const { w: pageW, h: pageH } = pageSizes[0];
+  const mid = pageW / 2;
+  const cands = [];
+  for (const it of items) {
+    const t = it.transform, x = t[4], baseline = t[5];
+    const fs = Math.abs(t[3]) || 9;
+    const w = it.width || fs * it.str.length * 0.5;
+    const text = it.str.trim().toLowerCase().replace(/\s+/g, " ");
+    for (const r of TEXT_RULES) {
+      if (!r.re.test(text)) continue;
+      let source = r.src;
+      if (r.side) source = x < mid ? r.left : r.right;
+      if (!source) break;
+      cands.push({ source, x, right: x + w, baseline, fs, side: x < mid ? "L" : "R", col: r.col, w: r.w });
+      break;
+    }
+  }
+  // topmost match wins per (source+side) — keeps both origin & destination boxes
+  // for shared sources (e.g. customer name) while dropping agent-row duplicates.
+  cands.sort((a, b) => b.baseline - a.baseline);
+  const used = new Set(), fields = [];
+  for (const c of cands) {
+    const key = c.source + "|" + c.side;
+    if (used.has(key)) continue;
+    used.add(key);
+    const bx = Math.round(c.right + 6);
+    const colRight = c.col ? (c.side === "L" ? mid - 6 : pageW - 12) : null;
+    let bw = colRight ? colRight - bx : (c.w || 140);
+    bw = Math.max(50, Math.min(bw, pageW - 12 - bx));
+    fields.push({
+      id: "t" + fields.length + Math.random().toString(36).slice(2, 5),
+      page: 0, x: bx, y: Math.round(pageH - c.baseline - c.fs * 1.15),
+      w: Math.round(bw), h: Math.round(c.fs * 1.6),
+      source: c.source, fontSize: 10, align: "left",
+    });
+  }
+  return fields;
+}
+
 // ── PDF generation: stamp values onto the original template ─────────────────
 async function generateFilledPdf(templateBytes, fields, job, brokers) {
   const pdf = await PDFDocument.load(templateBytes);
@@ -265,8 +330,15 @@ function TemplateEditor({ supabase, session, template, onClose }) {
     if (!pdfBytes) return;
     setAiBusy(true); setMsg(null);
     try {
-      // Render page 1 to a JPEG and send that — tiny payload (vs the multi-MB PDF
-      // that blows Vercel's body limit) and Claude does bounding boxes well on images.
+      // 1) Try the PDF text layer first — exact label-anchored boxes for digital PDFs.
+      const textFields = await detectFieldsFromText(pdfBytes, pageSizes);
+      if (textFields && textFields.length) {
+        setFields(textFields);
+        setMsg(`Detected ${textFields.length} fields from the PDF text — review & drag to fine-tune.`);
+        setAiBusy(false);
+        return;
+      }
+      // 2) Scanned PDF (no text): fall back to AI vision on a page-1 image.
       const doc = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
       const pg = await doc.getPage(1);
       const base = pg.getViewport({ scale: 1 });
