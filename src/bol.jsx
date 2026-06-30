@@ -118,13 +118,18 @@ async function getPdfPageSizes(pdfBytes) {
 const btn = (primary) => ({ padding: "8px 14px", borderRadius: 8, border: primary ? "none" : "1px solid #e5e5e5", background: primary ? "#111" : "#fff", color: primary ? "#fff" : "#333", fontSize: 13, fontWeight: 600, cursor: "pointer" });
 const smallBtn = { padding: "5px 10px", borderRadius: 7, border: "1px solid #eee", background: "#fff", cursor: "pointer", fontSize: 12 };
 
-export function BolSection({ supabase, session, jobs = [], brokers = [], can = () => true, isAdmin = false }) {
-  const [view, setView] = useState("list");      // list | editor | generate
+export function BolSection({ supabase, session, jobs = [], brokers = [], can = () => true, isAdmin = false, initialJobNumber = null, onConsumed }) {
+  const [view, setView] = useState(initialJobNumber != null ? "generate" : "list"); // list | editor | generate
+  const [genJobNumber] = useState(initialJobNumber);  // captured once
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null);  // template being edited
   const canEdit = isAdmin || can("bol", "create") || can("bol", "edit");
+
+  // Clear the parent's pre-select once we've consumed it, so a later sidebar
+  // visit opens the list instead of jumping back into generate.
+  useEffect(() => { if (initialJobNumber != null && onConsumed) onConsumed(); }, []); // eslint-disable-line
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -147,7 +152,7 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
   }
   if (view === "generate") {
     return <GeneratePanel supabase={supabase} templates={templates.filter(t => t.status === "active")}
-      jobs={jobs} brokers={brokers} onClose={() => setView("list")} />;
+      jobs={jobs} brokers={brokers} initialJobNumber={genJobNumber} onClose={() => setView("list")} />;
   }
 
   return (
@@ -403,10 +408,11 @@ function TemplateEditor({ supabase, session, template, onClose }) {
 }
 
 // ── Generate a BOL for a job ────────────────────────────────────────────────
-function GeneratePanel({ supabase, templates, jobs, brokers, onClose }) {
+function GeneratePanel({ supabase, templates, jobs, brokers, initialJobNumber, onClose }) {
+  const preJob = initialJobNumber ? jobs.find(j => String(j.job_number) === String(initialJobNumber)) : null;
   const [tplId, setTplId] = useState(templates[0]?.id || "");
-  const [jobQuery, setJobQuery] = useState("");
-  const [jobId, setJobId] = useState("");
+  const [jobQuery, setJobQuery] = useState(preJob ? String(preJob.job_number || "") : "");
+  const [jobId, setJobId] = useState(preJob ? String(preJob.id) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [blobUrl, setBlobUrl] = useState(null);
