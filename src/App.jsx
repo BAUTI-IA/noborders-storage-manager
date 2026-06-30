@@ -828,6 +828,14 @@ const PHYSICAL_METHODS = ["cash", "check", "money_order"];
 const isPhysical = (m) => PHYSICAL_METHODS.includes(m);
 const isDigitalMethod = (m) => !!m && !PHYSICAL_METHODS.includes(m);
 const paymentNet = (p) => numv(p.amount) - numv(p.discount);
+// Whether a payment counts as banked/deposited. Digital methods are auto-banked
+// (legacy rows may still have banked = null), so they always count as banked;
+// physical cash/checks count only when explicitly marked banked = true. A null
+// banked on a physical payment is therefore treated as "in circulation".
+const effectiveBanked = (p) => isDigitalMethod(p.method) ? true : p.banked === true;
+// Deposit date used for the "Deposited this month" window. Falls back to the
+// received/payment date for digital rows that were auto-banked without a date.
+const bankedDateOf = (p) => p.banked_date || (isDigitalMethod(p.method) ? (p.received_date || p.payment_date || "") : "");
 const daysSince = (dateStr) => { if (!dateStr) return 0; const d = new Date(dateStr + "T00:00:00"); return Math.floor((Date.now() - d.getTime()) / 86400000); };
 const EMPTY_PAYMENT = {
   job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"",
@@ -3440,6 +3448,40 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session, paymentsMissing, loadPayments, loadPayAccounts]);
 
+  // One-time migration: backfill `banked` on legacy payments where it is null so
+  // every received payment is unambiguously banked or in-circulation. Digital
+  // methods become banked = true (auto-deposited; keep/derive a deposit date),
+  // physical cash/checks become banked = false (still in circulation).
+  useEffect(() => {
+    if (!session || paymentsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.from("payments").select("id").is("banked", null).limit(1);
+      if (cancelled || error || !data || data.length === 0) return;   // nothing to migrate
+      const sql = "update public.payments set banked = true, banked_date = coalesce(banked_date, received_date, payment_date) where banked is null and method is not null and method not in ('cash','check','money_order'); update public.payments set banked = false where banked is null and (method is null or method in ('cash','check','money_order'));";
+      let ok = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { ok = true; break; }
+      }
+      if (cancelled) return;
+      if (!ok) {
+        // No SQL RPC available — migrate row by row through the JS client.
+        const { data: rows } = await supabase.from("payments").select("id, method, received_date, payment_date, banked_date").is("banked", null);
+        for (const r of (rows || [])) {
+          if (cancelled) return;
+          const digital = isDigitalMethod(r.method);
+          await supabase.from("payments").update({
+            banked: digital,
+            banked_date: digital ? (r.banked_date || r.received_date || r.payment_date || null) : null,
+          }).eq("id", r.id);
+        }
+      }
+      if (!cancelled) loadPayments();
+    })();
+    return () => { cancelled = true; };
+  }, [session, paymentsMissing, loadPayments]);
+
   // Probe the Legal & Compliance module (companies + compliance_documents tables).
   useEffect(() => {
     if (!session) return;
@@ -4238,16 +4280,20 @@ export default function App() {
   }), [payments, jobKeyByRowId, extraJobGroups]);
   const paymentMetrics = useMemo(() => {
     const mo = today().slice(0, 7);
-    let expected = 0, received = 0, inCirc = 0, banked = 0, ccFees = 0;
+    let expected = 0, received = 0, inCirc = 0, inCircThisMonth = 0, banked = 0, ccFees = 0;
     for (const g of extraJobGroups.values()) { if (g.status !== "cancelled") expected += jobExpected(g); }
     for (const p of payments) {
       const net = paymentNet(p);
-      if (p.received && (p.received_date || p.payment_date || "").slice(0, 7) === mo) received += net;
-      if (isPhysical(p.method) && p.received && !p.banked) inCirc += net;
-      if (p.banked && (p.banked_date || "").slice(0, 7) === mo) banked += net;
+      const recvMonth = (p.received_date || p.payment_date || "").slice(0, 7);
+      if (p.received && recvMonth === mo) received += net;
+      if (isPhysical(p.method) && p.received && !effectiveBanked(p)) {
+        inCirc += net;                                   // all undeposited cash, any month
+        if (recvMonth === mo) inCircThisMonth += net;    // ...just this month's portion
+      }
+      if (p.received && effectiveBanked(p) && bankedDateOf(p).slice(0, 7) === mo) banked += net;
       if (p.concept === "cc_fee" && (p.payment_date || "").slice(0, 7) === mo) ccFees += numv(p.amount);
     }
-    return { expected, received, inCirc, banked, pending: Math.max(0, expected - received), ccFees };
+    return { expected, received, inCirc, inCircThisMonth, banked, pending: Math.max(0, expected - received), ccFees };
   }, [payments, extraJobGroups, jobExpected]);
   // Cash physically held but not yet banked, that's been sitting >7 days.
   const stalePayments = useMemo(() => paymentRows
@@ -7267,7 +7313,7 @@ export default function App() {
       {/* ───────────────────────── PAYMENTS ───────────────────────── */}
       {page === "payments" && (() => {
         const m = paymentMetrics;
-        const tabFilter = (p) => payTab === "pending" ? !p.received : payTab === "received" ? p.received : payTab === "banked" ? p.banked : true;
+        const tabFilter = (p) => payTab === "pending" ? !p.received : payTab === "received" ? p.received : payTab === "banked" ? (p.received && effectiveBanked(p)) : true;
         const rows = paymentRows.filter(tabFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
         // Weekly window (Mon–Sun) for the cash-flow summary.
         const td = today(); const dd = new Date(td + "T00:00:00"); const dow = dd.getDay();
@@ -7357,6 +7403,12 @@ export default function App() {
                   <div style={{ fontSize:19, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Reconciliation note: the three figures use different time windows by design. */}
+            <div style={{ background:"#F5F7FA", border:"1px solid #e3e8ef", borderRadius:10, padding:"10px 13px", marginBottom:16, fontSize:12, color:"#556", lineHeight:1.5 }}>
+              💡 <b>How these reconcile:</b> “Received this month” and “Deposited this month” only count the current month. “In circulation” shows <b>all</b> undeposited cash/checks regardless of when they were received, so it won’t always equal Received − Deposited.
+              {" "}Of this month’s <b>${Math.round(m.received).toLocaleString()}</b> received, <b>${Math.round(m.inCircThisMonth).toLocaleString()}</b> is still in circulation and the rest has been deposited. Digital payments (Zelle, Venmo, wire, card…) are auto-deposited on receipt; cash, checks and money orders stay in circulation until marked deposited.
             </div>
 
             {stalePayments.length > 0 && (
