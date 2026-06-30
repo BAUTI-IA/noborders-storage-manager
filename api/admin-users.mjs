@@ -98,6 +98,26 @@ export default async function handler(req, res) {
       return;
     }
 
+    if (action === "delete") {
+      const { id } = payload || {};
+      if (!id) { res.status(400).json({ error: "Falta el id." }); return; }
+      if (id === user.id) { res.status(400).json({ error: "No podés eliminar tu propia cuenta." }); return; }
+      // Only deactivated users can be deleted (matches the UI; defense in depth).
+      const { data: target } = await admin.from("profiles").select("active").eq("id", id).single();
+      if (target && target.active !== false) {
+        res.status(400).json({ error: "Primero desactivá al usuario." });
+        return;
+      }
+      // Remove the auth user; the profiles row is removed by the on-delete-cascade FK.
+      const { error: dErr } = await admin.auth.admin.deleteUser(id);
+      if (dErr) {
+        // Fallback: if the auth user is already gone, still clear any orphan profile row.
+        await admin.from("profiles").delete().eq("id", id);
+      }
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     res.status(400).json({ error: "Acción desconocida." });
   } catch (e) {
     res.status(500).json({ error: e?.message || "Error." });
