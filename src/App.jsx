@@ -2697,6 +2697,14 @@ function UsersSection({ session }) {
     if (error) setError(error.message); else setNotice(`Password reset email sent to ${u.email}.`);
   }
 
+  async function removeUser(u) {
+    if (!window.confirm(`Delete ${u.email}? This permanently removes the account.`)) return;
+    setBusy(true); setError(null); setNotice(null);
+    try { await api("delete", { id: u.id }); setNotice("User deleted."); await load(); }
+    catch (e) { setError(e.message); }
+    setBusy(false);
+  }
+
   const td = { padding:"10px 12px", fontSize:13, borderBottom:"1px solid #f3f3f3", textAlign:"left", verticalAlign:"middle" };
   const th = { ...td, fontSize:11, fontWeight:600, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em" };
 
@@ -2737,6 +2745,9 @@ function UsersSection({ session }) {
                   <button onClick={() => openEdit(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Edit</button>
                   <button onClick={() => sendReset(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Send reset</button>
                   <button onClick={() => toggleActive(u)} disabled={busy} style={{ padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12, color: u.active !== false ? "#b91c1c" : "#3B6D11" }}>{u.active !== false ? "Deactivate" : "Activate"}</button>
+                  {u.active === false && (
+                    <button onClick={() => removeUser(u)} disabled={busy} style={{ marginLeft:6, padding:"5px 10px", borderRadius:7, border:"1px solid #f1c4c4", background:"#fff", cursor:"pointer", fontSize:12, color:"#b91c1c" }}>Delete</button>
+                  )}
                 </td>
               </tr>
             ))}
