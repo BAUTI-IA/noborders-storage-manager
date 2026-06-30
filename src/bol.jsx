@@ -68,6 +68,8 @@ function resolveValue(field, job, brokers) {
 // Reads the real position of each label from the PDF text layer and drops a
 // field box right next to it — exact, instant, free. Returns null when the page
 // has no usable text (scanned), so the caller can fall back to AI vision.
+// `dollar:true` rules place the value in the "$" column on the same row
+// (charges/totals); the rest place it right after the label.
 const TEXT_RULES = [
   { re: /^name\b/,                    side: true, left: "customer",        right: "customer",         col: true },
   { re: /^shipper name\b/,            src: "customer",        col: true },
@@ -79,9 +81,14 @@ const TEXT_RULES = [
   { re: /^job\s*#/,                   src: "job_number",      w: 80 },
   { re: /^pickup date/,               src: "pickup_date_from", w: 80 },
   { re: /agreed p\/?u date/,          src: "pickup_date_from", w: 80 },
-  { re: /available for delivery/,     src: "fadd",            w: 80 },
+  { re: /^date available for delivery/, src: "fadd",          w: 80 },
   { re: /^first avail/,               src: "fadd",            w: 80 },
-  { re: /^total estimated charges/,   src: "estimate",        w: 80 },
+  // charges → value in the "$" column
+  { re: /^total estimated charges/,   src: "estimate",            dollar: true },
+  { re: /grand total/,                src: "estimate",            dollar: true },
+  { re: /^partial payment/,           src: "deposit",             dollar: true },
+  { re: /^balance due/,               src: "bol_balance",         dollar: true },
+  { re: /^fuel surcharge/,            src: "fuel_surcharge_pct",  dollar: true },
 ];
 
 async function detectFieldsFromText(pdfBytes, pageSizes) {
@@ -92,36 +99,53 @@ async function detectFieldsFromText(pdfBytes, pageSizes) {
   if (items.length < 12) return null;            // scanned / no real text layer
   const { w: pageW, h: pageH } = pageSizes[0];
   const mid = pageW / 2;
+  const dollars = items.filter(i => i.str.trim() === "$").map(i => ({ x: i.transform[4], y: i.transform[5] }));
   const cands = [];
   for (const it of items) {
-    const t = it.transform, x = t[4], baseline = t[5];
-    const fs = Math.abs(t[3]) || 9;
+    const x = it.transform[4], baseline = it.transform[5];
+    const fs = Math.abs(it.transform[3]) || 9;
     const w = it.width || fs * it.str.length * 0.5;
     const text = it.str.trim().toLowerCase().replace(/\s+/g, " ");
+    if (text.length > 40) continue;              // skip legal paragraphs
     for (const r of TEXT_RULES) {
       if (!r.re.test(text)) continue;
       let source = r.src;
       if (r.side) source = x < mid ? r.left : r.right;
       if (!source) break;
-      cands.push({ source, x, right: x + w, baseline, fs, side: x < mid ? "L" : "R", col: r.col, w: r.w });
+      if (r.dollar) {
+        // nearest "$" to the right on the same row → value sits just after it
+        const d = dollars.filter(dd => Math.abs(dd.y - baseline) < 5 && dd.x > x + w - 2).sort((a, b) => a.x - b.x)[0];
+        if (!d) break;
+        cands.push({ source, anchorX: d.x + 7, baseline: d.y, fs: 9, side: x < mid ? "L" : "R", w: 75 });
+      } else {
+        cands.push({ source, anchorX: x + w + 6, baseline, fs, side: x < mid ? "L" : "R", col: r.col, w: r.w });
+      }
       break;
     }
   }
+  // CUBIC FEET "Base:" line → volume + price per CF (one text item holds the blanks)
+  const cuft = items.filter(i => /cu\.ft\. @ \$/.test(i.str))
+    .map(i => ({ x: i.transform[4], y: i.transform[5], fs: Math.abs(i.transform[3]) || 9 }))
+    .sort((a, b) => b.y - a.y)[0];
+  if (cuft) {
+    cands.push({ source: "volume",       anchorX: cuft.x + 4,   baseline: cuft.y, fs: cuft.fs, side: "R", w: 46 });
+    cands.push({ source: "price_per_cf", anchorX: cuft.x + 108, baseline: cuft.y, fs: cuft.fs, side: "R", w: 44 });
+  }
   // topmost match wins per (source+side) — keeps both origin & destination boxes
-  // for shared sources (e.g. customer name) while dropping agent-row duplicates.
+  // for shared sources (e.g. customer name, total) while dropping stray duplicates.
   cands.sort((a, b) => b.baseline - a.baseline);
   const used = new Set(), fields = [];
   for (const c of cands) {
     const key = c.source + "|" + c.side;
     if (used.has(key)) continue;
     used.add(key);
-    const bx = Math.round(c.right + 6);
-    const colRight = c.col ? (c.side === "L" ? mid - 6 : pageW - 12) : null;
-    let bw = colRight ? colRight - bx : (c.w || 140);
-    bw = Math.max(50, Math.min(bw, pageW - 12 - bx));
+    let bw;
+    if (c.col) bw = (c.side === "L" ? mid - 6 : pageW - 12) - c.anchorX;
+    else bw = c.w || 90;
+    bw = Math.max(40, Math.min(bw, pageW - 12 - c.anchorX));
     fields.push({
       id: "t" + fields.length + Math.random().toString(36).slice(2, 5),
-      page: 0, x: bx, y: Math.round(pageH - c.baseline - c.fs * 1.15),
+      page: 0, x: Math.round(c.anchorX), y: Math.round(pageH - c.baseline - c.fs * 1.15),
       w: Math.round(bw), h: Math.round(c.fs * 1.6),
       source: c.source, fontSize: 10, align: "left",
     });
