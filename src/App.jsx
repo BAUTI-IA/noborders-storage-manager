@@ -7005,7 +7005,8 @@ export default function App() {
           );
         };
         const activeTrips = trips.filter(t => TRIP_ACTIVE(t.status));
-        const shown = tripsView === "active" ? activeTrips : trips;
+        const unassignedTrips = trips.filter(t => !t.truck_id || !t.driver_id);
+        const shown = tripsView === "active" ? activeTrips : tripsView === "unassigned" ? unassignedTrips : trips;
         return (
           <>
             {tripsMissing && (
@@ -7029,7 +7030,7 @@ export default function App() {
             </div>
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
-              {[["live","🗺️ Live map"],["active","Active trips"],["all","All trips"]].map(([v,l]) => (
+              {[["live","🗺️ Live map"],["active","Active trips"],["unassigned","Unassigned trips"],["all","All trips"]].map(([v,l]) => (
                 <button key={v} onClick={() => setTripsView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: tripsView===v?"#fff":"none", color: tripsView===v?"#111":"#888", fontWeight: tripsView===v?600:400, boxShadow: tripsView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
               ))}
             </div>
@@ -7112,8 +7113,8 @@ export default function App() {
                 </>
               );
             })() : shown.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>{tripsView === "active" ? "No active trips. Create one with “+ Trip”." : "No trips."}</div>
-            ) : tripsView === "active" ? (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>{tripsView === "active" ? "No active trips. Create one with “+ Trip”." : tripsView === "unassigned" ? "No unassigned trips. Every trip has a truck and a driver." : "No trips."}</div>
+            ) : (tripsView === "active" || tripsView === "unassigned") ? (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))", gap:14 }}>
                 {shown.map(t => {
                   const c = tripCalc(t);
