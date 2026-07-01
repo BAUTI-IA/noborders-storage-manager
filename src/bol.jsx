@@ -54,6 +54,8 @@ const SOURCES = [
   { k: "fuel_amount",       l: "Fuel surcharge $",       fmt: "money" },
   { k: "grand_total",       l: "Grand total",            fmt: "money" },
   { k: "balance_due",       l: "Balance due (final)",    fmt: "money" },
+  { k: "due_pickup",        l: "Due at pickup",          fmt: "money" },
+  { k: "due_delivery",      l: "Due at delivery",        fmt: "money" },
   { k: "notes",             l: "Notes / free text" },
   { k: "add_cf_1_qty",      l: "Additional CF #1 — qty" },
   { k: "add_cf_1_rate",     l: "Additional CF #1 — rate", fmt: "money" },
@@ -110,8 +112,11 @@ function resolveValue(field, job, brokers) {
   }
   const def = SOURCES.find(s => s.k === src);
   const raw = job[src];
-  if (def?.fmt === "date") return fmtDate(raw);
-  if (def?.fmt === "money") return fmtMoney(raw);
+  // Template-defined "kind" wins (custom service sources aren't in SOURCES);
+  // otherwise fall back to the SOURCES format.
+  const kind = field.kind;
+  if (kind === "date" || (!kind && def?.fmt === "date")) return fmtDate(raw);
+  if (kind === "money" || (!kind && def?.fmt === "money")) return fmtMoney(raw);
   return raw == null ? "" : String(raw);
 }
 
@@ -147,11 +152,22 @@ const TEXT_RULES = [
 
 async function detectFieldsFromText(pdfBytes, pageSizes) {
   const doc = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
-  const page = await doc.getPage(1);
-  const tc = await page.getTextContent();
-  const items = (tc.items || []).filter(i => i.str && i.str.trim());
-  if (items.length < 12) return null;            // scanned / no real text layer
-  const { w: pageW, h: pageH } = pageSizes[0];
+  const all = [];
+  let anyText = false;
+  for (let p = 0; p < doc.numPages; p++) {
+    const page = await doc.getPage(p + 1);
+    const tc = await page.getTextContent();
+    const items = (tc.items || []).filter(i => i.str && i.str.trim());
+    if (items.length < 12) continue;             // scanned page → skip (map by hand)
+    anyText = true;
+    const ps = pageSizes[p] || pageSizes[0];
+    all.push(...scanPageForFields(items, ps.w, ps.h, p));
+  }
+  return anyText ? all : null;                    // null → whole PDF scanned → AI fallback
+}
+
+// Scan one page's text items and return the field boxes found on it.
+function scanPageForFields(items, pageW, pageH, pageIndex) {
   const mid = pageW / 2;
   const dollars = items.filter(i => i.str.trim() === "$").map(i => ({ x: i.transform[4], y: i.transform[5] }));
   const cands = [];
@@ -201,8 +217,8 @@ async function detectFieldsFromText(pdfBytes, pageSizes) {
     else bw = c.w || 90;
     bw = Math.max(40, Math.min(bw, pageW - 12 - c.anchorX));
     fields.push({
-      id: "t" + fields.length + Math.random().toString(36).slice(2, 5),
-      page: 0, x: Math.round(c.anchorX), y: Math.round(pageH - c.baseline - c.fs * 1.15),
+      id: "t" + pageIndex + "_" + fields.length + Math.random().toString(36).slice(2, 5),
+      page: pageIndex, x: Math.round(c.anchorX), y: Math.round(pageH - c.baseline - c.fs * 1.15),
       w: Math.round(bw), h: Math.round(c.fs * 1.6),
       source: c.source, fontSize: 10, align: "left",
     });
@@ -518,7 +534,7 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                       border: `1.5px solid ${selected ? "#2563eb" : "#e2762b"}`, background: selected ? "rgba(37,99,235,0.12)" : "rgba(226,118,43,0.10)",
                       cursor: "move", boxSizing: "border-box", fontSize: 9, color: "#333", overflow: "hidden", whiteSpace: "nowrap" }}>
                     <span style={{ background: selected ? "#2563eb" : "#e2762b", color: "#fff", fontSize: 8, padding: "0 3px", lineHeight: "12px", display: "inline-block" }}>
-                      {f.source ? (SOURCE_LABEL[f.source] || (f.source.startsWith("text:") ? "Text" : f.source)) : "unmapped"}
+                      {f.source ? (f.source.startsWith("svc:") ? (f.source.slice(4) || "Service") : f.label || SOURCE_LABEL[f.source] || (f.source.startsWith("text:") ? "Text" : f.source)) : (f.label || "unmapped")}
                     </span>
                     <div onPointerDown={e => onBoxPointerDown(e, f, "resize")}
                       style={{ position: "absolute", right: -4, bottom: -4, width: 10, height: 10, background: "#2563eb", border: "1px solid #fff", borderRadius: 2, cursor: "nwse-resize", display: selected ? "block" : "none" }} />
@@ -535,16 +551,22 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                 <>
                   <div style={{ fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", marginBottom: 8 }}>Field</div>
                   <label style={{ fontSize: 12, color: "#888" }}>Maps to</label>
-                  <select value={sel.source.startsWith("text:") ? "__text" : sel.source.startsWith("job:") ? "__job" : sel.source} onChange={e => {
-                      if (e.target.value === "__text") updateField(sel.id, { source: "text:" });
-                      else if (e.target.value === "__job") updateField(sel.id, { source: "job:" });
+                  <select value={sel.source.startsWith("svc:") ? "__svc" : sel.source.startsWith("text:") ? "__text" : sel.source.startsWith("job:") ? "__job" : sel.source} onChange={e => {
+                      if (e.target.value === "__text") updateField(sel.id, { source: "text:", mode: "fixed" });
+                      else if (e.target.value === "__job") updateField(sel.id, { source: "job:", mode: "variable" });
+                      else if (e.target.value === "__svc") updateField(sel.id, { source: "svc:", mode: "variable", kind: "money", group: "Services", align: "right" });
                       else updateField(sel.id, { source: e.target.value });
                     }} style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13 }}>
                     <option value="">— unmapped —</option>
                     {SOURCES.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}
+                    <option value="__svc">Service / charge (own name)…</option>
                     <option value="__text">Fixed text…</option>
                     <option value="__job">Other job field (advanced)…</option>
                   </select>
+                  {sel.source.startsWith("svc:") && (
+                    <input value={sel.source.slice(4)} onChange={e => updateField(sel.id, { source: "svc:" + e.target.value, label: e.target.value })} placeholder="Service name (e.g. Packing, Stairs)"
+                      style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", marginBottom: 10, fontSize: 13, boxSizing: "border-box" }} />
+                  )}
                   {sel.source.startsWith("text:") && (
                     <input value={sel.source.slice(5)} onChange={e => updateField(sel.id, { source: "text:" + e.target.value })} placeholder="Fixed text"
                       style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", marginBottom: 10, fontSize: 13, boxSizing: "border-box" }} />
@@ -552,6 +574,44 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                   {sel.source.startsWith("job:") && (
                     <input value={sel.source.slice(4)} onChange={e => updateField(sel.id, { source: "job:" + e.target.value.trim() })} placeholder="job field name (e.g. lot_number)"
                       style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", marginBottom: 10, fontSize: 13, boxSizing: "border-box" }} />
+                  )}
+                  {/* Panel behaviour: fixed = stamped for everyone; variable = asked when generating */}
+                  <label style={{ fontSize: 12, color: "#888" }}>On generate</label>
+                  <div style={{ display: "flex", gap: 4, margin: "4px 0 10px" }}>
+                    {[["fixed", "Fixed"], ["variable", "Ask (variable)"]].map(([m, t]) => {
+                      const cur = sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable");
+                      return <button key={m} onClick={() => updateField(sel.id, { mode: m })} style={{ flex: 1, padding: 6, borderRadius: 7, border: "1px solid #eee", cursor: "pointer", fontSize: 12, background: cur === m ? "#111" : "#fff", color: cur === m ? "#fff" : "#666" }}>{t}</button>;
+                    })}
+                  </div>
+                  {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && !sel.source.startsWith("svc:") && (
+                    <>
+                      <label style={{ fontSize: 12, color: "#888" }}>Label (shown in the panel)</label>
+                      <input value={sel.label || ""} onChange={e => updateField(sel.id, { label: e.target.value })} placeholder="optional"
+                        style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13, boxSizing: "border-box" }} />
+                    </>
+                  )}
+                  {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && (
+                    <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ fontSize: 12, color: "#888" }}>Group</label>
+                        <select value={sel.group || ""} onChange={e => updateField(sel.id, { group: e.target.value })} style={{ width: "100%", padding: 7, borderRadius: 8, border: "1px solid #e5e5e5", marginTop: 4, fontSize: 12 }}>
+                          {["", "Client", "CF", "Services", "Totals", "Other"].map(g => <option key={g} value={g}>{g || "—"}</option>)}
+                        </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ fontSize: 12, color: "#888" }}>Type</label>
+                        <select value={sel.kind || ""} onChange={e => updateField(sel.id, { kind: e.target.value })} style={{ width: "100%", padding: 7, borderRadius: 8, border: "1px solid #e5e5e5", marginTop: 4, fontSize: 12 }}>
+                          {[["", "text"], ["money", "money $"], ["date", "date"], ["cf", "CF"]].map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                  {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && (
+                    <>
+                      <label style={{ fontSize: 12, color: "#888" }}>Default value (pre-filled)</label>
+                      <input value={sel.default || ""} onChange={e => updateField(sel.id, { default: e.target.value })} placeholder="e.g. 50.00"
+                        style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13, boxSizing: "border-box" }} />
+                    </>
                   )}
                   <label style={{ fontSize: 12, color: "#888" }}>Align</label>
                   <div style={{ display: "flex", gap: 4, margin: "4px 0 10px" }}>
@@ -598,7 +658,7 @@ function sheetFromJob(job) {
     delivery_cityzip: [job?.delivery_city, [job?.delivery_state, job?.delivery_zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
     pickup_date_from: job?.pickup_date_from || "", fadd: job?.fadd || "", delivery_date: job?.delivery_date || "",
     volume: job?.volume || "", price_per_cf: job?.price_per_cf ?? "", fuel_surcharge_pct: job?.fuel_surcharge_pct ?? "",
-    deposit: job?.deposit ?? "", notes: "", balance_override: "",
+    fuel_amount: "", deposit: job?.deposit ?? "", notes: "", balance_override: "", due_pickup: "", due_delivery: "",
   };
 }
 
@@ -627,6 +687,31 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     return list.slice(0, 50);
   }, [jobQuery, jobs]);
 
+  // Named service/charge fields the template defines as "variable" (DocuSign-style).
+  // Deduped by source so a service that appears on 2 pages shows one input.
+  const serviceFields = useMemo(() => {
+    const t = templates.find(t => String(t.id) === String(tplId));
+    const seen = new Set(), out = [];
+    for (const x of (t?.field_map || [])) {
+      if (x.mode !== "variable" || !x.source) continue;
+      if (!(x.group === "Services" || String(x.source).startsWith("svc:"))) continue;
+      if (seen.has(x.source)) continue;
+      seen.add(x.source);
+      out.push({ source: x.source, label: x.label || (x.source.startsWith("svc:") ? x.source.slice(4) : x.source), default: x.default });
+    }
+    return out;
+  }, [templates, tplId]);
+
+  // Seed each service field with its template default (without clobbering edits).
+  useEffect(() => {
+    if (!serviceFields.length) return;
+    setF(s => {
+      const add = {};
+      for (const sf of serviceFields) if (s[sf.source] === undefined) add[sf.source] = sf.default ?? "";
+      return Object.keys(add).length ? { ...s, ...add } : s;
+    });
+  }, [serviceFields]); // eslint-disable-line
+
   // Prefill the sheet from the picked job (not when reopening a saved snapshot).
   useEffect(() => {
     if (!jobPicked || !jobId) return;
@@ -647,7 +732,10 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     return () => { alive = false; };
   }, [tplId, templates, supabase]);
 
-  // ── Live calculator (same math as the CRM: CF×rate, fuel = subtotal×%) ──────
+  // ── Live calculator ────────────────────────────────────────────────────────
+  // Fuel is MANUAL (per company it varies) — we only suggest a value; the user
+  // can always override. Total = CF + fuel + named services + ad-hoc charges −
+  // discounts. Balance = Total − Deposit, split 50/50 pickup/delivery (editable).
   const calc = useMemo(() => {
     const baseCf = parseCfNum(f.volume);
     const rate = num(f.price_per_cf);
@@ -657,24 +745,31 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     const totalCf = baseCf + extraCfQty;
     const cfSubtotal = baseAmt + extraAmt;
     const fuelPct = num(f.fuel_surcharge_pct);
-    const fuelAmt = cfSubtotal * fuelPct / 100;
+    const fuelSuggest = cfSubtotal * fuelPct / 100;
+    const manualFuel = f.fuel_amount !== "" && f.fuel_amount != null;
+    const fuelAmt = manualFuel ? num(f.fuel_amount) : fuelSuggest;
+    const servicesTotal = serviceFields.reduce((s, sf) => s + num(f[sf.source]), 0);
     const chargesTotal = charges.reduce((s, l) => s + num(l.amount), 0);
     const discountTotal = discounts.reduce((s, l) => s + Math.abs(num(l.amount)), 0);
-    const grandTotal = cfSubtotal + fuelAmt + chargesTotal - discountTotal;
+    const grandTotal = cfSubtotal + fuelAmt + servicesTotal + chargesTotal - discountTotal;
     const deposit = num(f.deposit);
     const manualBal = f.balance_override !== "" && f.balance_override != null;
     const balanceDue = manualBal ? num(f.balance_override) : grandTotal - deposit;
-    return { baseCf, rate, baseAmt, extraAmt, extraCfQty, totalCf, cfSubtotal, fuelPct, fuelAmt, chargesTotal, discountTotal, grandTotal, deposit, balanceDue };
-  }, [f, extraCf, charges, discounts]);
+    const duePickup = f.due_pickup !== "" && f.due_pickup != null ? num(f.due_pickup) : balanceDue / 2;
+    const dueDelivery = f.due_delivery !== "" && f.due_delivery != null ? num(f.due_delivery) : balanceDue / 2;
+    return { baseCf, rate, baseAmt, extraAmt, extraCfQty, totalCf, cfSubtotal, fuelPct, fuelSuggest, fuelAmt, servicesTotal, chargesTotal, discountTotal, grandTotal, deposit, balanceDue, duePickup, dueDelivery };
+  }, [f, extraCf, charges, discounts, serviceFields]);
 
   // The "effective job" fed to the stamper: base job + edits + computed + slots.
   const effJob = useMemo(() => {
     const job = jobs.find(j => String(j.id) === String(jobId)) || {};
     const e = { ...job };
     for (const hf of HEADER_FIELDS) e[hf.k] = f[hf.k] ?? "";
+    for (const sf of serviceFields) e[sf.source] = f[sf.source] ?? "";
     e.volume = f.volume; e.price_per_cf = f.price_per_cf; e.fuel_surcharge_pct = f.fuel_surcharge_pct; e.deposit = f.deposit;
     e.cf_total = calc.cfSubtotal; e.fuel_amount = calc.fuelAmt; e.grand_total = calc.grandTotal;
     e.estimate = calc.grandTotal; e.balance_due = calc.balanceDue; e.bol_balance = calc.balanceDue;
+    e.due_pickup = calc.duePickup; e.due_delivery = calc.dueDelivery;
     e.notes = f.notes || "";
     extraCf.slice(0, 2).forEach((l, i) => {
       const r = num(l.rate === "" || l.rate == null ? f.price_per_cf : l.rate);
@@ -683,7 +778,7 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     charges.slice(0, 4).forEach((l, i) => { e[`charge_${i + 1}_label`] = l.label || ""; e[`charge_${i + 1}_amount`] = l.amount === "" ? "" : num(l.amount); });
     discounts.slice(0, 2).forEach((l, i) => { e[`discount_${i + 1}_label`] = l.label || ""; e[`discount_${i + 1}_amount`] = l.amount === "" ? "" : -Math.abs(num(l.amount)); });
     return e;
-  }, [f, extraCf, charges, discounts, calc, jobId, jobs]);
+  }, [f, extraCf, charges, discounts, calc, jobId, jobs, serviceFields]);
 
   const tpl = templates.find(t => String(t.id) === String(tplId));
   const snapshot = JSON.stringify([effJob, tpl?.field_map]);
@@ -710,12 +805,15 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     setSaving(true);
     try {
       const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers);
-      const safe = String(f.job_number || f.customer || "bol").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40);
-      const path = `${safe}-${Date.now()}.pdf`;
+      // Filename by job# + client for easy search (with a unique suffix so it never overwrites).
+      const nice = [f.job_number, f.customer].filter(Boolean).join(" - ") || "bol";
+      const safe = nice.replace(/[^a-zA-Z0-9._ -]/g, "").trim().slice(0, 60) || "bol";
+      const path = `${safe} ${Date.now()}.pdf`;
       const { error: upErr } = await supabase.storage.from("bol-generated").upload(path, out, { contentType: "application/pdf", upsert: true });
       if (upErr) throw upErr;
       const line_items = [
         ...extraCf.map(l => ({ type: "cf", label: "Additional CF", qty: num(l.qty), rate: num(l.rate === "" || l.rate == null ? f.price_per_cf : l.rate), amount: num(l.qty) * num(l.rate === "" || l.rate == null ? f.price_per_cf : l.rate) })),
+        ...serviceFields.filter(sf => String(f[sf.source] ?? "") !== "").map(sf => ({ type: "service", source: sf.source, label: sf.label, amount: num(f[sf.source]) })),
         ...charges.map(l => ({ type: "charge", label: l.label, amount: num(l.amount) })),
         ...discounts.map(l => ({ type: "discount", label: l.label, amount: -Math.abs(num(l.amount)) })),
       ];
@@ -734,9 +832,16 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
   }
 
   const computed = [
-    ["CF total", calc.cfSubtotal], ["Fuel $ (" + (calc.fuelPct || 0) + "%)", calc.fuelAmt],
-    ["Other charges", calc.chargesTotal], ["Discounts", -calc.discountTotal],
-    ["Grand total", calc.grandTotal], ["Deposit", calc.deposit], ["Balance due", calc.balanceDue],
+    ["CF total", calc.cfSubtotal],
+    ["Fuel $", calc.fuelAmt],
+    ["Services", calc.servicesTotal],
+    ["Other charges", calc.chargesTotal],
+    ["Discounts", -calc.discountTotal],
+    ["Grand total", calc.grandTotal],
+    ["Deposit", calc.deposit],
+    ["Balance due", calc.balanceDue],
+    ["Due at pickup", calc.duePickup],
+    ["Due at delivery", calc.dueDelivery],
   ];
   const lineBtn = { padding: "4px 9px", borderRadius: 6, border: "1px dashed #cbd5e1", background: "#f8fafc", cursor: "pointer", fontSize: 12, color: "#334155" };
   const delX = { border: "none", background: "transparent", color: "#b91c1c", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 4px" };
@@ -788,12 +893,17 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
           {/* charges calculator */}
           <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", marginBottom: 10 }}>Charges</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
               <div><label style={lbl}>Base CF</label><input value={f.volume ?? ""} onChange={e => set("volume", e.target.value)} style={inp} /></div>
               <div><label style={lbl}>Rate / CF</label><input value={f.price_per_cf ?? ""} onChange={e => set("price_per_cf", e.target.value)} style={inp} /></div>
               <div><label style={lbl}>Fuel %</label><input value={f.fuel_surcharge_pct ?? ""} onChange={e => set("fuel_surcharge_pct", e.target.value)} style={inp} /></div>
             </div>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>Base CF stays untouched — extra CF goes on its own line.</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "end", marginBottom: 6 }}>
+              <div><label style={lbl}>Fuel $ (manual — blank = {calc.fuelPct || 0}% of CF)</label>
+                <input value={f.fuel_amount ?? ""} onChange={e => set("fuel_amount", e.target.value)} placeholder={fmtMoney(calc.fuelSuggest) || "0.00"} style={inp} /></div>
+              <button style={{ ...lineBtn, whiteSpace: "nowrap" }} title="Fill with % of CF" onClick={() => set("fuel_amount", calc.fuelSuggest ? calc.fuelSuggest.toFixed(2) : "")}>≈ suggest</button>
+            </div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>Base CF stays untouched — extra CF goes on its own line. Fuel is manual (Transit varies the rate).</div>
 
             {/* extra CF lines */}
             {extraCf.map((l, i) => (
@@ -803,7 +913,21 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
                 <button style={delX} title="Remove" onClick={() => setExtraCf(a => a.filter(x => x.id !== l.id))}>✕</button>
               </div>
             ))}
-            {/* other charges */}
+            {/* named services from the template (DocuSign-style boxes) */}
+            {serviceFields.length > 0 && (
+              <div style={{ margin: "4px 0 8px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#bbb", textTransform: "uppercase", margin: "6px 0 6px" }}>Services (from template)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  {serviceFields.map(sf => (
+                    <div key={sf.source}>
+                      <label style={lbl}>{sf.label}{sf.default ? ` · std ${sf.default}` : ""}</label>
+                      <input value={f[sf.source] ?? ""} onChange={e => set(sf.source, e.target.value)} placeholder={sf.default || "$"} style={inp} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* other charges (ad-hoc, if the template didn't name them) */}
             {charges.map((l, i) => (
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr auto", gap: 8, marginBottom: 6, alignItems: "end" }}>
                 <div><label style={lbl}>Charge {i + 1}</label><input value={l.label} onChange={e => setCharges(a => a.map(x => x.id === l.id ? { ...x, label: e.target.value } : x))} placeholder="e.g. packing, stairs" style={inp} /></div>
@@ -836,6 +960,10 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
               <div style={{ marginTop: 8 }}>
                 <label style={lbl}>Manual balance override (optional)</label>
                 <input value={f.balance_override ?? ""} onChange={e => set("balance_override", e.target.value)} placeholder="blank = grand total − deposit" style={inp} />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                <div><label style={lbl}>Due pickup (override)</label><input value={f.due_pickup ?? ""} onChange={e => set("due_pickup", e.target.value)} placeholder={fmtMoney(calc.balanceDue / 2) || "0.00"} style={inp} /></div>
+                <div><label style={lbl}>Due delivery (override)</label><input value={f.due_delivery ?? ""} onChange={e => set("due_delivery", e.target.value)} placeholder={fmtMoney(calc.balanceDue / 2) || "0.00"} style={inp} /></div>
               </div>
             </div>
           </div>
