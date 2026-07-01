@@ -7131,8 +7131,8 @@ export default function App() {
                           <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "no truck"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
                         </div>
                         <div style={{ display:"flex", gap:6 }}>
-                          <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Manage</Btn>
-                          <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit</Btn>
+                          <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Manage Loads</Btn>
+                          <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit Trip</Btn>
                         </div>
                       </div>
                       {c.cap > 0 ? (
