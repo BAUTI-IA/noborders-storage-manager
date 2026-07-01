@@ -2093,14 +2093,24 @@ function Btn({ onClick, primary, danger, disabled, children, style }) {
   );
 }
 
-function Modal({ title, onClose, children, footer }) {
+// Confirmation shown before throwing away a half-filled form (accidental backdrop
+// click, mis-click on the "x", etc.).
+const DISCARD_MSG = "Tenés datos sin guardar en este formulario.\nSi cerrás ahora se van a perder.\n\n¿Cerrar igual?";
+
+// `dirty` opts a modal into data-loss protection. When it is defined the modal is
+// treated as a data-entry form: clicking the dark backdrop no longer closes it, and
+// the "x" only closes after a confirm while there are unsaved changes (dirty === true).
+// Read-only modals omit `dirty` and keep the old click-outside-to-close behavior.
+function Modal({ title, onClose, children, footer, dirty }) {
+  const isForm = dirty !== undefined;
+  const requestClose = () => { if (!dirty || window.confirm(DISCARD_MSG)) onClose(); };
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:50, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      onClick={e => { if (e.target === e.currentTarget && !isForm) onClose(); }}>
       <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:600, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,0.15)" }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"18px 20px 14px", borderBottom:"1px solid #f0f0f0" }}>
           <span style={{ fontWeight:600, fontSize:15 }}>{title}</span>
-          <button onClick={onClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>x</button>
+          <button onClick={requestClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>x</button>
         </div>
         <div style={{ padding:"16px 20px" }}>{children}</div>
         {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8 }}>{footer}</div>}
@@ -2985,6 +2995,20 @@ export default function App() {
   const [jobSaving, setJobSaving] = useState(false);
   const [jobErr, setJobErr] = useState(null);
   const [editingJobKey, setEditingJobKey] = useState(null);
+  // ── Unsaved-data guard for the storage & job forms ──
+  // Snapshot the form when its modal opens, then treat it as "dirty" once it diverges.
+  // Modal reads `dirty` to block backdrop-close and confirm on the "x"; the footer
+  // Cancel buttons route through closeAdd/closeJob so a mis-click can't silently wipe
+  // everything the user just typed. The baseline lives in state (not a ref) so opening
+  // a pre-filled Edit re-renders with the correct snapshot instead of a stale one.
+  const [storageBaseline, setStorageBaseline] = useState(EMPTY_FORM);
+  const [jobBaseline, setJobBaseline] = useState(EMPTY_JOB);
+  useEffect(() => { if (showAdd) setStorageBaseline(form); }, [showAdd]);
+  useEffect(() => { if (showAddJob) setJobBaseline(jobForm); }, [showAddJob]);
+  const storageDirty = showAdd && JSON.stringify(form) !== JSON.stringify(storageBaseline);
+  const jobDirty = showAddJob && JSON.stringify(jobForm) !== JSON.stringify(jobBaseline);
+  const closeAdd = () => { if (!storageDirty || window.confirm(DISCARD_MSG)) setShowAdd(false); };
+  const closeJob = () => { if (!jobDirty || window.confirm(DISCARD_MSG)) setShowAddJob(false); };
   // Warehouse "+ Job" picker: choose an existing job to add here, or create a new one.
   const [whPicker, setWhPicker] = useState(null); // { name } | null
   const [whPickerKey, setWhPickerKey] = useState(""); // selected existing job key
@@ -9208,9 +9232,9 @@ export default function App() {
       )}
 
       {showAdd && (
-        <Modal title={editId ? "Edit unit" : "New unit"} onClose={() => setShowAdd(false)}
+        <Modal title={editId ? "Edit unit" : "New unit"} onClose={() => setShowAdd(false)} dirty={storageDirty}
           footer={<>
-            <Btn onClick={() => setShowAdd(false)}>Cancel</Btn>
+            <Btn onClick={closeAdd}>Cancel</Btn>
             <Btn primary disabled={saving} onClick={saveForm}>{saving ? "Saving..." : "Save"}</Btn>
           </>}>
           <p style={{ fontSize:12, color:"#999", margin:"0 0 12px" }}>Datos fijos de la unidad. Los clientes y jobs se cargan aparte en el historial.</p>
@@ -9346,9 +9370,9 @@ export default function App() {
       })()}
 
       {showAddJob && (
-        <Modal title={editingJobKey ? "Edit job" : "New job"} onClose={() => setShowAddJob(false)}
+        <Modal title={editingJobKey ? "Edit job" : "New job"} onClose={() => setShowAddJob(false)} dirty={jobDirty}
           footer={<>
-            <Btn onClick={() => setShowAddJob(false)}>Cancel</Btn>
+            <Btn onClick={closeJob}>Cancel</Btn>
             <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Saving..." : (editingJobKey ? "Save changes" : "Save job")}</Btn>
           </>}>
           {(() => {
