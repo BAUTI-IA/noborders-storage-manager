@@ -233,6 +233,7 @@ async function generateFilledPdf(templateBytes, fields, job, brokers) {
   const pages = pdf.getPages();
   const ink = rgb(0.04, 0.13, 0.36);
   for (const f of fields) {
+    if (f.kind === "signature" || f.kind === "initial" || f.kind === "sign_date") continue; // DocuSign tabs, not stamped
     const page = pages[f.page || 0];
     if (!page) continue;
     const value = resolveValue(f, job, brokers);
@@ -319,7 +320,7 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
       onSaved={() => {}} onClose={() => { setReopenDoc(null); setView(reopenDoc ? "documents" : "list"); }} />;
   }
   if (view === "documents") {
-    return <DocumentsView supabase={supabase} canEdit={canEdit}
+    return <DocumentsView supabase={supabase} session={session} canEdit={canEdit}
       onReopen={(doc) => { setReopenDoc(doc); setView("generate"); }} onClose={() => setView("list")} />;
   }
 
@@ -534,7 +535,8 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                       border: `1.5px solid ${selected ? "#2563eb" : "#e2762b"}`, background: selected ? "rgba(37,99,235,0.12)" : "rgba(226,118,43,0.10)",
                       cursor: "move", boxSizing: "border-box", fontSize: 9, color: "#333", overflow: "hidden", whiteSpace: "nowrap" }}>
                     <span style={{ background: selected ? "#2563eb" : "#e2762b", color: "#fff", fontSize: 8, padding: "0 3px", lineHeight: "12px", display: "inline-block" }}>
-                      {f.source ? (f.source.startsWith("svc:") ? (f.source.slice(4) || "Service") : f.label || SOURCE_LABEL[f.source] || (f.source.startsWith("text:") ? "Text" : f.source)) : (f.label || "unmapped")}
+                      {["signature", "initial", "sign_date"].includes(f.kind) ? `✍ ${f.kind === "sign_date" ? "Date" : f.kind === "initial" ? "Initial" : "Sign"} (${f.stage || "pickup"})`
+                        : f.source ? (f.source.startsWith("svc:") ? (f.source.slice(4) || "Service") : f.label || SOURCE_LABEL[f.source] || (f.source.startsWith("text:") ? "Text" : f.source)) : (f.label || "unmapped")}
                     </span>
                     <div onPointerDown={e => onBoxPointerDown(e, f, "resize")}
                       style={{ position: "absolute", right: -4, bottom: -4, width: 10, height: 10, background: "#2563eb", border: "1px solid #fff", borderRadius: 2, cursor: "nwse-resize", display: selected ? "block" : "none" }} />
@@ -606,12 +608,28 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                       </div>
                     </div>
                   )}
-                  {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && (
+                  {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && !["signature", "initial", "sign_date"].includes(sel.kind) && (
                     <>
                       <label style={{ fontSize: 12, color: "#888" }}>Default value (pre-filled)</label>
                       <input value={sel.default || ""} onChange={e => updateField(sel.id, { default: e.target.value })} placeholder="e.g. 50.00"
                         style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13, boxSizing: "border-box" }} />
                     </>
+                  )}
+                  {/* DocuSign signature placeholder (not stamped — becomes a DocuSign tab) */}
+                  <label style={{ fontSize: 12, color: "#888" }}>Signature (DocuSign)</label>
+                  <select value={["signature", "initial", "sign_date"].includes(sel.kind) ? sel.kind : ""} onChange={e => updateField(sel.id, { kind: e.target.value, ...(e.target.value ? { mode: "fixed", stage: sel.stage || "pickup" } : {}) })}
+                    style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 8px", fontSize: 13 }}>
+                    <option value="">— no es firma —</option>
+                    <option value="signature">Firma</option>
+                    <option value="initial">Inicial</option>
+                    <option value="sign_date">Fecha de firma</option>
+                  </select>
+                  {["signature", "initial", "sign_date"].includes(sel.kind) && (
+                    <div style={{ display: "flex", gap: 4, margin: "0 0 10px" }}>
+                      {[["pickup", "Pickup"], ["delivery", "Delivery"]].map(([s, t]) => (
+                        <button key={s} onClick={() => updateField(sel.id, { stage: s })} style={{ flex: 1, padding: 6, borderRadius: 7, border: "1px solid #eee", cursor: "pointer", fontSize: 12, background: (sel.stage || "pickup") === s ? "#111" : "#fff", color: (sel.stage || "pickup") === s ? "#fff" : "#666" }}>{t}</button>
+                      ))}
+                    </div>
                   )}
                   <label style={{ fontSize: 12, color: "#888" }}>Align</label>
                   <div style={{ display: "flex", gap: 4, margin: "4px 0 10px" }}>
@@ -994,11 +1012,22 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
 }
 
 // ── Documents: every saved BOL (legal backup), searchable by customer ───────
-function DocumentsView({ supabase, canEdit, onReopen, onClose }) {
+const SIGN_BADGE = {
+  unsigned:        ["Generated", "#FEF3C7", "#92760B"],
+  pickup_sent:     ["Pickup sent", "#E0EDFF", "#1d4ed8"],
+  pickup_signed:   ["Pickup signed", "#EAF3DE", "#3B6D11"],
+  delivery_sent:   ["Delivery sent", "#E0EDFF", "#1d4ed8"],
+  delivery_signed: ["Delivery signed", "#EAF3DE", "#3B6D11"],
+  completed:       ["Completed ✓", "#DCFCE7", "#166534"],
+};
+
+function DocumentsView({ supabase, session, canEdit, onReopen, onClose }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [q, setQ] = useState("");
+  const [busyId, setBusyId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -1021,6 +1050,32 @@ function DocumentsView({ supabase, canEdit, onReopen, onClose }) {
     load();
   }
 
+  // Send this BOL to DocuSign for the given stage and open the embedded signing view.
+  async function sign(r, stage) {
+    const email = window.prompt(`Email del firmante (cliente) para ${stage}:`, r.values?.client_email || "");
+    if (email === null) return;
+    setBusyId(r.id); setError(null); setNotice(null);
+    try {
+      const res = await fetch("/api/docusign-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+        body: JSON.stringify({ document_id: r.id, stage, signer_email: email, signer_name: r.customer }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al enviar a DocuSign.");
+      await load();
+      if (json.url) window.open(json.url, "_blank", "noopener");
+      setNotice("Enviado a DocuSign. Firmá en la ventana que se abrió; la copia firmada aparece acá al completar.");
+    } catch (e) { setError(e.message); }
+    setBusyId(null);
+  }
+  // Open a signed copy (private bucket → short-lived signed URL).
+  async function viewSigned(path) {
+    const { data, error } = await supabase.storage.from("bol-signed").createSignedUrl(path, 120);
+    if (error) { setError(error.message); return; }
+    window.open(data.signedUrl, "_blank", "noopener");
+  }
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
@@ -1031,30 +1086,38 @@ function DocumentsView({ supabase, canEdit, onReopen, onClose }) {
           style={{ ...inp, width: 280 }} />
       </div>
       {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
+      {notice && <div style={{ background: "#EAF3DE", border: "1px solid #cfe6b4", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#3B6D11", marginBottom: 12 }}>{notice}</div>}
       <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr>{["Date", "Customer", "Job #", "Company", "Status", ""].map((h, i) =>
+          <thead><tr>{["Date", "Customer", "Job #", "Company", "Signature", ""].map((h, i) =>
             <th key={i} style={{ padding: "10px 12px", fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", textAlign: i === 5 ? "right" : "left", borderBottom: "1px solid #f3f3f3" }}>{h}</th>)}
           </tr></thead>
           <tbody>
             {loading ? <tr><td colSpan={6} style={{ padding: 14, fontSize: 13 }}>Loading…</td></tr>
               : filtered.length === 0 ? <tr><td colSpan={6} style={{ padding: 14, fontSize: 13, color: "#888" }}>No saved BOLs yet.</td></tr>
-              : filtered.map(r => (
+              : filtered.map(r => {
+                const st = SIGN_BADGE[r.sign_status || "unsigned"] || SIGN_BADGE.unsigned;
+                const busy = busyId === r.id;
+                return (
                 <tr key={r.id}>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6", whiteSpace: "nowrap" }}>{fmtDate(r.created_at) || String(r.created_at || "").slice(0, 10)}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, borderBottom: "1px solid #f6f6f6" }}>{r.customer || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6" }}>{r.job_number || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6" }}>{r.company_name || "—"}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f6f6f6" }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: r.status === "final" ? "#EAF3DE" : "#FEF3C7", color: r.status === "final" ? "#3B6D11" : "#92760B" }}>{r.status}</span>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f6f6f6", whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: st[1], color: st[2] }}>{st[0]}</span>
+                    {r.pickup_signed_path && <button style={{ ...smallBtn, marginLeft: 6, fontSize: 11, padding: "3px 7px" }} onClick={() => viewSigned(r.pickup_signed_path)}>PU ✍</button>}
+                    {r.delivery_signed_path && <button style={{ ...smallBtn, marginLeft: 4, fontSize: 11, padding: "3px 7px" }} onClick={() => viewSigned(r.delivery_signed_path)}>DEL ✍</button>}
                   </td>
                   <td style={{ padding: "10px 12px", textAlign: "right", whiteSpace: "nowrap", borderBottom: "1px solid #f6f6f6" }}>
+                    {canEdit && !r.pickup_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "pickup")}>{busy ? "…" : "Firmar pickup"}</button>}
+                    {canEdit && r.pickup_signed_path && !r.delivery_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "delivery")}>{busy ? "…" : "Firmar delivery"}</button>}
                     {urlFor(r) && <a href={urlFor(r)} target="_blank" rel="noreferrer" style={{ ...smallBtn, textDecoration: "none", marginRight: 6 }}>View</a>}
                     <button style={{ ...smallBtn, marginRight: 6 }} onClick={() => onReopen(r)}>Reopen</button>
                     {canEdit && <button style={{ ...smallBtn, color: "#b91c1c" }} onClick={() => remove(r)}>Delete</button>}
                   </td>
                 </tr>
-              ))}
+              );})}
           </tbody>
         </table>
       </div>
