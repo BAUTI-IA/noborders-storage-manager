@@ -7174,7 +7174,7 @@ export default function App() {
             <div draggable onDragStart={e => e.dataTransfer.setData("text/plain", String(idx))}
               onDragOver={e => e.preventDefault()}
               onDrop={e => { e.preventDefault(); const from = parseInt(e.dataTransfer.getData("text/plain")); if (isNaN(from) || from === idx) return; const arr = ordered.map(jobKey); const [mv] = arr.splice(from, 1); arr.splice(idx, 0, mv); persistTripOrder(arr); }}
-              style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: delivered ? "#fafafa" : "#fff", cursor:"grab", opacity: delivered ? 0.7 : 1 }}>
+              style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: (delivered || dropped) ? "#fafafa" : "#fff", cursor:"grab", opacity: (delivered || dropped) ? 0.7 : 1 }}>
               <span title="Drag to reorder" style={{ color:"#ccc", cursor:"grab" }}>⠿</span>
               <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{idx + 1}</span>
               <div style={{ flex:1, minWidth:0 }}>
