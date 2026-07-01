@@ -5468,7 +5468,9 @@ export default function App() {
     const ids = jobRowIds(k);
     if (!ids.length || !target) return;
     setTripBusy(true);
-    const patch = { trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() };
+    // Keep the job on the trip (trip_id / stop order stay) so it still shows there,
+    // but mark it in_storage so it also appears in the storage/warehouse pages.
+    const patch = { status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() };
     if (target.kind === "warehouse") { patch.warehouse = target.name; patch.storage_id = null; }
     else { patch.storage_id = target.id; patch.warehouse = null; }
     await supabase.from("storage_jobs").update(patch).in("id", ids);
@@ -7164,6 +7166,9 @@ export default function App() {
       {page === "trips" && (() => {
         const Stop = ({ trip, j, idx, ordered }) => {
           const delivered = !!j.date_out || j.status === "delivered";
+          // Dropped at storage during the trip: still on the trip, but sitting in storage.
+          const dropped = !delivered && j.status === "in_storage";
+          const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
           const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
           return (
             <div draggable onDragStart={e => e.dataTransfer.setData("text/plain", String(idx))}
@@ -7188,6 +7193,8 @@ export default function App() {
               </div>
               {delivered
                 ? <span style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 8px" }}>Delivered</span>
+                : dropped
+                ? <span title={dropLoc} style={{ fontSize:10, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>
                 : <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
                     <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>
                     <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
@@ -10838,15 +10845,18 @@ export default function App() {
               {c.jobsIn.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"8px" }}>No jobs on this trip.</div>
                 : c.jobsIn.map((j, i) => {
                   const delivered = !!j.date_out || j.status === "delivered";
+                  const dropped = !delivered && j.status === "in_storage";
+                  const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
                   const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
                   return (
-                    <div key={j.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff", opacity: delivered ? 0.75 : 1 }}>
+                    <div key={j.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: (delivered || dropped) ? "#fafafa" : "#fff", opacity: (delivered || dropped) ? 0.75 : 1 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                         <span style={{ width:22, height:22, borderRadius:"50%", background:"#111", color:"#fff", fontSize:11, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i + 1}</span>
                         <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
                         <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
                         {fromTo && <span style={{ fontSize:11, color:"#888" }}>· {fromTo}</span>}
                         {delivered && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 9px" }}>Delivered</span>}
+                        {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>}
                       </div>
                       <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
                         <span>{Math.round(parseCf(j.volume))} CF</span>
@@ -10855,7 +10865,7 @@ export default function App() {
                         <FaddBadge fadd={j.fadd} />
                         {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
                       </div>
-                      {!delivered && (
+                      {!delivered && !dropped && (
                         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                           <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
                           {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
