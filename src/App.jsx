@@ -1780,15 +1780,15 @@ function deliveryGeocodeCandidates(j) {
   push([stateName]);
   return out;
 }
-// Ordered delivery stops for a trip's route (skips jobs with no delivery location).
+// One route stop per job, in trip order (jobs with no delivery location are kept
+// so the popup can still list them, flagged as not locatable).
 function tripRouteStops(jobsIn) {
   return (jobsIn || [])
-    .map(j => ({ jobNumber: j.job_number || "(job)", customer: j.customer || "", query: deliveryQuery(j), candidates: deliveryGeocodeCandidates(j) }))
-    .filter(s => s.candidates.length);
+    .map(j => ({ jobNumber: j.job_number || "(job)", customer: j.customer || "", query: deliveryQuery(j), candidates: deliveryGeocodeCandidates(j) }));
 }
-// Google Maps directions link through each job's delivery location, in trip order.
+// Google Maps directions link through the jobs that have a delivery location, in trip order.
 function tripRouteLink(jobsIn) {
-  const stops = tripRouteStops(jobsIn);
+  const stops = tripRouteStops(jobsIn).filter(s => s.candidates.length);
   if (stops.length === 0) return null;
   return "https://www.google.com/maps/dir/" + stops.map(s => encodeURIComponent(s.query || s.candidates[0])).join("/");
 }
@@ -2196,7 +2196,7 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
                 <span style={{ width:20, height:20, borderRadius:"50%", background: p.failed ? "#ccc" : "#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{i + 1}</span>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div><b style={{ fontFamily:"monospace" }}>{p.jobNumber}</b>{p.customer ? ` · ${p.customer}` : ""}{p.approx && !p.failed && <span style={{ fontSize:10.5, fontWeight:600, color:"#854F0B", background:"#FAEEDA", borderRadius:20, padding:"1px 7px", marginLeft:6 }}>approx.</span>}</div>
-                  <div style={{ color: p.failed ? "#A32D2D" : "#888", marginTop:1 }}>{p.failed ? `Couldn't locate: ${p.query}` : (p.resolvedLabel || p.query)}</div>
+                  <div style={{ color: p.failed ? "#A32D2D" : "#888", marginTop:1 }}>{p.failed ? (p.candidates.length ? `Couldn't locate: ${p.query}` : "No delivery address on file") : (p.resolvedLabel || p.query)}</div>
                 </div>
               </div>
             ))}
@@ -7275,7 +7275,7 @@ export default function App() {
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit Trip</Btn>
                           {(() => { const stops = tripRouteStops(c.jobsIn); return stops.length
                             ? <Btn onClick={() => setTripRouteModal({ title: t.trip_number || `#${t.id}`, stops, googleLink: tripRouteLink(c.jobsIn) })} style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>
-                            : <Btn disabled title="No delivery addresses for the jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>; })()}
+                            : <Btn disabled title="No jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>; })()}
                         </div>
                       </div>
                       {c.cap > 0 ? (
