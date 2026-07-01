@@ -3136,6 +3136,8 @@ export default function App() {
   const [tripAddJobSearch, setTripAddJobSearch] = useState("");
   const [tripAction, setTripAction] = useState(null);         // "add" | "pickup" | "unplanned" | null
   const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
+  const [dropModal, setDropModal] = useState(null); // { trip, jobKey, label } drop-at-storage popup (trip cards)
+  const [dropSel, setDropSel] = useState("");       // selected drop target index in dropModal
   const [unplannedForm, setUnplannedForm] = useState(EMPTY_UNPLANNED);
   const [tripBusy, setTripBusy] = useState(false);
   const [tripCompleteModal, setTripCompleteModal] = useState(null); // { trip } completion summary
@@ -7186,7 +7188,10 @@ export default function App() {
               </div>
               {delivered
                 ? <span style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 8px" }}>Delivered</span>
-                : <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11 }}>Mark delivered</Btn>}
+                : <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
+                    <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>
+                    <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
+                  </div>}
             </div>
           );
         };
@@ -10944,6 +10949,31 @@ export default function App() {
       {tripRouteModal && (
         <TripRouteModal title={tripRouteModal.title} waypoints={tripRouteModal.waypoints} googleLink={tripRouteModal.googleLink} onClose={() => setTripRouteModal(null)} />
       )}
+
+      {dropModal && (() => {
+        const dropTargets = [
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
+          ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
+        ];
+        return (
+          <Modal title={`Dropped at storage · ${dropModal.label}`} onClose={() => setDropModal(null)}
+            footer={<>
+              <Btn onClick={() => setDropModal(null)}>Cancel</Btn>
+              <Btn primary disabled={tripBusy || dropSel === ""} onClick={async () => {
+                const dm = dropModal, tgt = dropTargets[Number(dropSel)];
+                if (!tgt) return;
+                await tripDropAtStorage(dm.trip, dm.jobKey, tgt);
+                setDropModal(null); setDropSel("");
+              }}>{tripBusy ? "Saving…" : "Confirm drop"}</Btn>
+            </>}>
+            <div style={{ fontSize:13, color:"#555", marginBottom:10 }}>The job wasn't delivered to the final customer — choose the storage unit or warehouse where it was left. It'll leave the trip and go back to storage.</div>
+            <select style={inp} value={dropSel} onChange={e => setDropSel(e.target.value)}>
+              <option value="">— Choose destination —</option>
+              {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+            </select>
+          </Modal>
+        );
+      })()}
 
       {showTripModal && (() => {
         // Live capacity as jobs are added (using the form's selected jobs).
