@@ -1754,6 +1754,15 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
 }
 const tripManifestLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripManifestText(...args));
 
+// Google Maps directions link through each job's delivery location, in trip order.
+function tripRouteLink(jobsIn) {
+  const stops = (jobsIn || [])
+    .map(j => [j.delivery_address, j.delivery_city, j.delivery_state, j.delivery_zip].filter(Boolean).join(", "))
+    .filter(Boolean);
+  if (stops.length === 0) return null;
+  return "https://www.google.com/maps/dir/" + stops.map(s => encodeURIComponent(s)).join("/");
+}
+
 // WhatsApp "trip update" sent to the driver group when a job is added mid-trip.
 function tripUpdateWaText(trip, g, totalCf) {
   const dest = [g.delivery_address, g.delivery_city, g.delivery_state].filter(Boolean).join(", ");
@@ -7131,9 +7140,12 @@ export default function App() {
                           </div>
                           <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "no truck"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
                         </div>
-                        <div style={{ display:"flex", gap:6 }}>
+                        <div style={{ display:"flex", gap:6, flexWrap:"wrap", justifyContent:"flex-end" }}>
                           <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Manage Loads</Btn>
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit Trip</Btn>
+                          {(() => { const routeLink = tripRouteLink(c.jobsIn); return routeLink
+                            ? <a href={routeLink} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn></a>
+                            : <Btn disabled title="No delivery addresses for the jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>; })()}
                         </div>
                       </div>
                       {c.cap > 0 ? (
