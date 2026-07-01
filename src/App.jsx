@@ -928,6 +928,10 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
 
 const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
 
+// A job physically occupies its storage/warehouse only while it's actually there:
+// not delivered (date_out) and not already loaded onto a truck (out_for_delivery).
+const jobInStorageNow = (j) => !j.date_out && j.status !== "out_for_delivery";
+
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
   const sp = g.parts.find(p => p.storage?.address);
@@ -4001,19 +4005,20 @@ export default function App() {
 
   const activeJobsByStorage = useMemo(() => {
     const m = {};
-    for (const j of jobs) if (!j.date_out && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + 1;
+    for (const j of jobs) if (jobInStorageNow(j) && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + 1;
     return m;
   }, [jobs]);
 
-  // CF currently stored per rented unit and per owned warehouse (active jobs only).
+  // CF currently stored per rented unit and per owned warehouse (jobs physically
+  // present only — excludes anything already loaded onto a truck / out for delivery).
   const usedCfByStorage = useMemo(() => {
     const m = {};
-    for (const j of jobs) if (!j.date_out && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + parseCf(j.volume);
+    for (const j of jobs) if (jobInStorageNow(j) && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + parseCf(j.volume);
     return m;
   }, [jobs]);
   const usedCfByWarehouse = useMemo(() => {
     const m = {};
-    for (const j of jobs) if (!j.date_out && j.warehouse) m[j.warehouse] = (m[j.warehouse] || 0) + parseCf(j.volume);
+    for (const j of jobs) if (jobInStorageNow(j) && j.warehouse) m[j.warehouse] = (m[j.warehouse] || 0) + parseCf(j.volume);
     return m;
   }, [jobs]);
   // Warehouse capacity is held in a storages row (space_type='warehouse', brand=name).
@@ -4028,7 +4033,7 @@ export default function App() {
   const unitJobRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return jobs
-      .filter(j => !j.date_out && j.storage_id)
+      .filter(j => jobInStorageNow(j) && j.storage_id)
       .map(j => ({ ...j, storage: storageById[j.storage_id] || null }))
       .filter(j => {
         if (!q) return true;
@@ -8547,7 +8552,7 @@ export default function App() {
         const used = usedCfByWarehouse[name] || 0;
         const free = cap != null ? Math.max(0, cap - used) : null;
         const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0;
-        const inside = jobs.filter(j => !j.date_out && j.warehouse === name);
+        const inside = jobs.filter(j => jobInStorageNow(j) && j.warehouse === name);
         const byJob = []; const seen = new Set();
         for (const j of inside) { const k = jobKey(j); if (!seen.has(k)) { seen.add(k); byJob.push(j); } }
         return (
