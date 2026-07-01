@@ -1754,25 +1754,43 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
 }
 const tripManifestLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripManifestText(...args));
 
-// Best geocodable delivery address for a job (2-letter state → full name so the
+// Placeholder street values that aren't real addresses and break geocoding.
+const isPlaceholderAddr = (a) => /^(tbd|t\.?b\.?d\.?|n\/?a|na|none|-+|\.+|\?+|unknown|pending|same|house)$/i.test((a || "").trim());
+// Best human-readable delivery address for a job (2-letter state → full name so the
 // geocoder doesn't confuse "OK"/"ID"/etc. with words).
 function deliveryQuery(j) {
   const st = (j.delivery_state || "").trim();
   const stateName = US_CODE_TO_NAME[st.toUpperCase()] || st;
-  const parts = [j.delivery_address, j.delivery_city, stateName, j.delivery_zip].filter(Boolean);
-  return parts.join(", ");
+  return [j.delivery_address, j.delivery_city, stateName, j.delivery_zip].filter(Boolean).join(", ");
+}
+// Geocoding candidates from most to least specific, so a bad/placeholder street
+// still resolves to the city, zip, or at least the state centroid.
+function deliveryGeocodeCandidates(j) {
+  const st = (j.delivery_state || "").trim();
+  const stateName = US_CODE_TO_NAME[st.toUpperCase()] || st;
+  const addr = isPlaceholderAddr(j.delivery_address) ? "" : (j.delivery_address || "").trim();
+  const city = (j.delivery_city || "").trim();
+  const zip = (j.delivery_zip || "").trim();
+  const out = [];
+  const push = (parts) => { const q = parts.filter(Boolean).join(", "); if (q && !out.includes(q)) out.push(q); };
+  push([addr, city, stateName, zip]);
+  push([city, stateName, zip]);
+  push([zip, stateName]);
+  push([city, stateName]);
+  push([stateName]);
+  return out;
 }
 // Ordered delivery stops for a trip's route (skips jobs with no delivery location).
 function tripRouteStops(jobsIn) {
   return (jobsIn || [])
-    .map(j => ({ jobNumber: j.job_number || "(job)", customer: j.customer || "", query: deliveryQuery(j) }))
-    .filter(s => s.query);
+    .map(j => ({ jobNumber: j.job_number || "(job)", customer: j.customer || "", query: deliveryQuery(j), candidates: deliveryGeocodeCandidates(j) }))
+    .filter(s => s.candidates.length);
 }
 // Google Maps directions link through each job's delivery location, in trip order.
 function tripRouteLink(jobsIn) {
   const stops = tripRouteStops(jobsIn);
   if (stops.length === 0) return null;
-  return "https://www.google.com/maps/dir/" + stops.map(s => encodeURIComponent(s.query)).join("/");
+  return "https://www.google.com/maps/dir/" + stops.map(s => encodeURIComponent(s.query || s.candidates[0])).join("/");
 }
 
 // WhatsApp "trip update" sent to the driver group when a job is added mid-trip.
@@ -2104,13 +2122,20 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
         const out = [];
         for (const s of stops) {
           let resolved = { ...s, failed: true };
-          try {
-            const r = await fetch("/api/geocode?q=" + encodeURIComponent(s.query));
-            if (r.ok) {
-              const d = await r.json();
-              if (d && d.lat != null && d.lng != null) resolved = { ...s, lat: Number(d.lat), lng: Number(d.lng), resolvedLabel: d.label };
-            }
-          } catch { /* keep as failed */ }
+          // Try candidates from most to least specific; stop at the first hit.
+          for (let i = 0; i < s.candidates.length; i++) {
+            try {
+              const r = await fetch("/api/geocode?q=" + encodeURIComponent(s.candidates[i]));
+              if (r.ok) {
+                const d = await r.json();
+                if (d && d.lat != null && d.lng != null) {
+                  resolved = { ...s, lat: Number(d.lat), lng: Number(d.lng), resolvedLabel: d.label, approx: i > 0 };
+                  break;
+                }
+              }
+            } catch { /* try next candidate */ }
+            if (cancelled) return;
+          }
           if (cancelled) return;
           out.push(resolved);
           setPts([...out]);   // progressive reveal as each stop resolves
@@ -2170,7 +2195,7 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
               <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12.5 }}>
                 <span style={{ width:20, height:20, borderRadius:"50%", background: p.failed ? "#ccc" : "#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{i + 1}</span>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div><b style={{ fontFamily:"monospace" }}>{p.jobNumber}</b>{p.customer ? ` · ${p.customer}` : ""}</div>
+                  <div><b style={{ fontFamily:"monospace" }}>{p.jobNumber}</b>{p.customer ? ` · ${p.customer}` : ""}{p.approx && !p.failed && <span style={{ fontSize:10.5, fontWeight:600, color:"#854F0B", background:"#FAEEDA", borderRadius:20, padding:"1px 7px", marginLeft:6 }}>approx.</span>}</div>
                   <div style={{ color: p.failed ? "#A32D2D" : "#888", marginTop:1 }}>{p.failed ? `Couldn't locate: ${p.query}` : (p.resolvedLabel || p.query)}</div>
                 </div>
               </div>
