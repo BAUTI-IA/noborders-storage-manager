@@ -10489,6 +10489,7 @@ export default function App() {
         const truck = truckById[t.truck_id];
         const driverNm = driverById[t.driver_id]?.name || "";
         const inTransit = t.status === "in_transit";
+        const canAddJobs = t.status === "in_transit" || t.status === "loading";
         const over = c.cap > 0 ? Math.max(0, Math.round(c.totalCf - c.cap)) : 0;
         const pct = c.occPct || 0;
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
@@ -10552,8 +10553,8 @@ export default function App() {
               </div>
             )}
 
-            {/* in-transit action buttons */}
-            {inTransit && !tripAction && !storageDropJob && (
+            {/* loading / in-transit action buttons */}
+            {canAddJobs && !tripAction && !storageDropJob && (
               <div style={{ display:"flex", gap:8, margin:"12px 0", flexWrap:"wrap" }}>
                 <Btn primary onClick={() => { setTripAction("add"); setTripAddJobSearch(""); }} style={bigBtn}>➕ Add job</Btn>
                 <Btn onClick={() => setTripAction("pickup")} style={bigBtn}>🔼 Load from storage</Btn>
