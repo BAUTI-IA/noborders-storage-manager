@@ -47,6 +47,32 @@ const SOURCES = [
   { k: "pads_returned",     l: "Pads returned" },
   { k: "carrier_notes",     l: "Carrier notes" },
   { k: "broker",            l: "Broker name" },
+  // ── Phase-2 editable sheet: computed totals + repeatable line slots ────────
+  // These are NOT raw job columns — the live calculator fills them on an
+  // "effective" job object before stamping, so the mapped boxes print the
+  // edited values (extra CF, fuel $, discounts, grand total, balance…).
+  { k: "fuel_amount",       l: "Fuel surcharge $",       fmt: "money" },
+  { k: "grand_total",       l: "Grand total",            fmt: "money" },
+  { k: "balance_due",       l: "Balance due (final)",    fmt: "money" },
+  { k: "notes",             l: "Notes / free text" },
+  { k: "add_cf_1_qty",      l: "Additional CF #1 — qty" },
+  { k: "add_cf_1_rate",     l: "Additional CF #1 — rate", fmt: "money" },
+  { k: "add_cf_1_amount",   l: "Additional CF #1 — $",    fmt: "money" },
+  { k: "add_cf_2_qty",      l: "Additional CF #2 — qty" },
+  { k: "add_cf_2_rate",     l: "Additional CF #2 — rate", fmt: "money" },
+  { k: "add_cf_2_amount",   l: "Additional CF #2 — $",    fmt: "money" },
+  { k: "charge_1_label",    l: "Other charge #1 — label" },
+  { k: "charge_1_amount",   l: "Other charge #1 — $",     fmt: "money" },
+  { k: "charge_2_label",    l: "Other charge #2 — label" },
+  { k: "charge_2_amount",   l: "Other charge #2 — $",     fmt: "money" },
+  { k: "charge_3_label",    l: "Other charge #3 — label" },
+  { k: "charge_3_amount",   l: "Other charge #3 — $",     fmt: "money" },
+  { k: "charge_4_label",    l: "Other charge #4 — label" },
+  { k: "charge_4_amount",   l: "Other charge #4 — $",     fmt: "money" },
+  { k: "discount_1_label",  l: "Discount/adjust #1 — label" },
+  { k: "discount_1_amount", l: "Discount/adjust #1 — $",  fmt: "money" },
+  { k: "discount_2_label",  l: "Discount/adjust #2 — label" },
+  { k: "discount_2_amount", l: "Discount/adjust #2 — $",  fmt: "money" },
 ];
 const SOURCE_LABEL = Object.fromEntries(SOURCES.map(s => [s.k, s.l]));
 
@@ -60,16 +86,24 @@ function fmtMoney(v) {
   if (!isFinite(n) || v === null || v === "" || v === undefined) return "";
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+// Parse a plain number out of a possibly-formatted string ("1,800.00" → 1800).
+function num(v) { const n = parseFloat(String(v == null ? "" : v).replace(/[^0-9.\-]/g, "")); return isFinite(n) ? n : 0; }
+// First number found in a volume string ("400 cf" → 400) = base cubic feet.
+function parseCfNum(v) { const m = String(v == null ? "" : v).match(/[\d.]+/); return m ? parseFloat(m[0]) : 0; }
+
 // Resolve the printable value for a field source given a job.
 function resolveValue(field, job, brokers) {
   const src = field.source || "";
   if (!src) return "";
   if (src.startsWith("text:")) return src.slice(5);
   if (src.startsWith("job:")) { const v = job[src.slice(4)]; return v == null ? "" : String(v); }
-  if (src === "pickup_cityzip")  return [job.pickup_city, [job.pickup_state, job.pickup_zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-  if (src === "delivery_cityzip") return [job.delivery_city, [job.delivery_state, job.delivery_zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  if (src === "pickup_cityzip")  return job.pickup_cityzip != null && job.pickup_cityzip !== "" ? String(job.pickup_cityzip)
+    : [job.pickup_city, [job.pickup_state, job.pickup_zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  if (src === "delivery_cityzip") return job.delivery_cityzip != null && job.delivery_cityzip !== "" ? String(job.delivery_cityzip)
+    : [job.delivery_city, [job.delivery_state, job.delivery_zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
   if (src === "broker") { const b = brokers.find(b => String(b.id) === String(job.broker_id)); return b ? b.name : ""; }
-  if (src === "cf_total") {  // CF (first number in volume) × price per CF
+  if (src === "cf_total") {  // CF subtotal — explicit from the editable sheet, else CF × price
+    if (job.cf_total != null && job.cf_total !== "") return fmtMoney(job.cf_total);
     const m = String(job.volume || "").match(/[\d.]+/);
     const cf = m ? parseFloat(m[0]) : NaN, rate = Number(job.price_per_cf);
     return (isFinite(cf) && isFinite(rate) && cf && rate) ? fmtMoney(cf * rate) : "";
@@ -102,10 +136,13 @@ const TEXT_RULES = [
   { re: /^first avail/,               src: "fadd",            w: 80 },
   // charges → value in the "$" column
   { re: /^total estimated charges/,   src: "estimate",            dollar: true },
-  { re: /grand total/,                src: "estimate",            dollar: true },
+  { re: /grand total/,                src: "grand_total",         dollar: true },
   { re: /^partial payment/,           src: "deposit",             dollar: true },
-  { re: /^balance due/,               src: "bol_balance",         dollar: true },
-  { re: /^fuel surcharge/,            src: "fuel_surcharge_pct",  dollar: true },
+  { re: /prepaid deposit/,            src: "deposit",             dollar: true },
+  { re: /^balance due/,               src: "balance_due",         dollar: true },
+  { re: /new balance/,                src: "balance_due",         dollar: true },
+  { re: /^fuel surcharge/,            src: "fuel_amount",         dollar: true },
+  { re: /price adjust/,               src: "discount_1_amount",   dollar: true },
 ];
 
 async function detectFieldsFromText(pdfBytes, pageSizes) {
@@ -228,12 +265,13 @@ const btn = (primary) => ({ padding: "8px 14px", borderRadius: 8, border: primar
 const smallBtn = { padding: "5px 10px", borderRadius: 7, border: "1px solid #eee", background: "#fff", cursor: "pointer", fontSize: 12 };
 
 export function BolSection({ supabase, session, jobs = [], brokers = [], can = () => true, isAdmin = false, initialJobNumber = null, onConsumed }) {
-  const [view, setView] = useState(initialJobNumber != null ? "generate" : "list"); // list | editor | generate
+  const [view, setView] = useState(initialJobNumber != null ? "generate" : "list"); // list | editor | generate | documents
   const [genJobNumber] = useState(initialJobNumber);  // captured once
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null);  // template being edited
+  const [reopenDoc, setReopenDoc] = useState(null);  // saved BOL loaded back into the sheet
   const canEdit = isAdmin || can("bol", "create") || can("bol", "edit");
 
   // Clear the parent's pre-select once we've consumed it, so a later sidebar
@@ -260,14 +298,20 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
       onClose={() => { setView("list"); setEditing(null); load(); }} />;
   }
   if (view === "generate") {
-    return <GeneratePanel supabase={supabase} templates={templates.filter(t => t.status === "active")}
-      jobs={jobs} brokers={brokers} initialJobNumber={genJobNumber} onClose={() => setView("list")} />;
+    return <GeneratePanel supabase={supabase} session={session} templates={templates.filter(t => t.status === "active")}
+      jobs={jobs} brokers={brokers} initialJobNumber={genJobNumber} reopenDoc={reopenDoc}
+      onSaved={() => {}} onClose={() => { setReopenDoc(null); setView(reopenDoc ? "documents" : "list"); }} />;
+  }
+  if (view === "documents") {
+    return <DocumentsView supabase={supabase} canEdit={canEdit}
+      onReopen={(doc) => { setReopenDoc(doc); setView("generate"); }} onClose={() => setView("list")} />;
   }
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
-        <button style={btn(false)} onClick={() => setView("generate")}>Generate BOL</button>
+        <button style={btn(false)} onClick={() => setView("documents")}>Documents</button>
+        <button style={btn(false)} onClick={() => { setReopenDoc(null); setView("generate"); }}>Generate BOL</button>
         {canEdit && <button style={btn(true)} onClick={() => { setEditing(null); setView("editor"); }}>+ New template</button>}
       </div>
       {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
@@ -529,15 +573,53 @@ function TemplateEditor({ supabase, session, template, onClose }) {
   );
 }
 
-// ── Generate a BOL for a job ────────────────────────────────────────────────
-function GeneratePanel({ supabase, templates, jobs, brokers, initialJobNumber, onClose }) {
+// ── Editable generation sheet: live calculation + preview + save ────────────
+const inp = { width: "100%", padding: "7px 9px", borderRadius: 7, border: "1px solid #e5e5e5", fontSize: 13, boxSizing: "border-box" };
+const lbl = { fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 3 };
+const HEADER_FIELDS = [
+  { k: "customer",         l: "Client name" },
+  { k: "job_number",       l: "Job / Order #" },
+  { k: "pickup_address",   l: "Pickup address" },
+  { k: "pickup_cityzip",   l: "Pickup city/state/zip" },
+  { k: "delivery_address", l: "Delivery address" },
+  { k: "delivery_cityzip", l: "Delivery city/state/zip" },
+  { k: "pickup_date_from", l: "Pickup date" },
+  { k: "fadd",             l: "1st available delivery" },
+  { k: "delivery_date",    l: "Delivery date" },
+];
+const rid = () => "l" + Math.random().toString(36).slice(2, 8);
+
+function sheetFromJob(job) {
+  return {
+    customer: job?.customer || "", job_number: job?.job_number || "",
+    pickup_address: job?.pickup_address || "",
+    pickup_cityzip: [job?.pickup_city, [job?.pickup_state, job?.pickup_zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+    delivery_address: job?.delivery_address || "",
+    delivery_cityzip: [job?.delivery_city, [job?.delivery_state, job?.delivery_zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+    pickup_date_from: job?.pickup_date_from || "", fadd: job?.fadd || "", delivery_date: job?.delivery_date || "",
+    volume: job?.volume || "", price_per_cf: job?.price_per_cf ?? "", fuel_surcharge_pct: job?.fuel_surcharge_pct ?? "",
+    deposit: job?.deposit ?? "", notes: "", balance_override: "",
+  };
+}
+
+function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJobNumber, reopenDoc, onClose, onSaved }) {
   const preJob = initialJobNumber ? jobs.find(j => String(j.job_number) === String(initialJobNumber)) : null;
-  const [tplId, setTplId] = useState(templates[0]?.id || "");
+  const [tplId, setTplId] = useState(reopenDoc?.template_id ? String(reopenDoc.template_id) : (templates[0]?.id || ""));
   const [jobQuery, setJobQuery] = useState(preJob ? String(preJob.job_number || "") : "");
-  const [jobId, setJobId] = useState(preJob ? String(preJob.id) : "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
+  const [jobId, setJobId] = useState(reopenDoc?.job_id ? String(reopenDoc.job_id) : (preJob ? String(preJob.id) : ""));
+  const [f, setF] = useState(() => reopenDoc ? { ...sheetFromJob(null), ...(reopenDoc.values || {}) } : sheetFromJob(preJob));
+  const [extraCf, setExtraCf] = useState(() => (reopenDoc?.line_items || []).filter(l => l.type === "cf").map(l => ({ id: rid(), qty: l.qty ?? "", rate: l.rate ?? "" })));
+  const [charges, setCharges] = useState(() => (reopenDoc?.line_items || []).filter(l => l.type === "charge").map(l => ({ id: rid(), label: l.label ?? "", amount: l.amount ?? "" })));
+  const [discounts, setDiscounts] = useState(() => (reopenDoc?.line_items || []).filter(l => l.type === "discount").map(l => ({ id: rid(), label: l.label ?? "", amount: Math.abs(num(l.amount)) || "" })));
+  const [tplBytes, setTplBytes] = useState(null);
   const [blobUrl, setBlobUrl] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const jobPicked = !reopenDoc; // when reopening a saved BOL we keep its snapshot even if job list changes
+
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }));
 
   const jobMatches = useMemo(() => {
     const q = jobQuery.trim().toLowerCase();
@@ -545,60 +627,308 @@ function GeneratePanel({ supabase, templates, jobs, brokers, initialJobNumber, o
     return list.slice(0, 50);
   }, [jobQuery, jobs]);
 
-  async function generate() {
-    setError(null);
-    const tpl = templates.find(t => String(t.id) === String(tplId));
+  // Prefill the sheet from the picked job (not when reopening a saved snapshot).
+  useEffect(() => {
+    if (!jobPicked || !jobId) return;
     const job = jobs.find(j => String(j.id) === String(jobId));
+    if (job) { setF(sheetFromJob(job)); setExtraCf([]); setCharges([]); setDiscounts([]); }
+  }, [jobId]); // eslint-disable-line
+
+  // Load the template PDF bytes whenever the template changes.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setTplBytes(null);
+      const tpl = templates.find(t => String(t.id) === String(tplId));
+      if (!tpl?.pdf_path) return;
+      const { data } = await supabase.storage.from("bol-templates").download(tpl.pdf_path);
+      if (alive && data) setTplBytes(new Uint8Array(await data.arrayBuffer()));
+    })();
+    return () => { alive = false; };
+  }, [tplId, templates, supabase]);
+
+  // ── Live calculator (same math as the CRM: CF×rate, fuel = subtotal×%) ──────
+  const calc = useMemo(() => {
+    const baseCf = parseCfNum(f.volume);
+    const rate = num(f.price_per_cf);
+    const baseAmt = baseCf * rate;
+    const extraAmt = extraCf.reduce((s, l) => s + num(l.qty) * num(l.rate === "" || l.rate == null ? f.price_per_cf : l.rate), 0);
+    const extraCfQty = extraCf.reduce((s, l) => s + num(l.qty), 0);
+    const totalCf = baseCf + extraCfQty;
+    const cfSubtotal = baseAmt + extraAmt;
+    const fuelPct = num(f.fuel_surcharge_pct);
+    const fuelAmt = cfSubtotal * fuelPct / 100;
+    const chargesTotal = charges.reduce((s, l) => s + num(l.amount), 0);
+    const discountTotal = discounts.reduce((s, l) => s + Math.abs(num(l.amount)), 0);
+    const grandTotal = cfSubtotal + fuelAmt + chargesTotal - discountTotal;
+    const deposit = num(f.deposit);
+    const manualBal = f.balance_override !== "" && f.balance_override != null;
+    const balanceDue = manualBal ? num(f.balance_override) : grandTotal - deposit;
+    return { baseCf, rate, baseAmt, extraAmt, extraCfQty, totalCf, cfSubtotal, fuelPct, fuelAmt, chargesTotal, discountTotal, grandTotal, deposit, balanceDue };
+  }, [f, extraCf, charges, discounts]);
+
+  // The "effective job" fed to the stamper: base job + edits + computed + slots.
+  const effJob = useMemo(() => {
+    const job = jobs.find(j => String(j.id) === String(jobId)) || {};
+    const e = { ...job };
+    for (const hf of HEADER_FIELDS) e[hf.k] = f[hf.k] ?? "";
+    e.volume = f.volume; e.price_per_cf = f.price_per_cf; e.fuel_surcharge_pct = f.fuel_surcharge_pct; e.deposit = f.deposit;
+    e.cf_total = calc.cfSubtotal; e.fuel_amount = calc.fuelAmt; e.grand_total = calc.grandTotal;
+    e.estimate = calc.grandTotal; e.balance_due = calc.balanceDue; e.bol_balance = calc.balanceDue;
+    e.notes = f.notes || "";
+    extraCf.slice(0, 2).forEach((l, i) => {
+      const r = num(l.rate === "" || l.rate == null ? f.price_per_cf : l.rate);
+      e[`add_cf_${i + 1}_qty`] = l.qty; e[`add_cf_${i + 1}_rate`] = r || ""; e[`add_cf_${i + 1}_amount`] = num(l.qty) * r;
+    });
+    charges.slice(0, 4).forEach((l, i) => { e[`charge_${i + 1}_label`] = l.label || ""; e[`charge_${i + 1}_amount`] = l.amount === "" ? "" : num(l.amount); });
+    discounts.slice(0, 2).forEach((l, i) => { e[`discount_${i + 1}_label`] = l.label || ""; e[`discount_${i + 1}_amount`] = l.amount === "" ? "" : -Math.abs(num(l.amount)); });
+    return e;
+  }, [f, extraCf, charges, discounts, calc, jobId, jobs]);
+
+  const tpl = templates.find(t => String(t.id) === String(tplId));
+  const snapshot = JSON.stringify([effJob, tpl?.field_map]);
+
+  // Debounced live preview: re-stamp shortly after any edit settles.
+  useEffect(() => {
+    if (!tplBytes || !tpl) return;
+    const h = setTimeout(async () => {
+      try {
+        const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers);
+        const url = URL.createObjectURL(new Blob([out], { type: "application/pdf" }));
+        setBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
+      } catch (e) { /* keep previous preview */ }
+    }, 450);
+    return () => clearTimeout(h);
+  }, [tplBytes, snapshot]); // eslint-disable-line
+
+  useEffect(() => () => { if (blobUrl) URL.revokeObjectURL(blobUrl); }, []); // eslint-disable-line
+
+  async function save(status) {
+    setError(null); setNotice(null);
     if (!tpl) { setError("Pick a template."); return; }
-    if (!job) { setError("Pick a job."); return; }
-    if (!tpl.pdf_path) { setError("That template has no PDF."); return; }
-    setBusy(true);
+    if (!tplBytes) { setError("Template PDF still loading — try again."); return; }
+    setSaving(true);
     try {
-      const { data, error: dErr } = await supabase.storage.from("bol-templates").download(tpl.pdf_path);
-      if (dErr) throw dErr;
-      const bytes = new Uint8Array(await data.arrayBuffer());
-      const out = await generateFilledPdf(bytes, tpl.field_map || [], job, brokers);
-      const blob = new Blob([out], { type: "application/pdf" });
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-      setBlobUrl(URL.createObjectURL(blob));
+      const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers);
+      const safe = String(f.job_number || f.customer || "bol").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40);
+      const path = `${safe}-${Date.now()}.pdf`;
+      const { error: upErr } = await supabase.storage.from("bol-generated").upload(path, out, { contentType: "application/pdf", upsert: true });
+      if (upErr) throw upErr;
+      const line_items = [
+        ...extraCf.map(l => ({ type: "cf", label: "Additional CF", qty: num(l.qty), rate: num(l.rate === "" || l.rate == null ? f.price_per_cf : l.rate), amount: num(l.qty) * num(l.rate === "" || l.rate == null ? f.price_per_cf : l.rate) })),
+        ...charges.map(l => ({ type: "charge", label: l.label, amount: num(l.amount) })),
+        ...discounts.map(l => ({ type: "discount", label: l.label, amount: -Math.abs(num(l.amount)) })),
+      ];
+      const job = jobs.find(j => String(j.id) === String(jobId));
+      const { error: insErr } = await supabase.from("bol_documents").insert({
+        customer: f.customer || job?.customer || null, job_id: job?.id || null, job_number: f.job_number || null,
+        template_id: tpl.id, company_name: tpl.company_name,
+        values: { ...f, ...calc }, line_items, pdf_path: path, status,
+        created_by: session?.user?.email || null,
+      });
+      if (insErr) throw insErr;
+      setNotice(status === "final" ? "Saved as final — it's in Documents." : "Draft saved to Documents.");
+      onSaved && onSaved();
     } catch (e) { setError(e.message); }
-    setBusy(false);
+    setSaving(false);
+  }
+
+  const computed = [
+    ["CF total", calc.cfSubtotal], ["Fuel $ (" + (calc.fuelPct || 0) + "%)", calc.fuelAmt],
+    ["Other charges", calc.chargesTotal], ["Discounts", -calc.discountTotal],
+    ["Grand total", calc.grandTotal], ["Deposit", calc.deposit], ["Balance due", calc.balanceDue],
+  ];
+  const lineBtn = { padding: "4px 9px", borderRadius: 6, border: "1px dashed #cbd5e1", background: "#f8fafc", cursor: "pointer", fontSize: 12, color: "#334155" };
+  const delX = { border: "none", background: "transparent", color: "#b91c1c", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 4px" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <button style={smallBtn} onClick={onClose}>← Back</button>
+        <h3 style={{ margin: 0, fontSize: 16 }}>{reopenDoc ? "Edit BOL" : "Generate BOL"}</h3>
+        <span style={{ flex: 1 }} />
+        <button style={btn(false)} disabled={saving} onClick={() => save("draft")}>Save draft</button>
+        <button style={btn(true)} disabled={saving} onClick={() => save("final")}>{saving ? "Saving…" : "Save as final"}</button>
+      </div>
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
+      {notice && <div style={{ background: "#EAF3DE", border: "1px solid #cfe6b4", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#3B6D11", marginBottom: 12 }}>{notice}</div>}
+
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+        {/* ── LEFT: editable sheet ─────────────────────────────────────────── */}
+        <div style={{ width: 380, flexShrink: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
+            <label style={lbl}>Company template</label>
+            <select value={tplId} onChange={e => setTplId(e.target.value)} style={{ ...inp, marginBottom: 10 }}>
+              <option value="">— select —</option>
+              {templates.map(t => <option key={t.id} value={t.id}>{t.company_name}</option>)}
+            </select>
+            {templates.length === 0 && <div style={{ fontSize: 12, color: "#b91c1c", marginBottom: 8 }}>No active templates. Create and activate one first.</div>}
+            {!reopenDoc && (<>
+              <label style={lbl}>Job (loads its data — all editable below)</label>
+              <input value={jobQuery} onChange={e => setJobQuery(e.target.value)} placeholder="Search job # or client" style={{ ...inp, marginBottom: 6 }} />
+              <select value={jobId} onChange={e => setJobId(e.target.value)} size={5} style={{ ...inp, padding: 4 }}>
+                {jobMatches.map(j => <option key={j.id} value={j.id}>{(j.job_number || "—") + " · " + (j.customer || "")}</option>)}
+              </select>
+            </>)}
+          </div>
+
+          {/* client & route */}
+          <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", marginBottom: 10 }}>Client & route</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {HEADER_FIELDS.map(hf => (
+                <div key={hf.k} style={{ gridColumn: hf.k.includes("address") || hf.k === "customer" ? "1 / -1" : "auto" }}>
+                  <label style={lbl}>{hf.l}</label>
+                  <input value={f[hf.k] ?? ""} onChange={e => set(hf.k, e.target.value)} style={inp} />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* charges calculator */}
+          <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", marginBottom: 10 }}>Charges</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 4 }}>
+              <div><label style={lbl}>Base CF</label><input value={f.volume ?? ""} onChange={e => set("volume", e.target.value)} style={inp} /></div>
+              <div><label style={lbl}>Rate / CF</label><input value={f.price_per_cf ?? ""} onChange={e => set("price_per_cf", e.target.value)} style={inp} /></div>
+              <div><label style={lbl}>Fuel %</label><input value={f.fuel_surcharge_pct ?? ""} onChange={e => set("fuel_surcharge_pct", e.target.value)} style={inp} /></div>
+            </div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>Base CF stays untouched — extra CF goes on its own line.</div>
+
+            {/* extra CF lines */}
+            {extraCf.map((l, i) => (
+              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 6, alignItems: "end" }}>
+                <div><label style={lbl}>+ Extra CF {i + 1} — qty</label><input value={l.qty} onChange={e => setExtraCf(a => a.map(x => x.id === l.id ? { ...x, qty: e.target.value } : x))} style={inp} /></div>
+                <div><label style={lbl}>rate (blank = base)</label><input value={l.rate} onChange={e => setExtraCf(a => a.map(x => x.id === l.id ? { ...x, rate: e.target.value } : x))} placeholder={String(f.price_per_cf || "")} style={inp} /></div>
+                <button style={delX} title="Remove" onClick={() => setExtraCf(a => a.filter(x => x.id !== l.id))}>✕</button>
+              </div>
+            ))}
+            {/* other charges */}
+            {charges.map((l, i) => (
+              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr auto", gap: 8, marginBottom: 6, alignItems: "end" }}>
+                <div><label style={lbl}>Charge {i + 1}</label><input value={l.label} onChange={e => setCharges(a => a.map(x => x.id === l.id ? { ...x, label: e.target.value } : x))} placeholder="e.g. packing, stairs" style={inp} /></div>
+                <div><label style={lbl}>amount $</label><input value={l.amount} onChange={e => setCharges(a => a.map(x => x.id === l.id ? { ...x, amount: e.target.value } : x))} style={inp} /></div>
+                <button style={delX} title="Remove" onClick={() => setCharges(a => a.filter(x => x.id !== l.id))}>✕</button>
+              </div>
+            ))}
+            {/* discounts */}
+            {discounts.map((l, i) => (
+              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr auto", gap: 8, marginBottom: 6, alignItems: "end" }}>
+                <div><label style={lbl}>Discount/adjust {i + 1}</label><input value={l.label} onChange={e => setDiscounts(a => a.map(x => x.id === l.id ? { ...x, label: e.target.value } : x))} placeholder="e.g. broker adjustment" style={inp} /></div>
+                <div><label style={lbl}>amount $</label><input value={l.amount} onChange={e => setDiscounts(a => a.map(x => x.id === l.id ? { ...x, amount: e.target.value } : x))} style={inp} /></div>
+                <button style={delX} title="Remove" onClick={() => setDiscounts(a => a.filter(x => x.id !== l.id))}>✕</button>
+              </div>
+            ))}
+
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0 12px" }}>
+              <button style={lineBtn} onClick={() => setExtraCf(a => [...a, { id: rid(), qty: "", rate: "" }])}>+ Extra CF</button>
+              <button style={lineBtn} onClick={() => setCharges(a => [...a, { id: rid(), label: "", amount: "" }])}>+ Charge</button>
+              <button style={lineBtn} onClick={() => setDiscounts(a => [...a, { id: rid(), label: "", amount: "" }])}>+ Discount</button>
+            </div>
+
+            {/* live computed totals */}
+            <div style={{ background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
+              {computed.map(([k, v]) => (
+                <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0", fontWeight: k === "Grand total" || k === "Balance due" ? 700 : 400, color: k === "Balance due" ? "#0f172a" : "#475569", borderTop: k === "Grand total" ? "1px solid #e2e8f0" : "none", marginTop: k === "Grand total" ? 4 : 0, paddingTop: k === "Grand total" ? 7 : 3 }}>
+                  <span>{k}</span><span>$ {fmtMoney(v) || "0.00"}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: 8 }}>
+                <label style={lbl}>Manual balance override (optional)</label>
+                <input value={f.balance_override ?? ""} onChange={e => set("balance_override", e.target.value)} placeholder="blank = grand total − deposit" style={inp} />
+              </div>
+            </div>
+          </div>
+
+          {/* notes */}
+          <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
+            <label style={lbl}>Notes / free text (stamped where mapped)</label>
+            <textarea value={f.notes ?? ""} onChange={e => set("notes", e.target.value)} rows={3} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+        </div>
+
+        {/* ── RIGHT: live preview ──────────────────────────────────────────── */}
+        <div style={{ flex: 1, minWidth: 360, position: "sticky", top: 12 }}>
+          {blobUrl ? (
+            <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                <a href={blobUrl} download="bol.pdf" style={{ ...btn(false), textDecoration: "none" }}>⬇ Download</a>
+                <a href={blobUrl} target="_blank" rel="noreferrer" style={{ ...btn(false), textDecoration: "none" }}>Open tab</a>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>Preview updates live as you edit.</span>
+              </div>
+              <object data={blobUrl} type="application/pdf" style={{ width: "100%", height: 760, border: "1px solid #ddd", borderRadius: 8 }} />
+            </>
+          ) : <div style={{ border: "2px dashed #e5e5e5", borderRadius: 12, padding: 48, textAlign: "center", color: "#aaa", fontSize: 14 }}>{busy ? "Loading…" : "Pick a template and job — the live preview appears here."}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Documents: every saved BOL (legal backup), searchable by customer ───────
+function DocumentsView({ supabase, canEdit, onReopen, onClose }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [q, setQ] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    const { data, error } = await supabase.from("bol_documents").select("*").order("created_at", { ascending: false }).limit(500);
+    if (error) setError(error.message); else setRows(data || []);
+    setLoading(false);
+  }, [supabase]);
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return s ? rows.filter(r => [r.customer, r.job_number, r.company_name].filter(Boolean).some(v => String(v).toLowerCase().includes(s))) : rows;
+  }, [rows, q]);
+
+  function urlFor(r) { return r.pdf_path ? supabase.storage.from("bol-generated").getPublicUrl(r.pdf_path).data.publicUrl : null; }
+  async function remove(r) {
+    if (!window.confirm(`Delete this BOL for ${r.customer || "—"}? This removes the legal record.`)) return;
+    await supabase.from("bol_documents").delete().eq("id", r.id);
+    if (r.pdf_path) await supabase.storage.from("bol-generated").remove([r.pdf_path]);
+    load();
   }
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
         <button style={smallBtn} onClick={onClose}>← Back</button>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Generate BOL</h3>
+        <h3 style={{ margin: 0, fontSize: 16 }}>Documents</h3>
+        <span style={{ flex: 1 }} />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search customer, job #, company"
+          style={{ ...inp, width: 280 }} />
       </div>
       {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <div style={{ width: 320, flexShrink: 0, background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 16 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: "#888" }}>Company template</label>
-          <select value={tplId} onChange={e => setTplId(e.target.value)} style={{ width: "100%", padding: 9, borderRadius: 8, border: "1px solid #e5e5e5", margin: "5px 0 14px", fontSize: 13 }}>
-            <option value="">— select —</option>
-            {templates.map(t => <option key={t.id} value={t.id}>{t.company_name}</option>)}
-          </select>
-          {templates.length === 0 && <div style={{ fontSize: 12, color: "#b91c1c", marginBottom: 12 }}>No active templates. Create and activate one first.</div>}
-          <label style={{ fontSize: 12, fontWeight: 600, color: "#888" }}>Job</label>
-          <input value={jobQuery} onChange={e => setJobQuery(e.target.value)} placeholder="Search job # or client"
-            style={{ width: "100%", padding: 9, borderRadius: 8, border: "1px solid #e5e5e5", margin: "5px 0", fontSize: 13, boxSizing: "border-box" }} />
-          <select value={jobId} onChange={e => setJobId(e.target.value)} size={8} style={{ width: "100%", borderRadius: 8, border: "1px solid #e5e5e5", fontSize: 13, padding: 4 }}>
-            {jobMatches.map(j => <option key={j.id} value={j.id}>{(j.job_number || "—") + " · " + (j.customer || "")}</option>)}
-          </select>
-          <button style={{ ...btn(true), width: "100%", marginTop: 14 }} disabled={busy} onClick={generate}>{busy ? "Generating…" : "Generate"}</button>
-        </div>
-        <div style={{ flex: 1, minWidth: 360 }}>
-          {blobUrl ? (
-            <>
-              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                <a href={blobUrl} download="bol.pdf" style={{ ...btn(true), textDecoration: "none" }}>⬇ Download PDF</a>
-                <a href={blobUrl} target="_blank" rel="noreferrer" style={{ ...btn(false), textDecoration: "none" }}>Open in new tab</a>
-              </div>
-              <object data={blobUrl} type="application/pdf" style={{ width: "100%", height: 720, border: "1px solid #ddd", borderRadius: 8 }} />
-            </>
-          ) : <div style={{ border: "2px dashed #e5e5e5", borderRadius: 12, padding: 48, textAlign: "center", color: "#aaa", fontSize: 14 }}>The generated BOL preview will appear here.</div>}
-        </div>
+      <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr>{["Date", "Customer", "Job #", "Company", "Status", ""].map((h, i) =>
+            <th key={i} style={{ padding: "10px 12px", fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", textAlign: i === 5 ? "right" : "left", borderBottom: "1px solid #f3f3f3" }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {loading ? <tr><td colSpan={6} style={{ padding: 14, fontSize: 13 }}>Loading…</td></tr>
+              : filtered.length === 0 ? <tr><td colSpan={6} style={{ padding: 14, fontSize: 13, color: "#888" }}>No saved BOLs yet.</td></tr>
+              : filtered.map(r => (
+                <tr key={r.id}>
+                  <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6", whiteSpace: "nowrap" }}>{fmtDate(r.created_at) || String(r.created_at || "").slice(0, 10)}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13, borderBottom: "1px solid #f6f6f6" }}>{r.customer || "—"}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6" }}>{r.job_number || "—"}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6" }}>{r.company_name || "—"}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f6f6f6" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: r.status === "final" ? "#EAF3DE" : "#FEF3C7", color: r.status === "final" ? "#3B6D11" : "#92760B" }}>{r.status}</span>
+                  </td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", whiteSpace: "nowrap", borderBottom: "1px solid #f6f6f6" }}>
+                    {urlFor(r) && <a href={urlFor(r)} target="_blank" rel="noreferrer" style={{ ...smallBtn, textDecoration: "none", marginRight: 6 }}>View</a>}
+                    <button style={{ ...smallBtn, marginRight: 6 }} onClick={() => onReopen(r)}>Reopen</button>
+                    {canEdit && <button style={{ ...smallBtn, color: "#b91c1c" }} onClick={() => remove(r)}>Delete</button>}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
