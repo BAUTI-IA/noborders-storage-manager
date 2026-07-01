@@ -1756,41 +1756,68 @@ const tripManifestLink = (...args) => "https://wa.me/?text=" + encodeURIComponen
 
 // Placeholder street values that aren't real addresses and break geocoding.
 const isPlaceholderAddr = (a) => /^(tbd|t\.?b\.?d\.?|n\/?a|na|none|-+|\.+|\?+|unknown|pending|same|house)$/i.test((a || "").trim());
-// Best human-readable delivery address for a job (2-letter state → full name so the
-// geocoder doesn't confuse "OK"/"ID"/etc. with words).
-function deliveryQuery(j) {
-  const st = (j.delivery_state || "").trim();
+// Human-readable address (2-letter state → full name so the geocoder doesn't
+// confuse "OK"/"ID"/etc. with words).
+function fmtPlace({ address, city, state, zip }) {
+  const st = (state || "").trim();
   const stateName = US_CODE_TO_NAME[st.toUpperCase()] || st;
-  return [j.delivery_address, j.delivery_city, stateName, j.delivery_zip].filter(Boolean).join(", ");
+  return [address, city, stateName, zip].filter(Boolean).join(", ");
 }
 // Geocoding candidates from most to least specific, so a bad/placeholder street
 // still resolves to the city, zip, or at least the state centroid.
-function deliveryGeocodeCandidates(j) {
-  const st = (j.delivery_state || "").trim();
+function geoCandidates({ address, city, state, zip }) {
+  const st = (state || "").trim();
   const stateName = US_CODE_TO_NAME[st.toUpperCase()] || st;
-  const addr = isPlaceholderAddr(j.delivery_address) ? "" : (j.delivery_address || "").trim();
-  const city = (j.delivery_city || "").trim();
-  const zip = (j.delivery_zip || "").trim();
+  const addr = isPlaceholderAddr(address) ? "" : (address || "").trim();
+  const c = (city || "").trim();
+  const z = (zip || "").trim();
   const out = [];
   const push = (parts) => { const q = parts.filter(Boolean).join(", "); if (q && !out.includes(q)) out.push(q); };
-  push([addr, city, stateName, zip]);
-  push([city, stateName, zip]);
-  push([zip, stateName]);
-  push([city, stateName]);
+  push([addr, c, stateName, z]);
+  push([c, stateName, z]);
+  push([z, stateName]);
+  push([c, stateName]);
   push([stateName]);
   return out;
 }
-// One route stop per job, in trip order (jobs with no delivery location are kept
-// so the popup can still list them, flagged as not locatable).
-function tripRouteStops(jobsIn) {
-  return (jobsIn || [])
-    .map(j => ({ jobNumber: j.job_number || "(job)", customer: j.customer || "", query: deliveryQuery(j), candidates: deliveryGeocodeCandidates(j) }));
+function deliveryQuery(j) {
+  return fmtPlace({ address: j.delivery_address, city: j.delivery_city, state: j.delivery_state, zip: j.delivery_zip });
 }
-// Google Maps directions link through the jobs that have a delivery location, in trip order.
-function tripRouteLink(jobsIn) {
-  const stops = tripRouteStops(jobsIn).filter(s => s.candidates.length);
-  if (stops.length === 0) return null;
-  return "https://www.google.com/maps/dir/" + stops.map(s => encodeURIComponent(s.query || s.candidates[0])).join("/");
+// Where a job was actually loaded from: storage unit → warehouse → the job's own
+// pickup address (matching how routeUrl resolves origin). Returns null if unknown.
+function jobOrigin(j, storageById) {
+  const st = j.storage_id ? ((storageById || {})[j.storage_id] || null) : null;
+  if (st && (st.address || st.state || st.zip)) {
+    return { kind: "storage", label: [st.brand, st.unit].filter(Boolean).join(" ") || "Storage",
+      query: fmtPlace({ address: st.address, state: st.state, zip: st.zip }),
+      candidates: geoCandidates({ address: st.address, state: st.state, zip: st.zip }) };
+  }
+  if (j.warehouse) {
+    return { kind: "warehouse", label: `Warehouse ${j.warehouse}`, query: j.warehouse, candidates: [j.warehouse].filter(Boolean) };
+  }
+  const candidates = geoCandidates({ address: j.pickup_address, city: j.pickup_city, state: j.pickup_state, zip: j.pickup_zip });
+  if (!candidates.length) return null;
+  return { kind: "pickup", label: "Pickup", query: fmtPlace({ address: j.pickup_address, city: j.pickup_city, state: j.pickup_state, zip: j.pickup_zip }), candidates };
+}
+// The full journey the truck made: for each stop (in trip order) a pickup/origin
+// waypoint (where it was loaded) followed by the delivery waypoint. Jobs with no
+// delivery location still yield a (non-locatable) delivery waypoint so they're listed.
+function tripRouteWaypoints(jobsIn, storageById) {
+  const wps = [];
+  (jobsIn || []).forEach((j, idx) => {
+    const jobNumber = j.job_number || "(job)";
+    const customer = j.customer || "";
+    const o = jobOrigin(j, storageById);
+    if (o) wps.push({ type: "pickup", stop: idx + 1, jobNumber, customer, sourceKind: o.kind, sourceLabel: o.label, query: o.query, candidates: o.candidates });
+    wps.push({ type: "delivery", stop: idx + 1, jobNumber, customer, query: deliveryQuery(j), candidates: geoCandidates({ address: j.delivery_address, city: j.delivery_city, state: j.delivery_state, zip: j.delivery_zip }) });
+  });
+  return wps;
+}
+// Google Maps directions link through every locatable waypoint, in journey order.
+function tripRouteLink(jobsIn, storageById) {
+  const wps = tripRouteWaypoints(jobsIn, storageById).filter(w => w.candidates.length);
+  if (wps.length < 2) return null;
+  return "https://www.google.com/maps/dir/" + wps.map(w => encodeURIComponent(w.query || w.candidates[0])).join("/");
 }
 
 // WhatsApp "trip update" sent to the driver group when a job is added mid-trip.
@@ -2109,10 +2136,12 @@ function Modal({ title, onClose, children, footer }) {
   );
 }
 
-// In-app popup that geocodes a trip's delivery stops (via /api/geocode → OSM
-// Nominatim) and draws numbered markers + the route legs in trip order on the US map.
-function TripRouteModal({ title, stops, googleLink, onClose }) {
-  const [pts, setPts] = useState(null);   // resolved stops, or null while geocoding
+// In-app popup that geocodes a trip's full journey (via /api/geocode → OSM
+// Nominatim) — each stop's pickup/origin (storage, warehouse, or the job's pickup)
+// and its delivery — and draws the route legs in order on the US map.
+const PICKUP_COLOR = "#1A8A4E", DELIVERY_COLOR = "#111";
+function TripRouteModal({ title, waypoints, googleLink, onClose }) {
+  const [pts, setPts] = useState(null);   // resolved waypoints, or null while geocoding
   const [err, setErr] = useState(null);
 
   useEffect(() => {
@@ -2120,16 +2149,16 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
     (async () => {
       try {
         const out = [];
-        for (const s of stops) {
-          let resolved = { ...s, failed: true };
+        for (const w of waypoints) {
+          let resolved = { ...w, failed: true };
           // Try candidates from most to least specific; stop at the first hit.
-          for (let i = 0; i < s.candidates.length; i++) {
+          for (let i = 0; i < w.candidates.length; i++) {
             try {
-              const r = await fetch("/api/geocode?q=" + encodeURIComponent(s.candidates[i]));
+              const r = await fetch("/api/geocode?q=" + encodeURIComponent(w.candidates[i]));
               if (r.ok) {
                 const d = await r.json();
                 if (d && d.lat != null && d.lng != null) {
-                  resolved = { ...s, lat: Number(d.lat), lng: Number(d.lng), resolvedLabel: d.label, approx: i > 0 };
+                  resolved = { ...w, lat: Number(d.lat), lng: Number(d.lng), resolvedLabel: d.label, approx: i > 0 };
                   break;
                 }
               }
@@ -2138,7 +2167,7 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
           }
           if (cancelled) return;
           out.push(resolved);
-          setPts([...out]);   // progressive reveal as each stop resolves
+          setPts([...out]);   // progressive reveal as each waypoint resolves
         }
       } catch (e) {
         if (!cancelled) setErr(e?.message || "Error geolocating stops");
@@ -2147,14 +2176,18 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
     return () => { cancelled = true; };
   }, []);
 
-  const done = pts != null && pts.length === stops.length;
-  const located = (pts || []).filter(p => p.lat != null && p.lng != null);
+  const done = pts != null && pts.length === waypoints.length;
+  // Sequential route number for each locatable waypoint (shared by map + list).
+  let n = 0;
+  const rows = (pts || []).map(p => { const ok = p.lat != null && p.lng != null; return { ...p, num: ok ? ++n : null }; });
+  const located = rows.filter(r => r.num != null);
   const footer = (
     <>
       {googleLink && <a href={googleLink} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn>Open in Google Maps</Btn></a>}
       <Btn primary onClick={onClose}>Close</Btn>
     </>
   );
+  const originText = (p) => p.type === "pickup" ? `Pickup${p.sourceLabel && p.sourceLabel !== "Pickup" ? " · " + p.sourceLabel : ""}` : "Delivery";
 
   return (
     <Modal title={`Route · ${title}`} onClose={onClose} footer={footer}>
@@ -2162,7 +2195,7 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
         <div style={{ padding:"20px", textAlign:"center", color:"#A32D2D", fontSize:13 }}>{err}</div>
       ) : (
         <>
-          <div style={{ position:"relative", background:"#eaf3fb", border:"1px solid #efefef", borderRadius:12, overflow:"hidden", marginBottom:12 }}>
+          <div style={{ position:"relative", background:"#eaf3fb", border:"1px solid #efefef", borderRadius:12, overflow:"hidden", marginBottom:8 }}>
             <ComposableMap projection="geoAlbersUsa" projectionConfig={{ scale: 1000 }} width={800} height={500} style={{ width:"100%", height:"auto" }}>
               <Geographies geography={US_GEO_URL}>
                 {({ geographies }) => geographies.map(geo => (
@@ -2173,35 +2206,44 @@ function TripRouteModal({ title, stops, googleLink, onClose }) {
                   }} />
                 ))}
               </Geographies>
-              {/* route legs, in order */}
+              {/* route legs, in journey order — dashed when heading to a pickup (loading), solid when delivering */}
               {located.slice(1).map((p, i) => (
                 <Line key={"leg" + i} from={[located[i].lng, located[i].lat]} to={[p.lng, p.lat]}
-                  stroke="#185FA5" strokeWidth={2} strokeLinecap="round" strokeDasharray="5 4" fill="none" />
+                  stroke="#185FA5" strokeWidth={2} strokeLinecap="round" strokeDasharray={p.type === "pickup" ? "4 4" : undefined} fill="none" />
               ))}
-              {/* numbered stop markers */}
+              {/* numbered waypoint markers, colored by type */}
               {located.map((p, i) => (
                 <Marker key={"mk" + i} coordinates={[p.lng, p.lat]}>
                   <g>
-                    <circle r={9} fill="#111" stroke="#fff" strokeWidth={1.6} />
-                    <text textAnchor="middle" y={3} style={{ fontSize:9, fontWeight:800, fill:"#fff" }}>{i + 1}</text>
+                    <circle r={9} fill={p.type === "pickup" ? PICKUP_COLOR : DELIVERY_COLOR} stroke="#fff" strokeWidth={1.6} />
+                    <text textAnchor="middle" y={3} style={{ fontSize:9, fontWeight:800, fill:"#fff" }}>{p.num}</text>
                   </g>
                 </Marker>
               ))}
             </ComposableMap>
           </div>
-          {!done && <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>Geolocating stops… ({(pts || []).length}/{stops.length})</div>}
+          <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", marginBottom:10 }}>
+            <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:PICKUP_COLOR }} />Pickup / loaded from</span>
+            <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:DELIVERY_COLOR }} />Delivery</span>
+          </div>
+          {!done && <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>Geolocating stops… ({(pts || []).length}/{waypoints.length})</div>}
           <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden" }}>
-            {(pts || []).map((p, i) => (
+            {rows.map((p, i) => (
               <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12.5 }}>
-                <span style={{ width:20, height:20, borderRadius:"50%", background: p.failed ? "#ccc" : "#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{i + 1}</span>
+                <span style={{ width:20, height:20, borderRadius:"50%", background: p.num == null ? "#ccc" : (p.type === "pickup" ? PICKUP_COLOR : DELIVERY_COLOR), color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{p.num ?? "–"}</span>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div><b style={{ fontFamily:"monospace" }}>{p.jobNumber}</b>{p.customer ? ` · ${p.customer}` : ""}{p.approx && !p.failed && <span style={{ fontSize:10.5, fontWeight:600, color:"#854F0B", background:"#FAEEDA", borderRadius:20, padding:"1px 7px", marginLeft:6 }}>approx.</span>}</div>
-                  <div style={{ color: p.failed ? "#A32D2D" : "#888", marginTop:1 }}>{p.failed ? (p.candidates.length ? `Couldn't locate: ${p.query}` : "No delivery address on file") : (p.resolvedLabel || p.query)}</div>
+                  <div>
+                    <span style={{ fontSize:10.5, fontWeight:700, color: p.type === "pickup" ? "#1A6E3E" : "#333", textTransform:"uppercase", letterSpacing:"0.03em" }}>{originText(p)}</span>
+                    <span style={{ color:"#bbb" }}> · </span>
+                    <b style={{ fontFamily:"monospace" }}>{p.jobNumber}</b>{p.customer ? ` · ${p.customer}` : ""}
+                    {p.approx && p.num != null && <span style={{ fontSize:10.5, fontWeight:600, color:"#854F0B", background:"#FAEEDA", borderRadius:20, padding:"1px 7px", marginLeft:6 }}>approx.</span>}
+                  </div>
+                  <div style={{ color: p.num == null ? "#A32D2D" : "#888", marginTop:1 }}>{p.num == null ? (p.candidates.length ? `Couldn't locate: ${p.query}` : (p.type === "pickup" ? "No pickup location on file" : "No delivery address on file")) : (p.resolvedLabel || p.query)}</div>
                 </div>
               </div>
             ))}
           </div>
-          {done && located.length < 2 && <div style={{ fontSize:12, color:"#A32D2D", marginTop:8 }}>Need at least 2 located stops to draw a route.</div>}
+          {done && located.length < 2 && <div style={{ fontSize:12, color:"#A32D2D", marginTop:8 }}>Need at least 2 located points to draw a route.</div>}
         </>
       )}
     </Modal>
@@ -3093,7 +3135,7 @@ export default function App() {
   const [unplannedForm, setUnplannedForm] = useState(EMPTY_UNPLANNED);
   const [tripBusy, setTripBusy] = useState(false);
   const [tripCompleteModal, setTripCompleteModal] = useState(null); // { trip } completion summary
-  const [tripRouteModal, setTripRouteModal] = useState(null); // { title, stops, googleLink } route popup
+  const [tripRouteModal, setTripRouteModal] = useState(null); // { title, waypoints, googleLink } route popup
   const [completeDropTarget, setCompleteDropTarget] = useState("");
   const [tripWaLink, setTripWaLink] = useState(null);         // { href, label } pending driver notification
   const [showTruckModal, setShowTruckModal] = useState(false);
@@ -7273,9 +7315,9 @@ export default function App() {
                         <div style={{ display:"flex", gap:6, flexWrap:"wrap", justifyContent:"flex-end" }}>
                           <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Manage Loads</Btn>
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit Trip</Btn>
-                          {(() => { const stops = tripRouteStops(c.jobsIn); return stops.length
-                            ? <Btn onClick={() => setTripRouteModal({ title: t.trip_number || `#${t.id}`, stops, googleLink: tripRouteLink(c.jobsIn) })} style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>
-                            : <Btn disabled title="No jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>; })()}
+                          {c.jobsIn.length
+                            ? <Btn onClick={() => setTripRouteModal({ title: t.trip_number || `#${t.id}`, waypoints: tripRouteWaypoints(c.jobsIn, storageById), googleLink: tripRouteLink(c.jobsIn, storageById) })} style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>
+                            : <Btn disabled title="No jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>}
                         </div>
                       </div>
                       {c.cap > 0 ? (
@@ -10895,7 +10937,7 @@ export default function App() {
       })()}
 
       {tripRouteModal && (
-        <TripRouteModal title={tripRouteModal.title} stops={tripRouteModal.stops} googleLink={tripRouteModal.googleLink} onClose={() => setTripRouteModal(null)} />
+        <TripRouteModal title={tripRouteModal.title} waypoints={tripRouteModal.waypoints} googleLink={tripRouteModal.googleLink} onClose={() => setTripRouteModal(null)} />
       )}
 
       {showTripModal && (() => {
