@@ -5441,7 +5441,16 @@ export default function App() {
         volume_cf: Math.round(parseCf(j.volume)),
         fadd: j.fadd || "",
         status: j.status || "",
-        origin: jobOrigin(j, storageById)?.label || "",
+        // Load point with its real location: the customer's own pickup address,
+        // or the storage unit / warehouse where the job is stored — so the AI
+        // can judge whether picking it up fits the trip's route, not just the delivery.
+        origin: (() => {
+          const o = jobOrigin(j, storageById);
+          if (!o) return "";
+          if (o.kind === "pickup") return "Customer pickup at: " + (o.query || "unknown address");
+          if (o.kind === "storage") return `Storage unit "${o.label}" at: ${o.query || "unknown location"}`;
+          return o.label; // company warehouse — "Warehouse Indiana" / "Warehouse New Jersey"
+        })(),
         delivery: [j.delivery_city, j.delivery_state, j.delivery_zip].filter(Boolean).join(", "),
         delivery_state: j.delivery_state || "",
       })),
