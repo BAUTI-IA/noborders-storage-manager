@@ -4178,7 +4178,8 @@ export default function App() {
     const activeParts = jobs.filter(j => !j.date_out);
     const deliveredParts = jobs.filter(j => j.date_out);
     const occupied = new Set(activeParts.map(j => j.storage_id));
-    const withCost = records.filter(r => occupied.has(r.id) && r.monthly_cost && Number(r.monthly_cost) > 0);
+    // Expenses accrue on every rented unit until it's closed, even with no job inside.
+    const withCost = records.filter(r => r.space_type !== "warehouse" && r.situation !== "Close" && r.monthly_cost && Number(r.monthly_cost) > 0);
     const totalCost = withCost.reduce((sum, r) => sum + Number(r.monthly_cost), 0);
     return {
       activeJobs: new Set(activeParts.map(jobKey)).size,
@@ -8419,7 +8420,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly spend per company</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto le pagas a cada cadena de storages</div>
               {(() => {
-                const byBrand = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
+                const byBrand = records.filter(r=>r.space_type!=="warehouse" && sit(r)!=="Close" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byBrand).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
@@ -8465,7 +8466,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly cost per state</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Where you spend the most money on storages</div>
               {(() => {
-                const byCost = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
+                const byCost = records.filter(r=>r.space_type!=="warehouse" && sit(r)!=="Close" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
