@@ -246,9 +246,17 @@ async function generateFilledPdf(templateBytes, fields, job, brokers, baseJob = 
     const page = pages[f.page || 0];
     if (!page) continue;
     const value = resolveValue(f, job, brokers);
-    if (value === "" || value == null) continue;
-    if (baseJob && resolveValue(f, baseJob, brokers) === value) continue; // unchanged → already printed on the base
     const PH = page.getHeight();
+    if (baseJob) {
+      const old = resolveValue(f, baseJob, brokers);
+      if (old === value) continue; // unchanged → already printed on the base
+      // The base already shows the old value — cover it with white before
+      // printing the new one, otherwise both overlap (edits at delivery).
+      if (old !== "" && old != null) {
+        page.drawRectangle({ x: f.x - 1, y: PH - f.y - (f.h || 16) - 1, width: (f.w || 100) + 2, height: (f.h || 16) + 2, color: rgb(1, 1, 1) });
+      }
+    }
+    if (value === "" || value == null) continue;
     const pad = 2;
     const maxW = Math.max(8, (f.w || 100) - pad * 2);
     let size = f.fontSize || 10;
@@ -290,6 +298,32 @@ async function stampAnnotations(pdfBytes, annots) {
       else if (a.align === "right") x = a.x + (a.w || 100) - tw;
       page.drawText(line, { x, y: PH - a.y - size - i * leading, size, font, color: ink });
     });
+  }
+  return await pdf.save();
+}
+
+// Cover the areas of annotations already baked into a signed base PDF with
+// white, so the current annotations can be re-stamped without overlapping
+// (same "cover then reprint" approach as changed fields on a signed base).
+async function whiteOutAnnotations(pdfBytes, annots) {
+  const pdf = await PDFDocument.load(pdfBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const pages = pdf.getPages();
+  for (const a of annots) {
+    const page = pages[a.page || 0];
+    if (!page || !String(a.text || "").trim()) continue;
+    const PH = page.getHeight();
+    const size = a.fontSize || 10;
+    const leading = size * 1.25;
+    const lines = String(a.text).split("\n");
+    const textW = Math.max(...lines.map(l => font.widthOfTextAtSize(l || " ", size)));
+    const boxW = a.w || 100;
+    // Long lines overflow the box (no clipping at stamp time) — cover them too.
+    let x0 = a.x;
+    if (a.align === "center") x0 = Math.min(a.x, a.x + (boxW - textW) / 2);
+    else if (a.align === "right") x0 = Math.min(a.x, a.x + boxW - textW);
+    const h = Math.max(a.h || 16, size + (lines.length - 1) * leading + size * 0.3) + 2;
+    page.drawRectangle({ x: x0 - 1, y: PH - a.y - h + 1, width: Math.max(boxW, textW) + 2, height: h, color: rgb(1, 1, 1) });
   }
   return await pdf.save();
 }
@@ -882,6 +916,21 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
   function deleteAnnot(id) { onChange(prev => prev.filter(a => a.id !== id)); if (selId === id) setSelId(null); }
   const startDrag = useBoxDrag(scale, updateAnnot);
 
+  // Double-click detection via pointerdown timing: startDrag preventDefault()s
+  // the pointerdown, which suppresses the native dblclick event in Chromium.
+  const lastTap = useRef({ id: null, t: 0 });
+  function onBoxPointerDown(e, a) {
+    const now = Date.now();
+    if (lastTap.current.id === a.id && now - lastTap.current.t < 350) {
+      e.stopPropagation(); e.preventDefault();
+      setSelId(a.id); setEditId(a.id);
+      lastTap.current = { id: null, t: 0 };
+      return;
+    }
+    lastTap.current = { id: a.id, t: now };
+    setSelId(a.id); startDrag(e, a, "move");
+  }
+
   function addText() {
     const id = rid();
     onChange(prev => [...prev, { id, page: curPage, x: page.w * 0.35, y: page.h * 0.4, w: 180, h: 20, text: "Text", fontSize: 10, align: "left" }]);
@@ -904,17 +953,21 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
         )}
         <span style={{ fontSize: 11, color: "#94a3b8" }}>Drag to move · drag the corner to resize · double-click to edit text.</span>
       </div>
-      {sel && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 10px" }}>
-          <label style={{ fontSize: 12, color: "#888" }}>Size {sel.fontSize}</label>
-          <input type="range" min="6" max="24" step="0.5" value={sel.fontSize} onChange={e => updateAnnot(sel.id, { fontSize: Number(e.target.value) })} style={{ width: 110 }} />
-          {["left", "center", "right"].map(a => (
-            <button key={a} onClick={() => updateAnnot(sel.id, { align: a })}
-              style={{ padding: "4px 9px", borderRadius: 7, border: "1px solid #eee", cursor: "pointer", fontSize: 12, background: sel.align === a ? "#111" : "#fff", color: sel.align === a ? "#fff" : "#666" }}>{a}</button>
-          ))}
-          <button style={{ ...smallBtn, color: "#b91c1c" }} onClick={() => deleteAnnot(sel.id)}>Delete text</button>
-        </div>
-      )}
+      {/* Always rendered: mounting it on select would shift the page mid-double-click. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 10px", minHeight: 28 }}>
+        {sel ? (
+          <>
+            <label style={{ fontSize: 12, color: "#888" }}>Size {sel.fontSize}</label>
+            <input type="range" min="6" max="24" step="0.5" value={sel.fontSize} onChange={e => updateAnnot(sel.id, { fontSize: Number(e.target.value) })} style={{ width: 110 }} />
+            {["left", "center", "right"].map(a => (
+              <button key={a} onClick={() => updateAnnot(sel.id, { align: a })}
+                style={{ padding: "4px 9px", borderRadius: 7, border: "1px solid #eee", cursor: "pointer", fontSize: 12, background: sel.align === a ? "#111" : "#fff", color: sel.align === a ? "#fff" : "#666" }}>{a}</button>
+            ))}
+            <button style={smallBtn} onClick={() => setEditId(sel.id)}>✎ Edit text</button>
+            <button style={{ ...smallBtn, color: "#b91c1c" }} onClick={() => deleteAnnot(sel.id)}>Delete text</button>
+          </>
+        ) : <span style={{ fontSize: 12, color: "#94a3b8" }}>Select a text box to style or edit it.</span>}
+      </div>
       <div style={{ position: "relative", width: DISPLAY_W, maxWidth: "100%", border: "1px solid #ddd", borderRadius: 8, lineHeight: 0, overflow: "hidden" }}
         onPointerDown={() => { setSelId(null); setEditId(null); }}>
         <canvas ref={canvasRef} style={{ width: "100%", height: "auto", display: "block" }} />
@@ -923,13 +976,13 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
           const editing = a.id === editId;
           return (
             <div key={a.id}
-              onPointerDown={e => { if (editing) { e.stopPropagation(); return; } setSelId(a.id); startDrag(e, a, "move"); }}
+              onPointerDown={e => { if (editing) { e.stopPropagation(); return; } onBoxPointerDown(e, a); }}
               onDoubleClick={e => { e.stopPropagation(); setSelId(a.id); setEditId(a.id); }}
               style={{ position: "absolute", left: a.x * scale, top: a.y * scale, width: a.w * scale, minHeight: a.h * scale,
                 border: selected ? "1.5px solid #2563eb" : "1px dashed #60a5fa", background: selected ? "rgba(37,99,235,0.06)" : "transparent",
                 cursor: editing ? "text" : "move", boxSizing: "border-box", lineHeight: 1.25 }}>
               {editing ? (
-                <textarea autoFocus value={a.text}
+                <textarea ref={el => { if (el && !el.__focused) { el.__focused = true; setTimeout(() => el.focus(), 0); } }} value={a.text}
                   onChange={e => updateAnnot(a.id, { text: e.target.value })}
                   onBlur={() => { setEditId(null); if (!String(a.text || "").trim()) deleteAnnot(a.id); }}
                   onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.currentTarget.blur(); } }}
@@ -1133,7 +1186,11 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (!tplBytes || !tpl) return;
     const h = setTimeout(async () => {
       try {
-        setBaseBytes(await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null));
+        // Signed base: cover the annotations baked into it first (effect B
+        // re-stamps the current ones), then stamp only the changed fields.
+        let base = tplBytes;
+        if (onSignedBase && (reopenDoc?.annotations || []).length) base = await whiteOutAnnotations(base, reopenDoc.annotations);
+        setBaseBytes(await generateFilledPdf(base, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null));
       } catch (e) { /* keep previous preview */ }
     }, 450);
     return () => clearTimeout(h);
@@ -1160,7 +1217,9 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (!tplBytes) { setError("Template PDF still loading — try again."); return; }
     setSaving(true);
     try {
-      let out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
+      let base = tplBytes;
+      if (onSignedBase && (reopenDoc?.annotations || []).length) base = await whiteOutAnnotations(base, reopenDoc.annotations);
+      let out = await generateFilledPdf(base, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
       if (annots.length) out = await stampAnnotations(out, annots);
       // Filename by job# + client for easy search (with a unique suffix so it never overwrites).
       const nice = [f.job_number, f.customer].filter(Boolean).join(" - ") || "bol";
