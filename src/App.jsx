@@ -406,6 +406,17 @@ const I18N_ES = {
   "Reopen (mark as Loading)": "Reabrir (marcar cargando)",
   "Cancel Trip": "Cancelar trip",
   "New trips start as Loading": "Los trips nuevos empiezan en Cargando",
+  "✨ Suggest trips (AI)": "✨ Sugerir trips (IA)",
+  "AI trip suggestions": "Sugerencias de trips (IA)",
+  "Why this trip:": "Por qué este trip:",
+  "no longer available": "ya no disponible",
+  "Review & create": "Revisar y crear",
+  "Review & add": "Revisar y agregar",
+  "New suggestions": "Nuevas sugerencias",
+  "AI recommendations": "Recomendaciones con IA",
+  "Automatic analysis of your storage operation": "Análisis automático de tu operación de storage",
+  "Analyze with AI": "Analizar con IA",
+  "Analyzing...": "Analizando...",
   "Manage": "Gestionar",
   "Add job to trip": "Agregar job al trip",
   "Unplanned pickup": "Pickup no previsto",
@@ -2304,7 +2315,7 @@ function parseWhatsAppExport(rawText) {
     .map(b => parsePastedMessages(b.lines.join("\n"))[0] || null).filter(Boolean);
 }
 
-function AIPanel({ records }) {
+function AIPanel({ records, lang }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
@@ -2329,7 +2340,8 @@ DATA:
 - States with 3+ storages: ${sameState.join(", ") || "none"}
 - Companies with 3+ units: ${sameBrand.join(", ") || "none"}
 
-Format: numbered list, each recommendation in 2-3 lines max. Start directly with "1."`;
+Format: numbered list, each recommendation in 2-3 lines max. Start directly with "1."
+${lang === "es" ? "Answer in Spanish." : "Answer in English."}`;
 
     try {
       const res = await fetch("/api/analyze", {
@@ -2338,10 +2350,10 @@ Format: numbered list, each recommendation in 2-3 lines max. Start directly with
         body: JSON.stringify({ prompt })
       });
       const data = await res.json();
-      if (!res.ok) setResult(data.error || "Could not connect to the AI.");
-      else setResult(data.text || "Could not get a response.");
+      if (!res.ok) setResult(data.error || (lang === "es" ? "No se pudo conectar con la IA." : "Could not connect to the AI."));
+      else setResult(data.text || (lang === "es" ? "No se pudo obtener una respuesta." : "Could not get a response."));
     } catch(e) {
-      setResult("Error connecting to the AI. Try again.");
+      setResult(lang === "es" ? "Error conectando con la IA. Intentá de nuevo." : "Error connecting to the AI. Try again.");
     }
     setLoading(false);
   }
@@ -2350,18 +2362,20 @@ Format: numbered list, each recommendation in 2-3 lines max. Start directly with
     <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom: result ? 16 : 0 }}>
         <div>
-          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Recomendaciones con IA</div>
+          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>AI recommendations</div>
           <div style={{ fontSize:12, color:"#bbb" }}>Automatic analysis of your storage operation</div>
         </div>
         <button onClick={analyze} disabled={loading}
           style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background: loading ? "#f5f5f5" : "#111", color: loading ? "#aaa" : "#fff", cursor: loading ? "not-allowed" : "pointer", flexShrink:0, display:"flex", alignItems:"center", gap:6 }}>
-          {loading ? "Analizando..." : "Analyze with AI"}
+          {loading ? "Analyzing..." : "Analyze with AI"}
         </button>
       </div>
       {loading && (
         <div style={{ display:"flex", alignItems:"center", gap:10, padding:"20px 0", color:"#888", fontSize:13 }}>
           <div style={{ width:16, height:16, border:"2px solid #f0f0f0", borderTop:"2px solid #111", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
-          Analizando {records.filter(r=>r.situation==="Open").length} storages activos...
+          {lang === "es"
+            ? `Analizando ${records.filter(r=>r.situation==="Open").length} storages activos...`
+            : `Analyzing ${records.filter(r=>r.situation==="Open").length} active storages...`}
         </div>
       )}
       {result && (
@@ -3129,6 +3143,9 @@ export default function App() {
   const [tripAILoading, setTripAILoading] = useState(false);
   const [tripAIError, setTripAIError] = useState(null);
   const [tripAIResult, setTripAIResult] = useState(null); // { new_trips, trip_additions, unassigned, notes }
+  // alert()/confirm() and interpolated strings render outside the DOM overlay's
+  // reach (i18nApply), so they need explicit per-language branching.
+  const trAI = (en, es) => (lang === "es" ? es : en);
   // Dynamic in-transit trip management
   const [tripDetailId, setTripDetailId] = useState(null);     // trip detail modal
   const [tripEvents, setTripEvents] = useState([]);
@@ -5410,12 +5427,13 @@ export default function App() {
   // are review-only: accepting one just prefills the normal trip modal.
   async function requestTripSuggestions() {
     if (tripAILoading) return;
-    if (!tripCandidateJobs.length) { window.alert("No hay jobs disponibles para agrupar."); return; }
-    if (!freeTrucks.length && !loadingTripsWithRoom.length) { window.alert("No hay camiones libres ni trips cargando con capacidad."); return; }
+    if (!tripCandidateJobs.length) { window.alert(trAI("No jobs available to group.", "No hay jobs disponibles para agrupar.")); return; }
+    if (!freeTrucks.length && !loadingTripsWithRoom.length) { window.alert(trAI("No free trucks or loading trips with room.", "No hay camiones libres ni trips cargando con capacidad.")); return; }
     // Oldest FADD first so, if the list is capped, the least urgent jobs drop.
     const sorted = [...tripCandidateJobs].sort((a, b) => (a.fadd || "9999").localeCompare(b.fadd || "9999"));
     const payload = {
       today: today(),
+      lang, // the AI writes reasoning/notes in the user's display language
       jobs: sorted.slice(0, 150).map(j => ({
         key: jobKey(j),
         job_number: j.job_number || "",
@@ -5438,10 +5456,10 @@ export default function App() {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) setTripAIError(data.error || "No se pudo conectar con la IA.");
+      if (!res.ok) setTripAIError(data.error || trAI("Could not connect to the AI.", "No se pudo conectar con la IA."));
       else setTripAIResult(data);
     } catch {
-      setTripAIError("Error conectando con la IA. Intentá de nuevo.");
+      setTripAIError(trAI("Error connecting to the AI. Try again.", "Error conectando con la IA. Intentá de nuevo."));
     }
     setTripAILoading(false);
   }
@@ -5451,11 +5469,13 @@ export default function App() {
   function applyTripSuggestion(s, kind) {
     const live = new Set(tripCandidateJobs.map(jobKey));
     const valid = s.job_keys.filter(k => live.has(k));
-    if (!valid.length) { window.alert("Los jobs de esta sugerencia ya no están disponibles."); return; }
-    if (valid.length < s.job_keys.length && !window.confirm(`${s.job_keys.length - valid.length} job(s) ya no están disponibles y se omitirán. ¿Continuar?`)) return;
+    if (!valid.length) { window.alert(trAI("The jobs in this suggestion are no longer available.", "Los jobs de esta sugerencia ya no están disponibles.")); return; }
+    if (valid.length < s.job_keys.length && !window.confirm(trAI(
+      `${s.job_keys.length - valid.length} job(s) are no longer available and will be skipped. Continue?`,
+      `${s.job_keys.length - valid.length} job(s) ya no están disponibles y se omitirán. ¿Continuar?`))) return;
     if (kind === "addition") {
       const t = trips.find(x => x.id === s.trip_id);
-      if (!t || t.status !== "loading") { window.alert("Ese trip ya no está en estado Loading."); return; }
+      if (!t || t.status !== "loading") { window.alert(trAI("That trip is no longer in Loading status.", "Ese trip ya no está en estado Loading.")); return; }
       setEditingTripId(t.id);
       setTripForm({
         trip_number: t.trip_number || "", truck_id: t.truck_id || "", driver_id: t.driver_id || "",
@@ -6469,7 +6489,7 @@ export default function App() {
           {page === "drivers" && can("drivers","create") && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && can("brokers","create") && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
           {page === "settlements" && !csDetailId && can("settlements","create") && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
-          {page === "trips" && can("trips","create") && <Btn disabled={tripsMissing || tripAILoading} onClick={requestTripSuggestions}>✨ Sugerir trips (IA)</Btn>}
+          {page === "trips" && can("trips","create") && <Btn disabled={tripsMissing || tripAILoading} onClick={requestTripSuggestions}>✨ Suggest trips (AI)</Btn>}
           {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
           {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
@@ -8558,7 +8578,7 @@ export default function App() {
           </div>
 
           {/* Panel IA */}
-          <AIPanel records={records} />
+          <AIPanel records={records} lang={lang} />
 
         </div>
       )}
@@ -11220,8 +11240,8 @@ export default function App() {
           const capCf = numv(truck?.capacity_cf);
           const pct = s.occ_pct ?? (capCf > 0 ? Math.round((s.total_cf / capCf) * 100) : 0);
           const title = kind === "addition"
-            ? `➕ Agregar a ${tripById[s.trip_id]?.trip_number || "#" + s.trip_id}${truck?.name ? ` (${truck.name})` : ""}`
-            : `🚚 Nuevo trip — ${truck?.name || "Truck #" + s.truck_id}`;
+            ? `➕ ${trAI("Add to", "Agregar a")} ${tripById[s.trip_id]?.trip_number || "#" + s.trip_id}${truck?.name ? ` (${truck.name})` : ""}`
+            : `🚚 ${trAI("New trip", "Nuevo trip")} — ${truck?.name || "Truck #" + s.truck_id}`;
           return (
             <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px 14px", marginBottom:10, background:"#fff" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:8 }}>
@@ -11240,7 +11260,7 @@ export default function App() {
                       {j && <span style={{ color:"#888", flexShrink:0 }}>{Math.round(parseCf(j.volume))} CF</span>}
                       {j && <span style={{ color:"#888", flexShrink:0, maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{jobOrigin(j, storageById)?.label || ""} → {[j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "?"}</span>}
                       {j && !stale && <FaddBadge fadd={j.fadd} />}
-                      {stale && <span style={{ fontSize:10, color:"#C2410C", textDecoration:"none", flexShrink:0 }}>ya no disponible</span>}
+                      {stale && <span style={{ fontSize:10, color:"#C2410C", textDecoration:"none", flexShrink:0 }}>no longer available</span>}
                     </div>
                   );
                 })}
@@ -11248,26 +11268,28 @@ export default function App() {
               {s.reasoning && (
                 <div style={{ display:"flex", gap:8, alignItems:"flex-start", background:"#FFFBEB", border:"1px solid #FDE9C8", borderRadius:8, padding:"8px 10px", marginTop:8, fontSize:12, color:"#854F0B", lineHeight:1.5 }}>
                   <span style={{ flexShrink:0 }}>💡</span>
-                  <span><b>Por qué este trip:</b> {s.reasoning}</span>
+                  <span><b>Why this trip:</b> {s.reasoning}</span>
                 </div>
               )}
               <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10 }}>
-                <Btn onClick={() => dropSuggestion(kind === "addition" ? "trip_additions" : "new_trips", idx)}>Descartar</Btn>
-                <Btn primary onClick={() => applyTripSuggestion(s, kind)}>{kind === "addition" ? "Revisar y agregar" : "Revisar y crear"}</Btn>
+                <Btn onClick={() => dropSuggestion(kind === "addition" ? "trip_additions" : "new_trips", idx)}>Dismiss</Btn>
+                <Btn primary onClick={() => applyTripSuggestion(s, kind)}>{kind === "addition" ? "Review & add" : "Review & create"}</Btn>
               </div>
             </div>
           );
         };
         return (
-        <Modal title="Sugerencias de trips (IA)" onClose={() => setShowTripAI(false)}
+        <Modal title="AI trip suggestions" onClose={() => setShowTripAI(false)}
           footer={<>
-            <Btn onClick={() => setShowTripAI(false)}>Cerrar</Btn>
-            <Btn disabled={tripAILoading} onClick={requestTripSuggestions}>Nuevas sugerencias</Btn>
+            <Btn onClick={() => setShowTripAI(false)}>Close</Btn>
+            <Btn disabled={tripAILoading} onClick={requestTripSuggestions}>New suggestions</Btn>
           </>}>
           {tripAILoading && (
             <div style={{ display:"flex", alignItems:"center", gap:10, padding:"20px 0", color:"#888", fontSize:13 }}>
               <div style={{ width:16, height:16, border:"2px solid #f0f0f0", borderTop:"2px solid #111", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
-              Analizando {tripCandidateJobs.length} jobs y {freeTrucks.length + loadingTripsWithRoom.length} camiones/trips...
+              {trAI(
+                `Analyzing ${tripCandidateJobs.length} jobs and ${freeTrucks.length + loadingTripsWithRoom.length} trucks/trips...`,
+                `Analizando ${tripCandidateJobs.length} jobs y ${freeTrucks.length + loadingTripsWithRoom.length} camiones/trips...`)}
             </div>
           )}
           {!tripAILoading && tripAIError && (
@@ -11276,13 +11298,15 @@ export default function App() {
           {!tripAILoading && !tripAIError && tripAIResult && (
             <>
               {tripAIResult.new_trips.length === 0 && tripAIResult.trip_additions.length === 0 && (
-                <div style={{ padding:"14px 0", fontSize:13, color:"#888" }}>La IA no encontró agrupaciones recomendables con los jobs y camiones actuales.</div>
+                <div style={{ padding:"14px 0", fontSize:13, color:"#888" }}>{trAI(
+                  "The AI found no recommendable groupings with the current jobs and trucks.",
+                  "La IA no encontró agrupaciones recomendables con los jobs y camiones actuales.")}</div>
               )}
               {tripAIResult.new_trips.map((s, idx) => <SuggestionCard key={`n${s.truck_id}-${idx}`} s={s} kind="new" idx={idx} />)}
               {tripAIResult.trip_additions.map((s, idx) => <SuggestionCard key={`a${s.trip_id}-${idx}`} s={s} kind="addition" idx={idx} />)}
               {tripAIResult.unassigned.length > 0 && (
                 <>
-                  <SectionLabel>Jobs sin asignar ({tripAIResult.unassigned.length})</SectionLabel>
+                  <SectionLabel>{trAI("Unassigned jobs", "Jobs sin asignar")} ({tripAIResult.unassigned.length})</SectionLabel>
                   <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginBottom:10 }}>
                     {tripAIResult.unassigned.map(u => { const j = repFor(u.job_key); return (
                       <div key={u.job_key} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", borderBottom:"1px solid #f7f7f7", fontSize:12 }}>

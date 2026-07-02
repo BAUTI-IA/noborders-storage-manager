@@ -52,8 +52,15 @@ export default async function handler(req, res) {
       throw new Error(`El template no tiene campos de firma para "${stage}". Agregalos en el editor (kind: signature/date, stage: ${stage}).`);
     }
 
-    const { data: file, error: fErr } = await admin.storage.from("bol-generated").download(doc.pdf_path);
-    if (fErr || !file) throw new Error("No se pudo leer el PDF generado.");
+    // Delivery must be signed on a document that SHOWS the pickup signature.
+    // If this version's PDF wasn't already built on top of the signed pickup
+    // copy (values._on_signed_base), use the signed pickup PDF as the document.
+    let bucket = "bol-generated", basePath = doc.pdf_path;
+    if (stage === "delivery" && doc.pickup_signed_path && !doc.values?._on_signed_base) {
+      bucket = "bol-signed"; basePath = doc.pickup_signed_path;
+    }
+    const { data: file, error: fErr } = await admin.storage.from(bucket).download(basePath);
+    if (fErr || !file) throw new Error("No se pudo leer el PDF del BOL.");
     const pdfBase64 = Buffer.from(await file.arrayBuffer()).toString("base64");
 
     const email = signer_email || doc.values?.client_email || doc.values?.customer_email || "";

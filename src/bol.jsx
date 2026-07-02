@@ -233,7 +233,10 @@ function scanPageForFields(items, pageW, pageH, pageIndex) {
 }
 
 // ── PDF generation: stamp values onto the original template ─────────────────
-async function generateFilledPdf(templateBytes, fields, job, brokers) {
+// baseJob (optional): when re-stamping on top of an ALREADY-FILLED pdf (e.g. the
+// pickup-signed copy), fields whose value didn't change vs baseJob are skipped —
+// only new/changed values are printed, so nothing double-prints over the old ink.
+async function generateFilledPdf(templateBytes, fields, job, brokers, baseJob = null) {
   const pdf = await PDFDocument.load(templateBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
@@ -244,6 +247,7 @@ async function generateFilledPdf(templateBytes, fields, job, brokers) {
     if (!page) continue;
     const value = resolveValue(f, job, brokers);
     if (value === "" || value == null) continue;
+    if (baseJob && resolveValue(f, baseJob, brokers) === value) continue; // unchanged → already printed on the base
     const PH = page.getHeight();
     const pad = 2;
     const maxW = Math.max(8, (f.w || 100) - pad * 2);
@@ -1037,9 +1041,12 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (job) { setF(sheetFromJob(job)); setExtraCf([]); setCharges([]); setDiscounts([]); }
   }, [jobId]); // eslint-disable-line
 
-  // Load the template PDF bytes whenever the template changes. Annotation
-  // coordinates are template-specific, so a real template switch clears them
-  // (not the initial mount — that would wipe a reopened doc's annotations).
+  // Load the base PDF: normally the blank company template; when reopening a
+  // BOL whose pickup is already signed, the SIGNED copy is the base — the
+  // pickup signature must stay visible on the document signed at delivery.
+  // Annotation coordinates are template-specific, so a real template switch
+  // clears them (not the initial mount — that would wipe a reopened doc's).
+  const onSignedBase = !!reopenDoc?.pickup_signed_path;
   const prevTplId = useRef(null);
   useEffect(() => {
     let alive = true;
@@ -1047,13 +1054,23 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     prevTplId.current = tplId;
     (async () => {
       setTplBytes(null); setBaseBytes(null);
+      if (onSignedBase) {
+        const { data } = await supabase.storage.from("bol-signed").download(reopenDoc.pickup_signed_path);
+        if (alive && data) setTplBytes(new Uint8Array(await data.arrayBuffer()));
+        return;
+      }
       const tpl = templates.find(t => String(t.id) === String(tplId));
       if (!tpl?.pdf_path) return;
       const { data } = await supabase.storage.from("bol-templates").download(tpl.pdf_path);
       if (alive && data) setTplBytes(new Uint8Array(await data.arrayBuffer()));
     })();
     return () => { alive = false; };
-  }, [tplId, templates, supabase]);
+  }, [tplId, templates, supabase, onSignedBase]); // eslint-disable-line
+
+  // Snapshot of the values as they were when the signed version was saved —
+  // used to stamp only what CHANGED on top of the signed base.
+  const baseEff = useRef(null);
+  useEffect(() => { if (onSignedBase && baseEff.current === null) baseEff.current = effJob; }, []); // eslint-disable-line
 
   // ── Live calculator ────────────────────────────────────────────────────────
   // Fuel is MANUAL (per company it varies) — we only suggest a value; the user
@@ -1116,7 +1133,7 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (!tplBytes || !tpl) return;
     const h = setTimeout(async () => {
       try {
-        setBaseBytes(await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers));
+        setBaseBytes(await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null));
       } catch (e) { /* keep previous preview */ }
     }, 450);
     return () => clearTimeout(h);
@@ -1143,7 +1160,7 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (!tplBytes) { setError("Template PDF still loading — try again."); return; }
     setSaving(true);
     try {
-      let out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers);
+      let out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
       if (annots.length) out = await stampAnnotations(out, annots);
       // Filename by job# + client for easy search (with a unique suffix so it never overwrites).
       const nice = [f.job_number, f.customer].filter(Boolean).join(" - ") || "bol";
@@ -1161,11 +1178,25 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
       const { error: insErr } = await supabase.from("bol_documents").insert({
         customer: f.customer || job?.customer || null, job_id: job?.id || null, job_number: f.job_number || null,
         template_id: tpl.id, company_name: tpl.company_name,
-        values: { ...f, ...calc }, line_items, annotations: annots, pdf_path: path, status,
+        // _on_signed_base: this version's PDF was built ON TOP of the signed
+        // pickup copy (signature visible) → delivery signs pdf_path as-is.
+        values: { ...f, ...calc, ...(onSignedBase ? { _on_signed_base: true } : {}) }, line_items, annotations: annots, pdf_path: path, status,
         created_by: session?.user?.email || null,
+        // A new version after the pickup was signed inherits that signature
+        // (the signed pickup PDF is immutable) so it goes straight to the
+        // delivery-signature step. The delivery signature is never carried:
+        // it must be signed on the latest content.
+        ...(reopenDoc?.pickup_signed_path ? {
+          pickup_envelope_id: reopenDoc.pickup_envelope_id || null,
+          pickup_signed_path: reopenDoc.pickup_signed_path,
+          pickup_signed_at: reopenDoc.pickup_signed_at || null,
+          sign_status: "pickup_signed",
+        } : {}),
       });
       if (insErr) throw insErr;
-      setNotice(status === "final" ? "Saved as final — it's in Documents." : "Draft saved to Documents.");
+      setNotice(status === "final"
+        ? (reopenDoc?.pickup_signed_path ? "Saved as a new version — pickup signature carried over; it's ready to sign at delivery." : "Saved as final — it's in Documents.")
+        : "Draft saved to Documents.");
       onSaved && onSaved();
     } catch (e) { setError(e.message); }
     setSaving(false);
@@ -1197,6 +1228,11 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
       </div>
       {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
       {notice && <div style={{ background: "#EAF3DE", border: "1px solid #cfe6b4", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#3B6D11", marginBottom: 12 }}>{notice}</div>}
+      {reopenDoc?.pickup_signed_path && (
+        <div style={{ background: "#EFF6FF", border: "1px solid #bfdbfe", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#1d4ed8", marginBottom: 12 }}>
+          ✍ Este BOL ya tiene el <b>pickup firmado</b> (esa copia queda archivada tal cual). Al guardar, la nueva versión hereda esa firma y queda lista para <b>firmar el delivery</b> con los cambios incluidos.
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
         {/* ── LEFT: editable sheet ─────────────────────────────────────────── */}

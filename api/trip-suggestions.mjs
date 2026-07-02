@@ -29,7 +29,7 @@ const SUGGESTIONS_SCHEMA = {
         properties: {
           truck_id: { type: "integer" },
           job_keys: { type: "array", items: { type: "string" }, description: "Job keys in delivery stop order" },
-          reasoning: { type: "string", description: "1-2 frases en español para el dispatcher" },
+          reasoning: { type: "string", description: "1-2 sentences for the dispatcher, in the requested output language" },
         },
         required: ["truck_id", "job_keys", "reasoning"],
         additionalProperties: false,
@@ -42,7 +42,7 @@ const SUGGESTIONS_SCHEMA = {
         properties: {
           trip_id: { type: "integer" },
           job_keys: { type: "array", items: { type: "string" }, description: "Job keys to append, in delivery stop order" },
-          reasoning: { type: "string", description: "1-2 frases en español para el dispatcher" },
+          reasoning: { type: "string", description: "1-2 sentences for the dispatcher, in the requested output language" },
         },
         required: ["trip_id", "job_keys", "reasoning"],
         additionalProperties: false,
@@ -54,19 +54,19 @@ const SUGGESTIONS_SCHEMA = {
         type: "object",
         properties: {
           job_key: { type: "string" },
-          reason: { type: "string", description: "Motivo corto en español" },
+          reason: { type: "string", description: "Short reason, in the requested output language" },
         },
         required: ["job_key", "reason"],
         additionalProperties: false,
       },
     },
-    notes: { type: "string", description: "Observaciones generales en español (o cadena vacía)" },
+    notes: { type: "string", description: "General remarks in the requested output language (or empty string)" },
   },
   required: ["new_trips", "trip_additions", "unassigned", "notes"],
   additionalProperties: false,
 };
 
-function buildPrompt({ today, jobs, trucks, loadingTrips, truncated }) {
+function buildPrompt({ today, jobs, trucks, loadingTrips, truncated, lang }) {
   return [
     "You are a dispatch planner for a US interstate moving company. Group the candidate jobs below into truck trips.",
     "",
@@ -79,7 +79,9 @@ function buildPrompt({ today, jobs, trucks, loadingTrips, truncated }) {
     "6. Prefer fewer, fuller trips over many half-empty ones, but never exceed capacity.",
     "7. Jobs that don't fit any good trip (no delivery address, oversized for every truck, geographic outlier) go in \"unassigned\" with a short reason.",
     "",
-    "Write \"reasoning\", \"reason\" and \"notes\" in Spanish, addressed to the dispatcher.",
+    lang === "es"
+      ? "Write \"reasoning\", \"reason\" and \"notes\" in Spanish, addressed to the dispatcher."
+      : "Write \"reasoning\", \"reason\" and \"notes\" in English, addressed to the dispatcher.",
     truncated ? "Note: the candidate job list was truncated to the most urgent jobs; mention this in notes." : "",
     "",
     `TODAY: ${today}`,
@@ -101,6 +103,8 @@ export default async function handler(req, res) {
   }
 
   const body = req.body || {};
+  const lang = body.lang === "es" ? "es" : "en"; // AI output + error language follows the user's display language
+  const tr = (en, es) => (lang === "es" ? es : en);
   const today = typeof body.today === "string" && body.today ? body.today : new Date().toISOString().slice(0, 10);
   const rawJobs = Array.isArray(body.jobs) ? body.jobs : [];
   const rawTrucks = Array.isArray(body.trucks) ? body.trucks : [];
@@ -140,7 +144,9 @@ export default async function handler(req, res) {
     .filter((t) => t.capacity_cf > 0);
 
   if (!jobs.length || (!trucks.length && !loadingTrips.length)) {
-    res.status(200).json({ new_trips: [], trip_additions: [], unassigned: [], notes: "No hay jobs candidatos o camiones/trips con capacidad para sugerir." });
+    res.status(200).json({ new_trips: [], trip_additions: [], unassigned: [], notes: tr(
+      "No candidate jobs or trucks/trips with capacity to suggest.",
+      "No hay jobs candidatos o camiones/trips con capacidad para sugerir.") });
     return;
   }
 
@@ -152,12 +158,12 @@ export default async function handler(req, res) {
       // effort "medium" keeps latency reasonable; the dispatcher reviews every
       // suggestion before anything is created, so top-tier planning depth isn't critical.
       output_config: { effort: "medium", format: { type: "json_schema", schema: SUGGESTIONS_SCHEMA } },
-      messages: [{ role: "user", content: buildPrompt({ today, jobs, trucks, loadingTrips, truncated: rawJobs.length > MAX_JOBS }) }],
+      messages: [{ role: "user", content: buildPrompt({ today, jobs, trucks, loadingTrips, truncated: rawJobs.length > MAX_JOBS, lang }) }],
     });
     const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
     let parsed;
     try { parsed = JSON.parse(text); }
-    catch { res.status(502).json({ error: "La IA devolvió una respuesta inválida. Intentá de nuevo." }); return; }
+    catch { res.status(502).json({ error: tr("The AI returned an invalid response. Try again.", "La IA devolvió una respuesta inválida. Intentá de nuevo.") }); return; }
 
     // Never trust the model's ids or arithmetic: filter unknowns, dedupe jobs
     // across suggestions (first occurrence wins) and recompute CF/occupancy
@@ -214,6 +220,6 @@ export default async function handler(req, res) {
 
     res.status(200).json({ new_trips: newTrips, trip_additions: tripAdditions, unassigned, notes: String(parsed.notes || "") });
   } catch (e) {
-    res.status(500).json({ error: e?.message || "Error generando sugerencias." });
+    res.status(500).json({ error: e?.message || tr("Error generating suggestions.", "Error generando sugerencias.") });
   }
 }
