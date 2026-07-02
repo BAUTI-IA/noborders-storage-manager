@@ -30,8 +30,11 @@ export default async function handler(req, res) {
   const allowed = prof?.active && (prof.role === "admin" || perms.create || perms.edit);
   if (!allowed) { res.status(403).json({ error: "Sin permiso para firmar BOL." }); return; }
 
-  const { document_id, stage, signer_email, signer_name } = req.body || {};
+  const { document_id, stage, signer_email, signer_name, mode } = req.body || {};
   if (!document_id || !["pickup", "delivery"].includes(stage)) { res.status(400).json({ error: "document_id y stage (pickup|delivery) requeridos." }); return; }
+  // "email" (default): DocuSign emails the signing link to the client (remote
+  // back office flow). "embedded": in-person signing on the employee's device.
+  const sendMode = mode === "embedded" ? "embedded" : "email";
 
   try {
     // Load the BOL record + its template field map + the generated PDF.
@@ -58,10 +61,12 @@ export default async function handler(req, res) {
     if (!email) throw new Error("Falta el email del firmante (signer_email).");
 
     const auth = await dsAuth();
+    const signer = { email, name };
+    if (sendMode === "embedded") signer.clientUserId = "1"; // embedded → no email is sent
     const envelopeId = await dsCreateEnvelope(auth, {
       pdfBase64, docName: `${doc.job_number || "BOL"} - ${name}.pdf`,
-      emailSubject: `BOL ${doc.job_number || ""} — firma ${stage === "pickup" ? "de pickup" : "de delivery"}`.trim(),
-      signer: { email, name, clientUserId: "1" }, tabs,
+      emailSubject: `Bill of Lading ${doc.job_number || ""} — ${stage === "pickup" ? "pickup" : "delivery"} signature`.trim(),
+      signer, tabs,
     });
 
     // Record the envelope + advance status.
@@ -70,11 +75,16 @@ export default async function handler(req, res) {
       sign_status: `${stage}_sent`,
     }).eq("id", document_id);
 
-    const url = await dsRecipientView(auth, envelopeId, {
-      email, name, clientUserId: "1",
-      returnUrl: `${APP_URL}/?signed=${stage}`,
-    });
-    res.status(200).json({ ok: true, envelopeId, url });
+    if (sendMode === "embedded") {
+      const url = await dsRecipientView(auth, envelopeId, {
+        email, name, clientUserId: "1",
+        returnUrl: `${APP_URL}/?signed=${stage}`,
+      });
+      res.status(200).json({ ok: true, envelopeId, url });
+      return;
+    }
+    // Email mode: DocuSign already sent the signing email to the client.
+    res.status(200).json({ ok: true, envelopeId, emailed: true, email });
   } catch (e) {
     res.status(500).json({ error: e?.message || "Error enviando a DocuSign." });
   }

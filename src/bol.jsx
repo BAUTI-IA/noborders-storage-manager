@@ -1051,21 +1051,22 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose }) {
   }
 
   // Send this BOL to DocuSign for the given stage and open the embedded signing view.
+  // Email the DocuSign signing request to the client (remote back-office flow).
   async function sign(r, stage) {
-    const email = window.prompt(`Email del firmante (cliente) para ${stage}:`, r.values?.client_email || "");
+    const email = window.prompt(`Email del cliente para firmar el ${stage} (le llega el mail de DocuSign):`, r.values?.client_email || "");
     if (email === null) return;
+    if (!email.trim()) { setError("Poné el email del cliente."); return; }
     setBusyId(r.id); setError(null); setNotice(null);
     try {
       const res = await fetch("/api/docusign-send", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
-        body: JSON.stringify({ document_id: r.id, stage, signer_email: email, signer_name: r.customer }),
+        body: JSON.stringify({ document_id: r.id, stage, signer_email: email.trim(), signer_name: r.customer, mode: "email" }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al enviar a DocuSign.");
       await load();
-      if (json.url) window.open(json.url, "_blank", "noopener");
-      setNotice("Enviado a DocuSign. Firmá en la ventana que se abrió; la copia firmada aparece acá al completar.");
+      setNotice(`📧 BOL enviado a ${email.trim()} para firmar. Cuando el cliente firme desde su mail, la copia firmada aparece acá sola.`);
     } catch (e) { setError(e.message); }
     setBusyId(null);
   }
