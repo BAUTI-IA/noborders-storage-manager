@@ -420,7 +420,7 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
       onSaved={() => {}} onClose={() => { setReopenDoc(null); setView(reopenDoc ? "documents" : "list"); }} />;
   }
   if (view === "documents") {
-    return <DocumentsView supabase={supabase} session={session} canEdit={canEdit}
+    return <DocumentsView supabase={supabase} session={session} canEdit={canEdit} jobs={jobs} brokers={brokers}
       onReopen={(doc) => { setReopenDoc(doc); setView("generate"); }} onClose={() => setView("list")} />;
   }
 
@@ -892,6 +892,7 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
   const [curPage, setCurPage] = useState(0);
   const [selId, setSelId] = useState(null);
   const [editId, setEditId] = useState(null);
+  const [placing, setPlacing] = useState(false); // armed by "+ Add text": next PDF click drops the box there
   const canvasRef = useRef(null);
   const page = pageSizes[curPage] || { w: 612, h: 792 };
   const scale = DISPLAY_W / page.w;
@@ -931,9 +932,12 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
     setSelId(a.id); startDrag(e, a, "move");
   }
 
-  function addText() {
+  // Click-to-place: "+ Add text" arms placing mode; the next click on the PDF
+  // drops an empty text box right there and opens it for typing. Fastest path
+  // for a missing value — no template ("BOL madre") edit needed.
+  function addTextAt(px, py) {
     const id = rid();
-    onChange(prev => [...prev, { id, page: curPage, x: page.w * 0.35, y: page.h * 0.4, w: 180, h: 20, text: "Text", fontSize: 10, align: "left" }]);
+    onChange(prev => [...prev, { id, page: curPage, x: Math.max(0, Math.round(px)), y: Math.max(0, Math.round(py) - 7), w: 180, h: 20, text: "", fontSize: 10, align: "left" }]);
     setSelId(id); setEditId(id);
   }
 
@@ -943,7 +947,10 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-        <button style={smallBtn} onClick={addText}>+ Add text</button>
+        <button style={{ ...smallBtn, ...(placing ? { background: "#111", color: "#fff", borderColor: "#111" } : {}) }}
+          onClick={() => { setPlacing(p => !p); setSelId(null); setEditId(null); }}>
+          {placing ? "Click on the PDF…" : "+ Add text"}
+        </button>
         {pageSizes.length > 1 && (
           <>
             <button style={smallBtn} disabled={curPage === 0} onClick={() => { setCurPage(p => p - 1); setSelId(null); setEditId(null); }}>‹ Prev</button>
@@ -951,7 +958,10 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
             <button style={smallBtn} disabled={curPage === pageSizes.length - 1} onClick={() => { setCurPage(p => p + 1); setSelId(null); setEditId(null); }}>Next ›</button>
           </>
         )}
-        <span style={{ fontSize: 11, color: "#94a3b8" }}>Drag to move · drag the corner to resize · double-click to edit text.</span>
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>
+          {placing ? "Click anywhere on the PDF to drop the text there (click the button again to cancel)."
+            : "Drag to move · drag the corner to resize · double-click to edit text."}
+        </span>
       </div>
       {/* Always rendered: mounting it on select would shift the page mid-double-click. */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 10px", minHeight: 28 }}>
@@ -968,8 +978,16 @@ function AnnotatePreview({ pdfBytes, annots, onChange }) {
           </>
         ) : <span style={{ fontSize: 12, color: "#94a3b8" }}>Select a text box to style or edit it.</span>}
       </div>
-      <div style={{ position: "relative", width: DISPLAY_W, maxWidth: "100%", border: "1px solid #ddd", borderRadius: 8, lineHeight: 0, overflow: "hidden" }}
-        onPointerDown={() => { setSelId(null); setEditId(null); }}>
+      <div style={{ position: "relative", width: DISPLAY_W, maxWidth: "100%", border: "1px solid #ddd", borderRadius: 8, lineHeight: 0, overflow: "hidden", cursor: placing ? "crosshair" : "default" }}
+        onPointerDown={e => {
+          if (placing) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            addTextAt((e.clientX - rect.left) / scale, (e.clientY - rect.top) / scale);
+            setPlacing(false);
+            return;
+          }
+          setSelId(null); setEditId(null);
+        }}>
         <canvas ref={canvasRef} style={{ width: "100%", height: "auto", display: "block" }} />
         {pageAnnots.map(a => {
           const selected = a.id === selId;
@@ -1472,13 +1490,14 @@ const SIGN_BADGE = {
   completed:       ["Completed ✓", "#DCFCE7", "#166534"],
 };
 
-function DocumentsView({ supabase, session, canEdit, onReopen, onClose }) {
+function DocumentsView({ supabase, session, canEdit, onReopen, onClose, jobs = [], brokers = [] }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [q, setQ] = useState("");
   const [busyId, setBusyId] = useState(null);
+  const [folder, setFolder] = useState(""); // "" = all | "none" | broker id
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -1488,10 +1507,33 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose }) {
   }, [supabase]);
   useEffect(() => { load(); }, [load]);
 
+  // Broker "folders": each BOL belongs to its job's broker (resolved live from
+  // the jobs list, so no schema change and old documents get organized too).
+  const brokerIdOf = useCallback(r => {
+    const job = jobs.find(j => String(j.id) === String(r.job_id));
+    return job?.broker_id != null ? String(job.broker_id) : null;
+  }, [jobs]);
+  const folders = useMemo(() => {
+    const counts = new Map();
+    let none = 0;
+    for (const r of rows) { const id = brokerIdOf(r); if (id) counts.set(id, (counts.get(id) || 0) + 1); else none++; }
+    const list = brokers.filter(b => counts.has(String(b.id)))
+      .map(b => ({ key: String(b.id), name: b.name, count: counts.get(String(b.id)) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { list, none };
+  }, [rows, brokers, brokerIdOf]);
+  const brokerName = useCallback(r => {
+    const id = brokerIdOf(r);
+    return id ? (brokers.find(b => String(b.id) === id)?.name || "—") : null;
+  }, [brokerIdOf, brokers]);
+
   const filtered = useMemo(() => {
+    let list = rows;
+    if (folder === "none") list = list.filter(r => !brokerIdOf(r));
+    else if (folder) list = list.filter(r => brokerIdOf(r) === folder);
     const s = q.trim().toLowerCase();
-    return s ? rows.filter(r => [r.customer, r.job_number, r.company_name].filter(Boolean).some(v => String(v).toLowerCase().includes(s))) : rows;
-  }, [rows, q]);
+    return s ? list.filter(r => [r.customer, r.job_number, r.company_name, brokerName(r)].filter(Boolean).some(v => String(v).toLowerCase().includes(s))) : list;
+  }, [rows, q, folder, brokerIdOf, brokerName]);
 
   function urlFor(r) { return r.pdf_path ? supabase.storage.from("bol-generated").getPublicUrl(r.pdf_path).data.publicUrl : null; }
   async function remove(r) {
@@ -1539,14 +1581,25 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose }) {
       </div>
       {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
       {notice && <div style={{ background: "#EAF3DE", border: "1px solid #cfe6b4", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#3B6D11", marginBottom: 12 }}>{notice}</div>}
+
+      {/* Broker folders */}
+      {(folders.list.length > 0 || folders.none > 0) && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {[["", `📁 All BOLs (${rows.length})`], ...folders.list.map(f => [f.key, `📁 ${f.name} (${f.count})`]), ...(folders.none ? [["none", `📁 No broker (${folders.none})`]] : [])].map(([key, label]) => (
+            <button key={key || "all"} onClick={() => setFolder(key)}
+              style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid", borderColor: folder === key ? "#111" : "#e5e5e5", cursor: "pointer", fontSize: 12, fontWeight: folder === key ? 700 : 400, background: folder === key ? "#111" : "#fff", color: folder === key ? "#fff" : "#444" }}>{label}</button>
+          ))}
+        </div>
+      )}
+
       <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr>{["Date", "Customer", "Job #", "Company", "Signature", ""].map((h, i) =>
-            <th key={i} style={{ padding: "10px 12px", fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", textAlign: i === 5 ? "right" : "left", borderBottom: "1px solid #f3f3f3" }}>{h}</th>)}
+          <thead><tr>{["Date", "Customer", "Job #", "Company", "Broker", "Signature", ""].map((h, i) =>
+            <th key={i} style={{ padding: "10px 12px", fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", textAlign: i === 6 ? "right" : "left", borderBottom: "1px solid #f3f3f3" }}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {loading ? <tr><td colSpan={6} style={{ padding: 14, fontSize: 13 }}>Loading…</td></tr>
-              : filtered.length === 0 ? <tr><td colSpan={6} style={{ padding: 14, fontSize: 13, color: "#888" }}>No saved BOLs yet.</td></tr>
+            {loading ? <tr><td colSpan={7} style={{ padding: 14, fontSize: 13 }}>Loading…</td></tr>
+              : filtered.length === 0 ? <tr><td colSpan={7} style={{ padding: 14, fontSize: 13, color: "#888" }}>No saved BOLs yet.</td></tr>
               : filtered.map(r => {
                 const st = SIGN_BADGE[r.sign_status || "unsigned"] || SIGN_BADGE.unsigned;
                 const busy = busyId === r.id;
@@ -1556,6 +1609,7 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose }) {
                   <td style={{ padding: "10px 12px", fontSize: 13, borderBottom: "1px solid #f6f6f6" }}>{r.customer || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6" }}>{r.job_number || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6" }}>{r.company_name || "—"}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 13, color: "#888", borderBottom: "1px solid #f6f6f6" }}>{brokerName(r) || "—"}</td>
                   <td style={{ padding: "10px 12px", borderBottom: "1px solid #f6f6f6", whiteSpace: "nowrap" }}>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: st[1], color: st[2] }}>{st[0]}</span>
                     {r.pickup_signed_path && <button style={{ ...smallBtn, marginLeft: 6, fontSize: 11, padding: "3px 7px" }} onClick={() => viewSigned(r.pickup_signed_path)}>PU ✍</button>}
