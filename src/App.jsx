@@ -3124,6 +3124,11 @@ export default function App() {
   const [editingTripId, setEditingTripId] = useState(null);
   const [tripSaving, setTripSaving] = useState(false);
   const [tripJobSearch, setTripJobSearch] = useState("");
+  // AI trip suggestions ("✨ Sugerir trips (IA)")
+  const [showTripAI, setShowTripAI] = useState(false);
+  const [tripAILoading, setTripAILoading] = useState(false);
+  const [tripAIError, setTripAIError] = useState(null);
+  const [tripAIResult, setTripAIResult] = useState(null); // { new_trips, trip_additions, unassigned, notes }
   // Dynamic in-transit trip management
   const [tripDetailId, setTripDetailId] = useState(null);     // trip detail modal
   const [tripEvents, setTripEvents] = useState([]);
@@ -4479,6 +4484,43 @@ export default function App() {
     }
     return [...m.values()];
   }, [jobs]);
+  // AI trip suggestions — candidate pool: available jobs (scheduled / picked up)
+  // plus everything sitting in storage or a warehouse, not on any trip yet.
+  const tripCandidateJobs = useMemo(() => {
+    const m = new Map();
+    for (const j of jobs) {
+      if (j.trip_id || j.date_out) continue;
+      if (!["scheduled", "picked_up", "in_storage"].includes(j.status)) continue;
+      const k = jobKey(j);
+      if (!m.has(k)) m.set(k, j);
+    }
+    return [...m.values()];
+  }, [jobs]);
+  // Trucks with capacity and no active trip — candidates for a new AI-suggested trip.
+  const freeTrucks = useMemo(() => {
+    const busy = new Set(trips.filter(t => TRIP_ACTIVE(t.status)).map(t => t.truck_id).filter(Boolean));
+    return trucksList.filter(tk => numv(tk.capacity_cf) > 0 && !busy.has(tk.id));
+  }, [trucksList, trips]);
+  // Trips still loading with meaningful free capacity — candidates for AI top-ups.
+  // In-transit trips are excluded: adding jobs to those goes through the manual
+  // dynamic-load flow (driver notification + audit events), not suggestions.
+  const loadingTripsWithRoom = useMemo(() => {
+    const out = [];
+    for (const t of trips) {
+      if (t.status !== "loading") continue;
+      const c = tripCalc(t);
+      if (!(c.cap > 0) || c.totalCf >= c.cap * 0.9) continue;
+      out.push({
+        trip_id: t.id,
+        trip_number: t.trip_number || `#${t.id}`,
+        truck_name: truckById[t.truck_id]?.name || "",
+        capacity_cf: c.cap,
+        current_cf: Math.round(c.totalCf),
+        stops: c.jobsIn.map(j => [j.delivery_city, j.delivery_state].filter(Boolean).join(", ")).filter(Boolean),
+      });
+    }
+    return out;
+  }, [trips, tripCalc, truckById]);
 
   // ── Legal & Compliance derived data (declared before sidebarBadgesPlus, which reads it) ──
   const companyById = useMemo(() => { const m = {}; for (const c of companies) m[c.id] = c; return m; }, [companies]);
@@ -5361,6 +5403,74 @@ export default function App() {
     const assigned = (jobsByTrip[t.id] || []).map(jobKey);
     setTripForm({ trip_number:t.trip_number||"", truck_id:t.truck_id||"", driver_id:t.driver_id||"", departure_date:t.departure_date||"", status:t.status||"loading", notes:t.notes||"", job_keys: assigned });
     setTripJobSearch(""); setShowTripModal(true);
+  }
+  // ── AI trip suggestions ──────────────────────────────────────────────
+  // Ask Claude (via /api/trip-suggestions) to group the candidate jobs into
+  // new trips for free trucks and top-ups of trips still loading. Suggestions
+  // are review-only: accepting one just prefills the normal trip modal.
+  async function requestTripSuggestions() {
+    if (tripAILoading) return;
+    if (!tripCandidateJobs.length) { window.alert("No hay jobs disponibles para agrupar."); return; }
+    if (!freeTrucks.length && !loadingTripsWithRoom.length) { window.alert("No hay camiones libres ni trips cargando con capacidad."); return; }
+    // Oldest FADD first so, if the list is capped, the least urgent jobs drop.
+    const sorted = [...tripCandidateJobs].sort((a, b) => (a.fadd || "9999").localeCompare(b.fadd || "9999"));
+    const payload = {
+      today: today(),
+      jobs: sorted.slice(0, 150).map(j => ({
+        key: jobKey(j),
+        job_number: j.job_number || "",
+        customer: j.customer || "",
+        volume_cf: Math.round(parseCf(j.volume)),
+        fadd: j.fadd || "",
+        status: j.status || "",
+        origin: jobOrigin(j, storageById)?.label || "",
+        delivery: [j.delivery_city, j.delivery_state, j.delivery_zip].filter(Boolean).join(", "),
+        delivery_state: j.delivery_state || "",
+      })),
+      trucks: freeTrucks.map(tk => ({ id: tk.id, name: tk.name || "", capacity_cf: numv(tk.capacity_cf) })),
+      loading_trips: loadingTripsWithRoom,
+    };
+    setShowTripAI(true); setTripAILoading(true); setTripAIError(null);
+    try {
+      const res = await fetch("/api/trip-suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) setTripAIError(data.error || "No se pudo conectar con la IA.");
+      else setTripAIResult(data);
+    } catch {
+      setTripAIError("Error conectando con la IA. Intentá de nuevo.");
+    }
+    setTripAILoading(false);
+  }
+  // Accepting a suggestion never writes directly: it prefills the existing trip
+  // modal (create or edit) so the dispatcher picks the driver, reviews the live
+  // capacity bar and confirms through saveTrip() as always.
+  function applyTripSuggestion(s, kind) {
+    const live = new Set(tripCandidateJobs.map(jobKey));
+    const valid = s.job_keys.filter(k => live.has(k));
+    if (!valid.length) { window.alert("Los jobs de esta sugerencia ya no están disponibles."); return; }
+    if (valid.length < s.job_keys.length && !window.confirm(`${s.job_keys.length - valid.length} job(s) ya no están disponibles y se omitirán. ¿Continuar?`)) return;
+    if (kind === "addition") {
+      const t = trips.find(x => x.id === s.trip_id);
+      if (!t || t.status !== "loading") { window.alert("Ese trip ya no está en estado Loading."); return; }
+      setEditingTripId(t.id);
+      setTripForm({
+        trip_number: t.trip_number || "", truck_id: t.truck_id || "", driver_id: t.driver_id || "",
+        departure_date: t.departure_date || "", status: t.status || "loading", notes: t.notes || "",
+        job_keys: [...(jobsByTrip[t.id] || []).map(jobKey), ...valid.filter(k => !(jobsByTrip[t.id] || []).some(j => jobKey(j) === k))],
+      });
+    } else {
+      setEditingTripId(null);
+      setTripForm({
+        ...EMPTY_TRIP, trip_number: nextTripNumber(), departure_date: today(),
+        truck_id: String(s.truck_id), job_keys: valid,
+        notes: s.reasoning ? ("IA: " + s.reasoning).slice(0, 200) : "",
+      });
+    }
+    setTripJobSearch(""); setShowTripAI(false); setShowTripModal(true);
   }
   function tripToggleJob(k) {
     setTripForm(f => ({ ...f, job_keys: f.job_keys.includes(k) ? f.job_keys.filter(x => x !== k) : [...f.job_keys, k] }));
@@ -6359,6 +6469,7 @@ export default function App() {
           {page === "drivers" && can("drivers","create") && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && can("brokers","create") && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
           {page === "settlements" && !csDetailId && can("settlements","create") && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
+          {page === "trips" && can("trips","create") && <Btn disabled={tripsMissing || tripAILoading} onClick={requestTripSuggestions}>✨ Sugerir trips (IA)</Btn>}
           {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
           {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
@@ -11096,6 +11207,96 @@ export default function App() {
             })()}
           </div>
           <Field label="Notes" full><input style={{ ...inp, marginTop:10 }} value={tripForm.notes} onChange={e => setTripForm(f => ({...f, notes:e.target.value}))} placeholder="Trip notes" /></Field>
+        </Modal>
+        );
+      })()}
+
+      {showTripAI && (() => {
+        const live = new Set(tripCandidateJobs.map(jobKey));
+        const repFor = (k) => jobs.find(j => jobKey(j) === k);
+        const dropSuggestion = (kind, idx) => setTripAIResult(r => ({ ...r, [kind]: r[kind].filter((_, i) => i !== idx) }));
+        const SuggestionCard = ({ s, kind, idx }) => {
+          const truck = kind === "addition" ? truckById[tripById[s.trip_id]?.truck_id] : truckById[s.truck_id];
+          const capCf = numv(truck?.capacity_cf);
+          const pct = s.occ_pct ?? (capCf > 0 ? Math.round((s.total_cf / capCf) * 100) : 0);
+          const title = kind === "addition"
+            ? `➕ Agregar a ${tripById[s.trip_id]?.trip_number || "#" + s.trip_id}${truck?.name ? ` (${truck.name})` : ""}`
+            : `🚚 Nuevo trip — ${truck?.name || "Truck #" + s.truck_id}`;
+          return (
+            <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px 14px", marginBottom:10, background:"#fff" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:8 }}>
+                <b style={{ fontSize:13 }}>{title}</b>
+                <span style={{ fontSize:12, fontWeight:700, color: occColor(pct), flexShrink:0 }}>{pct}% · {Math.round(s.total_cf).toLocaleString()} CF{capCf > 0 ? ` / ${Math.round(capCf).toLocaleString()} CF` : ""}</span>
+              </div>
+              <div style={{ background:"#e8e8e8", borderRadius:6, height:8, overflow:"hidden", marginBottom:8 }}><div style={{ background:occColor(pct), height:8, width:`${Math.min(100, pct)}%` }} /></div>
+              <div style={{ border:"1px solid #f0f0f0", borderRadius:8 }}>
+                {s.job_keys.map((k, i) => {
+                  const j = repFor(k); const stale = !live.has(k);
+                  return (
+                    <div key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", borderBottom:"1px solid #f7f7f7", fontSize:12, textDecoration: stale ? "line-through" : "none", color: stale ? "#bbb" : "#333" }}>
+                      <span style={{ width:18, height:18, borderRadius:"50%", background: stale ? "#ccc" : "#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i+1}</span>
+                      <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j?.job_number || k}</span>
+                      <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j?.customer || "—"}</span>
+                      {j && <span style={{ color:"#888", flexShrink:0 }}>{Math.round(parseCf(j.volume))} CF</span>}
+                      {j && <span style={{ color:"#888", flexShrink:0, maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{jobOrigin(j, storageById)?.label || ""} → {[j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "?"}</span>}
+                      {j && !stale && <FaddBadge fadd={j.fadd} />}
+                      {stale && <span style={{ fontSize:10, color:"#C2410C", textDecoration:"none", flexShrink:0 }}>ya no disponible</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              {s.reasoning && (
+                <div style={{ display:"flex", gap:8, alignItems:"flex-start", background:"#FFFBEB", border:"1px solid #FDE9C8", borderRadius:8, padding:"8px 10px", marginTop:8, fontSize:12, color:"#854F0B", lineHeight:1.5 }}>
+                  <span style={{ flexShrink:0 }}>💡</span>
+                  <span><b>Por qué este trip:</b> {s.reasoning}</span>
+                </div>
+              )}
+              <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10 }}>
+                <Btn onClick={() => dropSuggestion(kind === "addition" ? "trip_additions" : "new_trips", idx)}>Descartar</Btn>
+                <Btn primary onClick={() => applyTripSuggestion(s, kind)}>{kind === "addition" ? "Revisar y agregar" : "Revisar y crear"}</Btn>
+              </div>
+            </div>
+          );
+        };
+        return (
+        <Modal title="Sugerencias de trips (IA)" onClose={() => setShowTripAI(false)}
+          footer={<>
+            <Btn onClick={() => setShowTripAI(false)}>Cerrar</Btn>
+            <Btn disabled={tripAILoading} onClick={requestTripSuggestions}>Nuevas sugerencias</Btn>
+          </>}>
+          {tripAILoading && (
+            <div style={{ display:"flex", alignItems:"center", gap:10, padding:"20px 0", color:"#888", fontSize:13 }}>
+              <div style={{ width:16, height:16, border:"2px solid #f0f0f0", borderTop:"2px solid #111", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
+              Analizando {tripCandidateJobs.length} jobs y {freeTrucks.length + loadingTripsWithRoom.length} camiones/trips...
+            </div>
+          )}
+          {!tripAILoading && tripAIError && (
+            <div style={{ padding:"14px", background:"#FCEBEB", border:"1px solid #F2C4C4", borderRadius:8, fontSize:13, color:"#A32D2D", marginBottom:10 }}>{tripAIError}</div>
+          )}
+          {!tripAILoading && !tripAIError && tripAIResult && (
+            <>
+              {tripAIResult.new_trips.length === 0 && tripAIResult.trip_additions.length === 0 && (
+                <div style={{ padding:"14px 0", fontSize:13, color:"#888" }}>La IA no encontró agrupaciones recomendables con los jobs y camiones actuales.</div>
+              )}
+              {tripAIResult.new_trips.map((s, idx) => <SuggestionCard key={`n${s.truck_id}-${idx}`} s={s} kind="new" idx={idx} />)}
+              {tripAIResult.trip_additions.map((s, idx) => <SuggestionCard key={`a${s.trip_id}-${idx}`} s={s} kind="addition" idx={idx} />)}
+              {tripAIResult.unassigned.length > 0 && (
+                <>
+                  <SectionLabel>Jobs sin asignar ({tripAIResult.unassigned.length})</SectionLabel>
+                  <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginBottom:10 }}>
+                    {tripAIResult.unassigned.map(u => { const j = repFor(u.job_key); return (
+                      <div key={u.job_key} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", borderBottom:"1px solid #f7f7f7", fontSize:12 }}>
+                        <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j?.job_number || u.job_key}</span>
+                        <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j?.customer || "—"}</span>
+                        <span style={{ color:"#888", flexShrink:0 }}>{u.reason}</span>
+                      </div>
+                    ); })}
+                  </div>
+                </>
+              )}
+              {tripAIResult.notes && <div style={{ fontSize:12, color:"#888", marginTop:6, lineHeight:1.5 }}>{tripAIResult.notes}</div>}
+            </>
+          )}
         </Modal>
         );
       })()}
