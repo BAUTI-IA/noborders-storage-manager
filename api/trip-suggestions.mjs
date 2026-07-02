@@ -6,7 +6,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
-export const maxDuration = 60; // the planning call can exceed Vercel's 10s default
+export const maxDuration = 300; // planning calls can run 1-2 min; Hobby + Fluid Compute allows up to 300s
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY from env
 const admin = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -149,7 +149,9 @@ export default async function handler(req, res) {
       model: "claude-opus-4-8",
       max_tokens: 16000,
       thinking: { type: "adaptive" },
-      output_config: { format: { type: "json_schema", schema: SUGGESTIONS_SCHEMA } },
+      // effort "medium" keeps latency reasonable; the dispatcher reviews every
+      // suggestion before anything is created, so top-tier planning depth isn't critical.
+      output_config: { effort: "medium", format: { type: "json_schema", schema: SUGGESTIONS_SCHEMA } },
       messages: [{ role: "user", content: buildPrompt({ today, jobs, trucks, loadingTrips, truncated: rawJobs.length > MAX_JOBS }) }],
     });
     const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");

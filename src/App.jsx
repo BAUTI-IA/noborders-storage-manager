@@ -11245,7 +11245,12 @@ export default function App() {
                   );
                 })}
               </div>
-              {s.reasoning && <div style={{ fontSize:12, color:"#888", marginTop:8, lineHeight:1.5 }}>{s.reasoning}</div>}
+              {s.reasoning && (
+                <div style={{ display:"flex", gap:8, alignItems:"flex-start", background:"#FFFBEB", border:"1px solid #FDE9C8", borderRadius:8, padding:"8px 10px", marginTop:8, fontSize:12, color:"#854F0B", lineHeight:1.5 }}>
+                  <span style={{ flexShrink:0 }}>💡</span>
+                  <span><b>Por qué este trip:</b> {s.reasoning}</span>
+                </div>
+              )}
               <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10 }}>
                 <Btn onClick={() => dropSuggestion(kind === "addition" ? "trip_additions" : "new_trips", idx)}>Descartar</Btn>
                 <Btn primary onClick={() => applyTripSuggestion(s, kind)}>{kind === "addition" ? "Revisar y agregar" : "Revisar y crear"}</Btn>
