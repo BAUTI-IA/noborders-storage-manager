@@ -227,7 +227,10 @@ function scanPageForFields(items, pageW, pageH, pageIndex) {
 }
 
 // ── PDF generation: stamp values onto the original template ─────────────────
-async function generateFilledPdf(templateBytes, fields, job, brokers) {
+// baseJob (optional): when re-stamping on top of an ALREADY-FILLED pdf (e.g. the
+// pickup-signed copy), fields whose value didn't change vs baseJob are skipped —
+// only new/changed values are printed, so nothing double-prints over the old ink.
+async function generateFilledPdf(templateBytes, fields, job, brokers, baseJob = null) {
   const pdf = await PDFDocument.load(templateBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
@@ -238,6 +241,7 @@ async function generateFilledPdf(templateBytes, fields, job, brokers) {
     if (!page) continue;
     const value = resolveValue(f, job, brokers);
     if (value === "" || value == null) continue;
+    if (baseJob && resolveValue(f, baseJob, brokers) === value) continue; // unchanged → already printed on the base
     const PH = page.getHeight();
     const pad = 2;
     const maxW = Math.max(8, (f.w || 100) - pad * 2);
@@ -737,18 +741,31 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (job) { setF(sheetFromJob(job)); setExtraCf([]); setCharges([]); setDiscounts([]); }
   }, [jobId]); // eslint-disable-line
 
-  // Load the template PDF bytes whenever the template changes.
+  // Load the base PDF: normally the blank company template; when reopening a
+  // BOL whose pickup is already signed, the SIGNED copy is the base — the
+  // pickup signature must stay visible on the document signed at delivery.
+  const onSignedBase = !!reopenDoc?.pickup_signed_path;
   useEffect(() => {
     let alive = true;
     (async () => {
       setTplBytes(null);
+      if (onSignedBase) {
+        const { data } = await supabase.storage.from("bol-signed").download(reopenDoc.pickup_signed_path);
+        if (alive && data) setTplBytes(new Uint8Array(await data.arrayBuffer()));
+        return;
+      }
       const tpl = templates.find(t => String(t.id) === String(tplId));
       if (!tpl?.pdf_path) return;
       const { data } = await supabase.storage.from("bol-templates").download(tpl.pdf_path);
       if (alive && data) setTplBytes(new Uint8Array(await data.arrayBuffer()));
     })();
     return () => { alive = false; };
-  }, [tplId, templates, supabase]);
+  }, [tplId, templates, supabase, onSignedBase]); // eslint-disable-line
+
+  // Snapshot of the values as they were when the signed version was saved —
+  // used to stamp only what CHANGED on top of the signed base.
+  const baseEff = useRef(null);
+  useEffect(() => { if (onSignedBase && baseEff.current === null) baseEff.current = effJob; }, []); // eslint-disable-line
 
   // ── Live calculator ────────────────────────────────────────────────────────
   // Fuel is MANUAL (per company it varies) — we only suggest a value; the user
@@ -806,7 +823,7 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (!tplBytes || !tpl) return;
     const h = setTimeout(async () => {
       try {
-        const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers);
+        const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
         const url = URL.createObjectURL(new Blob([out], { type: "application/pdf" }));
         setBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
       } catch (e) { /* keep previous preview */ }
@@ -822,7 +839,7 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (!tplBytes) { setError("Template PDF still loading — try again."); return; }
     setSaving(true);
     try {
-      const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers);
+      const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
       // Filename by job# + client for easy search (with a unique suffix so it never overwrites).
       const nice = [f.job_number, f.customer].filter(Boolean).join(" - ") || "bol";
       const safe = nice.replace(/[^a-zA-Z0-9._ -]/g, "").trim().slice(0, 60) || "bol";
@@ -839,7 +856,9 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
       const { error: insErr } = await supabase.from("bol_documents").insert({
         customer: f.customer || job?.customer || null, job_id: job?.id || null, job_number: f.job_number || null,
         template_id: tpl.id, company_name: tpl.company_name,
-        values: { ...f, ...calc }, line_items, pdf_path: path, status,
+        // _on_signed_base: this version's PDF was built ON TOP of the signed
+        // pickup copy (signature visible) → delivery signs pdf_path as-is.
+        values: { ...f, ...calc, ...(onSignedBase ? { _on_signed_base: true } : {}) }, line_items, pdf_path: path, status,
         created_by: session?.user?.email || null,
         // A new version after the pickup was signed inherits that signature
         // (the signed pickup PDF is immutable) so it goes straight to the
