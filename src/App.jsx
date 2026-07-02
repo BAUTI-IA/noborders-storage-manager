@@ -6041,15 +6041,23 @@ export default function App() {
       if (insErr) { err = insErr; break; }
       if (sc.pay === "job") jobLineSum += numv(l.amount);
       if (sc.extra && f.job_id && !extrasMissing && !splitMissing) {
-        const exPayload = {
-          job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
-          amount: numv(l.amount), generated_by: "driver_only",
-          driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
-          driver_commission_amount: 0, rep_commission_amount: 0, company_amount: numv(l.amount),
-          active: true, source: "payment_split", payment_id: pd?.id || null,
-        };
-        const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
-        if (ed) createdExtras.push(ed);
+        // If the job already has an active extra of this type (added via "+ Add extra"),
+        // the payment counts as collected against it — creating another row would
+        // double the billed total. Only auto-create the extra when none exists yet.
+        const k = jobKeyByRowId[Number(f.job_id)];
+        const jobExs = k ? (extrasByJobKey[k] || []) : jobExtras.filter(e => e.job_id === Number(f.job_id));
+        const alreadyBilled = jobExs.some(e => e.active !== false && e.extra_type === sc.extra);
+        if (!alreadyBilled) {
+          const exPayload = {
+            job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
+            amount: numv(l.amount), generated_by: "driver_only",
+            driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
+            driver_commission_amount: 0, rep_commission_amount: 0, company_amount: numv(l.amount),
+            active: true, source: "payment_split", payment_id: pd?.id || null,
+          };
+          const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
+          if (ed) createdExtras.push(ed);
+        }
       }
     }
     // Two-way sync: job-concept lines mirror bol_collected on the storage_job rows.
