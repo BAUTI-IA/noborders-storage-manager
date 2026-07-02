@@ -841,9 +841,21 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
         template_id: tpl.id, company_name: tpl.company_name,
         values: { ...f, ...calc }, line_items, pdf_path: path, status,
         created_by: session?.user?.email || null,
+        // A new version after the pickup was signed inherits that signature
+        // (the signed pickup PDF is immutable) so it goes straight to the
+        // delivery-signature step. The delivery signature is never carried:
+        // it must be signed on the latest content.
+        ...(reopenDoc?.pickup_signed_path ? {
+          pickup_envelope_id: reopenDoc.pickup_envelope_id || null,
+          pickup_signed_path: reopenDoc.pickup_signed_path,
+          pickup_signed_at: reopenDoc.pickup_signed_at || null,
+          sign_status: "pickup_signed",
+        } : {}),
       });
       if (insErr) throw insErr;
-      setNotice(status === "final" ? "Saved as final — it's in Documents." : "Draft saved to Documents.");
+      setNotice(status === "final"
+        ? (reopenDoc?.pickup_signed_path ? "Saved as a new version — pickup signature carried over; it's ready to sign at delivery." : "Saved as final — it's in Documents.")
+        : "Draft saved to Documents.");
       onSaved && onSaved();
     } catch (e) { setError(e.message); }
     setSaving(false);
@@ -875,6 +887,11 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
       </div>
       {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
       {notice && <div style={{ background: "#EAF3DE", border: "1px solid #cfe6b4", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#3B6D11", marginBottom: 12 }}>{notice}</div>}
+      {reopenDoc?.pickup_signed_path && (
+        <div style={{ background: "#EFF6FF", border: "1px solid #bfdbfe", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#1d4ed8", marginBottom: 12 }}>
+          ✍ Este BOL ya tiene el <b>pickup firmado</b> (esa copia queda archivada tal cual). Al guardar, la nueva versión hereda esa firma y queda lista para <b>firmar el delivery</b> con los cambios incluidos.
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
         {/* ── LEFT: editable sheet ─────────────────────────────────────────── */}
