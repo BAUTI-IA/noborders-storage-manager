@@ -9,74 +9,79 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 // ── Job fields that can be mapped onto a template ───────────────────────────
+// `g` groups the dropdown into <optgroup>s. Visibility (hidden keys) and
+// user-defined custom fields live in the global bol_field_config row —
+// resolution stays key-based, so hiding a field never breaks existing maps.
 const SOURCES = [
-  { k: "customer",          l: "Client name" },
-  { k: "client_phone",      l: "Client phone" },
-  { k: "client_email",      l: "Client email" },
-  { k: "job_number",        l: "Job / Order #" },
-  { k: "pickup_address",    l: "Pickup address" },
-  { k: "pickup_cityzip",    l: "Pickup city/state/zip" },
-  { k: "pickup_city",       l: "Pickup city" },
-  { k: "pickup_state",      l: "Pickup state" },
-  { k: "pickup_zip",        l: "Pickup zip" },
-  { k: "delivery_address",  l: "Delivery address" },
-  { k: "delivery_cityzip",  l: "Delivery city/state/zip" },
-  { k: "delivery_city",     l: "Delivery city" },
-  { k: "delivery_state",    l: "Delivery state" },
-  { k: "delivery_zip",      l: "Delivery zip" },
-  { k: "pickup_date_from",  l: "Pickup date",          fmt: "date" },
-  { k: "fadd",              l: "1st available delivery", fmt: "date" },
-  { k: "delivery_date",     l: "Delivery date",        fmt: "date" },
-  { k: "volume",            l: "Volume / CF" },
-  { k: "price_per_cf",      l: "Price per CF",         fmt: "money" },
-  { k: "cf_total",          l: "CF total (CF × rate)", fmt: "money" },
-  { k: "carrier_rate_per_cf", l: "Carrier rate / CF",  fmt: "money" },
-  { k: "fuel_surcharge_pct",l: "Fuel surcharge %",     fmt: "num" },
-  { k: "estimate",          l: "Estimate / Total",     fmt: "money" },
-  { k: "deposit",           l: "Deposit",              fmt: "money" },
-  { k: "pickup_balance",    l: "Pickup balance",       fmt: "money" },
-  { k: "delivery_balance",  l: "Delivery balance",     fmt: "money" },
-  { k: "bol_balance",       l: "BOL balance",          fmt: "money" },
-  { k: "bol_collected",     l: "BOL collected",        fmt: "money" },
-  { k: "bol_payment_method",l: "Payment method" },
-  { k: "rep",               l: "Rep" },
-  { k: "lot_number",        l: "Lot number" },
-  { k: "sticker_color",     l: "Sticker color" },
-  { k: "extra_stops",       l: "Extra stops" },
-  { k: "pads_received",     l: "Pads received" },
-  { k: "pads_returned",     l: "Pads returned" },
-  { k: "carrier_notes",     l: "Carrier notes" },
-  { k: "broker",            l: "Broker name" },
+  { k: "customer",          l: "Client name",          g: "Client" },
+  { k: "client_phone",      l: "Client phone",         g: "Client" },
+  { k: "client_email",      l: "Client email",         g: "Client" },
+  { k: "job_number",        l: "Job / Order #",        g: "Client" },
+  { k: "rep",               l: "Rep",                  g: "Client" },
+  { k: "broker",            l: "Broker name",          g: "Client" },
+  { k: "pickup_address",    l: "Pickup address",       g: "Route & dates" },
+  { k: "pickup_cityzip",    l: "Pickup city/state/zip", g: "Route & dates" },
+  { k: "pickup_city",       l: "Pickup city",          g: "Route & dates" },
+  { k: "pickup_state",      l: "Pickup state",         g: "Route & dates" },
+  { k: "pickup_zip",        l: "Pickup zip",           g: "Route & dates" },
+  { k: "delivery_address",  l: "Delivery address",     g: "Route & dates" },
+  { k: "delivery_cityzip",  l: "Delivery city/state/zip", g: "Route & dates" },
+  { k: "delivery_city",     l: "Delivery city",        g: "Route & dates" },
+  { k: "delivery_state",    l: "Delivery state",       g: "Route & dates" },
+  { k: "delivery_zip",      l: "Delivery zip",         g: "Route & dates" },
+  { k: "pickup_date_from",  l: "Pickup date",          g: "Route & dates", fmt: "date" },
+  { k: "fadd",              l: "1st available delivery", g: "Route & dates", fmt: "date" },
+  { k: "delivery_date",     l: "Delivery date",        g: "Route & dates", fmt: "date" },
+  { k: "extra_stops",       l: "Extra stops",          g: "Route & dates" },
+  { k: "volume",            l: "Volume / CF",          g: "Volume & rates" },
+  { k: "price_per_cf",      l: "Price per CF",         g: "Volume & rates", fmt: "money" },
+  { k: "cf_total",          l: "CF total (CF × rate)", g: "Volume & rates", fmt: "money" },
+  { k: "carrier_rate_per_cf", l: "Carrier rate / CF",  g: "Volume & rates", fmt: "money" },
+  { k: "fuel_surcharge_pct",l: "Fuel surcharge %",     g: "Charges & payments", fmt: "num" },
+  { k: "estimate",          l: "Estimate / Total",     g: "Charges & payments", fmt: "money" },
+  { k: "deposit",           l: "Deposit",              g: "Charges & payments", fmt: "money" },
+  { k: "pickup_balance",    l: "Pickup balance",       g: "Charges & payments", fmt: "money" },
+  { k: "delivery_balance",  l: "Delivery balance",     g: "Charges & payments", fmt: "money" },
+  { k: "bol_balance",       l: "BOL balance",          g: "Charges & payments", fmt: "money" },
+  { k: "bol_collected",     l: "BOL collected",        g: "Charges & payments", fmt: "money" },
+  { k: "bol_payment_method",l: "Payment method",       g: "Charges & payments" },
+  { k: "lot_number",        l: "Lot number",           g: "Other" },
+  { k: "sticker_color",     l: "Sticker color",        g: "Other" },
+  { k: "pads_received",     l: "Pads received",        g: "Other" },
+  { k: "pads_returned",     l: "Pads returned",        g: "Other" },
+  { k: "carrier_notes",     l: "Carrier notes",        g: "Other" },
   // ── Phase-2 editable sheet: computed totals + repeatable line slots ────────
   // These are NOT raw job columns — the live calculator fills them on an
   // "effective" job object before stamping, so the mapped boxes print the
   // edited values (extra CF, fuel $, discounts, grand total, balance…).
-  { k: "fuel_amount",       l: "Fuel surcharge $",       fmt: "money" },
-  { k: "grand_total",       l: "Grand total",            fmt: "money" },
-  { k: "balance_due",       l: "Balance due (final)",    fmt: "money" },
-  { k: "due_pickup",        l: "Due at pickup",          fmt: "money" },
-  { k: "due_delivery",      l: "Due at delivery",        fmt: "money" },
-  { k: "notes",             l: "Notes / free text" },
-  { k: "add_cf_1_qty",      l: "Additional CF #1 — qty" },
-  { k: "add_cf_1_rate",     l: "Additional CF #1 — rate", fmt: "money" },
-  { k: "add_cf_1_amount",   l: "Additional CF #1 — $",    fmt: "money" },
-  { k: "add_cf_2_qty",      l: "Additional CF #2 — qty" },
-  { k: "add_cf_2_rate",     l: "Additional CF #2 — rate", fmt: "money" },
-  { k: "add_cf_2_amount",   l: "Additional CF #2 — $",    fmt: "money" },
-  { k: "charge_1_label",    l: "Other charge #1 — label" },
-  { k: "charge_1_amount",   l: "Other charge #1 — $",     fmt: "money" },
-  { k: "charge_2_label",    l: "Other charge #2 — label" },
-  { k: "charge_2_amount",   l: "Other charge #2 — $",     fmt: "money" },
-  { k: "charge_3_label",    l: "Other charge #3 — label" },
-  { k: "charge_3_amount",   l: "Other charge #3 — $",     fmt: "money" },
-  { k: "charge_4_label",    l: "Other charge #4 — label" },
-  { k: "charge_4_amount",   l: "Other charge #4 — $",     fmt: "money" },
-  { k: "discount_1_label",  l: "Discount/adjust #1 — label" },
-  { k: "discount_1_amount", l: "Discount/adjust #1 — $",  fmt: "money" },
-  { k: "discount_2_label",  l: "Discount/adjust #2 — label" },
-  { k: "discount_2_amount", l: "Discount/adjust #2 — $",  fmt: "money" },
+  { k: "fuel_amount",       l: "Fuel surcharge $",       g: "Charges & payments", fmt: "money" },
+  { k: "grand_total",       l: "Grand total",            g: "Charges & payments", fmt: "money" },
+  { k: "balance_due",       l: "Balance due (final)",    g: "Charges & payments", fmt: "money" },
+  { k: "due_pickup",        l: "Due at pickup",          g: "Charges & payments", fmt: "money" },
+  { k: "due_delivery",      l: "Due at delivery",        g: "Charges & payments", fmt: "money" },
+  { k: "notes",             l: "Notes / free text",      g: "Other" },
+  { k: "add_cf_1_qty",      l: "Additional CF #1 — qty",  g: "Volume & rates" },
+  { k: "add_cf_1_rate",     l: "Additional CF #1 — rate", g: "Volume & rates", fmt: "money" },
+  { k: "add_cf_1_amount",   l: "Additional CF #1 — $",    g: "Volume & rates", fmt: "money" },
+  { k: "add_cf_2_qty",      l: "Additional CF #2 — qty",  g: "Volume & rates" },
+  { k: "add_cf_2_rate",     l: "Additional CF #2 — rate", g: "Volume & rates", fmt: "money" },
+  { k: "add_cf_2_amount",   l: "Additional CF #2 — $",    g: "Volume & rates", fmt: "money" },
+  { k: "charge_1_label",    l: "Other charge #1 — label", g: "Charges & payments" },
+  { k: "charge_1_amount",   l: "Other charge #1 — $",     g: "Charges & payments", fmt: "money" },
+  { k: "charge_2_label",    l: "Other charge #2 — label", g: "Charges & payments" },
+  { k: "charge_2_amount",   l: "Other charge #2 — $",     g: "Charges & payments", fmt: "money" },
+  { k: "charge_3_label",    l: "Other charge #3 — label", g: "Charges & payments" },
+  { k: "charge_3_amount",   l: "Other charge #3 — $",     g: "Charges & payments", fmt: "money" },
+  { k: "charge_4_label",    l: "Other charge #4 — label", g: "Charges & payments" },
+  { k: "charge_4_amount",   l: "Other charge #4 — $",     g: "Charges & payments", fmt: "money" },
+  { k: "discount_1_label",  l: "Discount/adjust #1 — label", g: "Charges & payments" },
+  { k: "discount_1_amount", l: "Discount/adjust #1 — $",  g: "Charges & payments", fmt: "money" },
+  { k: "discount_2_label",  l: "Discount/adjust #2 — label", g: "Charges & payments" },
+  { k: "discount_2_amount", l: "Discount/adjust #2 — $",  g: "Charges & payments", fmt: "money" },
 ];
 const SOURCE_LABEL = Object.fromEntries(SOURCES.map(s => [s.k, s.l]));
+const GROUP_ORDER = ["Client", "Route & dates", "Volume & rates", "Charges & payments", "Other"];
+const EMPTY_FIELD_CONFIG = { hidden_keys: [], custom_fields: [] };
 
 function fmtDate(v) {
   if (!v) return "";
@@ -115,6 +120,7 @@ function resolveValue(field, job, brokers) {
   // Template-defined "kind" wins (custom service sources aren't in SOURCES);
   // otherwise fall back to the SOURCES format.
   const kind = field.kind;
+  if (kind === "checkbox") return raw ? "X" : ""; // tick boxes stamp an X when checked
   if (kind === "date" || (!kind && def?.fmt === "date")) return fmtDate(raw);
   if (kind === "money" || (!kind && def?.fmt === "money")) return fmtMoney(raw);
   return raw == null ? "" : String(raw);
@@ -240,9 +246,17 @@ async function generateFilledPdf(templateBytes, fields, job, brokers, baseJob = 
     const page = pages[f.page || 0];
     if (!page) continue;
     const value = resolveValue(f, job, brokers);
-    if (value === "" || value == null) continue;
-    if (baseJob && resolveValue(f, baseJob, brokers) === value) continue; // unchanged → already printed on the base
     const PH = page.getHeight();
+    if (baseJob) {
+      const old = resolveValue(f, baseJob, brokers);
+      if (old === value) continue; // unchanged → already printed on the base
+      // The base already shows the old value — cover it with white before
+      // printing the new one, otherwise both overlap (edits at delivery).
+      if (old !== "" && old != null) {
+        page.drawRectangle({ x: f.x - 1, y: PH - f.y - (f.h || 16) - 1, width: (f.w || 100) + 2, height: (f.h || 16) + 2, color: rgb(1, 1, 1) });
+      }
+    }
+    if (value === "" || value == null) continue;
     const pad = 2;
     const maxW = Math.max(8, (f.w || 100) - pad * 2);
     let size = f.fontSize || 10;
@@ -259,6 +273,79 @@ async function generateFilledPdf(templateBytes, fields, job, brokers, baseJob = 
     page.drawText(text, { x, y: baseline, size, font, color: ink });
   }
   return await pdf.save();
+}
+
+// Stamp fill-time free-text annotations (DocuSign-style boxes the user drops
+// on the generated BOL) as a second pass over already-filled bytes. Same
+// top-left point convention as field_map; multi-line via explicit "\n".
+async function stampAnnotations(pdfBytes, annots) {
+  const pdf = await PDFDocument.load(pdfBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const pages = pdf.getPages();
+  const ink = rgb(0.04, 0.13, 0.36);
+  for (const a of annots) {
+    const page = pages[a.page || 0];
+    if (!page || !String(a.text || "").trim()) continue;
+    const PH = page.getHeight();
+    const size = a.fontSize || 10;
+    const leading = size * 1.25;
+    const lines = String(a.text).split("\n");
+    lines.forEach((line, i) => {
+      if (!line) return;
+      const tw = font.widthOfTextAtSize(line, size);
+      let x = a.x;
+      if (a.align === "center") x = a.x + ((a.w || 100) - tw) / 2;
+      else if (a.align === "right") x = a.x + (a.w || 100) - tw;
+      page.drawText(line, { x, y: PH - a.y - size - i * leading, size, font, color: ink });
+    });
+  }
+  return await pdf.save();
+}
+
+// Cover the areas of annotations already baked into a signed base PDF with
+// white, so the current annotations can be re-stamped without overlapping
+// (same "cover then reprint" approach as changed fields on a signed base).
+async function whiteOutAnnotations(pdfBytes, annots) {
+  const pdf = await PDFDocument.load(pdfBytes);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const pages = pdf.getPages();
+  for (const a of annots) {
+    const page = pages[a.page || 0];
+    if (!page || !String(a.text || "").trim()) continue;
+    const PH = page.getHeight();
+    const size = a.fontSize || 10;
+    const leading = size * 1.25;
+    const lines = String(a.text).split("\n");
+    const textW = Math.max(...lines.map(l => font.widthOfTextAtSize(l || " ", size)));
+    const boxW = a.w || 100;
+    // Long lines overflow the box (no clipping at stamp time) — cover them too.
+    let x0 = a.x;
+    if (a.align === "center") x0 = Math.min(a.x, a.x + (boxW - textW) / 2);
+    else if (a.align === "right") x0 = Math.min(a.x, a.x + boxW - textW);
+    const h = Math.max(a.h || 16, size + (lines.length - 1) * leading + size * 0.3) + 2;
+    page.drawRectangle({ x: x0 - 1, y: PH - a.y - h + 1, width: Math.max(boxW, textW) + 2, height: h, color: rgb(1, 1, 1) });
+  }
+  return await pdf.save();
+}
+
+// Drag/resize for boxes stored in PDF points (template editor + fill-time
+// annotations). Returns startDrag(e, box, mode) — mode "move" | "resize".
+function useBoxDrag(scale, updateBox) {
+  const drag = useRef(null);
+  return function startDrag(e, box, mode) {
+    e.stopPropagation(); e.preventDefault();
+    const d = { id: box.id, mode, startX: e.clientX, startY: e.clientY, ox: box.x, oy: box.y, ow: box.w, oh: box.h };
+    drag.current = d;
+    const onMove = ev => {
+      if (drag.current !== d) return;
+      const dx = (ev.clientX - d.startX) / scale, dy = (ev.clientY - d.startY) / scale;
+      if (mode === "move") updateBox(d.id, { x: Math.round(d.ox + dx), y: Math.round(d.oy + dy) });
+      else updateBox(d.id, { w: Math.max(20, Math.round(d.ow + dx)), h: Math.max(10, Math.round(d.oh + dy)) });
+    };
+    const onUp = () => { drag.current = null; window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 }
 
 // Render one PDF page to a data URL with pdf.js (used by editor + preview).
@@ -293,7 +380,16 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null);  // template being edited
   const [reopenDoc, setReopenDoc] = useState(null);  // saved BOL loaded back into the sheet
+  const [fieldConfig, setFieldConfig] = useState(EMPTY_FIELD_CONFIG);
   const canEdit = isAdmin || can("bol", "create") || can("bol", "edit");
+
+  // Global field config (hidden built-ins + custom fields). Missing table/row
+  // (script not run yet) just means the default: everything visible, no customs.
+  const loadFieldConfig = useCallback(async () => {
+    const { data } = await supabase.from("bol_field_config").select("*").eq("id", 1).maybeSingle();
+    setFieldConfig(data ? { hidden_keys: data.hidden_keys || [], custom_fields: data.custom_fields || [] } : EMPTY_FIELD_CONFIG);
+  }, [supabase]);
+  useEffect(() => { loadFieldConfig(); }, [loadFieldConfig]);
 
   // Clear the parent's pre-select once we've consumed it, so a later sidebar
   // visit opens the list instead of jumping back into generate.
@@ -315,12 +411,12 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
   }
 
   if (view === "editor") {
-    return <TemplateEditor supabase={supabase} session={session} template={editing}
+    return <TemplateEditor supabase={supabase} session={session} template={editing} fieldConfig={fieldConfig} refreshConfig={loadFieldConfig}
       onClose={() => { setView("list"); setEditing(null); load(); }} />;
   }
   if (view === "generate") {
     return <GeneratePanel supabase={supabase} session={session} templates={templates.filter(t => t.status === "active")}
-      jobs={jobs} brokers={brokers} initialJobNumber={genJobNumber} reopenDoc={reopenDoc}
+      jobs={jobs} brokers={brokers} initialJobNumber={genJobNumber} reopenDoc={reopenDoc} fieldConfig={fieldConfig}
       onSaved={() => {}} onClose={() => { setReopenDoc(null); setView(reopenDoc ? "documents" : "list"); }} />;
   }
   if (view === "documents") {
@@ -365,7 +461,7 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
 }
 
 // ── Visual template editor ──────────────────────────────────────────────────
-function TemplateEditor({ supabase, session, template, onClose }) {
+function TemplateEditor({ supabase, session, template, fieldConfig = EMPTY_FIELD_CONFIG, refreshConfig, onClose }) {
   const [companyName, setCompanyName] = useState(template?.company_name || "");
   const [pdfBytes, setPdfBytes] = useState(null);      // Uint8Array of the template
   const [pdfPath, setPdfPath] = useState(template?.pdf_path || null);
@@ -376,9 +472,9 @@ function TemplateEditor({ supabase, session, template, onClose }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [showFieldConfig, setShowFieldConfig] = useState(false);
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
-  const drag = useRef(null);
 
   const DISPLAY_W = 820;
   const scale = pageSizes[curPage] ? DISPLAY_W / pageSizes[curPage].w : 1;
@@ -418,22 +514,9 @@ function TemplateEditor({ supabase, session, template, onClose }) {
   function updateField(id, patch) { setFields(fs => fs.map(f => f.id === id ? { ...f, ...patch } : f)); }
   function deleteField(id) { setFields(fs => fs.filter(f => f.id !== id)); if (selId === id) setSelId(null); }
 
-  // drag / resize handlers (coords kept in PDF points)
-  function onBoxPointerDown(e, f, mode) {
-    e.stopPropagation(); e.preventDefault();
-    setSelId(f.id);
-    const rect = wrapRef.current.getBoundingClientRect();
-    drag.current = { id: f.id, mode, startX: e.clientX, startY: e.clientY, ox: f.x, oy: f.y, ow: f.w, oh: f.h, rect };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }
-  function onMove(e) {
-    const d = drag.current; if (!d) return;
-    const dx = (e.clientX - d.startX) / scale, dy = (e.clientY - d.startY) / scale;
-    if (d.mode === "move") updateField(d.id, { x: Math.round(d.ox + dx), y: Math.round(d.oy + dy) });
-    else updateField(d.id, { w: Math.max(20, Math.round(d.ow + dx)), h: Math.max(10, Math.round(d.oh + dy)) });
-  }
-  function onUp() { drag.current = null; window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); }
+  // drag / resize (coords kept in PDF points)
+  const startDrag = useBoxDrag(scale, updateField);
+  function onBoxPointerDown(e, f, mode) { setSelId(f.id); startDrag(e, f, mode); }
 
   async function runAutoDetect() {
     if (!pdfBytes) return;
@@ -512,6 +595,7 @@ function TemplateEditor({ supabase, session, template, onClose }) {
         )}
         {(pdfBytes || pdfPath) && <button style={smallBtn} onClick={addField}>+ Add field</button>}
         {pdfBytes && <button style={smallBtn} disabled={aiBusy} onClick={runAutoDetect}>{aiBusy ? "Detecting…" : "✨ Auto-detect (AI)"}</button>}
+        <button style={smallBtn} onClick={() => setShowFieldConfig(true)}>⚙ Manage fields</button>
         <span style={{ flex: 1 }} />
         <button style={btn(false)} disabled={busy} onClick={() => save("draft")}>Save draft</button>
         <button style={btn(true)} disabled={busy} onClick={() => save("active")}>{busy ? "Saving…" : "Save & activate"}</button>
@@ -540,6 +624,7 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                       cursor: "move", boxSizing: "border-box", fontSize: 9, color: "#333", overflow: "hidden", whiteSpace: "nowrap" }}>
                     <span style={{ background: selected ? "#2563eb" : "#e2762b", color: "#fff", fontSize: 8, padding: "0 3px", lineHeight: "12px", display: "inline-block" }}>
                       {["signature", "initial", "sign_date"].includes(f.kind) ? `✍ ${f.kind === "sign_date" ? "Date" : f.kind === "initial" ? "Initial" : "Sign"} (${f.stage || "pickup"})`
+                        : f.source.startsWith("chk:") ? `☑ ${f.source.slice(4) || "Checkbox"}`
                         : f.source ? (f.source.startsWith("svc:") ? (f.source.slice(4) || "Service") : f.label || SOURCE_LABEL[f.source] || (f.source.startsWith("text:") ? "Text" : f.source)) : (f.label || "unmapped")}
                     </span>
                     <div onPointerDown={e => onBoxPointerDown(e, f, "resize")}
@@ -557,20 +642,48 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                 <>
                   <div style={{ fontSize: 11, fontWeight: 600, color: "#999", textTransform: "uppercase", marginBottom: 8 }}>Field</div>
                   <label style={{ fontSize: 12, color: "#888" }}>Maps to</label>
-                  <select value={sel.source.startsWith("svc:") ? "__svc" : sel.source.startsWith("text:") ? "__text" : sel.source.startsWith("job:") ? "__job" : sel.source} onChange={e => {
-                      if (e.target.value === "__text") updateField(sel.id, { source: "text:", mode: "fixed" });
-                      else if (e.target.value === "__job") updateField(sel.id, { source: "job:", mode: "variable" });
-                      else if (e.target.value === "__svc") updateField(sel.id, { source: "svc:", mode: "variable", kind: "money", group: "Services", align: "right" });
-                      else updateField(sel.id, { source: e.target.value });
-                    }} style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13 }}>
-                    <option value="">— unmapped —</option>
-                    {SOURCES.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}
-                    <option value="__svc">Service / charge (own name)…</option>
-                    <option value="__text">Fixed text…</option>
-                    <option value="__job">Other job field (advanced)…</option>
-                  </select>
+                  {(() => {
+                    const hidden = new Set(fieldConfig.hidden_keys);
+                    const customs = fieldConfig.custom_fields || [];
+                    const selVal = sel.source.startsWith("svc:") ? "__svc" : sel.source.startsWith("text:") ? "__text" : sel.source.startsWith("job:") ? "__job" : sel.source.startsWith("chk:") ? "__chk" : sel.source;
+                    // Mapped to a hidden built-in or a deleted custom field: keep an
+                    // option for it so the select isn't blank and the map isn't lost.
+                    const known = selVal === "" || selVal.startsWith("__") || (SOURCES.some(s => s.k === selVal) && !hidden.has(selVal)) || customs.some(c => c.k === selVal);
+                    return (
+                      <select value={selVal} onChange={e => {
+                          const v = e.target.value;
+                          const custom = customs.find(c => c.k === v);
+                          if (v === "__text") updateField(sel.id, { source: "text:", mode: "fixed" });
+                          else if (v === "__job") updateField(sel.id, { source: "job:", mode: "variable" });
+                          else if (v === "__svc") updateField(sel.id, { source: "svc:", mode: "variable", kind: "money", group: "Services", align: "right" });
+                          else if (v === "__chk") updateField(sel.id, { source: "chk:", mode: "variable", kind: "checkbox", align: "center", w: 14, h: 14 });
+                          else if (custom) updateField(sel.id, { source: custom.k, mode: "variable", kind: custom.fmt || "", label: custom.l, group: "Custom" });
+                          else updateField(sel.id, { source: v });
+                        }} style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13 }}>
+                        <option value="">— unmapped —</option>
+                        {!known && <option value={selVal}>{(SOURCE_LABEL[selVal] || sel.label || selVal) + " (hidden)"}</option>}
+                        {GROUP_ORDER.map(g => {
+                          const opts = SOURCES.filter(s => s.g === g && !hidden.has(s.k));
+                          return opts.length ? <optgroup key={g} label={g}>{opts.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</optgroup> : null;
+                        })}
+                        {customs.length > 0 && (
+                          <optgroup label="Custom fields">{customs.map(c => <option key={c.k} value={c.k}>{c.l}</option>)}</optgroup>
+                        )}
+                        <optgroup label="Special">
+                          <option value="__svc">Service / charge (own name)…</option>
+                          <option value="__chk">Checkbox (tick when generating)…</option>
+                          <option value="__text">Fixed text…</option>
+                          <option value="__job">Other job field (advanced)…</option>
+                        </optgroup>
+                      </select>
+                    );
+                  })()}
                   {sel.source.startsWith("svc:") && (
                     <input value={sel.source.slice(4)} onChange={e => updateField(sel.id, { source: "svc:" + e.target.value, label: e.target.value })} placeholder="Service name (e.g. Packing, Stairs)"
+                      style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", marginBottom: 10, fontSize: 13, boxSizing: "border-box" }} />
+                  )}
+                  {sel.source.startsWith("chk:") && (
+                    <input value={sel.source.slice(4)} onChange={e => updateField(sel.id, { source: "chk:" + e.target.value, label: e.target.value })} placeholder="Checkbox name (e.g. Stairs — Origin)"
                       style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", marginBottom: 10, fontSize: 13, boxSizing: "border-box" }} />
                   )}
                   {sel.source.startsWith("text:") && (
@@ -596,7 +709,7 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                         style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13, boxSizing: "border-box" }} />
                     </>
                   )}
-                  {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && (
+                  {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && !sel.source.startsWith("chk:") && (
                     <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                       <div style={{ flex: 1 }}>
                         <label style={{ fontSize: 12, color: "#888" }}>Group</label>
@@ -615,7 +728,7 @@ function TemplateEditor({ supabase, session, template, onClose }) {
                   {(sel.mode || (sel.source.startsWith("text:") ? "fixed" : "variable")) === "variable" && !["signature", "initial", "sign_date"].includes(sel.kind) && (
                     <>
                       <label style={{ fontSize: 12, color: "#888" }}>Default value (pre-filled)</label>
-                      <input value={sel.default || ""} onChange={e => updateField(sel.id, { default: e.target.value })} placeholder="e.g. 50.00"
+                      <input value={sel.default || ""} onChange={e => updateField(sel.id, { default: e.target.value })} placeholder={sel.kind === "checkbox" ? "x = pre-checked" : "e.g. 50.00"}
                         style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 10px", fontSize: 13, boxSizing: "border-box" }} />
                     </>
                   )}
@@ -651,6 +764,92 @@ function TemplateEditor({ supabase, session, template, onClose }) {
           </div>
         </div>
       )}
+      {showFieldConfig && (
+        <FieldConfigModal supabase={supabase} session={session} fieldConfig={fieldConfig}
+          onClose={saved => { setShowFieldConfig(false); if (saved && refreshConfig) refreshConfig(); }} />
+      )}
+    </div>
+  );
+}
+
+// ── Manage fields: global dropdown config (hide built-ins + custom fields) ──
+function FieldConfigModal({ supabase, session, fieldConfig, onClose }) {
+  const [hidden, setHidden] = useState(() => new Set(fieldConfig.hidden_keys));
+  const [customs, setCustoms] = useState(() => (fieldConfig.custom_fields || []).map(c => ({ ...c })));
+  const [newLabel, setNewLabel] = useState("");
+  const [newFmt, setNewFmt] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  function toggle(k) { setHidden(h => { const n = new Set(h); n.has(k) ? n.delete(k) : n.add(k); return n; }); }
+
+  function addCustom() {
+    const label = newLabel.trim();
+    if (!label) { setErr("Enter a name for the new field."); return; }
+    let k = "custom_" + (label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "field");
+    while (SOURCES.some(s => s.k === k) || customs.some(c => c.k === k)) k += "_2";
+    setCustoms(cs => [...cs, { k, l: label, fmt: newFmt }]);
+    setNewLabel(""); setNewFmt(""); setErr(null);
+  }
+
+  async function save() {
+    setSaving(true); setErr(null);
+    const { error } = await supabase.from("bol_field_config").upsert({
+      id: 1, hidden_keys: [...hidden], custom_fields: customs,
+      updated_at: new Date().toISOString(), updated_by: session?.user?.email || null,
+    });
+    setSaving(false);
+    if (error) { setErr(error.message + (error.code === "42P01" ? " — run scripts/setup-bol-fields.sql in Supabase first." : "")); return; }
+    onClose(true);
+  }
+
+  return (
+    <div onPointerDown={() => onClose(false)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onPointerDown={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 560, maxWidth: "100%", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "16px 18px 10px" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Manage fields</div>
+          <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>Applies to all templates and all users.</div>
+        </div>
+        <div style={{ padding: "0 18px", overflowY: "auto", flex: 1 }}>
+          {err && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#b91c1c", marginBottom: 10 }}>{err}</div>}
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", margin: "6px 0 4px" }}>Built-in fields</div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>Uncheck to hide from the "Maps to" menu. Templates already using a hidden field keep printing it.</div>
+          {GROUP_ORDER.map(g => (
+            <div key={g} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#475569", margin: "4px 0" }}>{g}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 12px" }}>
+                {SOURCES.filter(s => s.g === g).map(s => (
+                  <label key={s.k} style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: hidden.has(s.k) ? "#b0b7c3" : "#333" }}>
+                    <input type="checkbox" checked={!hidden.has(s.k)} onChange={() => toggle(s.k)} />{s.l}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", margin: "14px 0 8px" }}>Custom fields</div>
+          {customs.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>No custom fields yet — add one below. It shows up in the "Maps to" menu and as an input when generating a BOL.</div>}
+          {customs.map(c => (
+            <div key={c.k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #f3f4f6", fontSize: 13 }}>
+              <span style={{ flex: 1 }}>{c.l}</span>
+              <span style={{ fontSize: 11, color: "#94a3b8" }}>{c.fmt === "money" ? "money $" : c.fmt === "date" ? "date" : "text"}</span>
+              <button style={{ border: "none", background: "transparent", color: "#b91c1c", cursor: "pointer", fontSize: 12 }}
+                onClick={() => { if (window.confirm(`Remove custom field "${c.l}"? Templates mapping it keep working.`)) setCustoms(cs => cs.filter(x => x.k !== c.k)); }}>Remove</button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, margin: "10px 0 16px" }}>
+            <input value={newLabel} onChange={e => setNewLabel(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addCustom(); }}
+              placeholder="New field name (e.g. PO Number)" style={{ flex: 1, padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", fontSize: 13 }} />
+            <select value={newFmt} onChange={e => setNewFmt(e.target.value)} style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", fontSize: 13 }}>
+              <option value="">text</option><option value="money">money $</option><option value="date">date</option>
+            </select>
+            <button style={smallBtn} onClick={addCustom}>+ Add</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 18px", borderTop: "1px solid #f3f4f6" }}>
+          <button style={btn(false)} onClick={() => onClose(false)}>Cancel</button>
+          <button style={btn(true)} disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -684,7 +883,127 @@ function sheetFromJob(job) {
   };
 }
 
-function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJobNumber, reopenDoc, onClose, onSaved }) {
+// ── Annotate mode: drop free text anywhere on the filled BOL (DocuSign-like).
+// Renders baseBytes (filled, WITHOUT annotations) to a canvas; the text lives
+// in draggable DOM boxes so it is never drawn twice. Coords in PDF points.
+function AnnotatePreview({ pdfBytes, annots, onChange }) {
+  const DISPLAY_W = 760;
+  const [pageSizes, setPageSizes] = useState([]);
+  const [curPage, setCurPage] = useState(0);
+  const [selId, setSelId] = useState(null);
+  const [editId, setEditId] = useState(null);
+  const canvasRef = useRef(null);
+  const page = pageSizes[curPage] || { w: 612, h: 792 };
+  const scale = DISPLAY_W / page.w;
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const s = await getPdfPageSizes(pdfBytes).catch(() => []);
+      if (alive && s.length) { setPageSizes(s); setCurPage(p => Math.min(p, s.length - 1)); }
+    })();
+    return () => { alive = false; };
+  }, [pdfBytes]);
+
+  useEffect(() => {
+    if (pdfBytes && canvasRef.current && pageSizes[curPage]) {
+      renderPageToCanvas(pdfBytes, curPage, canvasRef.current, scale).catch(() => {});
+    }
+  }, [pdfBytes, curPage, scale, pageSizes]);
+
+  // onChange is a state setter — functional updates keep fast drag events safe.
+  function updateAnnot(id, patch) { onChange(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a)); }
+  function deleteAnnot(id) { onChange(prev => prev.filter(a => a.id !== id)); if (selId === id) setSelId(null); }
+  const startDrag = useBoxDrag(scale, updateAnnot);
+
+  // Double-click detection via pointerdown timing: startDrag preventDefault()s
+  // the pointerdown, which suppresses the native dblclick event in Chromium.
+  const lastTap = useRef({ id: null, t: 0 });
+  function onBoxPointerDown(e, a) {
+    const now = Date.now();
+    if (lastTap.current.id === a.id && now - lastTap.current.t < 350) {
+      e.stopPropagation(); e.preventDefault();
+      setSelId(a.id); setEditId(a.id);
+      lastTap.current = { id: null, t: 0 };
+      return;
+    }
+    lastTap.current = { id: a.id, t: now };
+    setSelId(a.id); startDrag(e, a, "move");
+  }
+
+  function addText() {
+    const id = rid();
+    onChange(prev => [...prev, { id, page: curPage, x: page.w * 0.35, y: page.h * 0.4, w: 180, h: 20, text: "Text", fontSize: 10, align: "left" }]);
+    setSelId(id); setEditId(id);
+  }
+
+  const sel = annots.find(a => a.id === selId);
+  const pageAnnots = annots.filter(a => (a.page || 0) === curPage);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <button style={smallBtn} onClick={addText}>+ Add text</button>
+        {pageSizes.length > 1 && (
+          <>
+            <button style={smallBtn} disabled={curPage === 0} onClick={() => { setCurPage(p => p - 1); setSelId(null); setEditId(null); }}>‹ Prev</button>
+            <span style={{ fontSize: 13 }}>Page {curPage + 1} / {pageSizes.length}</span>
+            <button style={smallBtn} disabled={curPage === pageSizes.length - 1} onClick={() => { setCurPage(p => p + 1); setSelId(null); setEditId(null); }}>Next ›</button>
+          </>
+        )}
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>Drag to move · drag the corner to resize · double-click to edit text.</span>
+      </div>
+      {/* Always rendered: mounting it on select would shift the page mid-double-click. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 10px", minHeight: 28 }}>
+        {sel ? (
+          <>
+            <label style={{ fontSize: 12, color: "#888" }}>Size {sel.fontSize}</label>
+            <input type="range" min="6" max="24" step="0.5" value={sel.fontSize} onChange={e => updateAnnot(sel.id, { fontSize: Number(e.target.value) })} style={{ width: 110 }} />
+            {["left", "center", "right"].map(a => (
+              <button key={a} onClick={() => updateAnnot(sel.id, { align: a })}
+                style={{ padding: "4px 9px", borderRadius: 7, border: "1px solid #eee", cursor: "pointer", fontSize: 12, background: sel.align === a ? "#111" : "#fff", color: sel.align === a ? "#fff" : "#666" }}>{a}</button>
+            ))}
+            <button style={smallBtn} onClick={() => setEditId(sel.id)}>✎ Edit text</button>
+            <button style={{ ...smallBtn, color: "#b91c1c" }} onClick={() => deleteAnnot(sel.id)}>Delete text</button>
+          </>
+        ) : <span style={{ fontSize: 12, color: "#94a3b8" }}>Select a text box to style or edit it.</span>}
+      </div>
+      <div style={{ position: "relative", width: DISPLAY_W, maxWidth: "100%", border: "1px solid #ddd", borderRadius: 8, lineHeight: 0, overflow: "hidden" }}
+        onPointerDown={() => { setSelId(null); setEditId(null); }}>
+        <canvas ref={canvasRef} style={{ width: "100%", height: "auto", display: "block" }} />
+        {pageAnnots.map(a => {
+          const selected = a.id === selId;
+          const editing = a.id === editId;
+          return (
+            <div key={a.id}
+              onPointerDown={e => { if (editing) { e.stopPropagation(); return; } onBoxPointerDown(e, a); }}
+              onDoubleClick={e => { e.stopPropagation(); setSelId(a.id); setEditId(a.id); }}
+              style={{ position: "absolute", left: a.x * scale, top: a.y * scale, width: a.w * scale, minHeight: a.h * scale,
+                border: selected ? "1.5px solid #2563eb" : "1px dashed #60a5fa", background: selected ? "rgba(37,99,235,0.06)" : "transparent",
+                cursor: editing ? "text" : "move", boxSizing: "border-box", lineHeight: 1.25 }}>
+              {editing ? (
+                <textarea ref={el => { if (el && !el.__focused) { el.__focused = true; setTimeout(() => el.focus(), 0); } }} value={a.text}
+                  onChange={e => updateAnnot(a.id, { text: e.target.value })}
+                  onBlur={() => { setEditId(null); if (!String(a.text || "").trim()) deleteAnnot(a.id); }}
+                  onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.currentTarget.blur(); } }}
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none", outline: "none", resize: "none",
+                    background: "transparent", padding: 0, margin: 0, fontFamily: "Helvetica, Arial, sans-serif",
+                    fontSize: (a.fontSize || 10) * scale, lineHeight: 1.25, color: "#0A215C", textAlign: a.align || "left" }} />
+              ) : (
+                <div style={{ whiteSpace: "pre", overflow: "hidden", fontFamily: "Helvetica, Arial, sans-serif",
+                  fontSize: (a.fontSize || 10) * scale, color: "#0A215C", textAlign: a.align || "left", width: "100%" }}>{a.text}</div>
+              )}
+              <div onPointerDown={e => { setSelId(a.id); startDrag(e, a, "resize"); }}
+                style={{ position: "absolute", right: -4, bottom: -4, width: 10, height: 10, background: "#2563eb", border: "1px solid #fff", borderRadius: 2, cursor: "nwse-resize", display: selected && !editing ? "block" : "none" }} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJobNumber, reopenDoc, fieldConfig = EMPTY_FIELD_CONFIG, onClose, onSaved }) {
   const preJob = initialJobNumber ? jobs.find(j => String(j.job_number) === String(initialJobNumber)) : null;
   const [tplId, setTplId] = useState(reopenDoc?.template_id ? String(reopenDoc.template_id) : (templates[0]?.id || ""));
   const [jobQuery, setJobQuery] = useState(preJob ? String(preJob.job_number || "") : "");
@@ -695,6 +1014,9 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
   const [discounts, setDiscounts] = useState(() => (reopenDoc?.line_items || []).filter(l => l.type === "discount").map(l => ({ id: rid(), label: l.label ?? "", amount: Math.abs(num(l.amount)) || "" })));
   const [tplBytes, setTplBytes] = useState(null);
   const [blobUrl, setBlobUrl] = useState(null);
+  const [baseBytes, setBaseBytes] = useState(null); // filled PDF WITHOUT annotations (annotate-mode canvas)
+  const [annots, setAnnots] = useState(() => reopenDoc?.annotations || []); // free-text boxes stamped on top
+  const [annotMode, setAnnotMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -724,15 +1046,46 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     return out;
   }, [templates, tplId]);
 
-  // Seed each service field with its template default (without clobbering edits).
+  // Custom fields (from Manage fields) the template maps — same idea as
+  // serviceFields. Works off the field_map + "custom_" prefix so a custom
+  // field deleted from the config keeps its input on old templates.
+  const customJobFields = useMemo(() => {
+    const t = templates.find(t => String(t.id) === String(tplId));
+    const seen = new Set(), out = [];
+    for (const x of (t?.field_map || [])) {
+      if (!String(x.source || "").startsWith("custom_") || x.mode === "fixed") continue;
+      if (seen.has(x.source)) continue;
+      seen.add(x.source);
+      const def = (fieldConfig.custom_fields || []).find(c => c.k === x.source);
+      out.push({ source: x.source, label: def?.l || x.label || x.source, default: x.default });
+    }
+    return out;
+  }, [templates, tplId, fieldConfig]);
+
+  // Tick boxes the template defines (origin/destination, payment method…).
+  // Deduped by source: the same checkbox on several pages shares one tick.
+  const checkboxFields = useMemo(() => {
+    const t = templates.find(t => String(t.id) === String(tplId));
+    const seen = new Set(), out = [];
+    for (const x of (t?.field_map || [])) {
+      if (x.kind !== "checkbox" || !x.source || seen.has(x.source)) continue;
+      seen.add(x.source);
+      out.push({ source: x.source, label: x.label || (String(x.source).startsWith("chk:") ? x.source.slice(4) : x.source), default: x.default });
+    }
+    return out;
+  }, [templates, tplId]);
+
+  // Seed service/custom/checkbox fields with their template defaults
+  // (without clobbering edits).
   useEffect(() => {
-    if (!serviceFields.length) return;
+    if (!serviceFields.length && !customJobFields.length && !checkboxFields.length) return;
     setF(s => {
       const add = {};
-      for (const sf of serviceFields) if (s[sf.source] === undefined) add[sf.source] = sf.default ?? "";
+      for (const sf of [...serviceFields, ...customJobFields]) if (s[sf.source] === undefined) add[sf.source] = sf.default ?? "";
+      for (const cb of checkboxFields) if (s[cb.source] === undefined) add[cb.source] = !!cb.default;
       return Object.keys(add).length ? { ...s, ...add } : s;
     });
-  }, [serviceFields]); // eslint-disable-line
+  }, [serviceFields, customJobFields, checkboxFields]); // eslint-disable-line
 
   // Prefill the sheet from the picked job (not when reopening a saved snapshot).
   useEffect(() => {
@@ -744,11 +1097,16 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
   // Load the base PDF: normally the blank company template; when reopening a
   // BOL whose pickup is already signed, the SIGNED copy is the base — the
   // pickup signature must stay visible on the document signed at delivery.
+  // Annotation coordinates are template-specific, so a real template switch
+  // clears them (not the initial mount — that would wipe a reopened doc's).
   const onSignedBase = !!reopenDoc?.pickup_signed_path;
+  const prevTplId = useRef(null);
   useEffect(() => {
     let alive = true;
+    if (prevTplId.current != null && prevTplId.current !== tplId) { setAnnots([]); setAnnotMode(false); }
+    prevTplId.current = tplId;
     (async () => {
-      setTplBytes(null);
+      setTplBytes(null); setBaseBytes(null);
       if (onSignedBase) {
         const { data } = await supabase.storage.from("bol-signed").download(reopenDoc.pickup_signed_path);
         if (alive && data) setTplBytes(new Uint8Array(await data.arrayBuffer()));
@@ -801,6 +1159,8 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     const e = { ...job };
     for (const hf of HEADER_FIELDS) e[hf.k] = f[hf.k] ?? "";
     for (const sf of serviceFields) e[sf.source] = f[sf.source] ?? "";
+    for (const cf of customJobFields) e[cf.source] = f[cf.source] ?? "";
+    for (const cb of checkboxFields) e[cb.source] = !!f[cb.source];
     e.volume = f.volume; e.price_per_cf = f.price_per_cf; e.fuel_surcharge_pct = f.fuel_surcharge_pct; e.deposit = f.deposit;
     e.cf_total = calc.cfSubtotal; e.fuel_amount = calc.fuelAmt; e.grand_total = calc.grandTotal;
     e.estimate = calc.grandTotal; e.balance_due = calc.balanceDue; e.bol_balance = calc.balanceDue;
@@ -813,23 +1173,41 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     charges.slice(0, 4).forEach((l, i) => { e[`charge_${i + 1}_label`] = l.label || ""; e[`charge_${i + 1}_amount`] = l.amount === "" ? "" : num(l.amount); });
     discounts.slice(0, 2).forEach((l, i) => { e[`discount_${i + 1}_label`] = l.label || ""; e[`discount_${i + 1}_amount`] = l.amount === "" ? "" : -Math.abs(num(l.amount)); });
     return e;
-  }, [f, extraCf, charges, discounts, calc, jobId, jobs, serviceFields]);
+  }, [f, extraCf, charges, discounts, calc, jobId, jobs, serviceFields, customJobFields, checkboxFields]);
 
   const tpl = templates.find(t => String(t.id) === String(tplId));
   const snapshot = JSON.stringify([effJob, tpl?.field_map]);
 
-  // Debounced live preview: re-stamp shortly after any edit settles.
+  // Debounced live preview, two stages: (A) stamp the mapped fields into
+  // baseBytes — the annotate-mode canvas renders these, so annotation text is
+  // never drawn twice; (B) stamp the free-text annotations on top and expose
+  // the final bytes via blobUrl (preview embed, Download, Open tab).
   useEffect(() => {
     if (!tplBytes || !tpl) return;
     const h = setTimeout(async () => {
       try {
-        const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
-        const url = URL.createObjectURL(new Blob([out], { type: "application/pdf" }));
-        setBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
+        // Signed base: cover the annotations baked into it first (effect B
+        // re-stamps the current ones), then stamp only the changed fields.
+        let base = tplBytes;
+        if (onSignedBase && (reopenDoc?.annotations || []).length) base = await whiteOutAnnotations(base, reopenDoc.annotations);
+        setBaseBytes(await generateFilledPdf(base, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null));
       } catch (e) { /* keep previous preview */ }
     }, 450);
     return () => clearTimeout(h);
   }, [tplBytes, snapshot]); // eslint-disable-line
+
+  const annotsSnapshot = JSON.stringify(annots);
+  useEffect(() => {
+    if (!baseBytes) return;
+    const h = setTimeout(async () => {
+      try {
+        const out = annots.length ? await stampAnnotations(baseBytes, annots) : baseBytes;
+        const url = URL.createObjectURL(new Blob([out], { type: "application/pdf" }));
+        setBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
+      } catch (e) { /* keep previous preview */ }
+    }, 200);
+    return () => clearTimeout(h);
+  }, [baseBytes, annotsSnapshot]); // eslint-disable-line
 
   useEffect(() => () => { if (blobUrl) URL.revokeObjectURL(blobUrl); }, []); // eslint-disable-line
 
@@ -839,7 +1217,10 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
     if (!tplBytes) { setError("Template PDF still loading — try again."); return; }
     setSaving(true);
     try {
-      const out = await generateFilledPdf(tplBytes, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
+      let base = tplBytes;
+      if (onSignedBase && (reopenDoc?.annotations || []).length) base = await whiteOutAnnotations(base, reopenDoc.annotations);
+      let out = await generateFilledPdf(base, tpl.field_map || [], effJob, brokers, onSignedBase ? baseEff.current : null);
+      if (annots.length) out = await stampAnnotations(out, annots);
       // Filename by job# + client for easy search (with a unique suffix so it never overwrites).
       const nice = [f.job_number, f.customer].filter(Boolean).join(" - ") || "bol";
       const safe = nice.replace(/[^a-zA-Z0-9._ -]/g, "").trim().slice(0, 60) || "bol";
@@ -858,7 +1239,7 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
         template_id: tpl.id, company_name: tpl.company_name,
         // _on_signed_base: this version's PDF was built ON TOP of the signed
         // pickup copy (signature visible) → delivery signs pdf_path as-is.
-        values: { ...f, ...calc, ...(onSignedBase ? { _on_signed_base: true } : {}) }, line_items, pdf_path: path, status,
+        values: { ...f, ...calc, ...(onSignedBase ? { _on_signed_base: true } : {}) }, line_items, annotations: annots, pdf_path: path, status,
         created_by: session?.user?.email || null,
         // A new version after the pickup was signed inherits that signature
         // (the signed pickup PDF is immutable) so it goes straight to the
@@ -943,6 +1324,35 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
               ))}
             </div>
           </div>
+
+          {/* custom fields (from Manage fields, mapped by the template) */}
+          {customJobFields.length > 0 && (
+            <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", marginBottom: 10 }}>Custom fields</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {customJobFields.map(cf => (
+                  <div key={cf.source}>
+                    <label style={lbl}>{cf.label}</label>
+                    <input value={f[cf.source] ?? ""} onChange={e => set(cf.source, e.target.value)} placeholder={cf.default || ""} style={inp} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* tick boxes from the template (origin/destination, payment method…) */}
+          {checkboxFields.length > 0 && (
+            <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", marginBottom: 10 }}>Checkboxes (from template)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+                {checkboxFields.map(cb => (
+                  <label key={cb.source} style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                    <input type="checkbox" checked={!!f[cb.source]} onChange={e => set(cb.source, e.target.checked)} />{cb.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* charges calculator */}
           <div style={{ background: "#fff", border: "1px solid #efefef", borderRadius: 12, padding: 14 }}>
@@ -1033,12 +1443,17 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
         <div style={{ flex: 1, minWidth: 360, position: "sticky", top: 12 }}>
           {blobUrl ? (
             <>
-              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <a href={blobUrl} download="bol.pdf" style={{ ...btn(false), textDecoration: "none" }}>⬇ Download</a>
                 <a href={blobUrl} target="_blank" rel="noreferrer" style={{ ...btn(false), textDecoration: "none" }}>Open tab</a>
-                <span style={{ fontSize: 12, color: "#94a3b8" }}>Preview updates live as you edit.</span>
+                <button style={btn(annotMode)} disabled={!baseBytes} onClick={() => setAnnotMode(m => !m)}>{annotMode ? "✓ Done editing" : "✎ Add text on PDF"}</button>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                  {annotMode ? "Click + Add text, drag to place." : annots.length ? `${annots.length} text note(s) will be stamped.` : "Preview updates live as you edit."}
+                </span>
               </div>
-              <object data={blobUrl} type="application/pdf" style={{ width: "100%", height: 760, border: "1px solid #ddd", borderRadius: 8 }} />
+              {annotMode && baseBytes
+                ? <AnnotatePreview pdfBytes={baseBytes} annots={annots} onChange={setAnnots} />
+                : <object data={blobUrl} type="application/pdf" style={{ width: "100%", height: 760, border: "1px solid #ddd", borderRadius: 8 }} />}
             </>
           ) : <div style={{ border: "2px dashed #e5e5e5", borderRadius: 12, padding: 48, textAlign: "center", color: "#aaa", fontSize: 14 }}>{busy ? "Loading…" : "Pick a template and job — the live preview appears here."}</div>}
         </div>
