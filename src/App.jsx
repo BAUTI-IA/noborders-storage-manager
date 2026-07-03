@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { geoCentroid } from "d3-geo";
 import { BolSection } from "./bol.jsx";
+import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -765,6 +766,7 @@ const PAY_CONCEPTS = [
   { v:"extra", l:"Extra", bg:"#EDE9FE", text:"#6D28D9" },
   { v:"cc_fee", l:"CC Fee", bg:"#FAEEDA", text:"#854F0B" },   // amber
   { v:"storage", l:"Storage", bg:"#EAF3DE", text:"#3B6D11" },
+  { v:"on_account", l:"A cuenta", bg:"#FEF3C7", text:"#92760B" }, // received but not yet applied to a charge
   { v:"other", l:"Other", bg:"#F1F1F1", text:"#666" },
 ];
 // Detailed check / money order options.
@@ -1473,6 +1475,7 @@ alter table public.payments add column if not exists cc_fee_enabled boolean defa
 alter table public.payments add column if not exists cc_fee_pct numeric default 3;
 alter table public.payments add column if not exists cc_fee_amount numeric;
 alter table public.payments add column if not exists cc_fee_payment_id bigint;
+alter table public.payments add column if not exists job_extra_id bigint;
 alter table public.payments enable row level security;
 drop policy if exists "payments_all" on public.payments;
 create policy "payments_all" on public.payments for all to anon, authenticated using (true) with check (true);
@@ -3195,6 +3198,7 @@ export default function App() {
   const [payStageMissing, setPayStageMissing] = useState(false);
   const [payColsMissing, setPayColsMissing] = useState(false);   // detailed check/MO/CC columns
   const [splitMissing, setSplitMissing] = useState(false);       // split_group / extra_type / source / payment_id
+  const [allocMissing, setAllocMissing] = useState(false);       // payments.job_extra_id (charge allocation)
   const [expandedSplits, setExpandedSplits] = useState(() => new Set());
   const [commAssign, setCommAssign] = useState(null);            // pending commission assignment for a payment-split extra
   const [payDocUploading, setPayDocUploading] = useState(false);
@@ -3214,6 +3218,8 @@ export default function App() {
   const [editingPayId, setEditingPayId] = useState(null);
   const [paySaving, setPaySaving] = useState(false);
   const [payJobSearch, setPayJobSearch] = useState("");   // job search inside the payment form
+  const [extraJobSearch, setExtraJobSearch] = useState(""); // job search inside the quick-extra modal (Payments page flow)
+  const [reallocPay, setReallocPay] = useState(null);       // "A cuenta" payment being re-assigned to charges
   // Legal & Compliance
   const [complianceMissing, setComplianceMissing] = useState(false);
   const [companies, setCompanies] = useState([]);
@@ -3911,6 +3917,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session, paymentsMissing, extrasMissing]);
 
+  // Probe payments.job_extra_id (charge-allocation release: links a payment
+  // line to the specific extra it pays).
+  useEffect(() => {
+    if (!session || paymentsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("payments").select("job_extra_id").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.payments add column if not exists job_extra_id bigint;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setAllocMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, paymentsMissing]);
+
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
     if (!session) return;
@@ -4181,21 +4205,61 @@ export default function App() {
     return m;
   }, [records, sit, usedCfByStorage]);
 
+  // Storage P&L: what the company PAYS per rented unit vs what clients PAY for
+  // storage in it. Every non-closed rented unit counts as expense — a vacant
+  // unit still gets paid every month (that was the bug: only occupied units
+  // were summed, so the "real" storage bill was understated).
+  const storagePnl = useMemo(() => {
+    const activeParts = jobs.filter(j => !j.date_out && j.status !== "cancelled");
+    // A job can span several units: split its monthly rate evenly across them
+    // so the per-unit table sums to the same total as Storage Billing.
+    const partsByKey = {};
+    for (const p of activeParts) { const k = jobKey(p); (partsByKey[k] = partsByKey[k] || []).push(p); }
+    const incomeByStorage = {};
+    for (const parts of Object.values(partsByKey)) {
+      const j = parts[0];
+      if (!j.billing_active) continue;
+      const rate = Number(j.client_monthly_rate) || 0;
+      const storageParts = parts.filter(p => p.storage_id);
+      if (!rate || !storageParts.length) continue;
+      const share = rate / storageParts.length;
+      for (const p of storageParts) incomeByStorage[p.storage_id] = (incomeByStorage[p.storage_id] || 0) + share;
+    }
+    const rows = records
+      .filter(r => r.space_type !== "warehouse" && r.situation !== "Close")
+      .map(r => {
+        const pay = Number(r.monthly_cost) > 0 ? Number(r.monthly_cost) : 0;
+        const income = incomeByStorage[r.id] || 0;
+        return {
+          id: r.id,
+          name: [r.brand, r.unit && ("U" + r.unit), r.state].filter(Boolean).join(" · ") || "—",
+          pay, income, margin: income - pay,
+          hasCost: Number(r.monthly_cost) > 0,
+          occupied: sit(r) === "Open",
+        };
+      })
+      .sort((a, b) => a.margin - b.margin);
+    const totals = rows.reduce((t, r) => ({ pay: t.pay + r.pay, income: t.income + r.income }), { pay: 0, income: 0 });
+    return { rows, totals, missingCost: rows.filter(r => !r.hasCost).length };
+  }, [jobs, records, sit]);
+
   const metrics = useMemo(() => {
     const activeParts = jobs.filter(j => !j.date_out);
     const deliveredParts = jobs.filter(j => j.date_out);
     const occupied = new Set(activeParts.map(j => j.storage_id));
-    const withCost = records.filter(r => occupied.has(r.id) && r.monthly_cost && Number(r.monthly_cost) > 0);
-    const totalCost = withCost.reduce((sum, r) => sum + Number(r.monthly_cost), 0);
     return {
       activeJobs: new Set(activeParts.map(jobKey)).size,
       deliveredJobs: new Set(deliveredParts.map(jobKey)).size,
       units: records.length,
       occupied: occupied.size,
       states: new Set(records.map(r => r.state).filter(Boolean)).size,
-      totalCost,
+      totalCost: Math.round(storagePnl.totals.pay),
+      vacantCost: Math.round(storagePnl.rows.filter(r => !r.occupied).reduce((s, r) => s + r.pay, 0)),
+      storageIncome: Math.round(storagePnl.totals.income),
+      storageMargin: Math.round(storagePnl.totals.income - storagePnl.totals.pay),
+      missingCost: storagePnl.missingCost,
     };
-  }, [jobs, records]);
+  }, [jobs, records, storagePnl]);
 
   // Payments coming due on active units (not Closed/Empty).
   const urgentPayments = useMemo(
@@ -4474,17 +4538,26 @@ export default function App() {
   }, [jobs]);
   const tripCalc = useCallback((trip) => {
     const jobsIn = jobsByTrip[trip.id] || [];
-    let totalCf = 0, totalBol = 0, delivered = 0;
-    for (const j of jobsIn) { totalCf += parseCf(j.volume); totalBol += numv(j.bol_balance); if (j.date_out || j.status === "delivered") delivered++; }
+    // totalCf = everything assigned to the trip; loadedCf = what is physically on
+    // the truck right now — delivered jobs and jobs sitting in storage (dropped
+    // mid-trip or not picked up yet) don't take up space. Occupancy uses loadedCf
+    // so the bar matches the stops' "Delivered" / "Dropped in storage" badges.
+    let totalCf = 0, loadedCf = 0, totalBol = 0, delivered = 0;
+    for (const j of jobsIn) {
+      const cf = parseCf(j.volume);
+      totalCf += cf; totalBol += numv(j.bol_balance);
+      if (j.date_out || j.status === "delivered") delivered++;
+      else if (j.status !== "in_storage") loadedCf += cf;
+    }
     const cap = numv(truckById[trip.truck_id]?.capacity_cf);
-    const occPct = cap > 0 ? Math.round((totalCf / cap) * 100) : null;
-    return { jobsIn, totalCf, totalBol, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
+    const occPct = cap > 0 ? Math.round((loadedCf / cap) * 100) : null;
+    return { jobsIn, totalCf, loadedCf, totalBol, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
   }, [jobsByTrip, truckById]);
   const tripMetrics = useMemo(() => {
     const td = today();
     let activeCount = 0, cfTransit = 0, bolTransit = 0, deliveredToday = 0;
     for (const t of trips) {
-      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.totalCf; bolTransit += c.totalBol; }
+      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.loadedCf; bolTransit += c.totalBol; }
     }
     for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
     return { activeCount, cfTransit, bolTransit, deliveredToday };
@@ -4648,6 +4721,13 @@ export default function App() {
     for (const p of payments) { const k = jobKeyByRowId[p.job_id]; if (!k) continue; (m[k] = m[k] || []).push(p); }
     return m;
   }, [payments, jobKeyByRowId]);
+  // Charge state of a job (job balance + each extra, with per-charge remaining)
+  // — feeds the payment-allocation panel and the per-extra chips in the drawer.
+  const chargeStateByJobKey = useCallback((key) => buildJobCharges({
+    expected: jobExpected(extraJobGroups.get(key)),
+    extras: extrasByJobKey[key] || [],
+    payments: paymentsByJobKey[key] || [],
+  }), [extraJobGroups, jobExpected, extrasByJobKey, paymentsByJobKey]);
   // Net received per job (only payments flagged received), for outstanding-balance math.
   const jobReceivedByKey = useMemo(() => {
     const m = {};
@@ -5603,7 +5683,7 @@ export default function App() {
     const order = (jobsByTrip[trip.id] || []).length + 1;
     await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: rows[0].date_out ? rows[0].status : "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: rows[0].job_number || "" });
-    const newTotal = tripCalc(trip).totalCf + parseCf(rows[0].volume);
+    const newTotal = tripCalc(trip).loadedCf + parseCf(rows[0].volume);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
     setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} added` });
@@ -5653,7 +5733,7 @@ export default function App() {
     const { data, error } = await supabase.from("storage_jobs").insert([payload]).select("id").single();
     if (error) { setTripBusy(false); window.alert(error.message); return; }
     await logTripEvent(trip.id, "unplanned_pickup", { job_id: data?.id, notes: f.job_number || f.customer || "" });
-    const newTotal = tripCalc(trip).totalCf + parseCf(f.volume);
+    const newTotal = tripCalc(trip).loadedCf + parseCf(f.volume);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setUnplannedForm(EMPTY_UNPLANNED);
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
@@ -5788,6 +5868,16 @@ export default function App() {
     loadExtras();
   }
   async function deleteExtra(extra) {
+    // Payments already allocated to this extra → keep the history: confirm and
+    // soft-deactivate instead of hard-deleting (the charge stops counting).
+    const linked = payments.filter(p => (p.job_extra_id != null && Number(p.job_extra_id) === Number(extra.id)) || (p.job_extra_id == null && p.concept === "extra" && extra.payment_id != null && Number(extra.payment_id) === Number(p.id)));
+    if (linked.length) {
+      const sum = linked.reduce((s, p) => s + paymentNet(p), 0);
+      if (!window.confirm(`Este extra tiene ${linked.length} pago(s) asignados por $${Math.round(sum).toLocaleString()}. Se desactivará (deja de contar como cargo) conservando el historial de pagos. ¿Continuar?`)) return;
+      await supabase.from("job_extras").update({ active: false }).eq("id", extra.id);
+      loadExtras();
+      return;
+    }
     await supabase.from("job_extras").delete().eq("id", extra.id);
     loadExtras();
   }
@@ -5796,6 +5886,12 @@ export default function App() {
     if (q.id) await supabase.from("job_extras").update(extraPayload(q)).eq("id", q.id);
     else await supabase.from("job_extras").insert([{ job_id: q.jobId, ...extraPayload(q) }]);
     setQuickExtra(null); loadExtras();
+  }
+  // "+ Extra" from the Payments page: same modal, but the job is picked inside
+  // (the drawer flow pre-selects it). Creating the charge is a first-class
+  // action — payments get allocated against it afterwards.
+  function openAddExtraFromPayments() {
+    setQuickExtra({ jobId:"", _pickJob:true, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id:"", rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct:"", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false });
   }
   // Open the extra modal pre-filled from an existing extra (used to edit Extra CF details).
   function openEditExtra(e) {
@@ -5894,9 +5990,39 @@ export default function App() {
   }
 
   // ── Payments handlers ──
+  // ── Charge-allocation helpers (payments ↔ job charges) ──
+  // Build editable allocation lines for a job: one row per outstanding charge
+  // (job balance + each active extra), auto-filled greedily from the amount.
+  function seedAllocLines(jobId, amount) {
+    const k = jobKeyByRowId[Number(jobId)];
+    if (!k) return null;
+    const charges = chargeStateByJobKey(k);
+    const { lines } = proposeAllocation(numv(amount), charges);
+    return lines.map(l => ({
+      kind: l.kind, job_extra_id: l.job_extra_id, remaining: l.remaining, amount: l.amount, touched: false, notes: "",
+      label: l.kind === "job" ? "Job balance" : (() => {
+        const e = charges.extraCharges.find(c => Number(c.extra.id) === Number(l.job_extra_id))?.extra;
+        return e ? extraTypeLabel(e.extra_type) + (e.description ? ` · ${e.description}` : "") : "Extra";
+      })(),
+      extra_type: l.kind === "extra" ? (charges.extraCharges.find(c => Number(c.extra.id) === Number(l.job_extra_id))?.extra.extra_type || null) : null,
+    }));
+  }
+  // A job "wants" allocation when it has extras with something still unpaid.
+  function jobWantsAllocation(jobId) {
+    const k = jobKeyByRowId[Number(jobId)];
+    if (!k) return false;
+    return chargeStateByJobKey(k).extraCharges.some(c => c.remaining > 0);
+  }
+
   function openAddPayment(prefill = {}) {
-    setEditingPayId(null);
-    setPayForm({ ...EMPTY_PAYMENT, split_enabled: false, split_lines: [{ concept: "job", amount: "", notes: "" }], payment_date: today(), received: true, received_date: today(), ...prefill });
+    setEditingPayId(null); setReallocPay(null);
+    const base = { ...EMPTY_PAYMENT, split_enabled: false, split_lines: [{ concept: "job", amount: "", notes: "" }], alloc_lines: null, payment_date: today(), received: true, received_date: today(), ...prefill };
+    // Auto-arm the allocation panel when the job has pending extras.
+    if (!splitMissing && !allocMissing && base.job_id && jobWantsAllocation(base.job_id)) {
+      base.split_enabled = true;
+      base.alloc_lines = seedAllocLines(base.job_id, base.amount);
+    }
+    setPayForm(base);
     setPayJobSearch(""); setShowPayModal(true);
   }
   function openEditPayment(p) {
@@ -5917,7 +6043,14 @@ export default function App() {
       mo_issuer_location: p.mo_issuer_location || "", mo_photo_url: p.mo_photo_url || "",
       cc_fee_enabled: p.cc_fee_enabled !== false, cc_fee_pct: p.cc_fee_pct ?? "3", cc_fee_amount: p.cc_fee_amount ?? "", cc_fee_payment_id: p.cc_fee_payment_id || null,
     });
-    setPayJobSearch(""); setShowPayModal(true);
+    setReallocPay(null); setPayJobSearch(""); setShowPayModal(true);
+  }
+  // Re-assign an "A cuenta" payment: open it with the allocation panel forced
+  // on and the (fixed) amount pre-spread over the outstanding charges.
+  function openReallocatePayment(p) {
+    openEditPayment(p);
+    setReallocPay(p);
+    setPayForm(f => ({ ...f, split_enabled: true, alloc_lines: seedAllocLines(p.job_id, numv(p.amount)) }));
   }
   // Upload a check / money-order photo to the payment-docs bucket; stash url in the form field.
   async function uploadPaymentDoc(file, field) {
@@ -6085,12 +6218,140 @@ export default function App() {
       if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
     }
   }
+  // Save a payment allocated against the job's charges. One payments row per
+  // allocation line (grouped by split_group like the legacy split flow):
+  //   job line   → concept "job" (bol_collected sync preserved)
+  //   extra line → concept "extra" + job_extra_id (pays an EXISTING charge —
+  //                no new job_extras row, no commission prompt)
+  //   custom line→ legacy behavior (new extra on the fly / cc_fee / other)
+  //   remainder  → concept "on_account" ("a cuenta", re-assignable later)
+  async function saveAllocatedPayment(f) {
+    const { rows, unassigned, error: allocErr } = serializeAllocLines(f.alloc_lines, numv(f.amount));
+    if (allocErr) { window.alert(allocErr); return; }
+    if (!rows.length && unassigned <= 0) { window.alert("Add at least one line with an amount."); return; }
+    setPaySaving(true);
+    const base = payPayload(f);
+    base.discount = 0; base.discount_reason = null;
+    if (!payColsMissing) { base.cc_fee_enabled = false; base.cc_fee_amount = null; base.cc_fee_payment_id = null; }
+    const single = rows.length === 1 && unassigned <= 0;
+    const group = single ? null : ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now()));
+    const createdExtras = [];
+    let jobLineSum = 0, err = null;
+    const insertRow = async (payload) => {
+      if (group && !splitMissing) payload.split_group = group;
+      const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("id").single();
+      if (insErr) err = insErr;
+      return data;
+    };
+    for (const l of rows) {
+      if (err) break;
+      if (l.kind === "job") {
+        await insertRow({ ...base, amount: l.amount, concept: "job", notes: l.notes || base.notes });
+        jobLineSum += l.amount;
+      } else if (l.kind === "extra") {
+        const payload = { ...base, amount: l.amount, concept: "extra", notes: l.notes || base.notes };
+        if (!splitMissing) payload.extra_type = l.extra_type || null;
+        if (!allocMissing) payload.job_extra_id = l.job_extra_id || null;
+        await insertRow(payload);
+      } else { // custom line — same semantics as the legacy split builder
+        const sc = splitConcept(l.concept);
+        const payload = { ...base, amount: l.amount, concept: sc.pay, notes: l.notes || base.notes };
+        if (!splitMissing) payload.extra_type = sc.extra || null;
+        const pd = await insertRow(payload);
+        if (sc.pay === "job") jobLineSum += l.amount;
+        if (sc.extra && f.job_id && !extrasMissing && !splitMissing && pd?.id) {
+          const exPayload = {
+            job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
+            amount: l.amount, generated_by: "driver_only",
+            driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
+            driver_commission_amount: 0, rep_commission_amount: 0, company_amount: l.amount,
+            active: true, source: "payment_split", payment_id: pd.id,
+          };
+          const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
+          if (ed) {
+            createdExtras.push(ed);
+            if (!allocMissing) await supabase.from("payments").update({ job_extra_id: ed.id }).eq("id", pd.id);
+          }
+        }
+      }
+    }
+    if (!err && unassigned > 0) {
+      await insertRow({ ...base, amount: unassigned, concept: "on_account", notes: "A cuenta — sin imputar" });
+    }
+    // Two-way sync: job lines mirror bol_collected on the storage_job rows.
+    if (!err && jobLineSum > 0 && f.job_id) {
+      const k = jobKeyByRowId[Number(f.job_id)];
+      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    }
+    setPaySaving(false);
+    if (err) { window.alert(err.message); return; }
+    setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
+    if (createdExtras.length) {
+      const toAssign = [];
+      for (const e of createdExtras) {
+        if (window.confirm(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`)) toAssign.push(e);
+      }
+      if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
+    }
+  }
+  // Convert an "A cuenta" payment into allocated lines: the original row
+  // becomes the first line (method/check/photo details preserved) and the
+  // rest are inserted as siblings sharing its split_group.
+  async function saveReallocation() {
+    const p = reallocPay; if (!p) return;
+    const { rows, unassigned, error: allocErr } = serializeAllocLines(payForm.alloc_lines, numv(p.amount));
+    if (allocErr) { window.alert(allocErr); return; }
+    if (!rows.length) { window.alert("Asigná al menos un monto a un cargo."); return; }
+    setPaySaving(true);
+    const lineFields = (l) => l.kind === "job" ? { concept: "job", extra_type: null, job_extra_id: null }
+      : l.kind === "extra" ? { concept: "extra", extra_type: l.extra_type || null, job_extra_id: l.job_extra_id || null }
+      : { concept: splitConcept(l.concept).pay, extra_type: splitConcept(l.concept).extra || null, job_extra_id: null };
+    const needGroup = rows.length > 1 || unassigned > 0;
+    const group = p.split_group || (needGroup ? ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now())) : null);
+    const first = rows[0];
+    const upd = { amount: first.amount, ...lineFields(first), notes: first.notes || p.notes || null };
+    if (group && !splitMissing) upd.split_group = group;
+    if (allocMissing) delete upd.job_extra_id;
+    let { error: err } = await supabase.from("payments").update(upd).eq("id", p.id);
+    // Siblings copy the money-movement facts of the original row.
+    const sibling = { job_id: p.job_id, payment_date: p.payment_date, method: p.method || null, method_id: p.method_id || null,
+      received: !!p.received, received_date: p.received_date || null, received_by: p.received_by || null,
+      cash_with_whom: p.cash_with_whom || null, banked: !!p.banked, banked_date: p.banked_date || null, bank_account: p.bank_account || null,
+      payment_stage: p.payment_stage || null, discount: 0 };
+    let jobLineSum = first.concept === "job" || first.kind === "job" ? first.amount : 0;
+    for (const l of rows.slice(1)) {
+      if (err) break;
+      const payload = { ...sibling, amount: l.amount, ...lineFields(l), notes: l.notes || null };
+      if (group && !splitMissing) payload.split_group = group;
+      if (allocMissing) delete payload.job_extra_id;
+      ({ error: err } = await supabase.from("payments").insert([payload]));
+      if (l.kind === "job") jobLineSum += l.amount;
+    }
+    if (!err && unassigned > 0) {
+      const payload = { ...sibling, amount: unassigned, concept: "on_account", extra_type: null, notes: "A cuenta — sin imputar" };
+      if (group && !splitMissing) payload.split_group = group;
+      ({ error: err } = await supabase.from("payments").insert([payload]));
+    }
+    if (!err && jobLineSum > 0 && p.job_id) {
+      const k = jobKeyByRowId[Number(p.job_id)];
+      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: p.method || null, bol_collected_date: p.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    }
+    setPaySaving(false);
+    if (err) { window.alert(err.message); return; }
+    setReallocPay(null); setEditingPayId(null); setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
+  }
   async function savePaymentRow() {
     const f = payForm;
+    if (reallocPay) { await saveReallocation(); return; }
     // Duplicate check / money-order serial → block with an explicit confirmation.
     const serialDup = f.method === "check" ? findCheckSerialDup(f.check_serial) : f.method === "money_order" ? findMoSerialDup(f.mo_serial) : null;
     if (serialDup && !window.confirm(`Number ${serialDup.serial} was already recorded ($${Math.round(serialDup.amount).toLocaleString()} on ${serialDup.date}, job ${serialDup.job_number}).\n\nThis serial number is already in the system. Are you sure you want to save a duplicate?`)) return;
-    if (f.split_enabled && !editingPayId && !splitMissing) { await saveSplitPayment(f); return; }
+    if (f.split_enabled && !editingPayId && !splitMissing) {
+      if (!allocMissing && f.job_id && Array.isArray(f.alloc_lines)) { await saveAllocatedPayment(f); return; }
+      await saveSplitPayment(f); return;
+    }
     setPaySaving(true);
     const payload = payPayload(f);
     let mainId = editingPayId, error = null;
@@ -6563,6 +6824,7 @@ export default function App() {
           {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
           {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
           {page === "payments" && can("payments","create") && <Btn disabled={paymentsMissing} onClick={() => setShowAccountsModal(true)}>🏦 Bank accounts</Btn>}
+          {page === "payments" && can("payments","create") && !paymentsMissing && !extrasMissing && <Btn onClick={openAddExtraFromPayments}>+ Extra</Btn>}
           {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
           {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
           {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
@@ -6723,7 +6985,7 @@ export default function App() {
                     const ns = nextStatus(g);
                     const gTrip = g.trip_id ? tripById[g.trip_id] : null;
                     const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
-                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.totalCf, tc.occPct, tc.totalBol); })()
+                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalBol); })()
                       : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
                     const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
                     const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
@@ -7332,7 +7594,7 @@ export default function App() {
                   <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tripsMissing ? "Run the setup SQL to enable trucks." : "No trucks. Add one with “+ Truck”."}</td></tr>
                 ) : trucksList.map(tk => {
                   const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
-                  const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
+                  const load = activeTrip ? tripCalc(activeTrip).loadedCf : 0;
                   const cap = numv(tk.capacity_cf);
                   const pct = cap > 0 ? Math.min(100, Math.round((load / cap) * 100)) : null;
                   return (
@@ -7542,7 +7804,7 @@ export default function App() {
                         <div style={{ marginBottom:10 }}>
                           <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:4 }}>
                             <b style={{ color: occColor(c.occPct || 0) }}>{c.occPct}% occupied</b>
-                            <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
+                            <span style={{ color:"#888" }}>{Math.round(c.loadedCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
                           </div>
                           <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}><div style={{ background: occColor(c.occPct || 0), height:12, width:`${Math.min(100, c.occPct || 0)}%`, transition:"width .4s" }} /></div>
                         </div>
@@ -7557,7 +7819,7 @@ export default function App() {
                         <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
-                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
                         {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart</Btn>}
                       </div>
                     </div>
@@ -7916,6 +8178,9 @@ export default function App() {
             <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.banked_date || "—"}</td>
             <td style={td2}>{p.bank_account || "—"}</td>
             <td style={{ ...td2, whiteSpace:"nowrap" }}>
+              {p.concept === "on_account" && p.job_id && !allocMissing && can("payments","edit") && (
+                <button onClick={() => openReallocatePayment(p)} title="Imputar este pago a cuenta contra los cargos del job" style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"2px 8px", cursor:"pointer", marginRight:4 }}>Asignar</button>
+              )}
               <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
               <button onClick={() => deletePaymentRow(p)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
             </td>
@@ -8395,7 +8660,7 @@ export default function App() {
 
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
       {page === "analytics" && (
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:20 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:12 }}>
         {[
           { label:"Jobs activos", value:metrics.activeJobs, color:"#3B6D11" },
           { label:"Delivered", value:metrics.deliveredJobs, color:"#888" },
@@ -8404,7 +8669,10 @@ export default function App() {
           { label:"Urgent payments", value:urgentPayments, color:"#A32D2D" },
           { label:"Overdue FADD", value:faddStats.overdue, color:"#A32D2D" },
           { label:"Due this week", value:faddStats.dueWeek, color:"#C2410C" },
-          { label:"Monthly cost", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
+          { label:"Storage bill /mo", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
+          { label:"Vacant units cost /mo", value:"$"+metrics.vacantCost.toLocaleString(), color: metrics.vacantCost > 0 ? "#A32D2D" : "#888" },
+          { label:"Storage income /mo", value:"$"+metrics.storageIncome.toLocaleString(), color:"#1A8A4E" },
+          { label:"Storage margin /mo", value:(metrics.storageMargin < 0 ? "−$" : "$") + Math.abs(metrics.storageMargin).toLocaleString(), color: metrics.storageMargin < 0 ? "#A32D2D" : "#1A8A4E" },
           { label:"US states", value:metrics.states, color:"#888" },
         ].map(m => (
           <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
@@ -8413,6 +8681,54 @@ export default function App() {
           </div>
         ))}
       </div>
+      )}
+
+      {/* ANALYTICS — data completeness warning: totals are only as real as the costs entered */}
+      {page === "analytics" && metrics.missingCost > 0 && (
+        <div style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:8, padding:"8px 12px", fontSize:13, color:"#854F0B", marginBottom:14 }}>
+          ⚠ {metrics.missingCost} rented unit{metrics.missingCost === 1 ? "" : "s"} without a monthly cost entered — the storage bill shown is incomplete. Open each storage and load its <b>Monthly cost</b>.
+        </div>
+      )}
+
+      {/* ANALYTICS — storage P&L: what you pay per unit vs what clients pay you */}
+      {page === "analytics" && storagePnl.rows.length > 0 && (
+        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px", marginBottom:14 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storage P&L — real cost vs income</div>
+          <div style={{ fontSize:12, color:"#bbb", marginBottom:12 }}>Cada unidad alquilada (aunque esté vacía) contra lo que cobrás por mes. Peor margen primero. Si un job ocupa varias unidades, su tarifa se prorratea.</div>
+          <div style={{ maxHeight:340, overflowY:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5 }}>
+              <thead>
+                <tr>{["Storage", "Status", "You pay /mo", "You charge /mo", "Margin /mo"].map((h, i) => (
+                  <th key={h} style={{ position:"sticky", top:0, background:"#fff", textAlign: i >= 2 ? "right" : "left", padding:"6px 8px", fontSize:10.5, color:"#999", textTransform:"uppercase", borderBottom:"1px solid #f0f0f0" }}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {storagePnl.rows.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", fontWeight:500 }}>{r.name}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7" }}>
+                      <span style={{ fontSize:10.5, fontWeight:600, padding:"1px 7px", borderRadius:20, background: r.occupied ? "#EAF3DE" : "#FEF3C7", color: r.occupied ? "#3B6D11" : "#92760B" }}>{r.occupied ? "Occupied" : "Vacant"}</span>
+                    </td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", color:"#C2410C" }}>{r.hasCost ? "$" + Math.round(r.pay).toLocaleString() : <span style={{ color:"#b45309", fontWeight:600 }}>sin costo ⚠</span>}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", color:"#1A8A4E" }}>${Math.round(r.income).toLocaleString()}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", fontWeight:700, color: r.margin < 0 ? "#A32D2D" : "#1A8A4E" }}>{(r.margin < 0 ? "−$" : "$") + Math.abs(Math.round(r.margin)).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td style={{ padding:"8px", fontWeight:700, borderTop:"2px solid #eee" }}>Total ({storagePnl.rows.length} units)</td>
+                  <td style={{ borderTop:"2px solid #eee" }} />
+                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color:"#C2410C", borderTop:"2px solid #eee" }}>${Math.round(storagePnl.totals.pay).toLocaleString()}</td>
+                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color:"#1A8A4E", borderTop:"2px solid #eee" }}>${Math.round(storagePnl.totals.income).toLocaleString()}</td>
+                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color: (storagePnl.totals.income - storagePnl.totals.pay) < 0 ? "#A32D2D" : "#1A8A4E", borderTop:"2px solid #eee" }}>
+                    {((storagePnl.totals.income - storagePnl.totals.pay) < 0 ? "−$" : "$") + Math.abs(Math.round(storagePnl.totals.income - storagePnl.totals.pay)).toLocaleString()}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
       )}
 
       {/* ANALYTICS — revenue: gross vs net + broker share */}
@@ -8496,7 +8812,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly spend per company</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto le pagas a cada cadena de storages</div>
               {(() => {
-                const byBrand = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
+                const byBrand = records.filter(r=>r.situation!=="Close" && r.space_type!=="warehouse" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byBrand).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
@@ -8542,7 +8858,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly cost per state</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Where you spend the most money on storages</div>
               {(() => {
-                const byCost = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
+                const byCost = records.filter(r=>r.situation!=="Close" && r.space_type!=="warehouse" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
@@ -9177,6 +9493,9 @@ export default function App() {
             const repId = Math.min(...jobDetail.parts.map(p => p.id));
             const firstDriver = Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? jobDetail.driver_ids[0] : "";
             const totAmt = exs.reduce((s, e) => s + numv(e.amount), 0);
+            // Per-extra paid/pending chips (payments allocated via job_extra_id + legacy link).
+            const chargeState = paymentsMissing ? null : chargeStateByJobKey(jobDetail.key);
+            const chargeOf = (e) => chargeState?.extraCharges.find(c => Number(c.extra.id) === Number(e.id));
             return (
               <>
                 <SectionLabel>Extras {exs.length ? `(${exs.length})` : ""}</SectionLabel>
@@ -9186,6 +9505,13 @@ export default function App() {
                       <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
                         <span style={{ fontWeight:600 }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</span>
                         <span style={{ color:"#111", fontWeight:600 }}>{money(e.amount) || "$0"}</span>
+                        {(() => {
+                          const c = chargeOf(e);
+                          if (!c) return null;
+                          return c.remaining > 0.01
+                            ? <span style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>Pendiente ${Math.round(c.remaining).toLocaleString()}</span>
+                            : <span style={{ fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 8px" }}>Pagado</span>;
+                        })()}
                         <span style={{ fontSize:11, color:"#888" }}>{genByLabel(e.generated_by)}</span>
                         {driverById[e.driver_id]?.name && <span style={{ fontSize:11, color:"#888" }}>🧑‍✈️ {driverById[e.driver_id].name}</span>}
                         {empById[e.rep_id]?.name && <span style={{ fontSize:11, color:"#888" }}>👤 {empById[e.rep_id].name}</span>}
@@ -9252,6 +9578,23 @@ export default function App() {
                     </div>
                   )}
                   {ccFeeTotal > 0 && <div style={{ fontSize:12, marginTop:6, color:"#854F0B" }}>CC fees cobrados: <b>${Math.round(ccFeeTotal).toLocaleString()}</b></div>}
+                  {(() => {
+                    // Money received but not yet applied to a charge ("a cuenta").
+                    const onAcc = recv.filter(p => p.concept === "on_account");
+                    const onAccSum = onAcc.reduce((s, p) => s + paymentNet(p), 0);
+                    if (onAccSum <= 0) return null;
+                    const first = onAcc.find(p => p.job_id && !allocMissing);
+                    return (
+                      <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, marginTop:6, color:"#854F0B" }}>
+                        <span>A cuenta (sin imputar): <b>${Math.round(onAccSum).toLocaleString()}</b></span>
+                        {first && can("payments","edit") && <button onClick={() => openReallocatePayment(first)} style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"1px 8px", cursor:"pointer" }}>Asignar</button>}
+                      </div>
+                    );
+                  })()}
+                  {(() => {
+                    const un = paymentsMissing ? 0 : chargeStateByJobKey(jobDetail.key).unattributedExtraCollected;
+                    return un > 0.01 ? <div style={{ fontSize:11, marginTop:4, color:"#999" }}>${Math.round(un).toLocaleString()} cobrados de extras sin asignar a un extra específico (histórico).</div> : null;
+                  })()}
                   {totalBrokerShare > 0 && (
                     <div style={{ marginTop:6, paddingTop:6, borderTop:"1px solid #eee", fontSize:12.5 }}>
                       <div style={{ display:"flex", justifyContent:"space-between", color:"#C2410C" }}>
@@ -10162,7 +10505,7 @@ export default function App() {
         if (!tk) return null;
         const sub = truckSubtitle(tk);
         const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
-        const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
+        const load = activeTrip ? tripCalc(activeTrip).loadedCf : 0;
         const cap = numv(tk.capacity_cf);
         return (
           <Modal title={`Truck · ${tk.name}`} onClose={() => setTruckDetailId(null)}
@@ -10339,6 +10682,18 @@ export default function App() {
         const isCf = quickExtra.extra_type === "extra_cf";
         const setQ = (fields) => setQuickExtra(q => ({ ...q, ...fields }));
         const jobFuel = jobs.find(j => j.id === Number(quickExtra.jobId))?.fuel_surcharge_pct;
+        // Payments-page flow: the job is picked inside the modal.
+        const exGroups = [...extraJobGroups.values()];
+        const exQ = extraJobSearch.trim().toLowerCase();
+        const exMatches = (exQ ? exGroups.filter(g => (g.job_number || "").toLowerCase().includes(exQ) || (g.customer || "").toLowerCase().includes(exQ)) : exGroups).slice(0, 40);
+        const exSelected = quickExtra.jobId ? exGroups.find(g => String(g.repId) === String(quickExtra.jobId) || g.ids.includes(Number(quickExtra.jobId))) : null;
+        const pickJob = (g) => {
+          const firstDriver = (Array.isArray(g.driver_ids) && g.driver_ids.length ? g.driver_ids[0] : "") || "";
+          const jf = jobs.find(j => j.id === g.repId)?.fuel_surcharge_pct;
+          setQ({ jobId: g.repId, driver_id: quickExtra.driver_id || firstDriver, fuel_surcharge_pct: quickExtra.fuel_surcharge_pct === "" ? (jf ?? "") : quickExtra.fuel_surcharge_pct });
+          setExtraJobSearch("");
+        };
+        const needsJob = !quickExtra.id && quickExtra._pickJob;
         // Re-apply default %s whenever type or generated_by changes; pull job fuel% for extra_cf.
         const onType = (v) => { const gen = EXTRA_LOCKED_DRIVER(v) ? "driver_only" : quickExtra.generated_by; const d = commissionDefaults(v, gen); setQ({ extra_type:v, generated_by:gen, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: gen === "driver_only" ? "" : quickExtra.rep_id, fuel_surcharge_pct: v === "extra_cf" && (quickExtra.fuel_surcharge_pct === "" || quickExtra.fuel_surcharge_pct == null) ? (jobFuel ?? "") : quickExtra.fuel_surcharge_pct }); };
         const onGen = (v) => { const d = commissionDefaults(quickExtra.extra_type, v); setQ({ generated_by:v, driver_commission_pct:d.driver, rep_commission_pct:d.rep, rep_id: v === "driver_only" ? "" : quickExtra.rep_id }); };
@@ -10355,8 +10710,35 @@ export default function App() {
           <Modal title={quickExtra.id ? "Edit extra" : "Add extra"} onClose={() => setQuickExtra(null)}
             footer={<>
               <Btn onClick={() => setQuickExtra(null)}>Cancel</Btn>
-              <Btn primary disabled={!quickExtra.driver_id} onClick={saveQuickExtra}>{quickExtra.id ? "Save changes" : "Save extra"}</Btn>
+              <Btn primary disabled={!quickExtra.driver_id || (needsJob && !quickExtra.jobId)} onClick={saveQuickExtra}>{quickExtra.id ? "Save changes" : "Save extra"}</Btn>
             </>}>
+            {needsJob && (
+              <div style={{ marginBottom:10 }}>
+                <Field label="Job *">
+                  {exSelected ? (
+                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                      <span style={{ fontFamily:"monospace", fontWeight:700 }}>{exSelected.job_number || "(no #)"}</span>
+                      <span style={{ fontSize:12, color:"#666" }}>{exSelected.customer || "—"}</span>
+                      <button onClick={() => setQ({ jobId:"" })} style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:12, textDecoration:"underline" }}>cambiar</button>
+                    </div>
+                  ) : (
+                    <>
+                      <input style={inp} value={extraJobSearch} onChange={e => setExtraJobSearch(e.target.value)} placeholder="Search by job # or client…" />
+                      {exQ && (
+                        <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:160, overflowY:"auto" }}>
+                          {exMatches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>No results.</div>
+                            : exMatches.map(g => (
+                              <button key={g.key} onClick={() => pickJob(g)} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
+                                <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(no #)"}</span> · {g.customer || "—"}
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </Field>
+              </div>
+            )}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               <Field label="Type">
                 <select style={inp} value={quickExtra.extra_type} onChange={e => onType(e.target.value)}>
@@ -10471,19 +10853,32 @@ export default function App() {
         const net = numv(payForm.amount) - numv(payForm.discount);
         const whoList = [...driversList.map(d => d.name), ...employees.map(e => e.name)].filter(Boolean);
         // Split-payment helpers (only available when creating, with columns present).
-        const canSplit = !editingPayId && !splitMissing;
+        const canSplit = (!editingPayId || !!reallocPay) && !splitMissing;
         const splitOn = canSplit && payForm.split_enabled;
         const splitLines = payForm.split_lines || [];
         const splitSum = splitLines.reduce((s, l) => s + numv(l.amount), 0);
         const splitMatches = Math.abs(splitSum - numv(payForm.amount)) < 0.01;
         const setLines = (lines) => setF({ split_lines: lines });
         const patchLine = (i, fields) => setLines(splitLines.map((l, ix) => ix === i ? { ...l, ...fields } : l));
-        const saveDisabled = paySaving || payForm.amount === "" || (splitOn && (!splitMatches || splitLines.every(l => l.amount === "")));
+        // Charge-allocation mode: split against the job's real outstanding charges.
+        const allocOn = splitOn && !allocMissing && payForm.job_id && Array.isArray(payForm.alloc_lines);
+        const allocLines = payForm.alloc_lines || [];
+        const allocTotal = numv(reallocPay ? reallocPay.amount : payForm.amount);
+        const allocState = allocOn ? serializeAllocLines(allocLines, allocTotal) : null;
+        const patchAlloc = (i, fields) => setF({ alloc_lines: allocLines.map((l, ix) => ix === i ? { ...l, ...fields, touched: true } : l) });
+        // Re-seed the proposal while the user hasn't touched any line.
+        const onAmountChange = (v) => {
+          const fields = { amount: v };
+          if (allocOn && !allocLines.some(l => l.touched)) fields.alloc_lines = seedAllocLines(payForm.job_id, v);
+          setF(fields);
+        };
+        const saveDisabled = paySaving || (reallocPay ? (!allocState || !!allocState.error || !allocState.rows.length)
+          : (payForm.amount === "" || (allocOn ? !!allocState.error : (splitOn && (!splitMatches || splitLines.every(l => l.amount === ""))))));
         return (
-          <Modal title={editingPayId ? "Edit payment" : "New payment"} onClose={() => setShowPayModal(false)}
+          <Modal title={reallocPay ? "Asignar pago a cuenta" : editingPayId ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); }}
             footer={<>
-              <Btn onClick={() => setShowPayModal(false)}>Cancel</Btn>
-              <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : (editingPayId ? "Save changes" : splitOn ? "Create split payments" : "Create payment")}</Btn>
+              <Btn onClick={() => { setShowPayModal(false); setReallocPay(null); }}>Cancel</Btn>
+              <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : (reallocPay ? "Asignar" : editingPayId ? "Save changes" : splitOn ? (allocOn ? "Create payment" : "Create split payments") : "Create payment")}</Btn>
             </>}>
             <Field label="Job">
               {selectedG ? (
@@ -10499,7 +10894,17 @@ export default function App() {
                     <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:160, overflowY:"auto" }}>
                       {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>No results.</div>
                         : matches.map(g => (
-                          <button key={g.key} onClick={() => { setF({ job_id: g.repId }); setPayJobSearch(""); }} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
+                          <button key={g.key} onClick={() => {
+                              const fields = { job_id: g.repId };
+                              // Auto-arm charge allocation when the job has pending extras.
+                              if (canSplit && !allocMissing && !editingPayId && jobWantsAllocation(g.repId)) {
+                                fields.split_enabled = true;
+                                fields.alloc_lines = seedAllocLines(g.repId, payForm.amount);
+                              } else if (!editingPayId && !allocMissing) {
+                                fields.alloc_lines = seedAllocLines(g.repId, payForm.amount);
+                              }
+                              setF(fields); setPayJobSearch("");
+                            }} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
                             <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(no #)"}</span> · {g.customer || "—"}
                           </button>
                         ))}
@@ -10510,7 +10915,7 @@ export default function App() {
             </Field>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
               <Field label="Payment date"><input style={inp} type="date" value={payForm.payment_date} onChange={e => setF({ payment_date:e.target.value })} /></Field>
-              <Field label={splitOn ? "Total amount ($) *" : "Amount ($) *"}><input style={inp} type="number" value={payForm.amount} onChange={e => setF({ amount:e.target.value })} placeholder="0" /></Field>
+              <Field label={splitOn ? "Total amount ($) *" : "Amount ($) *"}><input style={inp} type="number" value={payForm.amount} disabled={!!reallocPay} onChange={e => onAmountChange(e.target.value)} placeholder="0" /></Field>
               {!splitOn && <Field label="Concept">
                 <select style={inp} value={payForm.concept} onChange={e => setF({ concept:e.target.value })}>
                   {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
@@ -10528,14 +10933,66 @@ export default function App() {
               </Field>}
             </div>
 
-            {/* Split payment toggle + builder */}
+            {/* Split payment toggle + builder (charge allocation when possible) */}
             {canSplit && (
               <div style={{ marginTop:10 }}>
-                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
-                  <input type="checkbox" checked={!!payForm.split_enabled} onChange={e => setF({ split_enabled: e.target.checked, split_lines: e.target.checked && splitLines.length ? splitLines : [{ concept:"job", amount:"", notes:"" }] })} />
-                  ✂️ Split the payment
-                </label>
-                {splitOn && (
+                {!reallocPay && (
+                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
+                    <input type="checkbox" checked={!!payForm.split_enabled} onChange={e => {
+                      const on = e.target.checked;
+                      const fields = { split_enabled: on };
+                      if (on && !allocMissing && payForm.job_id) fields.alloc_lines = payForm.alloc_lines || seedAllocLines(payForm.job_id, payForm.amount);
+                      if (on && !fields.alloc_lines && !splitLines.length) fields.split_lines = [{ concept:"job", amount:"", notes:"" }];
+                      setF(fields);
+                    }} />
+                    {!allocMissing && payForm.job_id ? "✂️ Asignar a cargos (split)" : "✂️ Split the payment"}
+                  </label>
+                )}
+                {allocOn && (
+                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
+                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Repartí el pago entre el balance del job y los extras pendientes. Lo que no asignes queda <b>a cuenta</b>.</div>
+                    {allocLines.map((l, i) => {
+                      const entered = numv(l.amount);
+                      const after = Math.max(0, l.remaining - entered);
+                      const over = entered > l.remaining + 0.01;
+                      return (
+                        <div key={i} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:7, flexWrap:"wrap" }}>
+                          <div style={{ flex:"1 1 170px", minWidth:150 }}>
+                            <div style={{ fontSize:12.5, fontWeight:600 }}>{l.kind === "custom" ? (
+                              <select style={{ ...inp, padding:"5px 8px" }} value={l.concept} onChange={e => patchAlloc(i, { concept: e.target.value })}>
+                                {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                              </select>
+                            ) : l.label}</div>
+                            {l.kind !== "custom" && <div style={{ fontSize:10.5, color:"#888" }}>Pendiente: ${l.remaining.toLocaleString(undefined,{maximumFractionDigits:2})}</div>}
+                          </div>
+                          <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchAlloc(i, { amount: e.target.value })} placeholder="$" />
+                          {l.kind !== "custom" && (
+                            over
+                              ? <span style={{ fontSize:11, color:"#C2410C", fontWeight:600 }}>Sobrepago ${ (entered - l.remaining).toLocaleString(undefined,{maximumFractionDigits:2}) } — se registra igual</span>
+                              : <span style={{ fontSize:11, color: after > 0 ? "#92760B" : "#1A8A4E" }}>Restante: ${after.toLocaleString(undefined,{maximumFractionDigits:2})}</span>
+                          )}
+                          {l.kind === "custom" && (
+                            <>
+                              <input style={{ ...inp, flex:"1 1 120px", minWidth:110 }} value={l.notes} onChange={e => patchAlloc(i, { notes: e.target.value })} placeholder="Notes (optional)" />
+                              <button onClick={() => setF({ alloc_lines: allocLines.filter((_, ix) => ix !== i) })} title="Remove line" style={{ border:"none", background:"none", cursor:"pointer", color:"#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button onClick={() => setF({ alloc_lines: [...allocLines, { kind:"custom", concept:"packing", amount:"", notes:"", touched:true }] })} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Nuevo extra / otra línea</button>
+                    {(() => {
+                      const st = allocState || { unassigned: 0, error: null };
+                      return (
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
+                          <span style={{ color:"#666" }}>Sin asignar (a cuenta): <b style={{ color: st.error ? "#E24B4A" : st.unassigned > 0 ? "#92760B" : "#1A8A4E" }}>${(st.error ? 0 : st.unassigned).toLocaleString(undefined,{maximumFractionDigits:2})}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${allocTotal.toLocaleString(undefined,{maximumFractionDigits:2})}</span></span>
+                          {st.error ? <span style={{ color:"#E24B4A" }}>✗ {st.error}</span> : <span style={{ color:"#1A8A4E" }}>✓</span>}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+                {splitOn && !allocOn && (
                   <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
                     <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Split the total amount into concepts. Extra lines are recorded automatically for commissions.</div>
                     {splitLines.map((l, i) => (
@@ -10955,7 +11412,7 @@ export default function App() {
         const driverNm = driverById[t.driver_id]?.name || "";
         const inTransit = t.status === "in_transit";
         const canAddJobs = t.status === "in_transit" || t.status === "loading";
-        const over = c.cap > 0 ? Math.max(0, Math.round(c.totalCf - c.cap)) : 0;
+        const over = c.cap > 0 ? Math.max(0, Math.round(c.loadedCf - c.cap)) : 0;
         const pct = c.occPct || 0;
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
         const events = tripEventsByTrip[t.id] || [];
@@ -11000,7 +11457,7 @@ export default function App() {
               <div style={{ marginBottom:6 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
                   <b style={{ color: occColor(pct) }}>{pct}% occupied</b>
-                  <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
+                  <span style={{ color:"#888" }}>{Math.round(c.loadedCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
                 </div>
                 <div style={{ background:"#f0f0f0", borderRadius:6, height:14, overflow:"hidden" }}><div style={{ background: occColor(pct), height:14, width:`${Math.min(100, pct)}%`, transition:"width .4s" }} /></div>
               </div>
@@ -11144,7 +11601,7 @@ export default function App() {
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
               <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
             </div>
-            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
 
             {/* event log */}
             <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
