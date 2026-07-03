@@ -4531,17 +4531,26 @@ export default function App() {
   }, [jobs]);
   const tripCalc = useCallback((trip) => {
     const jobsIn = jobsByTrip[trip.id] || [];
-    let totalCf = 0, totalBol = 0, delivered = 0;
-    for (const j of jobsIn) { totalCf += parseCf(j.volume); totalBol += numv(j.bol_balance); if (j.date_out || j.status === "delivered") delivered++; }
+    // totalCf = everything assigned to the trip; loadedCf = what is physically on
+    // the truck right now — delivered jobs and jobs sitting in storage (dropped
+    // mid-trip or not picked up yet) don't take up space. Occupancy uses loadedCf
+    // so the bar matches the stops' "Delivered" / "Dropped in storage" badges.
+    let totalCf = 0, loadedCf = 0, totalBol = 0, delivered = 0;
+    for (const j of jobsIn) {
+      const cf = parseCf(j.volume);
+      totalCf += cf; totalBol += numv(j.bol_balance);
+      if (j.date_out || j.status === "delivered") delivered++;
+      else if (j.status !== "in_storage") loadedCf += cf;
+    }
     const cap = numv(truckById[trip.truck_id]?.capacity_cf);
-    const occPct = cap > 0 ? Math.round((totalCf / cap) * 100) : null;
-    return { jobsIn, totalCf, totalBol, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
+    const occPct = cap > 0 ? Math.round((loadedCf / cap) * 100) : null;
+    return { jobsIn, totalCf, loadedCf, totalBol, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
   }, [jobsByTrip, truckById]);
   const tripMetrics = useMemo(() => {
     const td = today();
     let activeCount = 0, cfTransit = 0, bolTransit = 0, deliveredToday = 0;
     for (const t of trips) {
-      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.totalCf; bolTransit += c.totalBol; }
+      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.loadedCf; bolTransit += c.totalBol; }
     }
     for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
     return { activeCount, cfTransit, bolTransit, deliveredToday };
@@ -5667,7 +5676,7 @@ export default function App() {
     const order = (jobsByTrip[trip.id] || []).length + 1;
     await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: rows[0].date_out ? rows[0].status : "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: rows[0].job_number || "" });
-    const newTotal = tripCalc(trip).totalCf + parseCf(rows[0].volume);
+    const newTotal = tripCalc(trip).loadedCf + parseCf(rows[0].volume);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
     setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} added` });
@@ -5717,7 +5726,7 @@ export default function App() {
     const { data, error } = await supabase.from("storage_jobs").insert([payload]).select("id").single();
     if (error) { setTripBusy(false); window.alert(error.message); return; }
     await logTripEvent(trip.id, "unplanned_pickup", { job_id: data?.id, notes: f.job_number || f.customer || "" });
-    const newTotal = tripCalc(trip).totalCf + parseCf(f.volume);
+    const newTotal = tripCalc(trip).loadedCf + parseCf(f.volume);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setUnplannedForm(EMPTY_UNPLANNED);
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
@@ -6915,7 +6924,7 @@ export default function App() {
                     const ns = nextStatus(g);
                     const gTrip = g.trip_id ? tripById[g.trip_id] : null;
                     const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
-                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.totalCf, tc.occPct, tc.totalBol); })()
+                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalBol); })()
                       : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
                     const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
                     const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
@@ -7524,7 +7533,7 @@ export default function App() {
                   <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tripsMissing ? "Run the setup SQL to enable trucks." : "No trucks. Add one with “+ Truck”."}</td></tr>
                 ) : trucksList.map(tk => {
                   const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
-                  const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
+                  const load = activeTrip ? tripCalc(activeTrip).loadedCf : 0;
                   const cap = numv(tk.capacity_cf);
                   const pct = cap > 0 ? Math.min(100, Math.round((load / cap) * 100)) : null;
                   return (
@@ -7734,7 +7743,7 @@ export default function App() {
                         <div style={{ marginBottom:10 }}>
                           <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:4 }}>
                             <b style={{ color: occColor(c.occPct || 0) }}>{c.occPct}% occupied</b>
-                            <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
+                            <span style={{ color:"#888" }}>{Math.round(c.loadedCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
                           </div>
                           <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}><div style={{ background: occColor(c.occPct || 0), height:12, width:`${Math.min(100, c.occPct || 0)}%`, transition:"width .4s" }} /></div>
                         </div>
@@ -7749,7 +7758,7 @@ export default function App() {
                         <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
-                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
                         {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart</Btn>}
                       </div>
                     </div>
@@ -10419,7 +10428,7 @@ export default function App() {
         if (!tk) return null;
         const sub = truckSubtitle(tk);
         const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
-        const load = activeTrip ? tripCalc(activeTrip).totalCf : 0;
+        const load = activeTrip ? tripCalc(activeTrip).loadedCf : 0;
         const cap = numv(tk.capacity_cf);
         return (
           <Modal title={`Truck · ${tk.name}`} onClose={() => setTruckDetailId(null)}
@@ -11279,7 +11288,7 @@ export default function App() {
         const driverNm = driverById[t.driver_id]?.name || "";
         const inTransit = t.status === "in_transit";
         const canAddJobs = t.status === "in_transit" || t.status === "loading";
-        const over = c.cap > 0 ? Math.max(0, Math.round(c.totalCf - c.cap)) : 0;
+        const over = c.cap > 0 ? Math.max(0, Math.round(c.loadedCf - c.cap)) : 0;
         const pct = c.occPct || 0;
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
         const events = tripEventsByTrip[t.id] || [];
@@ -11324,7 +11333,7 @@ export default function App() {
               <div style={{ marginBottom:6 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
                   <b style={{ color: occColor(pct) }}>{pct}% occupied</b>
-                  <span style={{ color:"#888" }}>{Math.round(c.totalCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
+                  <span style={{ color:"#888" }}>{Math.round(c.loadedCf).toLocaleString()} / {c.cap.toLocaleString()} CF</span>
                 </div>
                 <div style={{ background:"#f0f0f0", borderRadius:6, height:14, overflow:"hidden" }}><div style={{ background: occColor(pct), height:14, width:`${Math.min(100, pct)}%`, transition:"width .4s" }} /></div>
               </div>
@@ -11468,7 +11477,7 @@ export default function App() {
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
               <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
             </div>
-            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.totalCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
 
             {/* event log */}
             <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
