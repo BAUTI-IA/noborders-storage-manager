@@ -3206,6 +3206,13 @@ export default function App() {
   const [payments, setPayments] = useState([]);
   const [payAccounts, setPayAccounts] = useState([]);
   const [payTab, setPayTab] = useState("all");            // all | pending | received | circulation | banked
+  const [depositSel, setDepositSel] = useState(() => new Set());  // payment ids ticked for batch deposit (circulation tab)
+  const [depositForm, setDepositForm] = useState({ bank_account:"", date:"" });
+  const [showAccountsModal, setShowAccountsModal] = useState(false);
+  const [accountForm, setAccountForm] = useState(EMPTY_PAY_ACCOUNT);
+  const [editingAccountId, setEditingAccountId] = useState(null);
+  const [accountFormOpen, setAccountFormOpen] = useState(false);
+  const [accountSaving, setAccountSaving] = useState(false);
   const [showPayModal, setShowPayModal] = useState(false);
   const [payForm, setPayForm] = useState(EMPTY_PAYMENT);
   const [editingPayId, setEditingPayId] = useState(null);
@@ -6174,15 +6181,23 @@ export default function App() {
       if (insErr) { err = insErr; break; }
       if (sc.pay === "job") jobLineSum += numv(l.amount);
       if (sc.extra && f.job_id && !extrasMissing && !splitMissing) {
-        const exPayload = {
-          job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
-          amount: numv(l.amount), generated_by: "driver_only",
-          driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
-          driver_commission_amount: 0, rep_commission_amount: 0, company_amount: numv(l.amount),
-          active: true, source: "payment_split", payment_id: pd?.id || null,
-        };
-        const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
-        if (ed) createdExtras.push(ed);
+        // If the job already has an active extra of this type (added via "+ Add extra"),
+        // the payment counts as collected against it — creating another row would
+        // double the billed total. Only auto-create the extra when none exists yet.
+        const k = jobKeyByRowId[Number(f.job_id)];
+        const jobExs = k ? (extrasByJobKey[k] || []) : jobExtras.filter(e => e.job_id === Number(f.job_id));
+        const alreadyBilled = jobExs.some(e => e.active !== false && e.extra_type === sc.extra);
+        if (!alreadyBilled) {
+          const exPayload = {
+            job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
+            amount: numv(l.amount), generated_by: "driver_only",
+            driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
+            driver_commission_amount: 0, rep_commission_amount: 0, company_amount: numv(l.amount),
+            active: true, source: "payment_split", payment_id: pd?.id || null,
+          };
+          const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
+          if (ed) createdExtras.push(ed);
+        }
       }
     }
     // Two-way sync: job-concept lines mirror bol_collected on the storage_job rows.
@@ -6419,6 +6434,51 @@ export default function App() {
     const banked = !p.banked;
     await supabase.from("payments").update({ banked, banked_date: banked ? (p.banked_date || today()) : null, cash_with_whom: banked ? null : p.cash_with_whom }).eq("id", p.id);
     loadPayments();
+  }
+  // Batch deposit from the "In circulation" tab: ticked payments become banked
+  // in one shot, optionally tagged with the bank account they went into.
+  async function depositSelected(ids) {
+    if (!ids.length) return;
+    const payload = { banked: true, banked_date: depositForm.date || today(), cash_with_whom: null };
+    if (depositForm.bank_account) payload.bank_account = depositForm.bank_account;
+    const { error } = await supabase.from("payments").update(payload).in("id", ids);
+    if (error) { window.alert(error.message); return; }
+    setDepositSel(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n; });
+    loadPayments();
+  }
+  function toggleDepositSel(id) {
+    setDepositSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+  // ── Bank accounts (payment_accounts) CRUD ──
+  function openAddAccount() { setEditingAccountId(null); setAccountForm(EMPTY_PAY_ACCOUNT); setAccountFormOpen(true); }
+  function openEditAccount(a) {
+    setEditingAccountId(a.id);
+    setAccountForm({ name:a.name || "", bank_name:a.bank_name || "", account_type:a.account_type || "", account_last4:a.account_last4 || "", notes:a.notes || "", active:a.active !== false });
+    setAccountFormOpen(true);
+  }
+  async function savePayAccount() {
+    const f = accountForm; if (!f.name.trim()) return;
+    setAccountSaving(true);
+    const payload = { name:f.name.trim(), bank_name:f.bank_name || null, account_type:f.account_type || null, account_last4:f.account_last4 || null, notes:f.notes || null, active:f.active !== false };
+    let error;
+    if (editingAccountId) ({ error } = await supabase.from("payment_accounts").update(payload).eq("id", editingAccountId));
+    else ({ error } = await supabase.from("payment_accounts").insert([payload]));
+    setAccountSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setAccountFormOpen(false); setEditingAccountId(null); setAccountForm(EMPTY_PAY_ACCOUNT);
+    loadPayAccounts();
+  }
+  async function toggleAccountActive(a) {
+    await supabase.from("payment_accounts").update({ active: a.active === false }).eq("id", a.id);
+    loadPayAccounts();
+  }
+  async function deletePayAccount(a) {
+    // Payments reference the account by name (text), so accounts in use are
+    // deactivated rather than deleted to keep history readable.
+    if (payments.some(p => p.bank_account === a.name)) { window.alert("Esta cuenta está referenciada por pagos existentes. Desactivala en vez de borrarla."); return; }
+    if (!window.confirm(`Delete account "${a.name}"?`)) return;
+    await supabase.from("payment_accounts").delete().eq("id", a.id);
+    loadPayAccounts();
   }
   function requestDepositWa(person) {
     const lines = person.items.map(p => `• Job ${p._g?.job_number || p.job_id || "—"} — $${p._net.toLocaleString()} (${payMethodLabel(p.method)})`).join("\n");
@@ -6763,6 +6823,7 @@ export default function App() {
           {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
           {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
+          {page === "payments" && can("payments","create") && <Btn disabled={paymentsMissing} onClick={() => setShowAccountsModal(true)}>🏦 Bank accounts</Btn>}
           {page === "payments" && can("payments","create") && !paymentsMissing && !extrasMissing && <Btn onClick={openAddExtraFromPayments}>+ Extra</Btn>}
           {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
           {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
@@ -8192,10 +8253,15 @@ export default function App() {
                 <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No cash/checks in circulation. All deposited. 🎉</div>
               ) : (
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(330px,1fr))", gap:14 }}>
-                  {circulation.map(person => (
+                  {circulation.map(person => {
+                  const selItems = person.items.filter(p => depositSel.has(p.id));
+                  const selTotal = selItems.reduce((s, p) => s + p._net, 0);
+                  const allSel = selItems.length === person.items.length;
+                  return (
                     <div key={person.name} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
                         <span style={{ fontSize:15, fontWeight:700 }}>👤 {person.name}</span>
+                        <button onClick={() => setDepositSel(prev => { const n = new Set(prev); person.items.forEach(p => allSel ? n.delete(p.id) : n.add(p.id)); return n; })} style={{ border:"none", background:"none", cursor:"pointer", fontSize:11, color:"#185FA5", fontWeight:600, padding:0 }}>{allSel ? "Clear" : "Select all"}</button>
                         <span style={{ flex:1 }} />
                         <span style={{ fontSize:18, fontWeight:800, color:"#E24B4A" }}>${Math.round(person.total).toLocaleString()}</span>
                       </div>
@@ -8212,8 +8278,9 @@ export default function App() {
                             ? [moTypeLabel(p.mo_type), payRef(p) && `#${payRef(p)}`].filter(Boolean).join(" · ")
                             : "";
                           return (
-                            <div key={p.id} style={{ padding:"7px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
+                            <div key={p.id} style={{ padding:"7px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12, background: depositSel.has(p.id) ? "#F0FAF4" : undefined }}>
                               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                <input type="checkbox" checked={depositSel.has(p.id)} onChange={() => toggleDepositSel(p.id)} title="Tick to deposit" style={{ cursor:"pointer", accentColor:"#1A8A4E" }} />
                                 <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
                                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{p._g?.customer || "—"}</span>
                                 <PaymentMethodBadge method={p.method} />
@@ -8226,9 +8293,19 @@ export default function App() {
                           );
                         })}
                       </div>
+                      {selItems.length > 0 && (
+                        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", marginBottom:10, background:"#F0FAF4", border:"1px solid #CDEBD8", borderRadius:8, padding:"8px 10px" }}>
+                          <select value={depositForm.bank_account} onChange={e => setDepositForm(f => ({ ...f, bank_account:e.target.value }))} style={{ fontSize:12, padding:"5px 7px", borderRadius:7, border:"1px solid #ddd", flex:1, minWidth:120 }}>
+                            <option value="">— Account (optional) —</option>
+                            {payAccounts.filter(a => a.active !== false).map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                          </select>
+                          <input type="date" value={depositForm.date || today()} onChange={e => setDepositForm(f => ({ ...f, date:e.target.value }))} style={{ fontSize:12, padding:"5px 7px", borderRadius:7, border:"1px solid #ddd" }} />
+                          <Btn primary onClick={() => depositSelected(selItems.map(p => p.id))} style={{ padding:"6px 12px", fontSize:12 }}>✓ Deposit {selItems.length} · ${Math.round(selTotal).toLocaleString()}</Btn>
+                        </div>
+                      )}
                       <a href={"https://wa.me/?text=" + encodeURIComponent(`Hi ${person.name}, you currently have $${Math.round(person.total).toLocaleString()} in circulation:\n` + person.items.map(p => `• Job ${p._g?.job_number || p.job_id || "—"} — $${p._net.toLocaleString()} (${payMethodLabel(p.method)})`).join("\n") + `\nPlease deposit or deliver by end of week. Thank you.`)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Request deposit</Btn></a>
                     </div>
-                  ))}
+                  );})}
                 </div>
               )
             ) : (
@@ -11105,7 +11182,7 @@ export default function App() {
                     <Field label="Bank account">
                       <select style={inp} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
                         <option value="">— Select —</option>
-                        {payAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                        {payAccounts.filter(a => a.active !== false || a.name === payForm.bank_account).map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
                       </select>
                     </Field>
                   </div>
@@ -11118,7 +11195,7 @@ export default function App() {
                 <div style={{ marginTop:6 }}>
                   <select style={{ ...inp, width:"auto" }} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
                     <option value="">— Account (optional) —</option>
-                    {payAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                    {payAccounts.filter(a => a.active !== false || a.name === payForm.bank_account).map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
                   </select>
                 </div>
               </div>
@@ -11129,6 +11206,53 @@ export default function App() {
           </Modal>
         );
       })()}
+
+      {/* ── Bank accounts manager (payment_accounts) ── */}
+      {showAccountsModal && (
+        <Modal title="Bank accounts" onClose={() => { setShowAccountsModal(false); setAccountFormOpen(false); }}
+          footer={<>
+            <Btn onClick={() => { setShowAccountsModal(false); setAccountFormOpen(false); }}>Close</Btn>
+            {accountFormOpen && <Btn primary disabled={accountSaving || !accountForm.name.trim()} onClick={savePayAccount}>{accountSaving ? "Saving..." : (editingAccountId ? "Save changes" : "Add account")}</Btn>}
+          </>}>
+          {payAccounts.length === 0
+            ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0 10px" }}>Sin cuentas todavía.</div>
+            : payAccounts.map(a => (
+                <div key={a.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap", opacity: a.active === false ? 0.55 : 1 }}>
+                  <span style={{ fontWeight:600 }}>{a.name}</span>
+                  {a.bank_name && <span style={{ fontSize:12, color:"#888" }}>{a.bank_name}</span>}
+                  {a.account_type && <span style={{ fontSize:10.5, fontWeight:600, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 8px" }}>{a.account_type}</span>}
+                  {a.account_last4 && <span style={{ fontFamily:"monospace", fontSize:12, color:"#888" }}>••{a.account_last4}</span>}
+                  {a.active === false && <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 8px" }}>Inactive</span>}
+                  <span style={{ flex:1 }} />
+                  <button onClick={() => openEditAccount(a)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+                  <button onClick={() => toggleAccountActive(a)} style={{ border:"1px solid #ddd", background:"#fff", cursor:"pointer", fontSize:11, borderRadius:7, padding:"3px 9px", color:"#555" }}>{a.active === false ? "Activate" : "Deactivate"}</button>
+                  <button onClick={() => deletePayAccount(a)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
+                </div>
+              ))}
+          {accountFormOpen ? (
+            <div style={{ marginTop:14, padding:"12px 14px", background:"#fafafa", borderRadius:9 }}>
+              <div style={{ fontSize:13, fontWeight:700, marginBottom:10 }}>{editingAccountId ? "Edit account" : "New account"}</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                <Field label="Name" full><input style={inp} value={accountForm.name} onChange={e => setAccountForm(f => ({ ...f, name:e.target.value }))} placeholder="ej: Chase Operations" /></Field>
+                <Field label="Bank"><input style={inp} value={accountForm.bank_name} onChange={e => setAccountForm(f => ({ ...f, bank_name:e.target.value }))} placeholder="ej: Chase" /></Field>
+                <Field label="Account type"><input style={inp} value={accountForm.account_type} onChange={e => setAccountForm(f => ({ ...f, account_type:e.target.value }))} placeholder="checking / savings" /></Field>
+                <Field label="Last 4 digits"><input style={inp} value={accountForm.account_last4} onChange={e => setAccountForm(f => ({ ...f, account_last4:e.target.value.replace(/\D/g, "").slice(0, 4) }))} placeholder="1234" /></Field>
+                <Field label="Status">
+                  <select style={inp} value={accountForm.active ? "yes" : "no"} onChange={e => setAccountForm(f => ({ ...f, active: e.target.value === "yes" }))}>
+                    <option value="yes">Active</option><option value="no">Inactive</option>
+                  </select>
+                </Field>
+                <Field label="Notes" full><input style={inp} value={accountForm.notes} onChange={e => setAccountForm(f => ({ ...f, notes:e.target.value }))} placeholder="Notes" /></Field>
+              </div>
+              <div style={{ marginTop:8, textAlign:"right" }}>
+                <button onClick={() => { setAccountFormOpen(false); setEditingAccountId(null); }} style={{ border:"none", background:"none", cursor:"pointer", fontSize:12, color:"#888", textDecoration:"underline" }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop:12 }}><Btn primary onClick={openAddAccount} style={{ padding:"6px 14px", fontSize:12.5 }}>+ Add account</Btn></div>
+          )}
+        </Modal>
+      )}
 
       {/* ── Commission assignment for a payment-split extra ── */}
       {commAssign && (() => {
