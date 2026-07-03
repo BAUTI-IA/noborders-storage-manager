@@ -1,9 +1,11 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
-import { geoCentroid } from "d3-geo";
 import { BolSection } from "./bol.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
+import { numv, money, jobKey, parseCf, STATUSES, statusMeta } from "./analyticsData.js";
+import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
+import { AnalyticsPage } from "./analytics.jsx";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -481,6 +483,9 @@ function i18nApply() {
     const pn = t.parentNode; if (!pn) continue;
     const tag = pn.nodeName;
     if (tag === "SCRIPT" || tag === "STYLE" || tag === "TEXTAREA") continue;
+    // Never rewrite text inside SVG (charts/maps): Recharts re-renders on every
+    // hover and the swap would fight React's reconciliation.
+    if (pn.ownerSVGElement || tag === "svg" || tag === "text" || tag === "tspan") continue;
     const raw = t.nodeValue; const key = raw.trim();
     if (!key) continue;
     const tr = dict[key];
@@ -728,7 +733,6 @@ function PaymentMethodSelect({ value, onChange, style }) {
     </select>
   );
 }
-const numv = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
 // Collection status for a BOL job: complete / partial / pending.
 function collectionStatus(j) {
   const bal = numv(j.bol_balance), col = numv(j.bol_collected);
@@ -1546,7 +1550,6 @@ do $$ begin alter publication supabase_realtime add table public.compliance_docu
 
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
-const parseCf = (v) => { if (!v) return 0; const m = String(v).match(/[\d,.]+/); return m ? Number(m[0].replace(/,/g, "")) || 0 : 0; };
 // Occupancy colors: green <70%, amber 70–90%, red >90%.
 const occColor = (pct) => pct > 90 ? "#E24B4A" : pct >= 70 ? "#EF9F27" : "#639922";
 function OccupancyBar({ used, total, height = 8 }) {
@@ -1562,101 +1565,6 @@ function OccupancyBar({ used, total, height = 8 }) {
   );
 }
 
-// ── US storage map (react-simple-maps + us-atlas state shapes) ──
-const US_GEO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json";
-// Full state name → 2-letter code, to join us-atlas geographies with our stats.
-const US_NAME_TO_CODE = {
-  Alabama:"AL", Alaska:"AK", Arizona:"AZ", Arkansas:"AR", California:"CA", Colorado:"CO", Connecticut:"CT",
-  Delaware:"DE", "District of Columbia":"DC", Florida:"FL", Georgia:"GA", Hawaii:"HI", Idaho:"ID", Illinois:"IL",
-  Indiana:"IN", Iowa:"IA", Kansas:"KS", Kentucky:"KY", Louisiana:"LA", Maine:"ME", Maryland:"MD", Massachusetts:"MA",
-  Michigan:"MI", Minnesota:"MN", Mississippi:"MS", Missouri:"MO", Montana:"MT", Nebraska:"NE", Nevada:"NV",
-  "New Hampshire":"NH", "New Jersey":"NJ", "New Mexico":"NM", "New York":"NY", "North Carolina":"NC",
-  "North Dakota":"ND", Ohio:"OH", Oklahoma:"OK", Oregon:"OR", Pennsylvania:"PA", "Rhode Island":"RI",
-  "South Carolina":"SC", "South Dakota":"SD", Tennessee:"TN", Texas:"TX", Utah:"UT", Vermont:"VT", Virginia:"VA",
-  Washington:"WA", "West Virginia":"WV", Wisconsin:"WI", Wyoming:"WY",
-};
-const US_CODE_TO_NAME = Object.fromEntries(Object.entries(US_NAME_TO_CODE).map(([n, c]) => [c, n]));
-// Choropleth fill by number of active storages; badge dot uses the stronger tone.
-const stateFill = (count) => !count ? "#f5f5f5" : count >= 6 ? "#FCEBEB" : count >= 3 ? "#FAEEDA" : "#EAF3DE";
-const stateDotColor = (count) => count >= 6 ? "#E24B4A" : count >= 3 ? "#EF9F27" : "#639922";
-
-function UsStorageMap({ stats, selected, onSelect }) {
-  const wrapRef = useRef();
-  const [tt, setTt] = useState(null);   // { code, x, y } tooltip anchor (relative to wrapper)
-  const showTip = (code, e) => {
-    const r = wrapRef.current?.getBoundingClientRect(); if (!r) return;
-    setTt({ code, x: e.clientX - r.left, y: e.clientY - r.top });
-  };
-  const ts = tt ? (stats[tt.code] || { count:0, cf:0, due:0 }) : null;
-  return (
-    <div ref={wrapRef} style={{ position:"relative", background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"6px 10px 4px", marginBottom:14 }}>
-      <ComposableMap projection="geoAlbersUsa" projectionConfig={{ scale: 1000 }} width={800} height={500} style={{ width:"100%", height:"auto" }}>
-        {/* state shapes */}
-        <Geographies geography={US_GEO_URL}>
-          {({ geographies }) => geographies.map(geo => {
-            const code = US_NAME_TO_CODE[geo.properties.name];
-            const count = (code && stats[code]?.count) || 0;
-            const isSel = code && selected === code;
-            return (
-              <Geography key={geo.rsmKey} geography={geo}
-                onMouseEnter={(e) => code && showTip(code, e)}
-                onMouseMove={(e) => code && showTip(code, e)}
-                onMouseLeave={() => setTt(null)}
-                onClick={() => code && onSelect(selected === code ? "" : code)}
-                style={{
-                  default: { fill: stateFill(count), stroke: isSel ? "#111" : "#e0e0e0", strokeWidth: isSel ? 1.6 : 0.6, outline:"none", cursor: code ? "pointer" : "default" },
-                  hover:   { fill: count ? stateFill(count) : "#eef2f7", stroke: isSel ? "#111" : "#9aa3ad", strokeWidth: isSel ? 1.6 : 0.9, outline:"none", cursor: code ? "pointer" : "default" },
-                  pressed: { fill: stateFill(count), stroke:"#111", strokeWidth: 1.4, outline:"none" },
-                }} />
-            );
-          })}
-        </Geographies>
-        {/* abbreviation + count badge on states that have storages (drawn on top) */}
-        <Geographies geography={US_GEO_URL}>
-          {({ geographies }) => geographies.map(geo => {
-            const code = US_NAME_TO_CODE[geo.properties.name];
-            const d = code ? stats[code] : null;
-            if (!d) return null;
-            const c = geoCentroid(geo);
-            return (
-              <Marker key={geo.rsmKey + "-m"} coordinates={c}>
-                <g style={{ pointerEvents:"none" }}>
-                  <text textAnchor="middle" y={2.5} style={{ fontWeight:700, fontSize:9, fill:"#3a3a3a" }}>{code}</text>
-                  <g transform="translate(11,-7)">
-                    {d.due > 0 && <circle r={9} fill="none" stroke="#E24B4A" strokeWidth={1.2} strokeDasharray="3 2" />}
-                    <circle r={7} fill={stateDotColor(d.count)} stroke="#fff" strokeWidth={1} />
-                    <text textAnchor="middle" y={2.6} style={{ fontSize:7.5, fontWeight:800, fill:"#fff" }}>{d.count}</text>
-                  </g>
-                </g>
-              </Marker>
-            );
-          })}
-        </Geographies>
-      </ComposableMap>
-
-      {/* legend */}
-      <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"2px 4px 4px" }}>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#EAF3DE", border:"1px solid #cfe0b8" }} />1–2</span>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#FAEEDA", border:"1px solid #ecd6ad" }} />3–5</span>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#FCEBEB", border:"1px solid #f0cccc" }} />6+</span>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", border:"1.5px dashed #E24B4A" }} />payment expiring soon</span>
-        <span style={{ marginLeft:"auto", color:"#aaa" }}>Tap a state to filter the list</span>
-      </div>
-
-      {/* tooltip */}
-      {tt && ts && (
-        <div style={{ position:"absolute", left: tt.x, top: tt.y, transform:"translate(-50%, -100%)", marginTop:-10, background:"#111", color:"#fff", borderRadius:8, padding:"8px 11px", fontSize:11.5, lineHeight:1.5, pointerEvents:"none", whiteSpace:"nowrap", boxShadow:"0 6px 20px rgba(0,0,0,0.25)", zIndex:5 }}>
-          <div style={{ fontWeight:700, marginBottom:2 }}>{US_CODE_TO_NAME[tt.code] || tt.code}</div>
-          <div>{ts.count} storage{ts.count !== 1 ? "s" : ""} activo{ts.count !== 1 ? "s" : ""}</div>
-          <div>{Math.round(ts.cf).toLocaleString()} CF en uso</div>
-          {ts.due > 0
-            ? <div style={{ color:"#FCA5A5", fontWeight:600 }}>⚠ {ts.due} payment{ts.due !== 1 ? "s" : ""} expiring soon (≤5 days)</div>
-            : <div style={{ color:"#8fb98f" }}>No payments expiring soon</div>}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Live-load map: truck GPS status colors + relative-time helper ──
 const LIVE_STATUS = {
@@ -1882,17 +1790,6 @@ const jobEventMeta = (v) => JOB_EVENT_TYPES.find(t => t.v === v) || { l: v || "E
 
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
-const STATUSES = [
-  { v:"scheduled", l:"Scheduled", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },        // blue
-  { v:"picked_up", l:"Picked up", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },         // amber
-  { v:"in_storage", l:"In storage", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },        // green
-  { v:"out_for_delivery", l:"Out for delivery", bg:"#EDE9FE", text:"#6D28D9", dot:"#7C3AED" }, // purple
-  { v:"delivered", l:"Delivered", bg:"#f1f1f1", text:"#888", dot:"#bbb" },                // gray
-  { v:"cancelled", l:"Cancelled", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },          // red
-  { v:"on_hold", l:"On hold", bg:"#FEF9C3", text:"#854D0E", dot:"#FACC15" },              // yellow
-  { v:"redispatched", l:"Redispatched", bg:"#FDE3CF", text:"#C2410C", dot:"#EA580C" },    // orange
-];
-const statusMeta = (v) => STATUSES.find(s => s.v === v) || STATUSES[0];
 function StatusBadge({ status }) {
   const c = statusMeta(status || "scheduled");
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
@@ -1911,7 +1808,6 @@ function nextStatus(g) {
   if (s === "out_for_delivery") return "delivered";
   return null;
 }
-const money = (v) => (v || v === 0) && !isNaN(Number(v)) ? `$${Number(v).toLocaleString()}` : null;
 
 // ── List pagination: 15 rows per page, prev/next arrows. Filters run over the
 // full set first; only the page slice is rendered. ──
@@ -2017,8 +1913,6 @@ function Sticker({ color }) {
   );
 }
 
-// Group key for a job: same job_number = same job (across locations). Blank number = standalone.
-const jobKey = (j) => j.job_number && j.job_number.trim() ? `n:${j.job_number.trim().toLowerCase()}` : `id:${j.id}`;
 
 const sitColor = {
   Open:  { bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
@@ -2318,77 +2212,6 @@ function parseWhatsAppExport(rawText) {
     .map(b => parsePastedMessages(b.lines.join("\n"))[0] || null).filter(Boolean);
 }
 
-function AIPanel({ records, lang }) {
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-
-  async function analyze() {
-    setLoading(true); setResult(null);
-    const active = records.filter(r => r.situation === "Open");
-    const byState = active.reduce((acc,r)=>{ if(r.state) acc[r.state]=(acc[r.state]||0)+1; return acc; },{});
-    const byBrand = active.reduce((acc,r)=>{ if(r.brand) acc[r.brand.trim()]=(acc[r.brand.trim()]||0)+1; return acc; },{});
-    const withCost = active.filter(r=>r.monthly_cost);
-    const totalCost = withCost.reduce((s,r)=>s+Number(r.monthly_cost),0);
-    const noCost = active.length - withCost.length;
-    const sameState = Object.entries(byState).filter(([,v])=>v>=3).map(([k,v])=>`${k}: ${v} storages`);
-    const sameBrand = Object.entries(byBrand).filter(([,v])=>v>=3).map(([k,v])=>`${k}: ${v} unidades`);
-
-    const prompt = `You are an expert in US moving-company operations. Analyze this active-storage data and give me 4-6 concrete, actionable recommendations to improve efficiency and reduce costs. Be specific, direct and practical.
-
-DATA:
-- Total active storages: ${active.length}
-- Total monthly cost recorded: $${totalCost.toLocaleString()} (${noCost} storages with no cost entered)
-- Storages by state: ${JSON.stringify(byState)}
-- Storages by company: ${JSON.stringify(byBrand)}
-- States with 3+ storages: ${sameState.join(", ") || "none"}
-- Companies with 3+ units: ${sameBrand.join(", ") || "none"}
-
-Format: numbered list, each recommendation in 2-3 lines max. Start directly with "1."
-${lang === "es" ? "Answer in Spanish." : "Answer in English."}`;
-
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt })
-      });
-      const data = await res.json();
-      if (!res.ok) setResult(data.error || (lang === "es" ? "No se pudo conectar con la IA." : "Could not connect to the AI."));
-      else setResult(data.text || (lang === "es" ? "No se pudo obtener una respuesta." : "Could not get a response."));
-    } catch(e) {
-      setResult(lang === "es" ? "Error conectando con la IA. Intentá de nuevo." : "Error connecting to the AI. Try again.");
-    }
-    setLoading(false);
-  }
-
-  return (
-    <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom: result ? 16 : 0 }}>
-        <div>
-          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>AI recommendations</div>
-          <div style={{ fontSize:12, color:"#bbb" }}>Automatic analysis of your storage operation</div>
-        </div>
-        <button onClick={analyze} disabled={loading}
-          style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background: loading ? "#f5f5f5" : "#111", color: loading ? "#aaa" : "#fff", cursor: loading ? "not-allowed" : "pointer", flexShrink:0, display:"flex", alignItems:"center", gap:6 }}>
-          {loading ? "Analyzing..." : "Analyze with AI"}
-        </button>
-      </div>
-      {loading && (
-        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"20px 0", color:"#888", fontSize:13 }}>
-          <div style={{ width:16, height:16, border:"2px solid #f0f0f0", borderTop:"2px solid #111", borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
-          {lang === "es"
-            ? `Analizando ${records.filter(r=>r.situation==="Open").length} storages activos...`
-            : `Analyzing ${records.filter(r=>r.situation==="Open").length} active storages...`}
-        </div>
-      )}
-      {result && (
-        <div style={{ marginTop:16, padding:"16px", background:"#fafafa", borderRadius:10, fontSize:13, lineHeight:1.7, color:"#333", whiteSpace:"pre-wrap" }}>
-          {result}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // Card shell shared by the login / set-password / deactivated screens.
 function AuthCard({ children }) {
@@ -4205,61 +4028,6 @@ export default function App() {
     return m;
   }, [records, sit, usedCfByStorage]);
 
-  // Storage P&L: what the company PAYS per rented unit vs what clients PAY for
-  // storage in it. Every non-closed rented unit counts as expense — a vacant
-  // unit still gets paid every month (that was the bug: only occupied units
-  // were summed, so the "real" storage bill was understated).
-  const storagePnl = useMemo(() => {
-    const activeParts = jobs.filter(j => !j.date_out && j.status !== "cancelled");
-    // A job can span several units: split its monthly rate evenly across them
-    // so the per-unit table sums to the same total as Storage Billing.
-    const partsByKey = {};
-    for (const p of activeParts) { const k = jobKey(p); (partsByKey[k] = partsByKey[k] || []).push(p); }
-    const incomeByStorage = {};
-    for (const parts of Object.values(partsByKey)) {
-      const j = parts[0];
-      if (!j.billing_active) continue;
-      const rate = Number(j.client_monthly_rate) || 0;
-      const storageParts = parts.filter(p => p.storage_id);
-      if (!rate || !storageParts.length) continue;
-      const share = rate / storageParts.length;
-      for (const p of storageParts) incomeByStorage[p.storage_id] = (incomeByStorage[p.storage_id] || 0) + share;
-    }
-    const rows = records
-      .filter(r => r.space_type !== "warehouse" && r.situation !== "Close")
-      .map(r => {
-        const pay = Number(r.monthly_cost) > 0 ? Number(r.monthly_cost) : 0;
-        const income = incomeByStorage[r.id] || 0;
-        return {
-          id: r.id,
-          name: [r.brand, r.unit && ("U" + r.unit), r.state].filter(Boolean).join(" · ") || "—",
-          pay, income, margin: income - pay,
-          hasCost: Number(r.monthly_cost) > 0,
-          occupied: sit(r) === "Open",
-        };
-      })
-      .sort((a, b) => a.margin - b.margin);
-    const totals = rows.reduce((t, r) => ({ pay: t.pay + r.pay, income: t.income + r.income }), { pay: 0, income: 0 });
-    return { rows, totals, missingCost: rows.filter(r => !r.hasCost).length };
-  }, [jobs, records, sit]);
-
-  const metrics = useMemo(() => {
-    const activeParts = jobs.filter(j => !j.date_out);
-    const deliveredParts = jobs.filter(j => j.date_out);
-    const occupied = new Set(activeParts.map(j => j.storage_id));
-    return {
-      activeJobs: new Set(activeParts.map(jobKey)).size,
-      deliveredJobs: new Set(deliveredParts.map(jobKey)).size,
-      units: records.length,
-      occupied: occupied.size,
-      states: new Set(records.map(r => r.state).filter(Boolean)).size,
-      totalCost: Math.round(storagePnl.totals.pay),
-      vacantCost: Math.round(storagePnl.rows.filter(r => !r.occupied).reduce((s, r) => s + r.pay, 0)),
-      storageIncome: Math.round(storagePnl.totals.income),
-      storageMargin: Math.round(storagePnl.totals.income - storagePnl.totals.pay),
-      missingCost: storagePnl.missingCost,
-    };
-  }, [jobs, records, storagePnl]);
 
   // Payments coming due on active units (not Closed/Empty).
   const urgentPayments = useMemo(
@@ -6647,30 +6415,6 @@ export default function App() {
     return m;
   }, [jobs, jobExtras, jobKeyByRowId, extraJobGroups]);
 
-  // Gross vs net revenue (after broker shares) + per-broker-per-month broker share.
-  const revenueAnalytics = useMemo(() => {
-    let grossJob = 0, brokerJob = 0, grossExtras = 0, brokerExtras = 0;
-    const seen = new Set();
-    const monthly = {}; // month -> { brokerId -> amount }
-    const addMonthly = (mo, bid, amt) => { if (!amt || !bid || !mo) return; (monthly[mo] = monthly[mo] || {}); monthly[mo][bid] = (monthly[mo][bid] || 0) + amt; };
-    for (const j of jobs) {
-      const k = jobKey(j); const sk = (j.broker_id || "x") + "|" + k; if (seen.has(sk)) continue; seen.add(sk);
-      const collected = numv(j.bol_collected) || (numv(j.pickup_balance) + numv(j.delivery_balance));
-      grossJob += collected;
-      const share = j.broker_job_share_amount != null ? numv(j.broker_job_share_amount) : (collected * numv(j.broker_job_share_pct) / 100);
-      brokerJob += share;
-      addMonthly((j.date_in || j.delivery_date || (j.created_at || "")).slice(0, 7), j.broker_id, share);
-    }
-    for (const e of jobExtras) {
-      if (e.active === false) continue;
-      grossExtras += numv(e.amount);
-      const share = extraBrokerShare(e); brokerExtras += share;
-      const k = jobKeyByRowId[e.job_id]; const g = k ? extraJobGroups.get(k) : null;
-      addMonthly((g?.date_in || (e.created_at || "")).slice(0, 7), g?.broker_id, share);
-    }
-    const gross = grossJob + grossExtras, broker = brokerJob + brokerExtras;
-    return { gross, broker, net: gross - broker, grossJob, grossExtras, brokerJob, brokerExtras, monthly };
-  }, [jobs, jobExtras, jobKeyByRowId, extraJobGroups]);
 
   // Mark every part of a job (all its units) as delivered.
   async function deliverJobs(ids) {
@@ -8660,329 +8404,13 @@ export default function App() {
 
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
       {page === "analytics" && (
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:12 }}>
-        {[
-          { label:"Jobs activos", value:metrics.activeJobs, color:"#3B6D11" },
-          { label:"Delivered", value:metrics.deliveredJobs, color:"#888" },
-          { label:"Units", value:metrics.units, color:"#111" },
-          { label:"Occupied units", value:metrics.occupied, color:"#185FA5" },
-          { label:"Urgent payments", value:urgentPayments, color:"#A32D2D" },
-          { label:"Overdue FADD", value:faddStats.overdue, color:"#A32D2D" },
-          { label:"Due this week", value:faddStats.dueWeek, color:"#C2410C" },
-          { label:"Storage bill /mo", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
-          { label:"Vacant units cost /mo", value:"$"+metrics.vacantCost.toLocaleString(), color: metrics.vacantCost > 0 ? "#A32D2D" : "#888" },
-          { label:"Storage income /mo", value:"$"+metrics.storageIncome.toLocaleString(), color:"#1A8A4E" },
-          { label:"Storage margin /mo", value:(metrics.storageMargin < 0 ? "−$" : "$") + Math.abs(metrics.storageMargin).toLocaleString(), color: metrics.storageMargin < 0 ? "#A32D2D" : "#1A8A4E" },
-          { label:"US states", value:metrics.states, color:"#888" },
-        ].map(m => (
-          <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
-            <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
-            <div style={{ fontSize:22, fontWeight:700, color:m.color }}>{m.value}</div>
-          </div>
-        ))}
-      </div>
-      )}
-
-      {/* ANALYTICS — data completeness warning: totals are only as real as the costs entered */}
-      {page === "analytics" && metrics.missingCost > 0 && (
-        <div style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:8, padding:"8px 12px", fontSize:13, color:"#854F0B", marginBottom:14 }}>
-          ⚠ {metrics.missingCost} rented unit{metrics.missingCost === 1 ? "" : "s"} without a monthly cost entered — the storage bill shown is incomplete. Open each storage and load its <b>Monthly cost</b>.
-        </div>
-      )}
-
-      {/* ANALYTICS — storage P&L: what you pay per unit vs what clients pay you */}
-      {page === "analytics" && storagePnl.rows.length > 0 && (
-        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px", marginBottom:14 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storage P&L — real cost vs income</div>
-          <div style={{ fontSize:12, color:"#bbb", marginBottom:12 }}>Cada unidad alquilada (aunque esté vacía) contra lo que cobrás por mes. Peor margen primero. Si un job ocupa varias unidades, su tarifa se prorratea.</div>
-          <div style={{ maxHeight:340, overflowY:"auto" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5 }}>
-              <thead>
-                <tr>{["Storage", "Status", "You pay /mo", "You charge /mo", "Margin /mo"].map((h, i) => (
-                  <th key={h} style={{ position:"sticky", top:0, background:"#fff", textAlign: i >= 2 ? "right" : "left", padding:"6px 8px", fontSize:10.5, color:"#999", textTransform:"uppercase", borderBottom:"1px solid #f0f0f0" }}>{h}</th>
-                ))}</tr>
-              </thead>
-              <tbody>
-                {storagePnl.rows.map(r => (
-                  <tr key={r.id}>
-                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", fontWeight:500 }}>{r.name}</td>
-                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7" }}>
-                      <span style={{ fontSize:10.5, fontWeight:600, padding:"1px 7px", borderRadius:20, background: r.occupied ? "#EAF3DE" : "#FEF3C7", color: r.occupied ? "#3B6D11" : "#92760B" }}>{r.occupied ? "Occupied" : "Vacant"}</span>
-                    </td>
-                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", color:"#C2410C" }}>{r.hasCost ? "$" + Math.round(r.pay).toLocaleString() : <span style={{ color:"#b45309", fontWeight:600 }}>sin costo ⚠</span>}</td>
-                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", color:"#1A8A4E" }}>${Math.round(r.income).toLocaleString()}</td>
-                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", fontWeight:700, color: r.margin < 0 ? "#A32D2D" : "#1A8A4E" }}>{(r.margin < 0 ? "−$" : "$") + Math.abs(Math.round(r.margin)).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td style={{ padding:"8px", fontWeight:700, borderTop:"2px solid #eee" }}>Total ({storagePnl.rows.length} units)</td>
-                  <td style={{ borderTop:"2px solid #eee" }} />
-                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color:"#C2410C", borderTop:"2px solid #eee" }}>${Math.round(storagePnl.totals.pay).toLocaleString()}</td>
-                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color:"#1A8A4E", borderTop:"2px solid #eee" }}>${Math.round(storagePnl.totals.income).toLocaleString()}</td>
-                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color: (storagePnl.totals.income - storagePnl.totals.pay) < 0 ? "#A32D2D" : "#1A8A4E", borderTop:"2px solid #eee" }}>
-                    {((storagePnl.totals.income - storagePnl.totals.pay) < 0 ? "−$" : "$") + Math.abs(Math.round(storagePnl.totals.income - storagePnl.totals.pay)).toLocaleString()}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ANALYTICS — revenue: gross vs net + broker share */}
-      {page === "analytics" && !brokerShareMissing && (revenueAnalytics.broker > 0 || revenueAnalytics.gross > 0) && (
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Gross vs net revenue</div>
-            <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>After what the broker keeps</div>
-            {(() => {
-              const { gross, broker, net } = revenueAnalytics;
-              const rows = [["Gross (collected + extras)", gross, "#185FA5"], ["− Broker share", broker, "#C2410C"], ["Net to company", net, "#1A8A4E"]];
-              const max = Math.max(gross, 1);
-              return rows.map(([l, v, c]) => (
-                <div key={l} style={{ marginBottom:12 }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:4 }}><span style={{ fontWeight:500 }}>{l}</span><span style={{ color:c, fontWeight:700 }}>${Math.round(v).toLocaleString()}</span></div>
-                  <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}><div style={{ background:c, borderRadius:6, height:8, width:`${Math.min(100, (Math.abs(v)/max)*100)}%`, transition:"width .4s" }} /></div>
-                </div>
-              ));
-            })()}
-          </div>
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Broker share por broker / mes</div>
-            <div style={{ fontSize:12, color:"#bbb", marginBottom:14 }}>Lo retenido por cada broker, por mes</div>
-            {(() => {
-              const months = Object.keys(revenueAnalytics.monthly).sort().slice(-3);
-              if (!months.length) return <p style={{ fontSize:12, color:"#bbb", textAlign:"center", marginTop:20 }}>Sin broker share registrado.</p>;
-              const monthNames = {"01":"Ene","02":"Feb","03":"Mar","04":"Abr","05":"May","06":"Jun","07":"Jul","08":"Ago","09":"Sep","10":"Oct","11":"Nov","12":"Dic"};
-              return months.reverse().map(mo => {
-                const [y, m] = mo.split("-");
-                const entries = Object.entries(revenueAnalytics.monthly[mo]).sort((a, b) => b[1] - a[1]);
-                const tot = entries.reduce((s, [, v]) => s + v, 0);
-                return (
-                  <div key={mo} style={{ marginBottom:12 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, fontWeight:700, marginBottom:5, borderBottom:"1px solid #f3f3f3", paddingBottom:3 }}><span>{monthNames[m]} {y}</span><span style={{ color:"#C2410C" }}>${Math.round(tot).toLocaleString()}</span></div>
-                    {entries.map(([bid, v]) => (
-                      <div key={bid} style={{ display:"flex", justifyContent:"space-between", fontSize:11.5, color:"#666", padding:"1px 0" }}><span>{brokerName(Number(bid)) || "Broker #" + bid}</span><span>${Math.round(v).toLocaleString()}</span></div>
-                    ))}
-                  </div>
-                );
-              });
-            })()}
-          </div>
-        </div>
-      )}
-
-      {/* ANALYTICS CHARTS */}
-      {page === "analytics" && (
-        <div style={{ marginBottom:20 }}>
-
-          {/* Fila 1: Aperturas vs Cierres + Costo por mes */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Aperturas vs cierres por mes</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Monthly evolution of your operation</div>
-              {(() => {
-                const monthNames = {"01":"Ene","02":"Feb","03":"Mar","04":"Abr","05":"May","06":"Jun","07":"Jul","08":"Ago","09":"Sep","10":"Oct","11":"Nov","12":"Dic"};
-                const opens = records.reduce((acc,r)=>{ if(r.date_opened){ const m=r.date_opened.slice(0,7); acc[m]=(acc[m]||0)+1; } return acc; },{});
-                const months = Object.keys(opens).sort().slice(-8);
-                const maxVal = Math.max(...months.map(m=>opens[m]||0), 1);
-                return months.map(month => {
-                  const [year, m] = month.split("-");
-                  const label = `${monthNames[m]} ${year.slice(2)}`;
-                  const openCount = opens[month]||0;
-                  return (
-                    <div key={month} style={{ marginBottom:10 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
-                        <span style={{ fontWeight:500 }}>{label}</span>
-                        <span style={{ color:"#3B6D11" }}>+{openCount} open</span>
-                      </div>
-                      <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
-                        <div style={{ background:"#3B6D11", borderRadius:6, height:8, width:`${(openCount/maxVal)*100}%`, transition:"width .4s" }} />
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
-
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly spend per company</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto le pagas a cada cadena de storages</div>
-              {(() => {
-                const byBrand = records.filter(r=>r.situation!=="Close" && r.space_type!=="warehouse" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
-                const sorted = Object.entries(byBrand).sort((a,b)=>b[1]-a[1]).slice(0,10);
-                const max = sorted[0]?.[1] || 1;
-                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
-                return sorted.map(([brand,cost]) => (
-                  <div key={brand} style={{ marginBottom:12 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
-                      <span style={{ fontSize:13, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"65%" }}>{brand}</span>
-                      <span style={{ fontSize:13, color:"#888", flexShrink:0 }}>${Number(cost).toLocaleString()}</span>
-                    </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
-                      <div style={{ background:"#A32D2D", borderRadius:6, height:8, width:`${(cost/max)*100}%`, transition:"width .4s" }} />
-                    </div>
-                  </div>
-                ));
-              })()}
-            </div>
-          </div>
-
-          {/* Fila 2: Storages por estado + Costo por estado */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storages activos por estado</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Where you have the most operational exposure</div>
-              {(() => {
-                const byState = records.filter(r=>sit(r)==="Open").reduce((acc,r)=>{ if(r.state){acc[r.state]=(acc[r.state]||0)+1;} return acc; },{});
-                const sorted = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,10);
-                const max = sorted[0]?.[1] || 1;
-                return sorted.map(([state,count]) => (
-                  <div key={state} style={{ marginBottom:12 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
-                      <span style={{ fontSize:13, fontWeight:500 }}>{state}</span>
-                      <span style={{ fontSize:13, color:"#888" }}>{count}</span>
-                    </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
-                      <div style={{ background:"#3B6D11", borderRadius:6, height:8, width:`${(count/max)*100}%`, transition:"width .4s" }} />
-                    </div>
-                  </div>
-                ));
-              })()}
-            </div>
-
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly cost per state</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Where you spend the most money on storages</div>
-              {(() => {
-                const byCost = records.filter(r=>r.situation!=="Close" && r.space_type!=="warehouse" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
-                const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
-                const max = sorted[0]?.[1] || 1;
-                if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
-                return sorted.map(([state,cost]) => (
-                  <div key={state} style={{ marginBottom:12 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
-                      <span style={{ fontSize:13, fontWeight:500 }}>{state}</span>
-                      <span style={{ fontSize:13, color:"#888" }}>${Number(cost).toLocaleString()}</span>
-                    </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}>
-                      <div style={{ background:"#185FA5", borderRadius:6, height:8, width:`${(cost/max)*100}%`, transition:"width .4s" }} />
-                    </div>
-                  </div>
-                ));
-              })()}
-            </div>
-          </div>
-
-          {/* CRM charts: revenue by broker + jobs by status */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Revenue por broker</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Estimate total de jobs por broker</div>
-              {(() => {
-                const num = v => (v && !isNaN(Number(v))) ? Number(v) : 0;
-                const map = new Map(); const seen = new Set();
-                for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); if (!j.broker_id) continue; map.set(j.broker_id, (map.get(j.broker_id)||0) + (num(j.estimate) || num(j.pickup_balance)+num(j.delivery_balance))); }
-                const sorted = [...map.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10);
-                const max = sorted[0]?.[1] || 1;
-                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Add brokers and estimates to see this</p>;
-                return sorted.map(([bid,val]) => (
-                  <div key={bid} style={{ marginBottom:12 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:5 }}>
-                      <span style={{ fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"65%" }}>{brokerName(bid) || `#${bid}`}</span>
-                      <span style={{ color:"#888" }}>${val.toLocaleString()}</span>
-                    </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}><div style={{ background:"#185FA5", borderRadius:6, height:8, width:`${(val/max)*100}%` }} /></div>
-                  </div>
-                ));
-              })()}
-            </div>
-
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Jobs por estado</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Distribution of active and historical jobs</div>
-              {(() => {
-                const counts = {}; const seen = new Set();
-                for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const s = j.status || "scheduled"; counts[s] = (counts[s]||0)+1; }
-                const total = Object.values(counts).reduce((a,b)=>a+b,0);
-                if (!total) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>No jobs</p>;
-                let acc = 0; const segs = [];
-                for (const st of STATUSES) { const c = counts[st.v]||0; if (!c) continue; const from = acc/total*360; acc += c; const to = acc/total*360; segs.push(`${st.dot} ${from}deg ${to}deg`); }
-                return (
-                  <div style={{ display:"flex", alignItems:"center", gap:18 }}>
-                    <div style={{ width:120, height:120, borderRadius:"50%", flexShrink:0, background:`conic-gradient(${segs.join(",")})`, position:"relative" }}>
-                      <div style={{ position:"absolute", inset:18, background:"#fff", borderRadius:"50%", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
-                        <div style={{ fontSize:22, fontWeight:800 }}>{total}</div><div style={{ fontSize:10, color:"#aaa" }}>jobs</div>
-                      </div>
-                    </div>
-                    <div style={{ flex:1 }}>
-                      {STATUSES.filter(st => counts[st.v]).map(st => (
-                        <div key={st.v} style={{ display:"flex", alignItems:"center", gap:7, fontSize:12, marginBottom:5 }}>
-                          <span style={{ width:9, height:9, borderRadius:2, background:st.dot }} />
-                          <span style={{ flex:1 }}>{st.l}</span>
-                          <span style={{ color:"#888", fontWeight:600 }}>{counts[st.v]}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-
-          {/* CRM charts: CF per month + top drivers */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>CF movidos por mes</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Total volume (cubic feet) per month</div>
-              {(() => {
-                const by = {}; const seen = new Set();
-                for (const j of jobs) { const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const d = j.pickup_date || j.date_in; if (!d) continue; const m = d.slice(0,7); by[m] = (by[m]||0) + parseCf(j.volume); }
-                const months = Object.keys(by).sort().slice(-8);
-                const max = Math.max(...months.map(m=>by[m]), 1);
-                if (!months.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Sin datos de volumen</p>;
-                return (
-                  <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:140 }}>
-                    {months.map(m => (
-                      <div key={m} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:5 }}>
-                        <div style={{ fontSize:9, color:"#888" }}>{Math.round(by[m]).toLocaleString()}</div>
-                        <div style={{ width:"100%", background:"#3B6D11", borderRadius:"4px 4px 0 0", height:`${Math.max(4,(by[m]/max)*110)}px` }} />
-                        <div style={{ fontSize:9, color:"#aaa" }}>{m.slice(5)}/{m.slice(2,4)}</div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
-
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px" }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Top drivers</div>
-              <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Por jobs entregados</div>
-              {(() => {
-                const counts = {}; const seen = new Set();
-                for (const j of jobs) { if (!j.date_out) continue; const k = jobKey(j); if (seen.has(k)) continue; seen.add(k); const names = (jobDriverNames(j) || "").split(",").map(s=>s.trim()).filter(Boolean); for (const n of names) counts[n] = (counts[n]||0)+1; }
-                const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
-                const max = sorted[0]?.[1] || 1;
-                if (!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>No deliveries yet</p>;
-                return sorted.map(([name,c]) => (
-                  <div key={name} style={{ marginBottom:12 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:5 }}>
-                      <span style={{ fontWeight:500 }}>{name}</span><span style={{ color:"#888" }}>{c}</span>
-                    </div>
-                    <div style={{ background:"#f5f5f5", borderRadius:6, height:8 }}><div style={{ background:"#7C3AED", borderRadius:6, height:8, width:`${(c/max)*100}%` }} /></div>
-                  </div>
-                ));
-              })()}
-            </div>
-          </div>
-
-          {/* Panel IA */}
-          <AIPanel records={records} lang={lang} />
-
-        </div>
+        <AnalyticsPage
+          records={records} jobs={jobs} brokers={brokers} driversList={driversList}
+          payments={payments} jobExtras={jobExtras} sit={sit}
+          urgentPayments={urgentPayments} faddStats={faddStats}
+          brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
+          lang={lang}
+        />
       )}
 
       <datalist id="drivers-list">{drivers.map(d => <option key={d} value={d} />)}</datalist>

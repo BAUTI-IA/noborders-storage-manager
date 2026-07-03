@@ -1,0 +1,119 @@
+// Sanity tests for src/analyticsData.js — run: node scripts/test-analytics-data.mjs
+import {
+  jobKey, dedupeJobs, buildFilterCtx, computeStoragePnl, computeMetrics,
+  computeRevenueSplit, monthlyRevenueSeries, arAging, monthsBetween,
+  rangeFromPreset, previousRange, shiftMonth, topN, occupancySeries,
+} from "../src/analyticsData.js";
+
+let failed = 0;
+const eq = (name, got, want) => {
+  const g = JSON.stringify(got), w = JSON.stringify(want);
+  if (g === w) console.log(`  ok  ${name}`);
+  else { failed++; console.error(`FAIL  ${name}\n      got  ${g}\n      want ${w}`); }
+};
+
+// ── months / ranges ──
+eq("monthsBetween zero-fill", monthsBetween("2025-11", "2026-02"), ["2025-11", "2025-12", "2026-01", "2026-02"]);
+eq("shiftMonth back over year", shiftMonth("2026-01", -2), "2025-11");
+eq("rangeFromPreset 6m", rangeFromPreset("6m", "2026-07-03"), { fromMonth: "2026-02", toMonth: "2026-07" });
+eq("rangeFromPreset ytd", rangeFromPreset("ytd", "2026-07-03"), { fromMonth: "2026-01", toMonth: "2026-07" });
+eq("previousRange same length", previousRange({ fromMonth: "2026-02", toMonth: "2026-07" }), { fromMonth: "2025-08", toMonth: "2026-01" });
+eq("previousRange todo", previousRange({ fromMonth: null, toMonth: "2026-07" }), null);
+
+// ── fixtures ──
+// Job A spans 2 units (same job_number), job B standalone, job C cancelled.
+const jobs = [
+  { id: 1, job_number: "A100", storage_id: 10, date_in: "2026-05-02", date_out: null, status: "in_storage", billing_active: true, client_monthly_rate: "1000", broker_id: 7, bol_collected: "5000", broker_job_share_pct: "10", volume: "1200 cf", customer: "Ana" },
+  { id: 2, job_number: "A100", storage_id: 11, date_in: "2026-05-04", date_out: null, status: "in_storage", billing_active: true, client_monthly_rate: "1000", broker_id: 7, bol_collected: "5000", broker_job_share_pct: "10", volume: "1200 cf", customer: "Ana" },
+  { id: 3, job_number: "B200", storage_id: 12, date_in: "2026-03-10", date_out: "2026-06-20", delivery_date: "2026-06-20", status: "delivered", broker_id: 8, pickup_balance: "1000", delivery_balance: "2000", broker_job_share_amount: "600", bol_balance: "900", bol_collected: "100", volume: "800", customer: "Beto" },
+  { id: 4, job_number: "", storage_id: null, date_in: "2026-06-01", date_out: null, status: "cancelled" },
+];
+const records = [
+  { id: 10, brand: "CubeSmart", unit: "1", state: "FL", monthly_cost: "300", situation: "Open", space_type: null, date_opened: "2026-01-05" },
+  { id: 11, brand: "CubeSmart", unit: "2", state: "FL", monthly_cost: "250", situation: "Open", space_type: null, date_opened: "2026-02-01" },
+  { id: 12, brand: "PublicStorage", unit: "9", state: "TX", monthly_cost: "400", situation: "Open", space_type: null, date_opened: "2026-01-15" }, // vacía hoy (job B salió)
+  { id: 13, brand: "Depot", unit: "3", state: "TX", monthly_cost: null, situation: "Close", space_type: null, date_opened: "2025-12-01" },     // cerrada: fuera del P&L
+  { id: 14, brand: "WH", unit: null, state: "FL", monthly_cost: "999", situation: "Open", space_type: "warehouse" },                            // warehouse: fuera del P&L
+];
+const sitFn = (r) => r.situation === "Close" ? "Close" : ([10, 11].includes(r.id) ? "Open" : "Empty");
+
+// ── dedupeJobs ──
+const groups = dedupeJobs(jobs);
+eq("dedupe count", groups.size, 3);
+const gA = groups.get(jobKey(jobs[0]));
+eq("dedupe earliest date_in", gA.dateIn, "2026-05-02");
+eq("dedupe allOut=false while active", gA.allOut, false);
+eq("dedupe anyOut on delivered", groups.get("n:b200").anyOut, true);
+
+// ── storage P&L: prorrateo y totales ──
+const pnl = computeStoragePnl(records, jobs, sitFn);
+eq("pnl rows (sin closed/warehouse)", pnl.rows.length, 3);
+const row10 = pnl.rows.find(r => r.id === 10);
+eq("pnl prorrateo 1000/2 unidades", row10.income, 500);
+eq("pnl totals income == rate una vez", pnl.totals.pay + "|" + pnl.totals.income, "950|1000");
+eq("pnl vacante sin income", pnl.rows.find(r => r.id === 12).income, 0);
+eq("pnl missingCost", pnl.missingCost, 0);
+
+// ── metrics (paridad con la fórmula vieja) ──
+const met = computeMetrics(records, jobs, pnl);
+eq("metrics activeJobs (dedupe, incluye cancelled sin date_out)", met.activeJobs, 2);
+eq("metrics vacantCost = unidad 12", met.vacantCost, 400);
+eq("metrics storageMargin", met.storageMargin, 1000 - 950);
+
+// ── revenue split: seen-set broker|jobKey + share amount vs pct ──
+const keyByRowId = {}; for (const j of jobs) keyByRowId[j.id] = jobKey(j);
+const groupByKey = new Map([...groups.values()].map(g => [g.key, g]));
+const split = computeRevenueSplit(jobs, [], keyByRowId, groupByKey, null);
+// A100: collected 5000 una sola vez (no 2), share 10% = 500. B200: bol 5000? no — bol_collected 100 → fallback? numv(100)=100 truthy → collected=100, share explícito 600.
+eq("split gross (A100 una vez + B200 bol_collected)", split.gross, 5000 + 100);
+eq("split broker share (pct + amount explícito)", split.broker, 500 + 600);
+eq("split net", split.net, 5100 - 1100);
+
+// ── AR aging: bordes de bucket y owed = balance − collected ──
+const agingGroups = [...dedupeJobs([
+  { id: 21, job_number: "D1", status: "delivered", date_out: "2026-06-30", delivery_date: "2026-06-03", bol_balance: "1000", bol_collected: "200" }, // 30 días → bucket 0-30
+  { id: 22, job_number: "D2", status: "delivered", date_out: "2026-06-02", delivery_date: "2026-06-02", bol_balance: "500", bol_collected: "0" },    // 31 días → bucket 31-60
+  { id: 23, job_number: "D3", status: "delivered", date_out: "2026-01-01", delivery_date: "2026-01-01", bol_balance: "300" },                        // >90
+  { id: 24, job_number: "D4", status: "in_storage", bol_balance: "999" },                                                                            // no entregado: fuera
+  { id: 25, job_number: "D5", status: "delivered", date_out: "2026-06-01", bol_balance: "100", bol_collected: "100" },                               // saldado: fuera
+]).values()];
+const aging = arAging(agingGroups, "2026-07-03");
+eq("aging bucket 0-30", aging.buckets[0].amount, 800);
+eq("aging bucket 31-60 (borde 31)", aging.buckets[1].amount, 500);
+eq("aging bucket 90+", aging.buckets[3].amount, 300);
+eq("aging total", aging.total, 1600);
+
+// ── buildFilterCtx: rango + segmentos ──
+const payments = [
+  { id: 1, job_id: 1, amount: "700", discount: "50", received: true, received_date: "2026-06-10", concept: "job" },
+  { id: 2, job_id: 3, amount: "300", received: false, payment_date: "2026-04-15", concept: "job" },
+  { id: 3, job_id: 3, amount: "100", received: true, received_date: "2025-12-01", concept: "job" }, // fuera de rango 6m
+];
+const range = rangeFromPreset("6m", "2026-07-03");
+const ctx = buildFilterCtx({ records, jobs, jobExtras: [], payments, range, stateF: "", brokerF: "" });
+eq("ctx meses zero-fill", ctx.months.length, 6);
+eq("ctx groups en rango (A100 may, B200 mar; cancelled jun cuenta)", ctx.groups.length, 3);
+const rev = monthlyRevenueSeries(ctx, false);
+eq("rev jun cobrado neto de descuento", rev.find(r => r.month === "2026-06").collected, 650);
+eq("rev abr pendiente", rev.find(r => r.month === "2026-04").pending, 300);
+eq("rev fuera de rango excluido", rev.reduce((s, r) => s + r.collected + r.pending, 0), 950);
+
+const ctxTX = buildFilterCtx({ records, jobs, jobExtras: [], payments, range, stateF: "TX", brokerF: "" });
+eq("ctx filtro estado TX → solo B200", ctxTX.groups.map(g => g.key), ["n:b200"]);
+const ctxB7 = buildFilterCtx({ records, jobs, jobExtras: [], payments, range, stateF: "", brokerF: 7 });
+eq("ctx filtro broker 7 → solo A100", ctxB7.groups.map(g => g.key), ["n:a100"]);
+// pagos de jobs fuera del segmento no entran
+eq("ctx broker 7 payments", ctxB7.payments.map(p => p.id), [1]);
+
+// ── occupancy ──
+const occ = occupancySeries(records, [...groups.values()], ["2026-04", "2026-05", "2026-06"]);
+eq("occupancy abr (B200 en unidad 12)", occ[0].occupied, 1);
+eq("occupancy may (A100 x2 + B200)", occ[1].occupied, 3);
+eq("occupancy open cuenta por date_opened", occ[0].open, 3);
+
+// ── topN ──
+eq("topN agrupa cola en Otros", topN([{ label: "a", v: 5 }, { label: "b", v: 3 }, { label: "c", v: 2 }, { label: "d", v: 1 }], 2, "v"),
+  [{ label: "a", v: 5 }, { label: "b", v: 3 }, { label: "Otros (2)", v: 3, isOther: true }]);
+
+if (failed) { console.error(`\n${failed} test(s) FAILED`); process.exit(1); }
+console.log("\nAll analytics-data tests passed ✓");
