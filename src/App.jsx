@@ -546,7 +546,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const EMPTY_FORM = {
   brand:"", state:"", zip:"", address:"", unit:"", size:"",
   gate_code:"", lock:"", email:"", account:"", phone:"", situation:"Open",
-  monthly_cost:"", card_on_file:"", date_opened:"", payment_due_date:""
+  monthly_cost:"", card_on_file:"", date_opened:"", payment_due_date:"", driver_id:""
 };
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
@@ -2894,6 +2894,7 @@ export default function App() {
   const [showSetup, setShowSetup] = useState(false);
   const [sqlCopied, setSqlCopied] = useState(false);
   const [paymentColMissing, setPaymentColMissing] = useState(false);
+  const [driverColMissing, setDriverColMissing] = useState(false);
   const [faddColMissing, setFaddColMissing] = useState(false);
   const [jobColsMissing, setJobColsMissing] = useState(false);
   const [crmV2Missing, setCrmV2Missing] = useState(false);
@@ -3241,6 +3242,23 @@ export default function App() {
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled && !created) setPaymentColMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  // Same probe for the driver_id column on storages (who opens the unit).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storages").select("driver_id").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storages add column if not exists driver_id bigint;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setDriverColMissing(true);
     })();
     return () => { cancelled = true; };
   }, [session]);
@@ -4688,7 +4706,7 @@ export default function App() {
 
   function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
   function openEdit(r) {
-    setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", phone:r.phone||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"", payment_due_date:r.payment_due_date||"" });
+    setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", phone:r.phone||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"", payment_due_date:r.payment_due_date||"", driver_id:r.driver_id ? String(r.driver_id) : "" });
     setEditId(r.id); setShowAdd(true);
   }
 
@@ -4702,6 +4720,8 @@ export default function App() {
     const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, phone:form.phone||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
     // Auto-set payment due date (date_opened + 30) when empty — only if the column exists.
     if (!paymentColMissing) payload.payment_due_date = form.payment_due_date || (form.date_opened ? addDaysStr(form.date_opened, 30) : null);
+    // Driver who opens the unit — only if the column exists.
+    if (!driverColMissing) payload.driver_id = form.driver_id ? Number(form.driver_id) : null;
     if (editId) { await supabase.from("storages").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editId); }
     else { await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]); }
     setSaving(false); setShowAdd(false);
@@ -9217,6 +9237,7 @@ export default function App() {
           <DetailRow label="Tamano" value={detail.size} />
           <DetailRow label="Gate Code" value={detail.gate_code} />
           <DetailRow label="Lock / Combo" value={detail.lock} />
+          {!driverColMissing && <DetailRow label="Driver que abre" value={detail.driver_id ? (driverById[detail.driver_id]?.name || null) : null} />}
           <SectionLabel>Account</SectionLabel>
           <DetailRow label="Email" value={detail.email} />
           <DetailRow label="Account #" value={detail.account} />
@@ -9275,6 +9296,16 @@ export default function App() {
             <Field label="Tamano"><input style={inp} list="sizes-list" value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
             <Field label="Gate Code"><input style={inp} value={form.gate_code} onChange={e => setForm(f => ({...f, gate_code:e.target.value}))} placeholder="*130438#" /></Field>
             <Field label="Lock / Combo"><input style={inp} value={form.lock} onChange={e => setForm(f => ({...f, lock:e.target.value}))} placeholder="use 8141 to unlock..." /></Field>
+            {!driverColMissing && (
+              <Field label="Driver que abre la unit">
+                <select style={inp} value={form.driver_id} onChange={e => setForm(f => ({...f, driver_id:e.target.value}))}>
+                  <option value="">— Sin asignar —</option>
+                  {driversList.filter(d => d.active !== false || String(d.id) === String(form.driver_id)).map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="Email"><input style={inp} value={form.email} onChange={e => setForm(f => ({...f, email:e.target.value}))} placeholder="service@..." /></Field>
             <Field label="Account #"><input style={inp} value={form.account} onChange={e => setForm(f => ({...f, account:e.target.value}))} placeholder="NONE" /></Field>
             <Field label="Phone"><input style={inp} value={form.phone} onChange={e => setForm(f => ({...f, phone:e.target.value}))} placeholder="(931) 555-0199" /></Field>
