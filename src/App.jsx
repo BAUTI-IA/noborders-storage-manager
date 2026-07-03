@@ -4174,21 +4174,61 @@ export default function App() {
     return m;
   }, [records, sit, usedCfByStorage]);
 
+  // Storage P&L: what the company PAYS per rented unit vs what clients PAY for
+  // storage in it. Every non-closed rented unit counts as expense — a vacant
+  // unit still gets paid every month (that was the bug: only occupied units
+  // were summed, so the "real" storage bill was understated).
+  const storagePnl = useMemo(() => {
+    const activeParts = jobs.filter(j => !j.date_out && j.status !== "cancelled");
+    // A job can span several units: split its monthly rate evenly across them
+    // so the per-unit table sums to the same total as Storage Billing.
+    const partsByKey = {};
+    for (const p of activeParts) { const k = jobKey(p); (partsByKey[k] = partsByKey[k] || []).push(p); }
+    const incomeByStorage = {};
+    for (const parts of Object.values(partsByKey)) {
+      const j = parts[0];
+      if (!j.billing_active) continue;
+      const rate = Number(j.client_monthly_rate) || 0;
+      const storageParts = parts.filter(p => p.storage_id);
+      if (!rate || !storageParts.length) continue;
+      const share = rate / storageParts.length;
+      for (const p of storageParts) incomeByStorage[p.storage_id] = (incomeByStorage[p.storage_id] || 0) + share;
+    }
+    const rows = records
+      .filter(r => r.space_type !== "warehouse" && r.situation !== "Close")
+      .map(r => {
+        const pay = Number(r.monthly_cost) > 0 ? Number(r.monthly_cost) : 0;
+        const income = incomeByStorage[r.id] || 0;
+        return {
+          id: r.id,
+          name: [r.brand, r.unit && ("U" + r.unit), r.state].filter(Boolean).join(" · ") || "—",
+          pay, income, margin: income - pay,
+          hasCost: Number(r.monthly_cost) > 0,
+          occupied: sit(r) === "Open",
+        };
+      })
+      .sort((a, b) => a.margin - b.margin);
+    const totals = rows.reduce((t, r) => ({ pay: t.pay + r.pay, income: t.income + r.income }), { pay: 0, income: 0 });
+    return { rows, totals, missingCost: rows.filter(r => !r.hasCost).length };
+  }, [jobs, records, sit]);
+
   const metrics = useMemo(() => {
     const activeParts = jobs.filter(j => !j.date_out);
     const deliveredParts = jobs.filter(j => j.date_out);
     const occupied = new Set(activeParts.map(j => j.storage_id));
-    const withCost = records.filter(r => occupied.has(r.id) && r.monthly_cost && Number(r.monthly_cost) > 0);
-    const totalCost = withCost.reduce((sum, r) => sum + Number(r.monthly_cost), 0);
     return {
       activeJobs: new Set(activeParts.map(jobKey)).size,
       deliveredJobs: new Set(deliveredParts.map(jobKey)).size,
       units: records.length,
       occupied: occupied.size,
       states: new Set(records.map(r => r.state).filter(Boolean)).size,
-      totalCost,
+      totalCost: Math.round(storagePnl.totals.pay),
+      vacantCost: Math.round(storagePnl.rows.filter(r => !r.occupied).reduce((s, r) => s + r.pay, 0)),
+      storageIncome: Math.round(storagePnl.totals.income),
+      storageMargin: Math.round(storagePnl.totals.income - storagePnl.totals.pay),
+      missingCost: storagePnl.missingCost,
     };
-  }, [jobs, records]);
+  }, [jobs, records, storagePnl]);
 
   // Payments coming due on active units (not Closed/Empty).
   const urgentPayments = useMemo(
@@ -8318,7 +8358,7 @@ export default function App() {
 
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
       {page === "analytics" && (
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:20 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:10, marginBottom:12 }}>
         {[
           { label:"Jobs activos", value:metrics.activeJobs, color:"#3B6D11" },
           { label:"Delivered", value:metrics.deliveredJobs, color:"#888" },
@@ -8327,7 +8367,10 @@ export default function App() {
           { label:"Urgent payments", value:urgentPayments, color:"#A32D2D" },
           { label:"Overdue FADD", value:faddStats.overdue, color:"#A32D2D" },
           { label:"Due this week", value:faddStats.dueWeek, color:"#C2410C" },
-          { label:"Monthly cost", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
+          { label:"Storage bill /mo", value:"$"+metrics.totalCost.toLocaleString(), color:"#185FA5" },
+          { label:"Vacant units cost /mo", value:"$"+metrics.vacantCost.toLocaleString(), color: metrics.vacantCost > 0 ? "#A32D2D" : "#888" },
+          { label:"Storage income /mo", value:"$"+metrics.storageIncome.toLocaleString(), color:"#1A8A4E" },
+          { label:"Storage margin /mo", value:(metrics.storageMargin < 0 ? "−$" : "$") + Math.abs(metrics.storageMargin).toLocaleString(), color: metrics.storageMargin < 0 ? "#A32D2D" : "#1A8A4E" },
           { label:"US states", value:metrics.states, color:"#888" },
         ].map(m => (
           <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
@@ -8336,6 +8379,54 @@ export default function App() {
           </div>
         ))}
       </div>
+      )}
+
+      {/* ANALYTICS — data completeness warning: totals are only as real as the costs entered */}
+      {page === "analytics" && metrics.missingCost > 0 && (
+        <div style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:8, padding:"8px 12px", fontSize:13, color:"#854F0B", marginBottom:14 }}>
+          ⚠ {metrics.missingCost} rented unit{metrics.missingCost === 1 ? "" : "s"} without a monthly cost entered — the storage bill shown is incomplete. Open each storage and load its <b>Monthly cost</b>.
+        </div>
+      )}
+
+      {/* ANALYTICS — storage P&L: what you pay per unit vs what clients pay you */}
+      {page === "analytics" && storagePnl.rows.length > 0 && (
+        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"20px", marginBottom:14 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Storage P&L — real cost vs income</div>
+          <div style={{ fontSize:12, color:"#bbb", marginBottom:12 }}>Cada unidad alquilada (aunque esté vacía) contra lo que cobrás por mes. Peor margen primero. Si un job ocupa varias unidades, su tarifa se prorratea.</div>
+          <div style={{ maxHeight:340, overflowY:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5 }}>
+              <thead>
+                <tr>{["Storage", "Status", "You pay /mo", "You charge /mo", "Margin /mo"].map((h, i) => (
+                  <th key={h} style={{ position:"sticky", top:0, background:"#fff", textAlign: i >= 2 ? "right" : "left", padding:"6px 8px", fontSize:10.5, color:"#999", textTransform:"uppercase", borderBottom:"1px solid #f0f0f0" }}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {storagePnl.rows.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", fontWeight:500 }}>{r.name}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7" }}>
+                      <span style={{ fontSize:10.5, fontWeight:600, padding:"1px 7px", borderRadius:20, background: r.occupied ? "#EAF3DE" : "#FEF3C7", color: r.occupied ? "#3B6D11" : "#92760B" }}>{r.occupied ? "Occupied" : "Vacant"}</span>
+                    </td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", color:"#C2410C" }}>{r.hasCost ? "$" + Math.round(r.pay).toLocaleString() : <span style={{ color:"#b45309", fontWeight:600 }}>sin costo ⚠</span>}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", color:"#1A8A4E" }}>${Math.round(r.income).toLocaleString()}</td>
+                    <td style={{ padding:"6px 8px", borderBottom:"1px solid #f7f7f7", textAlign:"right", fontWeight:700, color: r.margin < 0 ? "#A32D2D" : "#1A8A4E" }}>{(r.margin < 0 ? "−$" : "$") + Math.abs(Math.round(r.margin)).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td style={{ padding:"8px", fontWeight:700, borderTop:"2px solid #eee" }}>Total ({storagePnl.rows.length} units)</td>
+                  <td style={{ borderTop:"2px solid #eee" }} />
+                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color:"#C2410C", borderTop:"2px solid #eee" }}>${Math.round(storagePnl.totals.pay).toLocaleString()}</td>
+                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color:"#1A8A4E", borderTop:"2px solid #eee" }}>${Math.round(storagePnl.totals.income).toLocaleString()}</td>
+                  <td style={{ padding:"8px", textAlign:"right", fontWeight:700, color: (storagePnl.totals.income - storagePnl.totals.pay) < 0 ? "#A32D2D" : "#1A8A4E", borderTop:"2px solid #eee" }}>
+                    {((storagePnl.totals.income - storagePnl.totals.pay) < 0 ? "−$" : "$") + Math.abs(Math.round(storagePnl.totals.income - storagePnl.totals.pay)).toLocaleString()}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
       )}
 
       {/* ANALYTICS — revenue: gross vs net + broker share */}
@@ -8419,7 +8510,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly spend per company</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Cuanto le pagas a cada cadena de storages</div>
               {(() => {
-                const byBrand = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
+                const byBrand = records.filter(r=>r.situation!=="Close" && r.space_type!=="warehouse" && r.monthly_cost && r.brand).reduce((acc,r)=>{ const b=r.brand.trim(); acc[b]=(acc[b]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byBrand).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
@@ -8465,7 +8556,7 @@ export default function App() {
               <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Monthly cost per state</div>
               <div style={{ fontSize:12, color:"#bbb", marginBottom:16 }}>Where you spend the most money on storages</div>
               {(() => {
-                const byCost = records.filter(r=>sit(r)==="Open" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
+                const byCost = records.filter(r=>r.situation!=="Close" && r.space_type!=="warehouse" && r.monthly_cost && r.state).reduce((acc,r)=>{ acc[r.state]=(acc[r.state]||0)+Number(r.monthly_cost); return acc; },{});
                 const sorted = Object.entries(byCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
                 const max = sorted[0]?.[1] || 1;
                 if(!sorted.length) return <p style={{fontSize:12,color:"#bbb",textAlign:"center",marginTop:20}}>Carga costos para ver este grafico</p>;
