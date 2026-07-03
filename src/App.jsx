@@ -2504,7 +2504,7 @@ const jobBadgeStyle = (delivered) => ({
   color: delivered ? "#888" : "#3B6D11",
 });
 
-function JobCard({ job, onDeliver }) {
+function JobCard({ job, onDeliver, onRemove }) {
   const delivered = !!job.date_out;
   return (
     <div style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff" }}>
@@ -2517,6 +2517,10 @@ function JobCard({ job, onDeliver }) {
         <span style={{ flex:1 }} />
         {!delivered && (
           <Btn onClick={() => onDeliver(job)} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
+        )}
+        {onRemove && (
+          <button onClick={() => onRemove(job)} title="Quitar de esta unidad" type="button"
+            style={{ border:"1px solid #fca5a5", background:"#fff", borderRadius:8, cursor:"pointer", color:"#b91c1c", fontSize:12, padding:"4px 8px", lineHeight:1 }}>🗑</button>
         )}
       </div>
       <div style={{ fontSize:12, color:"#666", display:"flex", flexWrap:"wrap", gap:"2px 12px" }}>
@@ -2572,6 +2576,25 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
 
   async function addJob() {
     if (!form.job_number && !form.customer && !form.driver) { setErr("Fill in at least job, client or driver."); return; }
+    // Duplicate guard: same active job number already in this unit → block;
+    // already active elsewhere → confirm and attach the existing job instead of creating a copy.
+    const jn = (form.job_number || "").trim().toLowerCase();
+    const dupParts = jn ? allJobs.filter(j => !j.date_out && (j.job_number || "").trim().toLowerCase() === jn) : [];
+    if (dupParts.some(p => String(p.storage_id) === String(storageId))) {
+      setErr(`⚠️ El job ${form.job_number.trim()} ya está asignado a esta unidad — no se agregó de nuevo.`);
+      return;
+    }
+    if (dupParts.length) {
+      if (!window.confirm(`El job ${form.job_number.trim()} ya existe en el sistema (${dupParts[0].customer || "sin cliente"}). ¿Agregarlo también a esta unidad?`)) return;
+      setSaving(true); setErr(null);
+      const { id, storage_id, warehouse, created_at, updated_at, date_out, ...rest } = dupParts[0];
+      const { error } = await supabase.from("storage_jobs").insert([{ ...rest, storage_id: storageId, warehouse: null, date_out: null, created_by: userEmail || null }]);
+      setSaving(false);
+      if (error) { setErr(error.message); return; }
+      setForm(EMPTY);
+      onChange && onChange();
+      return;
+    }
     setSaving(true); setErr(null);
     const payload = {
       storage_id: storageId,
@@ -2594,6 +2617,18 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
     onChange && onChange();
   }
 
+  // Remove ONE part (this row) from the unit — e.g. a duplicated assignment.
+  async function removePart(job) {
+    const others = allJobs.filter(x => x.id !== job.id && jobKey(x) === jobKey(job)).length;
+    const msg = others > 0
+      ? `¿Quitar el job ${job.job_number || ""} de esta unidad? El job sigue existiendo en sus otras ubicaciones.`
+      : `¿Eliminar el job ${job.job_number || ""}? Es su única ubicación: se borra el job por completo del sistema.`;
+    if (!window.confirm(msg.replace(/\s+/g, " ").trim())) return;
+    const { error } = await supabase.from("storage_jobs").delete().eq("id", job.id);
+    if (error) { setErr(error.message); return; }
+    onChange && onChange();
+  }
+
   if (!dbReady) {
     return (
       <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"12px 14px", fontSize:13, color:"#854F0B" }}>
@@ -2609,7 +2644,7 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
         {active.length === 0 && delivered.length === 0 && (
           <div style={{ fontSize:13, color:"#bbb", padding:"6px 0" }}>No jobs in this unit yet.</div>
         )}
-        {active.map(j => <JobCard key={j.id} job={j} onDeliver={deliver} />)}
+        {active.map(j => <JobCard key={j.id} job={j} onDeliver={deliver} onRemove={removePart} />)}
 
         {delivered.length > 0 && (
           <div>
@@ -2620,7 +2655,7 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
             </button>
             {showDelivered && (
               <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:8 }}>
-                {delivered.map(j => <JobCard key={j.id} job={j} onDeliver={deliver} />)}
+                {delivered.map(j => <JobCard key={j.id} job={j} onDeliver={deliver} onRemove={removePart} />)}
               </div>
             )}
           </div>
@@ -4978,6 +5013,20 @@ export default function App() {
   async function saveJob() {
     // Storage is optional — a job can be saved with no unit/warehouse (storage_id null).
     if (!jobForm.job_number && !jobForm.customer && !jobForm.driver) { setJobErr("Fill in at least job, client or driver."); return; }
+    // Duplicate guard (new jobs only): never create a second active copy of the same
+    // job number in a unit/warehouse that already has it; elsewhere, ask first.
+    if (!editingJobKey) {
+      const jn = (jobForm.job_number || "").trim().toLowerCase();
+      const dupParts = jn ? jobs.filter(j => !j.date_out && (j.job_number || "").trim().toLowerCase() === jn) : [];
+      if (dupParts.length) {
+        const unitLbl = (sid) => { const r = records.find(x => String(x.id) === String(sid)); return r ? [r.brand, r.unit && "U" + r.unit, r.state].filter(Boolean).join(" ") : `#${sid}`; };
+        const dupUnit = jobForm.storage_ids.find(sid => dupParts.some(p => String(p.storage_id) === String(sid)));
+        if (dupUnit !== undefined) { setJobErr(`⚠️ El job ${jobForm.job_number.trim()} ya está asignado a ${unitLbl(dupUnit)}. No se duplicó — abrí el job existente para editarlo.`); return; }
+        const dupWh = jobForm.warehouses.find(w => dupParts.some(p => p.warehouse === w));
+        if (dupWh !== undefined) { setJobErr(`⚠️ El job ${jobForm.job_number.trim()} ya está en ${dupWh}. No se duplicó — abrí el job existente para editarlo.`); return; }
+        if (!window.confirm(`El job ${jobForm.job_number.trim()} ya existe en el sistema (${dupParts[0].customer || "sin cliente"}). ¿Crear otro con el mismo número de todas formas?`)) return;
+      }
+    }
     setJobSaving(true); setJobErr(null);
     const fields = {
       job_number: jobForm.job_number || null,
