@@ -6617,6 +6617,13 @@ export default function App() {
         </div>
       )}
 
+      {driverColMissing && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
+          Para asignar el driver que abre cada unit, agregá la columna una vez en Supabase (SQL Editor):
+          <code style={{ display:"block", marginTop:6, fontFamily:"monospace", fontSize:12 }}>alter table public.storages add column if not exists driver_id bigint;</code>
+        </div>
+      )}
+
       {jobColsMissing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
           For the Dispatching CRM (job type, statuses, pickup/delivery), add these columns once in Supabase (SQL Editor):
