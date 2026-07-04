@@ -11174,9 +11174,15 @@ export default function App() {
 
       {showTripModal && (() => {
         // Live capacity as jobs are added (using the form's selected jobs).
+        // Same rule as tripCalc: delivered jobs don't count, and a job of this
+        // trip that sits in storage (dropped mid-trip / not loaded) doesn't
+        // either. A storage job being newly added still counts — it's the load
+        // being planned onto the truck.
         const cap = numv(trucksList.find(tk => tk.id === Number(tripForm.truck_id))?.capacity_cf);
+        const jobDelivered = (j) => !!j.date_out || j.status === "delivered";
+        const jobOffTruck = (j) => jobDelivered(j) || (editingTripId && j.trip_id === editingTripId && j.status === "in_storage");
         let loadCf = 0; const seen = new Set();
-        for (const j of jobs) { const k = jobKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += parseCf(j.volume); } }
+        for (const j of jobs) { const k = jobKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); if (!jobOffTruck(j)) loadCf += parseCf(j.volume); } }
         const remaining = cap > 0 ? cap - loadCf : null;
         const pct = cap > 0 ? Math.min(100, Math.round((loadCf / cap) * 100)) : 0;
         const repFor = (k) => jobs.find(j => jobKey(j) === k);
@@ -11240,12 +11246,15 @@ export default function App() {
           <SectionLabel>Stops — delivery order{tripForm.job_keys.length ? ` (${tripForm.job_keys.length})` : ""}</SectionLabel>
           {tripForm.job_keys.length > 0 && (
             <div style={{ border:"1px solid #e5e5e5", borderRadius:8, marginBottom:8 }}>
-              {tripForm.job_keys.map((k, i) => { const j = repFor(k); if (!j) return null; return (
-                <div key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderBottom:"1px solid #f5f5f5", fontSize:13 }}>
+              {tripForm.job_keys.map((k, i) => { const j = repFor(k); if (!j) return null; const off = jobOffTruck(j); return (
+                <div key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderBottom:"1px solid #f5f5f5", fontSize:13, opacity: off ? 0.65 : 1 }}>
                   <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i+1}</span>
                   <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
                   <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
-                  <span style={{ color:"#888" }}>{Math.round(parseCf(j.volume))} CF</span>
+                  {off && (jobDelivered(j)
+                    ? <span style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>Delivered</span>
+                    : <span style={{ fontSize:10, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>📦 In storage</span>)}
+                  <span style={{ color:"#888", textDecoration: off ? "line-through" : "none" }}>{Math.round(parseCf(j.volume))} CF</span>
                   <FaddBadge fadd={j.fadd} />
                   <button onClick={() => tripMoveJob(i, -1)} disabled={i===0} style={{ border:"none", background:"none", cursor: i===0?"default":"pointer", color: i===0?"#ddd":"#888", fontSize:14 }}>↑</button>
                   <button onClick={() => tripMoveJob(i, 1)} disabled={i===tripForm.job_keys.length-1} style={{ border:"none", background:"none", cursor: i===tripForm.job_keys.length-1?"default":"pointer", color: i===tripForm.job_keys.length-1?"#ddd":"#888", fontSize:14 }}>↓</button>
