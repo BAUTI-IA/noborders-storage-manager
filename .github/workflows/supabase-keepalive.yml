@@ -22,6 +22,7 @@ jobs:
         run: |
           echo "GET /auth/v1/health"
           curl --fail-with-body --silent --show-error \
+            -H "apikey: $SUPABASE_KEY" \
             "$SUPABASE_URL/auth/v1/health"
           echo
 
