@@ -9,7 +9,7 @@ import {
 } from "recharts";
 import { UsMarginMap } from "./usMap.jsx";
 import {
-  parseCf, rangeFromPreset, previousRange, buildFilterCtx,
+  parseCf, effCf, rangeFromPreset, previousRange, buildFilterCtx,
   computeStoragePnl, computeMetrics, computeRevenueSplit, monthlyRevenueSeries,
   arAging, occupancySeries, lengthOfStayStats, brokerProfitability, marginByState,
   cfMovedSeries, dollarsPerCfSeries, faddCompliance, statusFunnel, jobsFlowSeries,
@@ -319,7 +319,7 @@ export function AnalyticsPage({
       if (!names.length) names = (g.rep.driver || "").split(",").map(s => s.trim()).filter(Boolean);
       for (const n of names) {
         const c = (counts[n] = counts[n] || { label: n, jobs: 0, cf: 0 });
-        c.jobs += 1; c.cf += parseCf(g.rep.volume);
+        c.jobs += 1; c.cf += effCf(g.rep);
       }
     }
     return topN(Object.values(counts).sort((a, b) => b.jobs - a.jobs), 7, "jobs");

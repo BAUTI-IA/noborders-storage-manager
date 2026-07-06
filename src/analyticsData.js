@@ -13,6 +13,11 @@ export const money = (v) => (v || v === 0) && !isNaN(Number(v)) ? `$${Number(v).
 // Group key for a job: same job_number = same job (across locations). Blank number = standalone.
 export const jobKey = (j) => j.job_number && j.job_number.trim() ? `n:${j.job_number.trim().toLowerCase()}` : `id:${j.id}`;
 export const parseCf = (v) => { if (!v) return 0; const m = String(v).match(/[\d,.]+/); return m ? Number(m[0].replace(/,/g, "")) || 0 : 0; };
+// Effective CF of a job: the REAL measured cubic feet (loaded at pickup) when
+// present, else the broker's estimate parsed from `volume`. Occupancy math
+// (storage + truck) must use this — reality beats the estimate.
+export const effCf = (j) => { const r = Number(j?.real_cf); return isFinite(r) && r > 0 ? r : parseCf(j?.volume); };
+export const hasRealCf = (j) => { const r = Number(j?.real_cf); return isFinite(r) && r > 0; };
 
 // Job status palette — the app's de-facto categorical color table.
 export const STATUSES = [
@@ -351,7 +356,7 @@ export function brokerProfitability(ctx, brokers) {
     b.jobs += 1;
     b.gross += groupCollected(g);
     b.share += groupBrokerShare(g);
-    b.cf += parseCf(g.rep.volume);
+    b.cf += effCf(g.rep);
   }
   for (const e of ctx.extras) {
     if (e.active === false) continue;
@@ -388,7 +393,7 @@ export function marginByState(pnlRows) {
 // CF moved per month (job volume by the job's month), zero-filled.
 export function cfMovedSeries(ctx) {
   const by = {};
-  for (const g of ctx.groups) { if (g.month) by[g.month] = (by[g.month] || 0) + parseCf(g.rep.volume); }
+  for (const g of ctx.groups) { if (g.month) by[g.month] = (by[g.month] || 0) + effCf(g.rep); }
   return ctx.months.map(month => ({ month, label: monthLabel(month), cf: Math.round(by[month] || 0) }));
 }
 
@@ -396,7 +401,7 @@ export function cfMovedSeries(ctx) {
 export function dollarsPerCfSeries(ctx) {
   const by = {};
   for (const g of ctx.groups) {
-    const cf = parseCf(g.rep.volume), coll = groupCollected(g);
+    const cf = effCf(g.rep), coll = groupCollected(g);
     if (!g.month || !cf || !coll) continue;
     const s = (by[g.month] = by[g.month] || { coll: 0, cf: 0 });
     s.coll += coll; s.cf += cf;

@@ -3,6 +3,7 @@ import {
   jobKey, dedupeJobs, buildFilterCtx, computeStoragePnl, computeMetrics,
   computeRevenueSplit, monthlyRevenueSeries, arAging, monthsBetween,
   rangeFromPreset, previousRange, shiftMonth, topN, occupancySeries,
+  effCf, hasRealCf,
 } from "../src/analyticsData.js";
 
 let failed = 0;
@@ -114,6 +115,12 @@ eq("occupancy open cuenta por date_opened", occ[0].open, 3);
 // ── topN ──
 eq("topN agrupa cola en Otros", topN([{ label: "a", v: 5 }, { label: "b", v: 3 }, { label: "c", v: 2 }, { label: "d", v: 1 }], 2, "v"),
   [{ label: "a", v: 5 }, { label: "b", v: 3 }, { label: "Otros (2)", v: 3, isOther: true }]);
+
+// ── real CF vs broker estimate ──
+eq("effCf usa el real cuando está cargado", effCf({ volume: "550 cf", real_cf: 620 }), 620);
+eq("effCf cae al estimado sin real", effCf({ volume: "550 cf" }), 550);
+eq("effCf ignora real inválido/0", effCf({ volume: "550 cf", real_cf: 0 }), 550);
+eq("hasRealCf", [hasRealCf({ real_cf: 620 }), hasRealCf({ volume: "550" }), hasRealCf({ real_cf: "abc" })], [true, false, false]);
 
 if (failed) { console.error(`\n${failed} test(s) FAILED`); process.exit(1); }
 console.log("\nAll analytics-data tests passed ✓");
