@@ -1769,8 +1769,17 @@ const TRIP_EVENT_META = {
   storage_pickup:     { l:"Loaded from storage", icon:"🔼" },
   unplanned_pickup:   { l:"Unplanned pickup", icon:"🆕" },
   delivery_completed: { l:"Delivered", icon:"✅" },
+  driver_handoff:     { l:"Handoff de driver", icon:"🔄" },
 };
 const tripEventLabel = (v) => TRIP_EVENT_META[v]?.l || v;
+// Why a driver handed a job (or the whole trip) to another driver.
+const HANDOFF_REASONS = [
+  ["better_fit", "Mejor para esta entrega"],
+  ["truck_swap", "Cambio de camión"],
+  ["availability", "Disponibilidad"],
+  ["other", "Otro"],
+];
+const handoffReasonLabel = (v) => HANDOFF_REASONS.find(r => r[0] === v)?.[1] || v;
 const EMPTY_UNPLANNED = { job_number:"", customer:"", volume:"", pickup_address:"", delivery_address:"", fadd:"", broker_id:"", sticker_color:"", lot_number:"" };
 
 // Manual job-timeline event types (logged directly on a job). `status` = the job
@@ -1784,6 +1793,7 @@ const JOB_EVENT_TYPES = [
   { v:"on_hold", l:"On hold", icon:"⏸️" },
   { v:"attempted_delivery", l:"Attempted delivery — not home", icon:"🚪" },
   { v:"redispatched", l:"Redispatched", icon:"🔁" },
+  { v:"driver_handoff", l:"Handoff de driver", icon:"🔄" },
   { v:"other", l:"Other", icon:"📝" },
 ];
 const jobEventMeta = (v) => JOB_EVENT_TYPES.find(t => t.v === v) || { l: v || "Evento", icon:"•" };
@@ -2983,7 +2993,8 @@ export default function App() {
   const [jobEventForm, setJobEventForm] = useState(null);     // null = closed; else the add-event form
   const [tripLogOpen, setTripLogOpen] = useState(false);
   const [tripAddJobSearch, setTripAddJobSearch] = useState("");
-  const [tripAction, setTripAction] = useState(null);         // "add" | "pickup" | "unplanned" | null
+  const [tripAction, setTripAction] = useState(null);         // "add" | "pickup" | "unplanned" | "handoff" | null
+  const [handoffForm, setHandoffForm] = useState({ jobKey:"", to:"", reason:"better_fit", note:"" }); // jobKey "" = whole trip
   const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
   const [dropModal, setDropModal] = useState(null); // { trip, jobKey, label } drop-at-storage popup (trip cards)
   const [dropSel, setDropSel] = useState("");       // selected drop target index in dropModal
@@ -5461,6 +5472,46 @@ export default function App() {
     if (tripEventsMissing) return;
     await supabase.from("trip_events").insert([{ trip_id: tripId, event_type, job_id: opts.job_id ?? null, storage_id: opts.storage_id ?? null, notes: opts.notes || null, created_by: opts.created_by || "dispatcher" }]);
     loadTripEvents();
+  }
+  // ── Driver handoff ──
+  // A driver hands the WHOLE job to another driver: the new driver becomes the
+  // primary (money follows him — cash-in-circulation defaults and new-extra
+  // commission prefills read driver_ids[0]); other assigned drivers stay.
+  async function handoffJob(k, toDriverId, reason, note) {
+    const rows = jobs.filter(j => jobKey(j) === k);
+    if (!rows.length || !toDriverId) return;
+    const toId = Number(toDriverId);
+    const cur = Array.isArray(rows[0].driver_ids) ? rows[0].driver_ids.map(Number) : [];
+    const fromId = cur[0] ?? null;
+    if (fromId === toId) { window.alert("El job ya está a cargo de ese driver."); return; }
+    const driver_ids = [toId, ...cur.filter(id => id !== toId && id !== fromId)];
+    const names = driver_ids.map(id => driverById[id]?.name).filter(Boolean);
+    setTripBusy(true);
+    await supabase.from("storage_jobs").update({
+      driver_ids, driver: names.join(", ") || null,
+      updated_by: userEmail, updated_at: new Date().toISOString(),
+    }).in("id", rows.map(j => j.id));
+    const fromNm = (fromId != null && driverById[fromId]?.name) || rows[0].driver || "—";
+    const toNm = driverById[toId]?.name || "—";
+    const notes = `${rows[0].job_number || ""} · ${fromNm} → ${toNm} · ${handoffReasonLabel(reason)}${note ? ` · ${note}` : ""}`.trim();
+    if (rows[0].trip_id) await logTripEvent(rows[0].trip_id, "driver_handoff", { job_id: Math.min(...rows.map(j => j.id)), notes, created_by: userEmail });
+    else if (!jobEventsMissing) { await supabase.from("job_events").insert([{ job_id: Math.min(...rows.map(j => j.id)), event_date: today(), event_type: "driver_handoff", notes, created_by: userEmail }]); loadJobEvents(); }
+    await loadJobs();
+    setTripBusy(false);
+    showToast(`Handoff registrado: ${fromNm} → ${toNm}`);
+  }
+  // Hand the whole trip (truck swap case) to another driver.
+  async function handoffTrip(trip, toDriverId, reason, note) {
+    const toId = Number(toDriverId);
+    if (!toId || toId === Number(trip.driver_id)) { window.alert("Elegí un driver distinto al actual."); return; }
+    setTripBusy(true);
+    await supabase.from("trips").update({ driver_id: toId }).eq("id", trip.id);
+    const fromNm = driverById[trip.driver_id]?.name || "—";
+    const toNm = driverById[toId]?.name || "—";
+    await logTripEvent(trip.id, "driver_handoff", { notes: `Trip completo · ${fromNm} → ${toNm} · ${handoffReasonLabel(reason)}${note ? ` · ${note}` : ""}`, created_by: userEmail });
+    await loadTrips();
+    setTripBusy(false);
+    showToast(`Trip pasado a ${toNm}`);
   }
   // Add an existing (non-trip) job to a trip in transit, log it, queue a driver WA update.
   async function tripAddExistingJob(trip, k) {
@@ -10947,8 +10998,56 @@ export default function App() {
                 <Btn primary onClick={() => { setTripAction("add"); setTripAddJobSearch(""); }} style={bigBtn}>➕ Add job</Btn>
                 <Btn onClick={() => setTripAction("pickup")} style={bigBtn}>🔼 Load from storage</Btn>
                 <Btn onClick={() => { setUnplannedForm(EMPTY_UNPLANNED); setTripAction("unplanned"); }} style={bigBtn}>🆕 Unplanned pickup</Btn>
+                <Btn onClick={() => { setHandoffForm({ jobKey:"", to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} style={bigBtn}>🔄 Handoff</Btn>
               </div>
             )}
+
+            {/* action panel: driver handoff (whole trip or a single job) */}
+            {tripAction === "handoff" && (() => {
+              const hf = handoffForm;
+              const setH = (fields) => setHandoffForm(f => ({ ...f, ...fields }));
+              const jobSel = hf.jobKey ? c.jobsIn.find(j => jobKey(j) === hf.jobKey) : null;
+              const fromNm = jobSel
+                ? ((Array.isArray(jobSel.driver_ids) && jobSel.driver_ids.length ? driverById[jobSel.driver_ids[0]]?.name : "") || jobSel.driver || driverNm || "—")
+                : (driverNm || "—");
+              return (
+                <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>🔄 Handoff de driver</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                    <Field label="Qué se traspasa">
+                      <select style={inp} value={hf.jobKey} onChange={e => setH({ jobKey: e.target.value })}>
+                        <option value="">Trip completo (cambio de camión)</option>
+                        {c.jobsIn.filter(j => !(j.date_out || j.status === "delivered")).map(j => (
+                          <option key={j.id} value={jobKey(j)}>Job {j.job_number || "(sin #)"} · {j.customer || "—"}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="De"><input style={{ ...inp, background:"#f1f1f1" }} value={fromNm} disabled /></Field>
+                    <Field label="Pasar a *">
+                      <select style={inp} value={hf.to} onChange={e => setH({ to: e.target.value })}>
+                        <option value="">— Elegir driver —</option>
+                        {driversList.filter(d => d.name !== fromNm).map(d => <option key={d.id} value={d.id}>{d.name}{d.truck_id ? ` · ${d.truck_id}` : ""}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Motivo">
+                      <select style={inp} value={hf.reason} onChange={e => setH({ reason: e.target.value })}>
+                        {HANDOFF_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Nota (opcional)" full><input style={inp} value={hf.note} onChange={e => setH({ note: e.target.value })} placeholder="Detalle del traspaso" /></Field>
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
+                    <Btn primary disabled={tripBusy || !hf.to} onClick={async () => {
+                      const toNm = driverById[Number(hf.to)]?.name || "";
+                      if (!window.confirm(hf.jobKey ? `¿Pasar el job a ${toNm}? Desde ahora los extras y el efectivo de este job quedan a su nombre.` : `¿Pasar el trip completo a ${toNm}?`)) return;
+                      if (hf.jobKey) await handoffJob(hf.jobKey, hf.to, hf.reason, hf.note);
+                      else await handoffTrip(t, hf.to, hf.reason, hf.note);
+                      setTripAction(null);
+                    }}>{tripBusy ? "..." : "Confirmar handoff"}</Btn>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* action panel: add existing job */}
             {tripAction === "add" && (
@@ -11051,11 +11150,19 @@ export default function App() {
                         {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                         <FaddBadge fadd={j.fadd} />
                         {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                        {(() => {
+                          // A stop owned by a different driver than the trip's → show who.
+                          const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
+                          return jd && jd !== driverNm
+                            ? <span title="Este job está a cargo de otro driver (handoff)" style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>🧑‍✈️ {jd}</span>
+                            : null;
+                        })()}
                       </div>
                       {!delivered && !dropped && (
                         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                           <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
                           {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
+                          <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: jobKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
                         </div>
                       )}
                     </div>
@@ -11084,7 +11191,7 @@ export default function App() {
                       <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, padding:"6px 0", borderBottom:"1px solid #f6f6f6", flexWrap:"wrap" }}>
                         <span>{TRIP_EVENT_META[e.event_type]?.icon || "•"}</span>
                         <b>{tripEventLabel(e.event_type)}</b>
-                        {(j?.job_number || e.notes) && <span style={{ fontFamily:"monospace", color:"#185FA5" }}>{j?.job_number || e.notes}</span>}
+                        {(j?.job_number || e.notes) && <span style={{ fontFamily:"monospace", color:"#185FA5" }}>{e.event_type === "driver_handoff" ? e.notes : (j?.job_number || e.notes)}</span>}
                         <span style={{ fontSize:10.5, color:"#999", background:"#f1f1f1", borderRadius:20, padding:"1px 7px" }}>{e.created_by || "dispatcher"}</span>
                         <span style={{ marginLeft:"auto", color:"#aaa", fontSize:11 }}>{(e.created_at || "").replace("T", " ").slice(0, 16)}</span>
                       </div>
