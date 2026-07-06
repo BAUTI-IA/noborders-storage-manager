@@ -1,0 +1,65 @@
+name: Supabase backup
+
+# Hace un dump completo de la base de Postgres una vez por día y lo
+# guarda como artifact de GitHub (descargable por 30 días). El plan Free
+# de Supabase NO incluye backups automáticos, así que esta es la red de
+# seguridad ante un borrado accidental o una pérdida del proyecto.
+#
+# REQUISITO (una sola vez): crear el secret SUPABASE_DB_URL con la
+# connection string directa de la base. Ver docs/backups-y-keepalive.md.
+# Si el secret no está, el workflow se salta el dump sin fallar.
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # todos los días, 05:00 UTC
+  workflow_dispatch: {} # permite dispararlo a mano
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que el secret esté configurado
+        id: guard
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$DB_URL" ]; then
+            echo "::warning::Falta el secret SUPABASE_DB_URL. Se omite el backup."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Instalar pg_dump 17 (compatible con Postgres 15/16/17)
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
+      - name: Generar dump
+        if: steps.guard.outputs.run == 'true'
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          stamp=$(date -u +%Y%m%d-%H%M)
+          file="noborders-backup-$stamp.dump"
+          echo "Generando $file ..."
+          # Formato custom (-Fc): comprimido y restaurable con pg_restore.
+          pg_dump "$DB_URL" \
+            --no-owner --no-privileges \
+            --format=custom \
+            --file="$file"
+          ls -lh "$file"
+          echo "DUMP_FILE=$file" >> "$GITHUB_ENV"
+
+      - name: Subir backup como artifact
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DUMP_FILE }}
+          path: ${{ env.DUMP_FILE }}
+          retention-days: 30
+          if-no-files-found: error
