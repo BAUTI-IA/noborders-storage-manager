@@ -1,13 +1,13 @@
 name: Supabase backup
 
-# Hace un dump completo de la base de Postgres una vez por día y lo
-# guarda como artifact de GitHub (descargable por 30 días). El plan Free
-# de Supabase NO incluye backups automáticos, así que esta es la red de
-# seguridad ante un borrado accidental o una pérdida del proyecto.
+# Backup diario de los DATOS de la base, SIN contraseña de Postgres.
+# Usa la service_role key (Supabase → Settings → API Keys) contra la API
+# REST para exportar todas las tablas a JSON, y sube el resultado como
+# artifact de GitHub (descargable por 30 días). El plan Free no incluye
+# backups automáticos, así que esta es la red de seguridad.
 #
-# REQUISITO (una sola vez): crear el secret SUPABASE_DB_URL con la
-# connection string directa de la base. Ver docs/backups-y-keepalive.md.
-# Si el secret no está, el workflow se salta el dump sin fallar.
+# REQUISITO (una sola vez): crear el secret SUPABASE_SERVICE_ROLE_KEY.
+# Ver docs/backups-y-keepalive.md. Si el secret no está, se saltea sin fallar.
 
 on:
   schedule:
@@ -21,45 +21,40 @@ jobs:
       - name: Verificar que el secret esté configurado
         id: guard
         env:
-          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          if [ -z "$DB_URL" ]; then
-            echo "::warning::Falta el secret SUPABASE_DB_URL. Se omite el backup."
+          if [ -z "$KEY" ]; then
+            echo "::warning::Falta el secret SUPABASE_SERVICE_ROLE_KEY. Se omite el backup."
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Instalar pg_dump 17 (compatible con Postgres 15/16/17)
+      - name: Checkout (para usar scripts/backup-json.mjs)
         if: steps.guard.outputs.run == 'true'
-        run: |
-          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client-17
-          pg_dump --version
+        uses: actions/checkout@v4
 
-      - name: Generar dump
+      - name: Setup Node
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Exportar la base a JSON
         if: steps.guard.outputs.run == 'true'
         env:
-          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: |
-          stamp=$(date -u +%Y%m%d-%H%M)
-          file="noborders-backup-$stamp.dump"
-          echo "Generando $file ..."
-          # Formato custom (-Fc): comprimido y restaurable con pg_restore.
-          pg_dump "$DB_URL" \
-            --no-owner --no-privileges \
-            --format=custom \
-            --file="$file"
-          ls -lh "$file"
-          echo "DUMP_FILE=$file" >> "$GITHUB_ENV"
+          SUPABASE_URL: "https://szkmktxziojzgfjkomua.supabase.co"
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BACKUP_DIR: backup
+        run: node scripts/backup-json.mjs
 
       - name: Subir backup como artifact
-        if: steps.guard.outputs.run == 'true'
+        # always(): si algún tabla falló el script sale con código 1, pero
+        # igual queremos guardar lo que sí se pudo exportar.
+        if: ${{ always() && steps.guard.outputs.run == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.DUMP_FILE }}
-          path: ${{ env.DUMP_FILE }}
+          name: noborders-backup
+          path: backup/
           retention-days: 30
-          if-no-files-found: error
+          if-no-files-found: warn
