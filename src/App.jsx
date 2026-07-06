@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
-import { numv, money, jobKey, parseCf, STATUSES, statusMeta } from "./analyticsData.js";
+import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta } from "./analyticsData.js";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 
@@ -943,7 +943,7 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
   );
 }
 
-const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", real_cf:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
 
 // A job physically occupies its storage/warehouse only while it's actually there:
 // not delivered (date_out) and not already loaded onto a truck (out_for_delivery).
@@ -1190,7 +1190,8 @@ const CRM_V3_SQL = `alter table public.storage_jobs
   add column if not exists driver_ids bigint[],
   add column if not exists pickup_date_from date,
   add column if not exists pickup_date_to date,
-  add column if not exists calendar_status text;
+  add column if not exists calendar_status text,
+  add column if not exists real_cf numeric;
 
 alter table public.storages add column if not exists payment_due_date date;
 
@@ -1672,7 +1673,7 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
   jobsIn.forEach((j, i) => {
     lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}`);
     lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
-    lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(parseCf(j.volume))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
+    lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
     lines.push(`   Balance to collect: $${numv(j.bol_balance).toLocaleString()}`);
     lines.push("");
   });
@@ -1755,7 +1756,7 @@ function tripUpdateWaText(trip, g, totalCf) {
     `New job added to your trip:`,
     `Job: ${g.job_number || "-"} — ${g.customer || "-"}`,
     `Pickup/delivery: ${dest || pick || "-"}`,
-    `CF: ${Math.round(parseCf(g.volume))} | Sticker: ${g.sticker_color || "-"} Lot ${g.lot_number || "-"}`,
+    `CF: ${Math.round(effCf(g))} | Sticker: ${g.sticker_color || "-"} Lot ${g.lot_number || "-"}`,
     `Balance to collect: $${numv(g.bol_balance).toLocaleString()}`,
     `Updated total load: ${Math.round(totalCf || 0)} CF`,
   ].join("\n");
@@ -3034,6 +3035,7 @@ export default function App() {
   const [payColsMissing, setPayColsMissing] = useState(false);   // detailed check/MO/CC columns
   const [splitMissing, setSplitMissing] = useState(false);       // split_group / extra_type / source / payment_id
   const [allocMissing, setAllocMissing] = useState(false);       // payments.job_extra_id (charge allocation)
+  const [realCfMissing, setRealCfMissing] = useState(false);     // storage_jobs.real_cf (measured cubic feet)
   const [expandedSplits, setExpandedSplits] = useState(() => new Set());
   const [commAssign, setCommAssign] = useState(null);            // pending commission assignment for a payment-split extra
   const [payDocUploading, setPayDocUploading] = useState(false);
@@ -3787,6 +3789,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session, paymentsMissing]);
 
+  // Probe storage_jobs.real_cf (measured cubic feet loaded at pickup — the
+  // broker estimate in `volume` stays as reference).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("real_cf").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storage_jobs add column if not exists real_cf numeric;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setRealCfMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
     if (!session) return;
@@ -3920,12 +3940,12 @@ export default function App() {
   // present only — excludes anything already loaded onto a truck / out for delivery).
   const usedCfByStorage = useMemo(() => {
     const m = {};
-    for (const j of jobs) if (jobInStorageNow(j) && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + parseCf(j.volume);
+    for (const j of jobs) if (jobInStorageNow(j) && j.storage_id) m[j.storage_id] = (m[j.storage_id] || 0) + effCf(j);
     return m;
   }, [jobs]);
   const usedCfByWarehouse = useMemo(() => {
     const m = {};
-    for (const j of jobs) if (jobInStorageNow(j) && j.warehouse) m[j.warehouse] = (m[j.warehouse] || 0) + parseCf(j.volume);
+    for (const j of jobs) if (jobInStorageNow(j) && j.warehouse) m[j.warehouse] = (m[j.warehouse] || 0) + effCf(j);
     return m;
   }, [jobs]);
   // Warehouse capacity is held in a storages row (space_type='warehouse', brand=name).
@@ -4341,7 +4361,7 @@ export default function App() {
     // so the bar matches the stops' "Delivered" / "Dropped in storage" badges.
     let totalCf = 0, loadedCf = 0, totalBol = 0, delivered = 0;
     for (const j of jobsIn) {
-      const cf = parseCf(j.volume);
+      const cf = effCf(j);
       totalCf += cf; totalBol += numv(j.bol_balance);
       if (j.date_out || j.status === "delivered") delivered++;
       else if (j.status !== "in_storage") loadedCf += cf;
@@ -4838,7 +4858,7 @@ export default function App() {
       warehouses: [...new Set(jd.parts.filter(p => p.warehouse).map(p => p.warehouse))],
       driver_ids: Array.isArray(jd.driver_ids) ? jd.driver_ids : [],
       job_number: jd.job_number || "", customer: jd.customer || "", driver: jd.driver || "",
-      date_in: jd.date_in || "", fadd: jd.fadd || "", volume: jd.volume || "", lot_number: jd.lot_number || "",
+      date_in: jd.date_in || "", fadd: jd.fadd || "", volume: jd.volume || "", real_cf: jd.real_cf ?? "", lot_number: jd.lot_number || "",
       sticker_color: jd.sticker_color || "",
       job_type: jd.job_type || "full", status: jd.status || "scheduled", calendar_status: calStatusOf(jd),
       broker_id: jd.broker_id || "", rep: jd.rep || "", client_phone: jd.client_phone || "", client_email: jd.client_email || "",
@@ -4870,6 +4890,7 @@ export default function App() {
       driver: jobForm.driver || null,
       date_in: jobForm.date_in || today(),
       volume: jobForm.volume || null,
+      ...(realCfMissing ? {} : { real_cf: jobForm.real_cf !== "" && jobForm.real_cf != null ? Number(jobForm.real_cf) : null }),
       lot_number: jobForm.lot_number || null,
       sticker_color: jobForm.sticker_color || null,
       delivery_address: jobForm.delivery_address || null,
@@ -5324,7 +5345,7 @@ export default function App() {
         key: jobKey(j),
         job_number: j.job_number || "",
         customer: j.customer || "",
-        volume_cf: Math.round(parseCf(j.volume)),
+        volume_cf: Math.round(effCf(j)),
         fadd: j.fadd || "",
         status: j.status || "",
         // Load point with its real location: the customer's own pickup address,
@@ -5500,6 +5521,19 @@ export default function App() {
     setTripBusy(false);
     showToast(`Handoff registrado: ${fromNm} → ${toNm}`);
   }
+  // Quick-set the measured cubic feet of a job (from the trip stop card):
+  // occupancy math switches from the broker estimate to this value.
+  async function quickSetRealCf(j) {
+    const k = jobKey(j);
+    const cur = hasRealCf(j) ? String(Math.round(Number(j.real_cf))) : "";
+    const v = window.prompt(`CF real medido para ${j.job_number || j.customer || "el job"} (estimado: ${Math.round(parseCf(j.volume))} CF).\nVacío = volver al estimado.`, cur);
+    if (v === null) return;
+    const val = v.trim() === "" ? null : Number(v.trim());
+    if (val !== null && (!isFinite(val) || val < 0)) { window.alert("Número inválido."); return; }
+    await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", jobRowIds(k));
+    await loadJobs();
+    showToast(val === null ? "Real CF borrado — vuelve al estimado" : `Real CF: ${Math.round(val).toLocaleString()} CF`);
+  }
   // Hand the whole trip (truck swap case) to another driver.
   async function handoffTrip(trip, toDriverId, reason, note) {
     const toId = Number(toDriverId);
@@ -5522,7 +5556,7 @@ export default function App() {
     const order = (jobsByTrip[trip.id] || []).length + 1;
     await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: rows[0].date_out ? rows[0].status : "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: rows[0].job_number || "" });
-    const newTotal = tripCalc(trip).loadedCf + parseCf(rows[0].volume);
+    const newTotal = tripCalc(trip).loadedCf + effCf(rows[0]);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
     setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} added` });
@@ -5572,7 +5606,7 @@ export default function App() {
     const { data, error } = await supabase.from("storage_jobs").insert([payload]).select("id").single();
     if (error) { setTripBusy(false); window.alert(error.message); return; }
     await logTripEvent(trip.id, "unplanned_pickup", { job_id: data?.id, notes: f.job_number || f.customer || "" });
-    const newTotal = tripCalc(trip).loadedCf + parseCf(f.volume);
+    const newTotal = tripCalc(trip).loadedCf + effCf(f);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setUnplannedForm(EMPTY_UNPLANNED);
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
@@ -7469,7 +7503,7 @@ export default function App() {
                   {fromTo && <span style={{ color:"#888" }}>· {fromTo}</span>}
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:3, flexWrap:"wrap", color:"#666" }}>
-                  <span>{Math.round(parseCf(j.volume))} CF</span>
+                  <span>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                   {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                   {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                   <FaddBadge fadd={j.fadd} />
@@ -8909,7 +8943,15 @@ export default function App() {
             ); })()}
           </EditRow>
           <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
-          <EditRow label="Volumen (CF)"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
+          <EditRow label="Volumen (CF) — estimado"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
+          {!realCfMissing && (
+            <EditRow label="Real CF (medido)">
+              <InlineField type="number" value={jobDetail.real_cf ?? ""} onSave={set("real_cf")}
+                display={hasRealCf(jobDetail)
+                  ? <span style={{ fontWeight:600, color:"#3B6D11" }}>{Math.round(Number(jobDetail.real_cf)).toLocaleString()} CF ✓{parseCf(jobDetail.volume) > 0 ? <span style={{ fontWeight:400, color:"#999" }}> · est. {Math.round(parseCf(jobDetail.volume)).toLocaleString()}</span> : null}</span>
+                  : <span style={{ color:"#bbb" }}>— (usa el estimado)</span>} />
+            </EditRow>
+          )}
           <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
           <EditRow label="Sticker color"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
           <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
@@ -9589,7 +9631,8 @@ export default function App() {
             const load = (
               <FormSection title="Load / Carga">
                 <div style={fgrid}>
-                  <Field label="Volumen (CF)"><input style={inp} value={jobForm.volume} onChange={u("volume")} placeholder="ej: 1200" /></Field>
+                  <Field label="Volumen (CF) — estimado broker"><input style={inp} value={jobForm.volume} onChange={u("volume")} placeholder="ej: 1200" /></Field>
+                  {!realCfMissing && <Field label="Real CF (medido al cargar)"><input style={inp} type="number" value={jobForm.real_cf ?? ""} onChange={u("real_cf")} placeholder="vacío = usa el estimado" /></Field>}
                   <Field label="Sticker color">
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
@@ -11061,7 +11104,7 @@ export default function App() {
                         <div style={{ flex:1, minWidth:0 }}>
                           <div><b className="mono" style={{ fontFamily:"monospace" }}>{j.job_number || "(no #)"}</b> · {j.customer || "—"}</div>
                           <div style={{ color:"#888", marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
-                            <span>{Math.round(parseCf(j.volume))} CF</span><FaddBadge fadd={j.fadd} />
+                            <span>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span><FaddBadge fadd={j.fadd} />
                             {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} />}
                             {(j.storage_id || j.warehouse) && <span>📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</span>}
                           </div>
@@ -11083,7 +11126,7 @@ export default function App() {
                       <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
                         <div style={{ flex:1, minWidth:0 }}>
                           <div><b style={{ fontFamily:"monospace" }}>{j.job_number || "(no #)"}</b> · {j.customer || "—"}</div>
-                          <div style={{ color:"#888", marginTop:2 }}>{Math.round(parseCf(j.volume))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</div>
+                          <div style={{ color:"#888", marginTop:2 }}>{Math.round(effCf(j))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</div>
                         </div>
                         <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Load</Btn>
                       </div>
@@ -11145,7 +11188,10 @@ export default function App() {
                         {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>}
                       </div>
                       <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
-                        <span>{Math.round(parseCf(j.volume))} CF</span>
+                        <span title={hasRealCf(j) ? `Real (est. ${Math.round(parseCf(j.volume))} CF)` : "Estimado del broker"}>
+                          {Math.round(effCf(j))} CF{hasRealCf(j) ? <b style={{ color:"#3B6D11" }}> ✓real</b> : <span style={{ color:"#aaa" }}> est.</span>}
+                        </span>
+                        {!realCfMissing && <button onClick={() => quickSetRealCf(j)} title="Cargar el CF real medido" style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:6, cursor:"pointer", fontSize:10.5, padding:"1px 7px", color:"#185FA5" }}>✏️ CF real</button>}
                         {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                         {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                         <FaddBadge fadd={j.fadd} />
@@ -11208,7 +11254,7 @@ export default function App() {
         const c = tripCalc(t);
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
         const deliveredJobs = c.jobsIn.filter(j => j.date_out || j.status === "delivered");
-        const cfDelivered = deliveredJobs.reduce((s, j) => s + parseCf(j.volume), 0);
+        const cfDelivered = deliveredJobs.reduce((s, j) => s + effCf(j), 0);
         const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
         const bolPending = c.jobsIn.reduce((s, j) => s + Math.max(0, numv(j.bol_balance) - numv(j.bol_collected)), 0);
         const dropTargets = [
@@ -11283,7 +11329,7 @@ export default function App() {
         // Live capacity as jobs are added (using the form's selected jobs).
         const cap = numv(trucksList.find(tk => tk.id === Number(tripForm.truck_id))?.capacity_cf);
         let loadCf = 0; const seen = new Set();
-        for (const j of jobs) { const k = jobKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += parseCf(j.volume); } }
+        for (const j of jobs) { const k = jobKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += effCf(j); } }
         const remaining = cap > 0 ? cap - loadCf : null;
         const pct = cap > 0 ? Math.min(100, Math.round((loadCf / cap) * 100)) : 0;
         const repFor = (k) => jobs.find(j => jobKey(j) === k);
@@ -11352,7 +11398,7 @@ export default function App() {
                   <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i+1}</span>
                   <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
                   <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
-                  <span style={{ color:"#888" }}>{Math.round(parseCf(j.volume))} CF</span>
+                  <span style={{ color:"#888" }}>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                   <FaddBadge fadd={j.fadd} />
                   <button onClick={() => tripMoveJob(i, -1)} disabled={i===0} style={{ border:"none", background:"none", cursor: i===0?"default":"pointer", color: i===0?"#ddd":"#888", fontSize:14 }}>↑</button>
                   <button onClick={() => tripMoveJob(i, 1)} disabled={i===tripForm.job_keys.length-1} style={{ border:"none", background:"none", cursor: i===tripForm.job_keys.length-1?"default":"pointer", color: i===tripForm.job_keys.length-1?"#ddd":"#888", fontSize:14 }}>↓</button>
@@ -11382,7 +11428,7 @@ export default function App() {
                     <input type="checkbox" checked={checked} onChange={() => tripToggleJob(k)} />
                     <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
                     <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
-                    <span style={{ color:"#888" }}>{Math.round(parseCf(j.volume))} CF</span>
+                    <span style={{ color:"#888" }}>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                     {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="On another active trip — will move here">on {otherTrip.trip_number || "#"+otherTrip.id}</span>}
                   </label>
                 );
@@ -11420,7 +11466,7 @@ export default function App() {
                       <span style={{ width:18, height:18, borderRadius:"50%", background: stale ? "#ccc" : "#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i+1}</span>
                       <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j?.job_number || k}</span>
                       <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j?.customer || "—"}</span>
-                      {j && <span style={{ color:"#888", flexShrink:0 }}>{Math.round(parseCf(j.volume))} CF</span>}
+                      {j && <span style={{ color:"#888", flexShrink:0 }}>{Math.round(effCf(j))} CF</span>}
                       {j && <span style={{ color:"#888", flexShrink:0, maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{jobOrigin(j, storageById)?.label || ""} → {[j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "?"}</span>}
                       {j && !stale && <FaddBadge fadd={j.fadd} />}
                       {stale && <span style={{ fontSize:10, color:"#C2410C", textDecoration:"none", flexShrink:0 }}>no longer available</span>}
