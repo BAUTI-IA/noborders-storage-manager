@@ -214,7 +214,10 @@ En el detalle del job, sección **Extras** → botón **"+ Agregar extra"**.
 Un **trip** asigna varios jobs a un camión y muestra la carga en tiempo real.
 
 ### 11.1 Crear un trip
-**"+ Trip"** → número automático (TRIP-001…), elegís **camión**, **driver**, fecha de salida, y **buscás y agregás jobs**. Mientras agregás, una **barra de capacidad** te muestra cuánto CF queda libre. Reordenás las paradas con ↑ / ↓.
+**"+ Trip"** → número automático (TRIP-001…), elegís **camión**, **foreman driver** (el chofer a cargo), fecha de salida, y **buscás y agregás jobs**. Mientras agregás, una **barra de capacidad** te muestra cuánto CF queda libre. Reordenás las paradas con ↑ / ↓.
+
+### 11.1b Equipo del camión (crew)
+Además del foreman driver podés agregar hasta **2 acompañantes** por camión (máximo 3 personas en total), cada uno con su rol: **co-driver** o **helper**. Se eligen de la misma lista de la sección Drivers. El equipo queda guardado en el trip y se ve en la tarjeta del trip, en la tabla, en el detalle, en el mapa en vivo y en el manifest de WhatsApp — así queda la trazabilidad de **quiénes iban en el camión** en cada viaje, para después liquidar bien los pagos de cada empleado.
 
 ### 11.2 Vista "Active trips"
 Una tarjeta por camión activo: nombre + driver, **barra de capacidad** (verde <70%, ámbar 70-90%, rojo >90%), lista de **stops** (arrastrables para reordenar), con job, cliente, ruta, CF, sticker, FADD y balance. Por cada stop: **Mark delivered**. Totales de CF y de plata a cobrar.
