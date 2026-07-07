@@ -9427,6 +9427,7 @@ export default function App() {
                               : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:20, padding:"1px 7px" }}>In circulation{p.cash_with_whom ? ` · ${p.cash_with_whom}` : ""}</span>)
                           : <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 7px" }}>Pending</span>}
                         <span style={{ flex:1 }} />
+                        {payPhotoUrl(p) && <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="View document" style={{ border:"none", background:"none", cursor:"pointer", fontSize:13 }}>📷</button>}
                         <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>
                       </div>
                     ))}
