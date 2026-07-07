@@ -7706,13 +7706,17 @@ export default function App() {
             onDragOver: e => e.preventDefault(),
             onDrop: onSeqDrop(trip, seq, idx),
           };
+          // Drop target props for a row whose drag is initiated only by its handle
+          // (so clicks on the row body aren't swallowed by the drag machinery).
+          const dropProps = { onDragOver: e => e.preventDefault(), onDrop: onSeqDrop(trip, seq, idx) };
           const numBadge = (bg) => <span style={{ width:20, height:20, borderRadius:"50%", background:bg, color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{idx + 1}</span>;
           const handle = <span title={trAI("Drag to reorder", "Arrastrá para reordenar")} style={{ color:"#ccc", cursor:"grab" }}>⠿</span>;
+          const dragHandle = <span draggable onDragStart={e => e.dataTransfer.setData("text/plain", String(idx))} title={trAI("Drag to reorder", "Arrastrá para reordenar")} style={{ color:"#ccc", cursor:"grab", flexShrink:0 }}>⠿</span>;
           if (item.kind === "custom") {
             const s = item.s, cat = tripStopCat(s.category);
             return (
-              <div {...dragProps} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: s.done ? "#fafafa" : "#fbfbfd", cursor:"grab", opacity: s.done ? 0.7 : 1 }}>
-                {handle}
+              <div {...dropProps} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: s.done ? "#fafafa" : "#fbfbfd", opacity: s.done ? 0.7 : 1 }}>
+                {dragHandle}
                 {numBadge(cat.color)}
                 <div onClick={() => openEditStop(trip, s)} title={trAI("Edit address / note", "Editar dirección / nota")} style={{ flex:1, minWidth:0, cursor:"pointer" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
@@ -7725,6 +7729,7 @@ export default function App() {
                   {s.note && <div style={{ color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                  <button title={trAI("Edit address / note", "Editar dirección / nota")} onClick={() => openEditStop(trip, s)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:14, lineHeight:1 }}>✏️</button>
                   <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15 }}>{s.done ? "✅" : "⬜"}</span>
                   <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:14, lineHeight:1 }}>✕</button>
                 </div>
@@ -11428,8 +11433,11 @@ export default function App() {
                 persistUnifiedOrder(t, arr);
               };
               const rowDrag = (idx) => ({ draggable:true, onDragStart:e => e.dataTransfer.setData("text/plain", String(idx)), onDragOver:e => e.preventDefault(), onDrop:onRowDrop(idx) });
+              // Drop target only — drag is initiated by the handle, so row-body clicks work.
+              const dropOnly = (idx) => ({ onDragOver:e => e.preventDefault(), onDrop:onRowDrop(idx) });
               const numBadge = (bg, n) => <span style={{ width:22, height:22, borderRadius:"50%", background:bg, color:"#fff", fontSize:11, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{n}</span>;
               const handle = <span title={trAI("Drag to reorder", "Arrastrá para reordenar")} style={{ color:"#ccc", cursor:"grab", flexShrink:0 }}>⠿</span>;
+              const dragHandleAt = (idx) => <span draggable onDragStart={e => e.dataTransfer.setData("text/plain", String(idx))} title={trAI("Drag to reorder", "Arrastrá para reordenar")} style={{ color:"#ccc", cursor:"grab", flexShrink:0 }}>⠿</span>;
               return (<>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"6px 0 6px" }}>
                   <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Stops ({seq.length})</span>
@@ -11441,8 +11449,8 @@ export default function App() {
                       if (item.kind === "custom") {
                         const s = item.s, cat = tripStopCat(s.category);
                         return (
-                          <div key={item.key} {...rowDrag(i)} style={{ display:"flex", alignItems:"flex-start", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"9px 11px", background: s.done ? "#fafafa" : "#fbfbfd", cursor:"grab", opacity: s.done ? 0.7 : 1 }}>
-                            {handle}
+                          <div key={item.key} {...dropOnly(i)} style={{ display:"flex", alignItems:"flex-start", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"9px 11px", background: s.done ? "#fafafa" : "#fbfbfd", opacity: s.done ? 0.7 : 1 }}>
+                            {dragHandleAt(i)}
                             {numBadge(cat.color, i + 1)}
                             <div onClick={() => openEditStop(t, s)} title={trAI("Edit address / note", "Editar dirección / nota")} style={{ flex:1, minWidth:0, cursor:"pointer" }}>
                               <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
@@ -11453,6 +11461,7 @@ export default function App() {
                               {s.note && <div style={{ fontSize:12, color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
                             </div>
                             <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                              <button title={trAI("Edit address / note", "Editar dirección / nota")} onClick={() => openEditStop(t, s)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:15, lineHeight:1 }}>✏️</button>
                               <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15 }}>{s.done ? "✅" : "⬜"}</span>
                               <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:15, lineHeight:1 }}>✕</button>
                             </div>
