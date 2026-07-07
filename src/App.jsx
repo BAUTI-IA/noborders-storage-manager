@@ -1588,17 +1588,18 @@ function OccupancyBar({ used, total, height = 8 }) {
 // ── Custom trip stops (non-job): categories with icon + color ──
 // Used for the "Add stop" button on each trip card: maintenance, inspections,
 // fuel, weigh stations, rest breaks, etc. — anything that isn't a job pickup/drop.
+// Source labels are English; `es` is the Spanish translation, picked via lang.
 const TRIP_STOP_CATEGORIES = [
-  { key:"maintenance",  label:"Mantenimiento",        icon:"🔧", color:"#185FA5" },
-  { key:"repair",       label:"Reparación",           icon:"🛠️", color:"#A32D2D" },
-  { key:"inspection",   label:"Inspección DOT",       icon:"🔍", color:"#7C3AED" },
-  { key:"scale",        label:"Báscula",              icon:"⚖️", color:"#B4690E" },
-  { key:"fuel",         label:"Combustible",          icon:"⛽", color:"#1A8A4E" },
-  { key:"rest",         label:"Descanso (horas DOT)", icon:"🛌", color:"#3B6D11" },
-  { key:"overnight",    label:"Pernocta / parking",   icon:"🅿️", color:"#4B5563" },
-  { key:"equipment",    label:"Equipo (pads/dollies)",icon:"🚚", color:"#B4690E" },
-  { key:"office",       label:"Oficina / terminal",   icon:"🏢", color:"#185FA5" },
-  { key:"other",        label:"Otro",                 icon:"📋", color:"#888888" },
+  { key:"maintenance",  label:"Maintenance",           es:"Mantenimiento",        icon:"🔧", color:"#185FA5" },
+  { key:"repair",       label:"Repair",                es:"Reparación",           icon:"🛠️", color:"#A32D2D" },
+  { key:"inspection",   label:"DOT inspection",        es:"Inspección DOT",       icon:"🔍", color:"#7C3AED" },
+  { key:"scale",        label:"Weigh station",         es:"Báscula",              icon:"⚖️", color:"#B4690E" },
+  { key:"fuel",         label:"Fuel",                  es:"Combustible",          icon:"⛽", color:"#1A8A4E" },
+  { key:"rest",         label:"Rest (DOT hours)",      es:"Descanso (horas DOT)", icon:"🛌", color:"#3B6D11" },
+  { key:"overnight",    label:"Overnight / parking",   es:"Pernocta / parking",   icon:"🅿️", color:"#4B5563" },
+  { key:"equipment",    label:"Equipment (pads/dollies)", es:"Equipo (pads/dollies)", icon:"🚚", color:"#B4690E" },
+  { key:"office",       label:"Office / terminal",     es:"Oficina / terminal",   icon:"🏢", color:"#185FA5" },
+  { key:"other",        label:"Other",                 es:"Otro",                 icon:"📋", color:"#888888" },
 ];
 const tripStopCat = (k) => TRIP_STOP_CATEGORIES.find(c => c.key === k) || TRIP_STOP_CATEGORIES[TRIP_STOP_CATEGORIES.length - 1];
 
@@ -3025,6 +3026,8 @@ export default function App() {
   // alert()/confirm() and interpolated strings render outside the DOM overlay's
   // reach (i18nApply), so they need explicit per-language branching.
   const trAI = (en, es) => (lang === "es" ? es : en);
+  // Localized label for a custom-stop category (respects the user's language).
+  const catLabel = (key) => { const c = tripStopCat(key); return trAI(c.label, c.es); };
   // Dynamic in-transit trip management
   const [tripDetailId, setTripDetailId] = useState(null);     // trip detail modal
   const [tripEvents, setTripEvents] = useState([]);
@@ -5577,14 +5580,14 @@ export default function App() {
     if (error) { window.alert(error.message); return; }
     setAddStopModal(null);
     loadTripStops();
-    logTripEvent(trip.id, "custom_stop_added", { notes: `${tripStopCat(stopForm.category).label}${stopForm.address ? ` · ${stopForm.address}` : ""}` });
+    logTripEvent(trip.id, "custom_stop_added", { notes: `${catLabel(stopForm.category)}${stopForm.address ? ` · ${stopForm.address}` : ""}` });
   }
   async function toggleCustomStop(s) {
     await supabase.from("trip_stops").update({ done: !s.done }).eq("id", s.id);
     loadTripStops();
   }
   async function deleteCustomStop(s) {
-    if (!window.confirm(`Delete the "${tripStopCat(s.category).label}" stop?`)) return;
+    if (!window.confirm(trAI(`Delete the "${catLabel(s.category)}" stop?`, `¿Eliminar la parada "${catLabel(s.category)}"?`))) return;
     await supabase.from("trip_stops").delete().eq("id", s.id);
     loadTripStops();
   }
@@ -7761,7 +7764,7 @@ export default function App() {
                         <div style={{ display:"flex", gap:6, flexWrap:"wrap", justifyContent:"flex-end" }}>
                           <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Manage Loads</Btn>
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit Trip</Btn>
-                          <Btn disabled={tripStopsMissing} title={tripStopsMissing ? "Run the setup SQL to enable custom stops" : "Add a maintenance, inspection, fuel… stop"} onClick={() => openAddStop(t)} style={{ padding:"4px 9px", fontSize:11 }}>➕ Add stop</Btn>
+                          <Btn disabled={tripStopsMissing} title={tripStopsMissing ? trAI("Run the setup SQL to enable custom stops", "Corré el setup SQL para habilitar paradas") : trAI("Add a maintenance, inspection, fuel… stop", "Agregar parada de mantenimiento, inspección, combustible…")} onClick={() => openAddStop(t)} style={{ padding:"4px 9px", fontSize:11 }}>➕ {trAI("Add stop", "Agregar parada")}</Btn>
                           {c.jobsIn.length
                             ? <Btn onClick={() => setTripRouteModal({ title: t.trip_number || `#${t.id}`, waypoints: tripRouteWaypoints(c.jobsIn, storageById), googleLink: tripRouteLink(c.jobsIn, storageById) })} style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>
                             : <Btn disabled title="No jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>}
@@ -7786,20 +7789,20 @@ export default function App() {
                         if (!cstops.length) return null;
                         return (
                           <>
-                            <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"10px 0 4px" }}>Otras paradas ({cstops.length})</div>
+                            <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"10px 0 4px" }}>{trAI("Other stops", "Otras paradas")} ({cstops.length})</div>
                             <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden" }}>
                               {cstops.map(s => { const cat = tripStopCat(s.category); return (
                                 <div key={s.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: s.done ? "#fafafa" : "#fff", opacity: s.done ? 0.65 : 1 }}>
-                                  <span title="Marcar hecho" onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:14, lineHeight:1.2, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
+                                  <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:14, lineHeight:1.2, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
                                   <div style={{ flex:1, minWidth:0 }}>
                                     <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                                      <span style={{ fontSize:10.5, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"1px 8px", whiteSpace:"nowrap" }}>{cat.icon} {cat.label}</span>
-                                      {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11" }}>Hecho</span>}
+                                      <span style={{ fontSize:10.5, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"1px 8px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
+                                      {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11" }}>{trAI("Done", "Hecho")}</span>}
                                     </div>
                                     {s.address && <div style={{ color:"#555", marginTop:3 }}>📍 {s.address}</div>}
                                     {s.note && <div style={{ color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
                                   </div>
-                                  <button title="Eliminar parada" onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:14, lineHeight:1, flexShrink:0 }}>✕</button>
+                                  <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:14, lineHeight:1, flexShrink:0 }}>✕</button>
                                 </div>
                               ); })}
                             </div>
@@ -11354,22 +11357,22 @@ export default function App() {
 
             {/* custom (non-job) stops */}
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"14px 0 6px" }}>
-              <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Otras paradas ({(tripStopsByTrip[t.id] || []).length})</span>
-              <Btn disabled={tripStopsMissing} onClick={() => openAddStop(t)} style={{ padding:"4px 10px", fontSize:11.5 }}>➕ Add stop</Btn>
+              <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>{trAI("Other stops", "Otras paradas")} ({(tripStopsByTrip[t.id] || []).length})</span>
+              <Btn disabled={tripStopsMissing} onClick={() => openAddStop(t)} style={{ padding:"4px 10px", fontSize:11.5 }}>➕ {trAI("Add stop", "Agregar parada")}</Btn>
             </div>
             {(tripStopsByTrip[t.id] || []).length === 0 ? (
-              <div style={{ fontSize:12, color:"#bbb", padding:"4px 2px" }}>Sin paradas de mantenimiento, inspección, etc.</div>
+              <div style={{ fontSize:12, color:"#bbb", padding:"4px 2px" }}>{trAI("No maintenance, inspection, etc. stops.", "Sin paradas de mantenimiento, inspección, etc.")}</div>
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 {(tripStopsByTrip[t.id] || []).map(s => { const cat = tripStopCat(s.category); return (
                   <div key={s.id} style={{ display:"flex", alignItems:"flex-start", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"9px 11px", background: s.done ? "#fafafa" : "#fff", opacity: s.done ? 0.7 : 1 }}>
-                    <span title="Marcar hecho" onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
+                    <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
                     <div style={{ flex:1, minWidth:0 }}>
-                      <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{cat.icon} {cat.label}</span>
+                      <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
                       {s.address && <div style={{ fontSize:12, color:"#555", marginTop:4 }}>📍 {s.address}</div>}
                       {s.note && <div style={{ fontSize:12, color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
                     </div>
-                    <button title="Eliminar parada" onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:15, lineHeight:1, flexShrink:0 }}>✕</button>
+                    <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:15, lineHeight:1, flexShrink:0 }}>✕</button>
                   </div>
                 ); })}
               </div>
@@ -11462,30 +11465,24 @@ export default function App() {
       {addStopModal && (() => {
         const tr = addStopModal.trip;
         return (
-          <Modal title={`Agregar parada · ${tr.trip_number || "#"+tr.id}`} onClose={() => setAddStopModal(null)}
+          <Modal title={`${trAI("Add stop", "Agregar parada")} · ${tr.trip_number || "#"+tr.id}`} onClose={() => setAddStopModal(null)}
             footer={<>
-              <Btn onClick={() => setAddStopModal(null)}>Cancel</Btn>
-              <Btn primary disabled={stopSaving} onClick={saveCustomStop}>{stopSaving ? "Saving…" : "Agregar parada"}</Btn>
+              <Btn onClick={() => setAddStopModal(null)}>{trAI("Cancel", "Cancelar")}</Btn>
+              <Btn primary disabled={stopSaving} onClick={saveCustomStop}>{stopSaving ? trAI("Saving…", "Guardando…") : trAI("Add stop", "Agregar parada")}</Btn>
             </>}>
-            <div style={{ fontSize:13, color:"#555", marginBottom:12 }}>Una parada que no es un job — mantenimiento, inspección, combustible, báscula, descanso, etc. Se agrega al final de la lista del trip.</div>
-            <Field label="Categoría" full>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {TRIP_STOP_CATEGORIES.map(cat => {
-                  const sel = stopForm.category === cat.key;
-                  return (
-                    <button key={cat.key} onClick={() => setStopForm(f => ({ ...f, category: cat.key }))}
-                      style={{ fontSize:12, padding:"6px 11px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: sel ? cat.color : "#e5e5e5", background: sel ? cat.color+"18" : "#fff", color: sel ? cat.color : "#555", fontWeight: sel ? 700 : 500 }}>
-                      {cat.icon} {cat.label}
-                    </button>
-                  );
-                })}
-              </div>
+            <div style={{ fontSize:13, color:"#555", marginBottom:12 }}>{trAI("A non-job stop — maintenance, inspection, fuel, weigh station, rest, etc. It's added at the end of the trip's list.", "Una parada que no es un job — mantenimiento, inspección, combustible, báscula, descanso, etc. Se agrega al final de la lista del trip.")}</div>
+            <Field label={trAI("Category", "Categoría")} full>
+              <select style={inp} value={stopForm.category} onChange={e => setStopForm(f => ({ ...f, category: e.target.value }))}>
+                {TRIP_STOP_CATEGORIES.map(cat => (
+                  <option key={cat.key} value={cat.key}>{cat.icon} {trAI(cat.label, cat.es)}</option>
+                ))}
+              </select>
             </Field>
-            <Field label="Dirección (opcional)" full>
-              <input style={inp} value={stopForm.address} placeholder="Taller, estación, terminal…" onChange={e => setStopForm(f => ({ ...f, address: e.target.value }))} />
+            <Field label={trAI("Address (optional)", "Dirección (opcional)")} full>
+              <input style={inp} value={stopForm.address} placeholder={trAI("Shop, station, terminal…", "Taller, estación, terminal…")} onChange={e => setStopForm(f => ({ ...f, address: e.target.value }))} />
             </Field>
-            <Field label="Nota (opcional)" full>
-              <textarea style={{ ...inp, minHeight:70, resize:"vertical" }} value={stopForm.note} placeholder="Detalle: cambio de aceite, DOT inspection, etc." onChange={e => setStopForm(f => ({ ...f, note: e.target.value }))} />
+            <Field label={trAI("Note (optional)", "Nota (opcional)")} full>
+              <textarea style={{ ...inp, minHeight:70, resize:"vertical" }} value={stopForm.note} placeholder={trAI("Detail: oil change, DOT inspection, etc.", "Detalle: cambio de aceite, DOT inspection, etc.")} onChange={e => setStopForm(f => ({ ...f, note: e.target.value }))} />
             </Field>
           </Modal>
         );
