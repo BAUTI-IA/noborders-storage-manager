@@ -437,7 +437,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
           <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
             <span style={{ flex: 1, fontSize: 19, fontWeight: 800, letterSpacing: "-0.02em" }}>Chats</span>
             <button onClick={() => setShowNewChat(true)} title="New chat"
-              style={{ width: 30, height: 30, borderRadius: "50%", border: "none", background: "#f2f2f4", cursor: "pointer", fontSize: 15, lineHeight: 1, color: "#333" }}>✏️</button>
+              style={{ width: 30, height: 30, borderRadius: "50%", border: "none", background: "#f2f2f4", cursor: "pointer", fontSize: 20, lineHeight: 1, color: "#333", display: "flex", alignItems: "center", justifyContent: "center", paddingBottom: 2 }}>+</button>
           </div>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search chats…"
             style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", background: "#f2f2f4", borderRadius: 18, padding: "8px 14px", fontSize: 13 }} />
@@ -498,7 +498,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
             </>
           )}
           {conversations.length === 0 && searchPeople.length === 0 && (
-            <div style={{ fontSize: 12.5, color: "#bbb", padding: "10px 8px" }}>No chats yet — tap ✏️ to start one.</div>
+            <div style={{ fontSize: 12.5, color: "#bbb", padding: "10px 8px" }}>No chats yet — tap + to start one.</div>
           )}
         </div>
       </div>

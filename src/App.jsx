@@ -41,7 +41,7 @@ const I18N_ES = {
   "You: ": "Vos: ",
   "No messages yet": "Todavía no hay mensajes",
   "No messages yet. Say hi! 👋": "Todavía no hay mensajes. ¡Saludá! 👋",
-  "No chats yet — tap ✏️ to start one.": "Todavía no hay chats — tocá ✏️ para empezar uno.",
+  "No chats yet — tap + to start one.": "Todavía no hay chats — tocá + para empezar uno.",
   "Pick a chat to start messaging": "Elegí un chat para empezar a conversar",
   "Group chat · visible to the whole team": "Chat grupal · visible para todo el equipo",
   "…or create a group chat (visible to the whole team)": "…o creá un chat grupal (visible para todo el equipo)",
