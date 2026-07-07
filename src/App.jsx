@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
+import { MessagesSection } from "./messages.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta } from "./analyticsData.js";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
@@ -28,6 +29,19 @@ const I18N_ES = {
   "AI metrics and recommendations": "Métricas y recomendaciones con IA",
   "Account": "Cuenta",
   "Actions": "Acciones",
+  "Messages": "Mensajes",
+  "Team chat and direct messages": "Chat del equipo y mensajes directos",
+  "Channels": "Canales",
+  "Direct messages": "Mensajes directos",
+  "New channel": "Nuevo canal",
+  "Channels are visible to the whole team.": "Los canales son visibles para todo el equipo.",
+  "No channels yet": "Todavía no hay canales",
+  "No messages yet. Say hi! 👋": "Todavía no hay mensajes. ¡Saludá! 👋",
+  "Pick a channel or a teammate to start chatting 💬": "Elegí un canal o un compañero para empezar a chatear 💬",
+  "Enter to send · Shift+Enter for a new line": "Enter para enviar · Shift+Enter para nueva línea",
+  "Send": "Enviar",
+  "One-time setup needed": "Se necesita una configuración única",
+  "I ran it — retry": "Ya lo corrí — reintentar",
   "Active": "Activo",
   "Active companies": "Empresas activas",
   "Active jobs": "Jobs activos",
@@ -2550,6 +2564,7 @@ const NAV = [
     { id:"calendario", label:"Calendar", icon:"📅" },
     { id:"storage", label:"Storage", icon:"🏬" },
     { id:"jobs", label:"Jobs", icon:"💼" },
+    { id:"messages", label:"Messages", icon:"💬" },
   ]},
   { section:"Finanzas", items:[
     { id:"brokers", label:"Brokers", icon:"🏦" },
@@ -2619,6 +2634,7 @@ const PAGE_META = {
   calendario:  { title:"Calendar", sub:"Pick ups programados" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
+  messages:    { title:"Messages", sub:"Team chat and direct messages" },
   brokers:     { title:"Brokers", sub:"Brokers and outstanding balances" },
   billing:     { title:"Storage Billing", sub:"Monthly storage billing for clients" },
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
@@ -2894,6 +2910,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [liveIndicator, setLiveIndicator] = useState(false);
   const [page, setPage] = useState("dispatching");   // sidebar navigation
+  const [chatUnread, setChatUnread] = useState(0);   // unread team-chat messages (sidebar badge)
   const [bolJobNumber, setBolJobNumber] = useState(null); // job to pre-select in the BOL generator
   const [lang, setLang] = useState(() => { try { return localStorage.getItem("lang") || "en"; } catch { return "en"; } });
   const [showDupModal, setShowDupModal] = useState(false);  // duplicates review modal
@@ -4562,7 +4579,23 @@ export default function App() {
     return rows.sort((a, b) => (a.days ?? 0) - (b.days ?? 0));
   }, [complianceDocs, entityName]);
 
-  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length]);
+  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0, messages: chatUnread || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length, chatUnread]);
+
+  // Team-chat unread badge while the Messages section is closed. Realtime rows
+  // respect RLS, so only channels visible to this user arrive here. When the
+  // section is open it owns the count (via onUnreadTotal) — skip increments.
+  const pageRef = useRef(page); pageRef.current = page;
+  useEffect(() => {
+    if (!session) return;
+    const channel = supabase.channel("chat-badge")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, (payload) => {
+        if (payload.new.sender_id !== session.user.id && pageRef.current !== "messages")
+          setChatUnread(n => n + 1);
+      })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session]);
+  useEffect(() => { if (page === "messages") setChatUnread(0); }, [page]);
 
   // Trip status is MANUAL only — never auto-changed from job delivery state.
   // The `allDelivered` flag (from tripCalc) is used solely to surface a
@@ -6865,6 +6898,9 @@ export default function App() {
 
       {/* ───────────────────────── USERS (admin) ───────────────────────── */}
       {page === "users" && isAdmin && <UsersSection session={session} />}
+
+      {/* ───────────────────────── MESSAGES (team chat) ───────────────────────── */}
+      {page === "messages" && can("messages","view") && <MessagesSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} onUnreadTotal={setChatUnread} />}
 
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
