@@ -168,7 +168,7 @@ const STATUS_ES = {
 };
 
 // ── Panel IA (movido de App.jsx; ahora recibe el resumen filtrado) ───────────
-function AIPanel({ records, lang, extra }) {
+function AIPanel({ records, lang, extra, session }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
@@ -200,7 +200,10 @@ ${lang === "es" ? "Answer in Spanish." : "Answer in English."}`;
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: "Bearer " + session.access_token } : {}),
+        },
         body: JSON.stringify({ prompt })
       });
       const data = await res.json();
@@ -244,7 +247,7 @@ ${lang === "es" ? "Answer in Spanish." : "Answer in English."}`;
 // ═════════════════════════════════════════════════════════════════════════════
 export function AnalyticsPage({
   records, jobs, brokers, driversList, payments, jobExtras,
-  sit, urgentPayments, faddStats, brokerShareMissing, paymentsMissing, lang,
+  sit, urgentPayments, faddStats, brokerShareMissing, paymentsMissing, lang, session,
 }) {
   const [todayISO] = useState(() => new Date().toISOString().slice(0, 10));
   const [preset, setPreset] = useState("6m");
@@ -485,7 +488,7 @@ export function AnalyticsPage({
             </div>
           </div>
 
-          <AIPanel records={records} lang={lang} extra={aiExtra} />
+          <AIPanel records={records} lang={lang} extra={aiExtra} session={session} />
         </>
       )}
 

@@ -1535,7 +1535,13 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose, jobs = [
     return s ? list.filter(r => [r.customer, r.job_number, r.company_name, brokerName(r)].filter(Boolean).some(v => String(v).toLowerCase().includes(s))) : list;
   }, [rows, q, folder, brokerIdOf, brokerName]);
 
-  function urlFor(r) { return r.pdf_path ? supabase.storage.from("bol-generated").getPublicUrl(r.pdf_path).data.publicUrl : null; }
+  // Open a generated BOL via a short-lived signed URL (the bucket is private:
+  // BOLs carry the client's full PII, so no permanent public links).
+  async function viewPdf(r) {
+    const { data, error } = await supabase.storage.from("bol-generated").createSignedUrl(r.pdf_path, 120);
+    if (error) { setError(error.message); return; }
+    window.open(data.signedUrl, "_blank", "noopener");
+  }
   async function remove(r) {
     if (!window.confirm(`Delete this BOL for ${r.customer || "—"}? This removes the legal record.`)) return;
     await supabase.from("bol_documents").delete().eq("id", r.id);
@@ -1618,7 +1624,7 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose, jobs = [
                   <td style={{ padding: "10px 12px", textAlign: "right", whiteSpace: "nowrap", borderBottom: "1px solid #f6f6f6" }}>
                     {canEdit && !r.pickup_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "pickup")}>{busy ? "…" : "Firmar pickup"}</button>}
                     {canEdit && r.pickup_signed_path && !r.delivery_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "delivery")}>{busy ? "…" : "Firmar delivery"}</button>}
-                    {urlFor(r) && <a href={urlFor(r)} target="_blank" rel="noreferrer" style={{ ...smallBtn, textDecoration: "none", marginRight: 6 }}>View</a>}
+                    {r.pdf_path && <button style={{ ...smallBtn, marginRight: 6 }} onClick={() => viewPdf(r)}>View</button>}
                     <button style={{ ...smallBtn, marginRight: 6 }} onClick={() => onReopen(r)}>Reopen</button>
                     {canEdit && <button style={{ ...smallBtn, color: "#b91c1c" }} onClick={() => remove(r)}>Delete</button>}
                   </td>

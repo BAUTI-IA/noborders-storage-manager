@@ -4,14 +4,11 @@
 // JSON suggestions which are validated and re-computed server-side before being
 // shown to the dispatcher. Nothing is written to the database here.
 import Anthropic from "@anthropic-ai/sdk";
-import { createClient } from "@supabase/supabase-js";
+import { requireUser, rateLimitOk } from "../lib/auth.mjs";
 
 export const maxDuration = 300; // planning calls can run 1-2 min; Hobby + Fluid Compute allows up to 300s
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY from env
-const admin = process.env.SUPABASE_SERVICE_ROLE_KEY
-  ? createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
-  : null;
 
 const MAX_JOBS = 150;
 const MAX_TRUCKS = 30;
@@ -102,12 +99,10 @@ export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   if (!process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "Falta ANTHROPIC_API_KEY en Vercel." }); return; }
 
-  // Require a valid logged-in user (best-effort auth via service role).
-  if (admin) {
-    const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-    const { data: { user } = {}, error } = await admin.auth.getUser(token);
-    if (error || !user) { res.status(401).json({ error: "No autorizado." }); return; }
-  }
+  // Require a valid logged-in user (fails closed if Supabase env is missing).
+  const user = await requireUser(req, res);
+  if (!user) return;
+  if (!rateLimitOk(res, `trip-suggestions:${user.id}`, 10, 5 * 60 * 1000)) return;
 
   const body = req.body || {};
   const lang = body.lang === "es" ? "es" : "en"; // AI output + error language follows the user's display language

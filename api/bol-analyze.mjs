@@ -3,12 +3,10 @@
 // Returns rough field boxes that pre-populate the visual editor; the user then
 // drags them to fine-tune. Best-effort — the manual editor works without this.
 import Anthropic from "@anthropic-ai/sdk";
-import { createClient } from "@supabase/supabase-js";
+import { requireUser, rateLimitOk } from "../lib/auth.mjs";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY from env
-const admin = process.env.SUPABASE_SERVICE_ROLE_KEY
-  ? createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
-  : null;
+const MAX_IMAGE_B64_CHARS = 8 * 1024 * 1024; // ~6 MB of JPEG; page-1 renders are far smaller
 
 const SOURCE_KEYS = [
   "customer","client_phone","client_email","job_number",
@@ -22,15 +20,14 @@ export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   if (!process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "Falta ANTHROPIC_API_KEY en Vercel." }); return; }
 
-  // Require a valid logged-in user (best-effort auth via service role).
-  if (admin) {
-    const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-    const { data: { user } = {}, error } = await admin.auth.getUser(token);
-    if (error || !user) { res.status(401).json({ error: "No autorizado." }); return; }
-  }
+  // Require a valid logged-in user (fails closed if Supabase env is missing).
+  const user = await requireUser(req, res);
+  if (!user) return;
+  if (!rateLimitOk(res, `bol-analyze:${user.id}`, 10, 5 * 60 * 1000)) return;
 
   const { image_base64, pages } = req.body || {};
-  if (!image_base64) { res.status(400).json({ error: "Falta la imagen." }); return; }
+  if (!image_base64 || typeof image_base64 !== "string") { res.status(400).json({ error: "Falta la imagen." }); return; }
+  if (image_base64.length > MAX_IMAGE_B64_CHARS) { res.status(400).json({ error: "La imagen es demasiado grande." }); return; }
   const page0 = (pages && pages[0]) || { w: 612, h: 792 };
 
   const prompt = `This image is the first page of a moving company's Interstate Bill of Lading form. ` +

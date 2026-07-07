@@ -17,6 +17,12 @@ const admin = SERVICE_KEY
   ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
   : null;
 
+// Light input validation: these values are written with the service role
+// (bypassing RLS), so nothing unexpected should reach the database.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isPlainObject = (v) => v != null && typeof v === "object" && !Array.isArray(v);
+const cleanName = (v) => (typeof v === "string" ? v.trim().slice(0, 200) : null);
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -45,7 +51,7 @@ export default async function handler(req, res) {
   if ((req.body || {}).action === "update_self") {
     const { full_name } = (req.body.payload) || {};
     const { error } = await admin.from("profiles")
-      .update({ full_name: typeof full_name === "string" ? full_name.trim() : null })
+      .update({ full_name: cleanName(full_name) })
       .eq("id", user.id);
     if (error) { res.status(500).json({ error: error.message }); return; }
     res.status(200).json({ ok: true });
@@ -84,29 +90,35 @@ export default async function handler(req, res) {
 
     if (action === "invite") {
       const { email, role = "member", permissions = {}, full_name = "" } = payload || {};
-      if (!email) { res.status(400).json({ error: "Falta el email." }); return; }
+      if (typeof email !== "string" || !EMAIL_RE.test(email.trim())) { res.status(400).json({ error: "Email inválido." }); return; }
       if (role !== "admin" && role !== "member") { res.status(400).json({ error: "Rol inválido." }); return; }
+      if (!isPlainObject(permissions)) { res.status(400).json({ error: "Permisos inválidos." }); return; }
 
-      const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
+      const cleanEmail = email.trim().toLowerCase();
+      const name = cleanName(full_name) || "";
+      const { data, error } = await admin.auth.admin.inviteUserByEmail(cleanEmail, {
         redirectTo: APP_URL ? `${APP_URL}/?invited=1` : undefined,
-        data: { full_name },
+        data: { full_name: name },
       });
       if (error) throw error;
 
       // The on_auth_user_created trigger creates the base row; set role + perms.
       const { error: pErr } = await admin.from("profiles").upsert({
-        id: data.user.id, email, full_name, role, permissions, active: true,
+        id: data.user.id, email: cleanEmail, full_name: name, role, permissions, active: true,
       });
       if (pErr) throw pErr;
-      res.status(200).json({ ok: true, user: { id: data.user.id, email } });
+      res.status(200).json({ ok: true, user: { id: data.user.id, email: cleanEmail } });
       return;
     }
 
     if (action === "update") {
       const { id, role, permissions, active, full_name } = payload || {};
-      if (!id) { res.status(400).json({ error: "Falta el id." }); return; }
+      if (!id || typeof id !== "string") { res.status(400).json({ error: "Falta el id." }); return; }
       if (role !== undefined && role !== "admin" && role !== "member") {
         res.status(400).json({ error: "Rol inválido." }); return;
+      }
+      if (permissions !== undefined && !isPlainObject(permissions)) {
+        res.status(400).json({ error: "Permisos inválidos." }); return;
       }
       // Guard: an admin cannot strip their own admin role / deactivate themselves
       // (prevents locking everyone out by mistake).
@@ -117,8 +129,8 @@ export default async function handler(req, res) {
       const patch = {};
       if (role !== undefined) patch.role = role;
       if (permissions !== undefined) patch.permissions = permissions;
-      if (active !== undefined) patch.active = active;
-      if (full_name !== undefined) patch.full_name = full_name;
+      if (active !== undefined) patch.active = active === true;
+      if (full_name !== undefined) patch.full_name = cleanName(full_name);
       const { error } = await admin.from("profiles").update(patch).eq("id", id);
       if (error) throw error;
       res.status(200).json({ ok: true });

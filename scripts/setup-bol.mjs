@@ -43,8 +43,11 @@ create policy bol_templates_del on public.bol_templates for delete to authentica
   using ( public.has_perm('bol','edit') );
 
 -- Storage buckets for the original templates and the generated BOLs.
-insert into storage.buckets (id, name, public) values ('bol-templates','bol-templates', true) on conflict (id) do nothing;
-insert into storage.buckets (id, name, public) values ('bol-generated','bol-generated', true) on conflict (id) do nothing;
+-- PRIVATE: generated BOLs carry the client's full PII; the app opens them via
+-- short-lived signed URLs, never public links.
+insert into storage.buckets (id, name, public) values ('bol-templates','bol-templates', false) on conflict (id) do nothing;
+insert into storage.buckets (id, name, public) values ('bol-generated','bol-generated', false) on conflict (id) do nothing;
+update storage.buckets set public = false where id in ('bol-templates','bol-generated');
 
 -- Authenticated users with BOL access can read/write objects in those buckets.
 drop policy if exists bol_objs_sel on storage.objects;

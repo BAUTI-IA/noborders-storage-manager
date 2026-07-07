@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
@@ -12,6 +12,56 @@ import { AnalyticsPage } from "./analytics.jsx";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://szkmktxziojzgfjkomua.supabase.co";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "sb_publishable_v2VNtyiQ_tTAAmEWDdHwYg_IJ-_IN-5";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── Security helpers ─────────────────────────────────────────────────────────
+// Escape user-entered data before interpolating it into print/export HTML.
+// Without this, a customer name like "<img onerror=...>" would execute inside
+// the print window, which shares the app's origin (stored XSS).
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Authorization header for calls to our own /api endpoints (they all require
+// a valid Supabase session now).
+async function authHeader() {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ? { Authorization: "Bearer " + session.access_token } : {};
+}
+
+// Uploaded documents (compliance, payment proofs, closing sheets, BOLs) live in
+// storage buckets that should be PRIVATE. The DB may still hold legacy public
+// URLs, so: parse the bucket/path out of any Supabase storage URL and mint a
+// short-lived signed URL at view time. Anything else is returned untouched.
+function storageRefFromUrl(url) {
+  const m = String(url || "").match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+?)(?:\?.*)?$/);
+  return m ? { bucket: m[1], path: decodeURIComponent(m[2]) } : null;
+}
+async function resolveDocUrl(url) {
+  const ref = storageRefFromUrl(url);
+  if (!ref) return url;
+  try {
+    const { data } = await supabase.storage.from(ref.bucket).createSignedUrl(ref.path, 300);
+    return data?.signedUrl || url;
+  } catch { return url; }
+}
+async function openDocUrl(url) {
+  const href = await resolveDocUrl(url);
+  if (href) window.open(href, "_blank", "noopener,noreferrer");
+}
+// Drop-in <a>/<img> for stored document URLs: resolve to a signed URL on use.
+function DocLink({ url, style, children, onClick }) {
+  return (
+    <a href={url} target="_blank" rel="noreferrer" style={style}
+      onClick={(e) => { e.preventDefault(); if (onClick) onClick(e); openDocUrl(url); }}>{children}</a>
+  );
+}
+function DocImg({ url, alt, style, onClick }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    let on = true;
+    resolveDocUrl(url).then((u) => { if (on) setSrc(u); });
+    return () => { on = false; };
+  }, [url]);
+  return src ? <img src={src} alt={alt} style={style} onClick={onClick} /> : null;
+}
 
 // ── Lightweight EN→ES UI toggle ──────────────────────────────────────────────
 // The app source is English. When the user picks Spanish, a DOM pass swaps the
@@ -832,7 +882,7 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
         style={{ border:`2px dashed ${drag ? "#378ADD" : "#ddd"}`, borderRadius:10, padding: url ? "8px" : "14px", textAlign:"center", background: drag ? "#E6F1FB" : "#fafafa", cursor:"pointer", fontSize:12, color:"#888" }}>
         {uploading ? "Subiendo…" : url ? (
           <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
-            {isPdf ? <span style={{ fontSize:28 }}>📄</span> : <img src={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} />}
+            {isPdf ? <span style={{ fontSize:28 }}>📄</span> : <DocImg url={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} />}
             <span style={{ color:"#185FA5" }}>Replace file</span>
           </div>
         ) : "Drag or tap to upload photo/PDF (jpg, png, heic, pdf)"}
@@ -929,7 +979,7 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
           <div style={{ fontSize:10.5, color: expColor }}>{doc.expiry_date ? `Vence ${doc.expiry_date}${days != null ? ` (${days < 0 ? `hace ${-days}d` : `${days}d`})` : ""}` : "No expiry"}</div>
           <div style={{ display:"flex", gap:9, marginTop:"auto", alignItems:"center" }}>
             {doc.document_url
-              ? <a href={doc.document_url} target="_blank" rel="noreferrer" style={{ fontSize:10.5, color:"#185FA5", textDecoration:"none" }}>📎 Ver</a>
+              ? <DocLink url={doc.document_url} style={{ fontSize:10.5, color:"#185FA5", textDecoration:"none" }}>📎 Ver</DocLink>
               : <span style={{ fontSize:10.5, color:"#bbb" }}>No file</span>}
             <button onClick={() => inputRef.current?.click()} style={{ fontSize:10.5, color:"#185FA5", border:"none", background:"none", cursor:"pointer", padding:0 }}>Subir</button>
             <button onClick={onEdit} style={{ fontSize:10.5, color:"#888", border:"none", background:"none", cursor:"pointer", padding:0 }}>Edit</button>
@@ -2112,7 +2162,7 @@ function TripRouteModal({ title, waypoints, googleLink, onClose }) {
           // Try candidates from most to least specific; stop at the first hit.
           for (let i = 0; i < w.candidates.length; i++) {
             try {
-              const r = await fetch("/api/geocode?q=" + encodeURIComponent(w.candidates[i]));
+              const r = await fetch("/api/geocode?q=" + encodeURIComponent(w.candidates[i]), { headers: await authHeader() });
               if (r.ok) {
                 const d = await r.json();
                 if (d && d.lat != null && d.lng != null) {
@@ -5288,7 +5338,7 @@ export default function App() {
     if (!q) { setLocErr("Type an address to search."); return; }
     setLocBusy(true); setLocErr(null);
     try {
-      const r = await fetch("/api/geocode?q=" + encodeURIComponent(q));
+      const r = await fetch("/api/geocode?q=" + encodeURIComponent(q), { headers: await authHeader() });
       const data = await r.json();
       if (!r.ok) { setLocErr(data?.error || "Could not geocode."); }
       else setLocForm(f => ({ ...f, lat: data.lat, lng: data.lng, label: data.label }));
@@ -5924,17 +5974,17 @@ export default function App() {
     let totAmt = 0, totComm = 0;
     const rows = jobsData.flatMap(jd => jd.extras.map(e => {
       totAmt += numv(e.amount); totComm += numv(e.driver_commission_amount);
-      return `<tr><td>${jd.job_number || "—"}</td><td>${jd.customer || ""}</td><td>${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}</td><td style="text-align:right">$${numv(e.amount).toLocaleString()}</td><td style="text-align:right">${numv(e.driver_commission_pct)}%</td><td style="text-align:right">$${numv(e.driver_commission_amount).toLocaleString()}</td></tr>`;
+      return `<tr><td>${esc(jd.job_number || "—")}</td><td>${esc(jd.customer || "")}</td><td>${esc(extraTypeLabel(e.extra_type))}${e.extra_type === "other" && e.description ? ` (${esc(e.description)})` : ""}</td><td style="text-align:right">$${numv(e.amount).toLocaleString()}</td><td style="text-align:right">${numv(e.driver_commission_pct)}%</td><td style="text-align:right">$${numv(e.driver_commission_amount).toLocaleString()}</td></tr>`;
     })).join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Extras ${driverName}</title>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Extras ${esc(driverName)}</title>
       <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
-      <body><h1>Extras & Comisiones — ${driverName}</h1><div class="sub">${monthLabel}</div>
+      <body><h1>Extras & Comisiones — ${esc(driverName)}</h1><div class="sub">${esc(monthLabel)}</div>
       <table><thead><tr><th>Job #</th><th>Client</th><th>Extra</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th><th style="text-align:right">Commission</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#999">No extras</td></tr>'}</tbody>
       <tfoot><tr><td colspan="3">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
-      <script>window.onload=function(){window.print();}</script></body></html>`;
+      </body></html>`;
     const w = window.open("", "_blank");
-    if (w) { w.document.write(html); w.document.close(); }
+    if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); }
   }
   // Per-rep export: rows carry the assigned driver + rep commission.
   function repExtrasReport(repName, monthLabel, jobsData) {
@@ -5959,17 +6009,17 @@ export default function App() {
     let totAmt = 0, totComm = 0;
     const rows = jobsData.flatMap(jd => jd.extras.map(e => {
       totAmt += numv(e.amount); totComm += numv(e.rep_commission_amount);
-      return `<tr><td>${jd.job_number || "—"}</td><td>${jd.customer || ""}</td><td>${jd.driverName || ""}</td><td>${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}</td><td style="text-align:right">$${numv(e.amount).toLocaleString()}</td><td style="text-align:right">${numv(e.rep_commission_pct)}%</td><td style="text-align:right">$${numv(e.rep_commission_amount).toLocaleString()}</td></tr>`;
+      return `<tr><td>${esc(jd.job_number || "—")}</td><td>${esc(jd.customer || "")}</td><td>${esc(jd.driverName || "")}</td><td>${esc(extraTypeLabel(e.extra_type))}${e.extra_type === "other" && e.description ? ` (${esc(e.description)})` : ""}</td><td style="text-align:right">$${numv(e.amount).toLocaleString()}</td><td style="text-align:right">${numv(e.rep_commission_pct)}%</td><td style="text-align:right">$${numv(e.rep_commission_amount).toLocaleString()}</td></tr>`;
     })).join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comisiones ${repName}</title>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Comisiones ${esc(repName)}</title>
       <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}.sub{color:#666;margin:4px 0 18px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ddd;padding:7px 9px;text-align:left}th{background:#f5f5f5}tfoot td{font-weight:700;background:#FEF9C3}</style></head>
-      <body><h1>Comisiones Rep — ${repName}</h1><div class="sub">${monthLabel}</div>
+      <body><h1>Comisiones Rep — ${esc(repName)}</h1><div class="sub">${esc(monthLabel)}</div>
       <table><thead><tr><th>Job #</th><th>Client</th><th>Driver</th><th>Extra</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th><th style="text-align:right">Commission</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#999">No extras</td></tr>'}</tbody>
       <tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">$${totAmt.toLocaleString()}</td><td></td><td style="text-align:right">$${totComm.toLocaleString()}</td></tr></tfoot></table>
-      <script>window.onload=function(){window.print();}</script></body></html>`;
+      </body></html>`;
     const w = window.open("", "_blank");
-    if (w) { w.document.write(html); w.document.close(); }
+    if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); }
   }
 
   // ── Payments handlers ──
@@ -6499,12 +6549,12 @@ export default function App() {
   }
   function exportCsPdf(sheet, calc, brokerNm, driverNm, jobsIn) {
     const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
-    const rows = jobsIn.map(j => `<tr><td>${j.job_number||"-"}</td><td>${j.customer||"-"}</td><td>${Math.round(parseCf(j.volume))} CF</td><td>${m(numv(j.carrier_rate_per_cf))}</td><td>${m(parseCf(j.volume)*numv(j.carrier_rate_per_cf))}</td><td>${m(numv(j.bol_balance))}</td><td>${m(numv(j.bol_collected))}</td></tr>`).join("");
+    const rows = jobsIn.map(j => `<tr><td>${esc(j.job_number||"-")}</td><td>${esc(j.customer||"-")}</td><td>${Math.round(parseCf(j.volume))} CF</td><td>${m(numv(j.carrier_rate_per_cf))}</td><td>${m(parseCf(j.volume)*numv(j.carrier_rate_per_cf))}</td><td>${m(numv(j.bol_balance))}</td><td>${m(numv(j.bol_collected))}</td></tr>`).join("");
     const net = calc.net >= 0 ? `Broker owes you ${m(calc.net)}` : `You owe the broker ${m(-calc.net)}`;
-    const html = `<html><head><meta charset="utf-8"><title>CS ${sheet.closing_sheet_number||""}</title>
+    const html = `<html><head><meta charset="utf-8"><title>CS ${esc(sheet.closing_sheet_number||"")}</title>
       <style>body{font-family:system-ui,sans-serif;padding:30px;color:#111}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f5f5f5}.box{border:1px solid #ddd;border-radius:8px;padding:12px;margin-top:10px}.r{display:flex;justify-content:space-between;font-size:13px;margin:3px 0}</style></head>
-      <body><h1>Closing Sheet #${sheet.closing_sheet_number||"-"}</h1>
-      <div>Broker: <b>${brokerNm||"-"}</b> · Driver: ${driverNm||"-"} · Load date: ${sheet.load_date||"-"} · Status: ${sheet.status}</div>
+      <body><h1>Closing Sheet #${esc(sheet.closing_sheet_number||"-")}</h1>
+      <div>Broker: <b>${esc(brokerNm||"-")}</b> · Driver: ${esc(driverNm||"-")} · Load date: ${esc(sheet.load_date||"-")} · Status: ${esc(sheet.status)}</div>
       <table><thead><tr><th>Job #</th><th>Client</th><th>CF</th><th>Rate/CF</th><th>Carrier fee</th><th>BOL balance</th><th>Collected</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="box"><div class="r"><span>Carrier fee subtotal</span><b>${m(calc.carrierFee)}</b></div>
       <div class="r"><span>− Trip cost</span><span>${m(numv(sheet.trip_cost))}</span></div>
@@ -6686,7 +6736,7 @@ export default function App() {
     if (!file) return;
     setZipName(file.name); setZipStatus("Leyendo ZIP...");
     try {
-      const { default: JSZip } = await import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm");
+      const { default: JSZip } = await import("jszip");
       const zip = await JSZip.loadAsync(file);
       let chatFile = Object.keys(zip.files).find(n => /chat.*\.txt$/i.test(n) && !zip.files[n].dir);
       if (!chatFile) chatFile = Object.keys(zip.files).find(n => /\.txt$/i.test(n) && !zip.files[n].dir);
@@ -7427,8 +7477,8 @@ export default function App() {
                   <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], s)} />
                   {docUploading ? <div style={{ fontSize:12, color:"#888" }}>Subiendo…</div>
                     : s.document_url ? (
-                      isImg ? <img src={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
-                        : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Ver documento (PDF)</a></div>
+                      isImg ? <DocImg url={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
+                        : <div style={{ fontSize:13 }}>📄 <DocLink url={s.document_url} onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Ver documento (PDF)</DocLink></div>
                     ) : <div style={{ fontSize:12, color:"#999" }}>Drag or click to upload closing-sheet photo/PDF</div>}
                 </label>
                 {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>Click the area to replace</div>}
@@ -8524,7 +8574,7 @@ export default function App() {
                             <td style={{ ...td, whiteSpace:"nowrap" }}>{d.expiry_date || "—"}{days !== null && <span style={{ color: st==="expired"?"#A32D2D": st==="expiring_soon"?"#854F0B":"#aaa", fontSize:10.5 }}> ({days < 0 ? `hace ${-days}d` : `${days}d`})</span>}</td>
                             <td style={td}><ComplianceBadge status={st} /></td>
                             <td style={{ ...td, whiteSpace:"nowrap" }}>
-                              {d.document_url && <a href={d.document_url} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", marginRight:8 }}>Ver</a>}
+                              {d.document_url && <DocLink url={d.document_url} style={{ color:"#185FA5", textDecoration:"none", marginRight:8 }}>Ver</DocLink>}
                               <button onClick={() => openEditDoc(d)} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>Edit</button>
                               <button onClick={() => deleteDoc(d)} style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
                             </td>
@@ -8657,7 +8707,7 @@ export default function App() {
           payments={payments} jobExtras={jobExtras} sit={sit}
           urgentPayments={urgentPayments} faddStats={faddStats}
           brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
-          lang={lang}
+          lang={lang} session={session}
         />
       )}
 
@@ -10296,7 +10346,7 @@ export default function App() {
                     choose one
                     <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) uploadComplianceDoc(f); e.target.value = ""; }} />
                   </label>
-                  {docForm.document_url && <div style={{ marginTop:8 }}><a href={docForm.document_url} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E" }}>📎 Archivo cargado — ver</a></div>}
+                  {docForm.document_url && <div style={{ marginTop:8 }}><DocLink url={docForm.document_url} style={{ color:"#1A8A4E" }}>📎 Archivo cargado — ver</DocLink></div>}
                 </>
               )}
             </div>
@@ -11905,8 +11955,8 @@ export default function App() {
       {payPhotoView && (
         <div onClick={() => setPayPhotoView(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.8)", zIndex:60, display:"flex", alignItems:"center", justifyContent:"center", padding:24, cursor:"zoom-out" }}>
           {payPhotoView.toLowerCase().includes(".pdf")
-            ? <div style={{ background:"#fff", borderRadius:10, padding:24, textAlign:"center" }}><div style={{ fontSize:40 }}>📄</div><a href={payPhotoView} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Open PDF in new tab ↗</a></div>
-            : <img src={payPhotoView} alt="documento" style={{ maxWidth:"92%", maxHeight:"92%", borderRadius:8, boxShadow:"0 8px 40px rgba(0,0,0,0.4)" }} onClick={e => e.stopPropagation()} />}
+            ? <div style={{ background:"#fff", borderRadius:10, padding:24, textAlign:"center" }}><div style={{ fontSize:40 }}>📄</div><DocLink url={payPhotoView} onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Open PDF in new tab ↗</DocLink></div>
+            : <DocImg url={payPhotoView} alt="documento" style={{ maxWidth:"92%", maxHeight:"92%", borderRadius:8, boxShadow:"0 8px 40px rgba(0,0,0,0.4)" }} onClick={e => e.stopPropagation()} />}
         </div>
       )}
 

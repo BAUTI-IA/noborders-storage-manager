@@ -25,7 +25,7 @@ function readRaw(req) {
 }
 function hmacOk(raw, header) {
   const key = process.env.DOCUSIGN_CONNECT_HMAC;
-  if (!key) return true; // not configured → skip (dev only)
+  if (!key) return false; // FAIL CLOSED: without the shared secret, no payload is trusted
   if (!header) return false;
   const expected = crypto.createHmac("sha256", key).update(raw).digest("base64");
   try { return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(header)); } catch { return false; }
@@ -34,6 +34,12 @@ function hmacOk(raw, header) {
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).end(); return; }
   if (!admin) { res.status(500).json({ error: "server not configured" }); return; }
+  if (!process.env.DOCUSIGN_CONNECT_HMAC) {
+    // Refuse to process unauthenticated webhooks: configure "Include HMAC" in
+    // DocuSign Connect and set DOCUSIGN_CONNECT_HMAC in Vercel.
+    res.status(500).json({ error: "webhook HMAC not configured" });
+    return;
+  }
 
   const raw = await readRaw(req);
   if (!hmacOk(raw, req.headers["x-docusign-signature-1"])) { res.status(401).json({ error: "bad signature" }); return; }
