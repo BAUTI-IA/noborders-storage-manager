@@ -2078,17 +2078,17 @@ function Btn({ onClick, primary, danger, disabled, children, style }) {
   );
 }
 
-function Modal({ title, onClose, children, footer }) {
+function Modal({ title, onClose, children, footer, maxWidth = 600 }) {
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:50, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:600, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,0.15)" }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"18px 20px 14px", borderBottom:"1px solid #f0f0f0" }}>
+      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth, maxHeight:"90vh", display:"flex", flexDirection:"column", overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.15)" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"18px 20px 14px", borderBottom:"1px solid #f0f0f0", flexShrink:0 }}>
           <span style={{ fontWeight:600, fontSize:15 }}>{title}</span>
           <button onClick={onClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>x</button>
         </div>
-        <div style={{ padding:"16px 20px" }}>{children}</div>
-        {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8 }}>{footer}</div>}
+        <div style={{ padding:"16px 20px", overflowY:"auto", flex:1, minHeight:0 }}>{children}</div>
+        {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", flexWrap:"wrap", justifyContent:"flex-end", gap:8, flexShrink:0 }}>{footer}</div>}
       </div>
     </div>
   );
@@ -8999,7 +8999,7 @@ export default function App() {
       </div>{/* end page content */}
 
       {jobDetail && (
-        <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
+        <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)} maxWidth={760}
           footer={<>
             <Btn onClick={() => openEditJob(jobDetail)}>Edit</Btn>
             {can("bol","view") && <Btn primary onClick={() => { const jn = jobDetail.job_number; setJobDetailKey(null); setBolJobNumber(jn || ""); setPage("bol"); }}>📄 Generate BOL</Btn>}
