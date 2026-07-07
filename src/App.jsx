@@ -843,10 +843,11 @@ function PaymentMethodBadge({ method }) {
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10.5, fontWeight:600, padding:"2px 8px", borderRadius:20, background:hex+"1a", color:hex, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:hex }} />{payMethodLabel(method)}</span>;
 }
 // Drag-and-drop / click photo box for a check or money-order document (jpg/png/heic/pdf).
-function PayPhotoBox({ url, onFile, uploading, label }) {
+function PayPhotoBox({ url, onFile, uploading, label, onView }) {
   const [drag, setDrag] = useState(false);
   const ref = useRef();
   const isPdf = (url || "").toLowerCase().includes(".pdf");
+  const view = onView && url ? (e) => { e.stopPropagation(); onView(url); } : null;
   return (
     <div style={{ marginTop:8 }}>
       <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>{label || "Photo / file"}</div>
@@ -856,7 +857,9 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
         style={{ border:`2px dashed ${drag ? "#378ADD" : "#ddd"}`, borderRadius:10, padding: url ? "8px" : "14px", textAlign:"center", background: drag ? "#E6F1FB" : "#fafafa", cursor:"pointer", fontSize:12, color:"#888" }}>
         {uploading ? "Subiendo…" : url ? (
           <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
-            {isPdf ? <span style={{ fontSize:28 }}>📄</span> : <img src={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} />}
+            {isPdf ? <span onClick={view || undefined} style={{ fontSize:28, cursor: view ? "zoom-in" : "pointer" }}>📄</span>
+              : <img src={url} alt="" onClick={view || undefined} style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover", cursor: view ? "zoom-in" : "pointer" }} />}
+            {view && <><span onClick={view} style={{ color:"#185FA5", fontWeight:600, textDecoration:"underline", cursor:"zoom-in" }}>View</span><span style={{ color:"#ccc" }}>·</span></>}
             <span style={{ color:"#185FA5" }}>Replace file</span>
           </div>
         ) : "Drag or tap to upload photo/PDF (jpg, png, heic, pdf)"}
@@ -7524,11 +7527,11 @@ export default function App() {
                   <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], s)} />
                   {docUploading ? <div style={{ fontSize:12, color:"#888" }}>Subiendo…</div>
                     : s.document_url ? (
-                      isImg ? <img src={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
+                      isImg ? <img src={s.document_url} alt="doc" onClick={e => { e.preventDefault(); setPayPhotoView(s.document_url); }} style={{ maxWidth:"100%", maxHeight:160, borderRadius:6, cursor:"zoom-in" }} />
                         : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Ver documento (PDF)</a></div>
                     ) : <div style={{ fontSize:12, color:"#999" }}>Drag or click to upload closing-sheet photo/PDF</div>}
                 </label>
-                {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>Click the area to replace</div>}
+                {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>{isImg ? trAI("Click the image to view it — click outside it or drag a file to replace", "Click en la imagen para verla — click afuera de la imagen o arrastrá un archivo para reemplazar") : trAI("Click the area to replace", "Click en el área para reemplazar")}</div>}
               </div>
             </div>
 
@@ -10887,7 +10890,7 @@ export default function App() {
                       <Field label="Memo" full><input style={inp} value={payForm.check_memo} onChange={e => setF({ check_memo:e.target.value })} placeholder="Memo" /></Field>
                     </div>
                   )}
-                  {ck && <PayPhotoBox url={payForm.check_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "check_photo_url")} label="Check photo" />}
+                  {ck && <PayPhotoBox url={payForm.check_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "check_photo_url")} onView={setPayPhotoView} label="Check photo" />}
                 </div>
               );
             })()}
@@ -10928,7 +10931,7 @@ export default function App() {
                       <Field label="Issuer location"><input style={inp} value={payForm.mo_issuer_location} onChange={e => setF({ mo_issuer_location:e.target.value })} placeholder="Location" /></Field>
                     </div>
                   )}
-                  <PayPhotoBox url={payForm.mo_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "mo_photo_url")} label="Money order photo" />
+                  <PayPhotoBox url={payForm.mo_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "mo_photo_url")} onView={setPayPhotoView} label="Money order photo" />
                 </div>
               );
             })()}
@@ -11882,7 +11885,7 @@ export default function App() {
             onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, null); }}>
             <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], null)} />
             {docUploading ? <span style={{ fontSize:12, color:"#888" }}>Subiendo…</span>
-              : csForm.document_url ? <span style={{ fontSize:12, color:"#3B6D11" }}>✓ Document uploaded — click to replace</span>
+              : csForm.document_url ? <span style={{ fontSize:12, color:"#3B6D11" }}>✓ {trAI("Document uploaded", "Documento cargado")} — <a onClick={e => { e.preventDefault(); e.stopPropagation(); setPayPhotoView(csForm.document_url); }} style={{ color:"#185FA5", textDecoration:"underline", cursor:"zoom-in" }}>{trAI("view", "ver")}</a> · {trAI("click to replace", "click para reemplazar")}</span>
               : <span style={{ fontSize:12, color:"#999" }}>Drag or click to upload</span>}
           </label>
 
