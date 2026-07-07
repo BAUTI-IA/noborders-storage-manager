@@ -853,14 +853,14 @@ function PayPhotoBox({ url, onFile, uploading, label, onView }) {
       <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>{label || "Photo / file"}</div>
       <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
         onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
-        onClick={() => ref.current?.click()}
-        style={{ border:`2px dashed ${drag ? "#378ADD" : "#ddd"}`, borderRadius:10, padding: url ? "8px" : "14px", textAlign:"center", background: drag ? "#E6F1FB" : "#fafafa", cursor:"pointer", fontSize:12, color:"#888" }}>
+        onClick={view || (() => ref.current?.click())}
+        style={{ border:`2px dashed ${drag ? "#378ADD" : "#ddd"}`, borderRadius:10, padding: url ? "8px" : "14px", textAlign:"center", background: drag ? "#E6F1FB" : "#fafafa", cursor: view ? "zoom-in" : "pointer", fontSize:12, color:"#888" }}>
         {uploading ? "Subiendo…" : url ? (
           <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
-            {isPdf ? <span onClick={view || undefined} style={{ fontSize:28, cursor: view ? "zoom-in" : "pointer" }}>📄</span>
-              : <img src={url} alt="" onClick={view || undefined} style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover", cursor: view ? "zoom-in" : "pointer" }} />}
-            {view && <><span onClick={view} style={{ color:"#185FA5", fontWeight:600, textDecoration:"underline", cursor:"zoom-in" }}>View</span><span style={{ color:"#ccc" }}>·</span></>}
-            <span style={{ color:"#185FA5" }}>Replace file</span>
+            {isPdf ? <span style={{ fontSize:28 }}>📄</span>
+              : <img src={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} />}
+            {view && <><span style={{ color:"#185FA5", fontWeight:600, textDecoration:"underline" }}>View</span><span style={{ color:"#ccc" }}>·</span></>}
+            <span onClick={e => { e.stopPropagation(); ref.current?.click(); }} style={{ color:"#185FA5", cursor:"pointer" }}>Replace file</span>
           </div>
         ) : "Drag or tap to upload photo/PDF (jpg, png, heic, pdf)"}
       </div>
