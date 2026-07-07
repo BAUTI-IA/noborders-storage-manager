@@ -96,7 +96,31 @@ select 'general', false
 where not exists (select 1 from public.chat_channels where name = 'general' and not is_dm);
 
 alter publication supabase_realtime add table public.chat_channels;
-alter publication supabase_realtime add table public.chat_messages;`;
+alter publication supabase_realtime add table public.chat_messages;
+
+-- Read receipts + last connection (also available standalone in
+-- scripts/setup-chat-receipts.mjs for databases that ran the block above).
+create table if not exists public.chat_presence (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  last_seen_at timestamptz not null default now()
+);
+alter table public.chat_presence enable row level security;
+drop policy if exists "chat_presence_select" on public.chat_presence;
+create policy "chat_presence_select" on public.chat_presence
+  for select to authenticated using (true);
+drop policy if exists "chat_presence_insert" on public.chat_presence;
+create policy "chat_presence_insert" on public.chat_presence
+  for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists "chat_presence_update" on public.chat_presence;
+create policy "chat_presence_update" on public.chat_presence
+  for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "chat_members_select_mates" on public.chat_channel_members;
+create policy "chat_members_select_mates" on public.chat_channel_members
+  for select to authenticated using (
+    exists (select 1 from public.chat_channels c where c.id = channel_id and public.chat_can_see(c))
+  );
+alter publication supabase_realtime add table public.chat_channel_members;
+alter publication supabase_realtime add table public.chat_presence;`;
 
 if (!TOKEN) {
   console.error("Missing SUPABASE_ACCESS_TOKEN. Run:\n  SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-chat.mjs");

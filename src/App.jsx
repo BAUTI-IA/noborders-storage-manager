@@ -49,6 +49,12 @@ const I18N_ES = {
   "No teammates found.": "No se encontraron compañeros.",
   "Delete message": "Borrar mensaje",
   "Delete group": "Borrar grupo",
+  "Seen": "Visto",
+  "Seen by": "Visto por",
+  "Delivered": "Entregado",
+  "Sent": "Enviado",
+  "Last seen": "Últ. vez",
+  "To enable read receipts and last connection, run this SQL once in Supabase (SQL Editor):": "Para activar los recibos de lectura y la última conexión, corré este SQL una vez en Supabase (SQL Editor):",
   "Send": "Enviar",
   "One-time setup needed": "Se necesita una configuración única",
   "I ran it — retry": "Ya lo corrí — reintentar",
@@ -4635,6 +4641,18 @@ export default function App() {
     ch.on("presence", { event: "sync" }, () => setOnlineIds(Object.keys(ch.presenceState())))
       .subscribe(status => { if (status === "SUBSCRIBED") ch.track({ online_at: new Date().toISOString() }); });
     return () => { supabase.removeChannel(ch); setOnlineIds([]); };
+  }, [session]);
+
+  // Last-connection heartbeat: stamp my chat_presence row every minute while
+  // the app is open (silently a no-op until the chat receipts SQL is run).
+  useEffect(() => {
+    if (!session) return;
+    const beat = () => { supabase.from("chat_presence").upsert({ user_id: session.user.id, last_seen_at: new Date().toISOString() }).then(() => {}); };
+    beat();
+    const iv = setInterval(beat, 60_000);
+    const onVis = () => { if (document.visibilityState === "visible") beat(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
   }, [session]);
 
   // Trip status is MANUAL only — never auto-changed from job delivery state.

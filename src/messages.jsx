@@ -73,6 +73,29 @@ where not exists (select 1 from public.chat_channels where name = 'general' and 
 alter publication supabase_realtime add table public.chat_channels;
 alter publication supabase_realtime add table public.chat_messages;`;
 
+// Upgrade for read receipts + last connection (scripts/setup-chat-receipts.mjs).
+export const CHAT_SQL_V2 = `create table if not exists public.chat_presence (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  last_seen_at timestamptz not null default now()
+);
+alter table public.chat_presence enable row level security;
+drop policy if exists "chat_presence_select" on public.chat_presence;
+create policy "chat_presence_select" on public.chat_presence
+  for select to authenticated using (true);
+drop policy if exists "chat_presence_insert" on public.chat_presence;
+create policy "chat_presence_insert" on public.chat_presence
+  for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists "chat_presence_update" on public.chat_presence;
+create policy "chat_presence_update" on public.chat_presence
+  for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "chat_members_select_mates" on public.chat_channel_members;
+create policy "chat_members_select_mates" on public.chat_channel_members
+  for select to authenticated using (
+    exists (select 1 from public.chat_channels c where c.id = channel_id and public.chat_can_see(c))
+  );
+alter publication supabase_realtime add table public.chat_channel_members;
+alter publication supabase_realtime add table public.chat_presence;`;
+
 const BLUE = "#0A7CFF";                 // Messenger-style own-bubble blue
 const AVATAR_COLORS = ["#185FA5", "#3B6D11", "#B45309", "#A32D2D", "#6D28D9", "#0F766E", "#BE185D", "#4D7C0F"];
 const avatarColor = (id) => AVATAR_COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
@@ -94,6 +117,16 @@ const fmtListTime = (ts) => {
   if (now - d < 6 * 24 * 3600 * 1000) return d.toLocaleDateString([], { weekday: "short" });
   return d.toLocaleDateString([], { month: "numeric", day: "numeric" });
 };
+// Compact relative time for "last seen" (language-neutral: 5m, 3h, 2d).
+const relTime = (ts) => {
+  const s = (Date.now() - new Date(ts)) / 1000;
+  if (s < 90) return "1m";
+  if (s < 3600) return Math.round(s / 60) + "m";
+  if (s < 86400) return Math.round(s / 3600) + "h";
+  if (s < 7 * 86400) return Math.round(s / 86400) + "d";
+  return new Date(ts).toLocaleDateString();
+};
+const after = (a, b) => a && b && new Date(a) >= new Date(b);
 
 function Avatar({ id, name, size = 36, online = false, group = false }) {
   return (
@@ -128,6 +161,10 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
   const [showNewChat, setShowNewChat] = useState(false);
   const [newChatSearch, setNewChatSearch] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
+  const [readBy, setReadBy] = useState({});           // active channel: user_id -> last_read_at (others)
+  const [lastSeen, setLastSeen] = useState({});       // user_id -> last_seen_at (chat_presence heartbeat)
+  const [receiptsMissing, setReceiptsMissing] = useState(false); // v2 SQL (receipts/last seen) not run yet
+  const [v2Copied, setV2Copied] = useState(false);
 
   const scrollRef = useRef(null);
   const activeIdRef = useRef(null);
@@ -176,6 +213,25 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     await supabase.from("chat_channel_members").upsert({ channel_id: channelId, user_id: me, last_read_at: now });
   }, [supabase, me]);
 
+  // Last connection of every teammate (chat_presence heartbeats). Its absence
+  // means the receipts upgrade SQL hasn't been run yet — degrade gracefully.
+  const loadLastSeen = useCallback(async () => {
+    const { data, error } = await supabase.from("chat_presence").select("*");
+    if (error) {
+      if (error.code === "42P01" || /chat_presence/.test(error.message || "")) setReceiptsMissing(true);
+      return;
+    }
+    setReceiptsMissing(false);
+    setLastSeen(Object.fromEntries((data || []).map(r => [r.user_id, r.last_seen_at])));
+  }, [supabase]);
+
+  // Read cursors of the other members of the open conversation (seen receipts).
+  const loadReadBy = useCallback(async (channelId) => {
+    const { data } = await supabase.from("chat_channel_members")
+      .select("user_id, last_read_at").eq("channel_id", channelId).neq("user_id", me);
+    setReadBy(Object.fromEntries((data || []).map(r => [r.user_id, r.last_read_at])));
+  }, [supabase, me]);
+
   const loadMessages = useCallback(async (channelId) => {
     setLoadingMsgs(true);
     const { data, error } = await supabase.from("chat_messages").select("*")
@@ -190,8 +246,12 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     (async () => {
       await loadPeople();
       await loadChannels();
+      await loadLastSeen();
     })();
-  }, [loadPeople, loadChannels]);
+    // Refresh last-seen periodically as a fallback if realtime misses beats.
+    const iv = setInterval(loadLastSeen, 60_000);
+    return () => clearInterval(iv);
+  }, [loadPeople, loadChannels, loadLastSeen]);
 
   useEffect(() => {
     if (channels.length) loadMeta(channels, cursors);
@@ -202,12 +262,14 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     onUnreadTotal(Object.entries(unread).reduce((a, [id, n]) => a + (Number(id) === activeId ? 0 : n), 0));
   }, [unread, activeId, onUnreadTotal]);
 
-  // Open conversation → load history + mark read.
+  // Open conversation → load history + others' read cursors + mark read.
   useEffect(() => {
     if (activeId == null) return;
+    setReadBy({});
     loadMessages(activeId);
+    loadReadBy(activeId);
     markRead(activeId);
-  }, [activeId, loadMessages, markRead]);
+  }, [activeId, loadMessages, loadReadBy, markRead]);
 
   // Realtime: append to the open conversation, bump unread + preview elsewhere.
   useEffect(() => {
@@ -227,6 +289,17 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
         setMessages(ms => ms.filter(m => m.id !== payload.old.id));
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "chat_channels" }, () => loadChannels())
+      // Someone read the open conversation → their "seen" cursor moves live.
+      .on("postgres_changes", { event: "*", schema: "public", table: "chat_channel_members" }, (payload) => {
+        const row = payload.new;
+        if (row && row.channel_id === activeIdRef.current && row.user_id !== me)
+          setReadBy(rb => ({ ...rb, [row.user_id]: row.last_read_at }));
+      })
+      // Heartbeats → last connection updates live.
+      .on("postgres_changes", { event: "*", schema: "public", table: "chat_presence" }, (payload) => {
+        const row = payload.new;
+        if (row) setLastSeen(ls => ({ ...ls, [row.user_id]: row.last_seen_at }));
+      })
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [supabase, me, loadChannels, markRead]);
@@ -329,7 +402,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
       <div style={{ fontWeight: 700, marginBottom: 6 }}>One-time setup needed</div>
       <div>Team chat needs its tables created once. Run this SQL in Supabase (SQL Editor), or run <code>node scripts/setup-chat.mjs</code>.</div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={() => { navigator.clipboard?.writeText(CHAT_SQL).then(() => { setSqlCopied(true); setTimeout(() => setSqlCopied(false), 1500); }); }}
+        <button onClick={() => { navigator.clipboard?.writeText(CHAT_SQL + "\n\n" + CHAT_SQL_V2).then(() => { setSqlCopied(true); setTimeout(() => setSqlCopied(false), 1500); }); }}
           style={{ background: "#854F0B", border: "none", color: "#fff", fontWeight: 600, borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: 12 }}>
           {sqlCopied ? "Copied!" : "Copy SQL"}
         </button>
@@ -343,6 +416,19 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
   const otherOnline = active?.is_dm && online.has(dmOther(active).id);
 
   return (
+    <>
+    {receiptsMissing && (
+      <div style={{ background: "#FAEEDA", border: "1px solid #EF9F27", borderRadius: 10, padding: "8px 14px", marginBottom: 12, fontSize: 12.5, color: "#854F0B", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span>To enable read receipts and last connection, run this SQL once in Supabase (SQL Editor):</span>
+        <button onClick={() => { navigator.clipboard?.writeText(CHAT_SQL_V2).then(() => { setV2Copied(true); setTimeout(() => setV2Copied(false), 1500); }); }}
+          style={{ background: "#854F0B", border: "none", color: "#fff", fontWeight: 600, borderRadius: 7, padding: "5px 12px", cursor: "pointer", fontSize: 12 }}>
+          {v2Copied ? "Copied!" : "Copy SQL"}
+        </button>
+        <button onClick={loadLastSeen} style={{ background: "#fff", border: "1px solid #EF9F27", color: "#854F0B", fontWeight: 600, borderRadius: 7, padding: "5px 12px", cursor: "pointer", fontSize: 12 }}>
+          I ran it — retry
+        </button>
+      </div>
+    )}
     <div style={{ display: "flex", background: "#fff", border: "1px solid #efefef", borderRadius: 12, overflow: "hidden", height: "calc(100vh - 150px)", minHeight: 460 }}>
 
       {/* ── Inbox: conversation list ── */}
@@ -433,7 +519,13 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
               <span style={{ minWidth: 0 }}>
                 <span style={{ display: "block", fontSize: 14.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{convName(active)}</span>
                 <span style={{ display: "block", fontSize: 11.5, color: otherOnline ? "#31A24C" : "#999" }}>
-                  {active.is_dm ? (otherOnline ? "Active now" : "Offline") : "Group chat · visible to the whole team"}
+                  {active.is_dm
+                    ? (otherOnline
+                      ? "Active now"
+                      : lastSeen[dmOther(active).id]
+                        ? <><span>Last seen</span>{" " + relTime(lastSeen[dmOther(active).id])}</>
+                        : "Offline")
+                    : "Group chat · visible to the whole team"}
                 </span>
               </span>
               {!active.is_dm && (isAdmin || active.created_by === me) && active.name !== "general" && (
@@ -493,6 +585,33 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
                   </div>
                 );
               })}
+              {/* Receipt status under my last message: Sent ✓ → Delivered ✓✓ → Seen. */}
+              {(() => {
+                if (receiptsMissing || loadingMsgs || !messages.length) return null;
+                const last = messages[messages.length - 1];
+                if (last.sender_id !== me) return null;
+                const line = (children) => (
+                  <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4, marginTop: 4, fontSize: 10.5, color: "#8a8d91" }}>{children}</div>
+                );
+                if (active.is_dm) {
+                  const other = dmOther(active);
+                  if (after(readBy[other.id], last.created_at)) return line(<>
+                    <Avatar id={other.id} name={other.name} size={14} />
+                    <span>Seen</span><span>{fmtTime(readBy[other.id])}</span>
+                  </>);
+                  if (online.has(other.id) || after(lastSeen[other.id], last.created_at))
+                    return line(<><span style={{ color: BLUE }}>✓✓</span><span>Delivered</span></>);
+                  return line(<><span>✓</span><span>Sent</span></>);
+                }
+                const readers = Object.entries(readBy)
+                  .filter(([uid, t]) => after(t, last.created_at))
+                  .map(([uid]) => (peopleById[uid]?.full_name || "?").split(/\s+/)[0]);
+                if (!readers.length) return line(<><span>✓</span><span>Sent</span></>);
+                return line(<>
+                  <span>👁</span><span>Seen by</span>
+                  <span>{readers.slice(0, 3).join(", ")}{readers.length > 3 ? ` +${readers.length - 3}` : ""}</span>
+                </>);
+              })()}
             </div>
 
             <div style={{ padding: "10px 14px 12px", borderTop: "1px solid #f0f0f0", display: "flex", gap: 8, alignItems: "flex-end" }}>
@@ -547,5 +666,6 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
         </div>
       )}
     </div>
+    </>
   );
 }
