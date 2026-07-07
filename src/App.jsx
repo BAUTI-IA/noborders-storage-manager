@@ -1817,6 +1817,16 @@ const HANDOFF_REASONS = [
   ["other", "Otro"],
 ];
 const handoffReasonLabel = (v) => HANDOFF_REASONS.find(r => r[0] === v)?.[1] || v;
+// Why a trip job may legitimately have no payment yet — the picklist offered
+// by the "trip sin payment" alert ("other" enables free text). [value, en, es]
+const NO_PAYMENT_REASONS = [
+  ["pay_on_delivery", "Pays on delivery (COD)", "Paga al entregar (COD)"],
+  ["broker_pending", "Broker payment pending", "Pago del broker pendiente"],
+  ["billing", "Invoiced later / credit", "Se factura después / a crédito"],
+  ["included_other_job", "Included in another job", "Incluido en otro job"],
+  ["no_charge", "No charge / courtesy", "Sin cargo / cortesía"],
+  ["other", "Other", "Otro"],
+];
 const EMPTY_UNPLANNED = { job_number:"", customer:"", volume:"", pickup_address:"", delivery_address:"", fadd:"", broker_id:"", sticker_color:"", lot_number:"" };
 
 // Manual job-timeline event types (logged directly on a job). `status` = the job
@@ -3049,6 +3059,12 @@ export default function App() {
   const [tripRouteModal, setTripRouteModal] = useState(null); // { title, waypoints, googleLink } route popup
   const [completeDropTarget, setCompleteDropTarget] = useState("");
   const [tripWaLink, setTripWaLink] = useState(null);         // { href, label } pending driver notification
+  // "Trip sin payment" alert: trip jobs with no payment row linked yet.
+  const [tripPayAlert, setTripPayAlert] = useState(null);     // { tripId } — alert modal
+  const [tripPayBannerDismissed, setTripPayBannerDismissed] = useState(false);
+  const [payReasonForm, setPayReasonForm] = useState(null);   // { jobKey, choice, custom } — inline "why no payment" editor
+  const [payReasonSaving, setPayReasonSaving] = useState(false);
+  const [payReasonMissing, setPayReasonMissing] = useState(false); // storage_jobs.no_payment_reason not yet in DB
   const [showTruckModal, setShowTruckModal] = useState(false);
   const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
   const [editingTruckId, setEditingTruckId] = useState(null);
@@ -3883,6 +3899,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session]);
 
+  // Probe storage_jobs.no_payment_reason (why a trip job has no payment yet —
+  // recording it acknowledges the "trip sin payment" alert).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("no_payment_reason").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storage_jobs add column if not exists no_payment_reason text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setPayReasonMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
     if (!session) return;
@@ -4650,6 +4684,27 @@ export default function App() {
     for (const p of payments) { if (!p.received) continue; const k = jobKeyByRowId[p.job_id]; if (!k) continue; m[k] = (m[k] || 0) + paymentNet(p); }
     return m;
   }, [payments, jobKeyByRowId]);
+  // ── "Trip sin payment" detection ──
+  // Trips (not cancelled) whose jobs have no payment row linked at all. A saved
+  // storage_jobs.no_payment_reason acknowledges the job ("excused"): it leaves
+  // the banner/badges but stays listed, with its reason, in the alert modal.
+  const tripsWithoutPayment = useMemo(() => {
+    const out = [];
+    for (const t of trips) {
+      if (t.status === "cancelled") continue;
+      const jobsIn = jobsByTrip[t.id] || [];
+      if (!jobsIn.length) continue;
+      const unpaid = [], excused = [];
+      for (const j of jobsIn) {
+        if ((paymentsByJobKey[jobKey(j)] || []).length) continue;
+        if ((j.no_payment_reason || "").trim()) excused.push(j); else unpaid.push(j);
+      }
+      if (unpaid.length || excused.length) out.push({ trip: t, unpaid, excused });
+    }
+    return out;
+  }, [trips, jobsByTrip, paymentsByJobKey]);
+  const tripPayInfoById = useMemo(() => { const m = {}; for (const x of tripsWithoutPayment) m[x.trip.id] = x; return m; }, [tripsWithoutPayment]);
+  const tripPayAlerts = useMemo(() => tripsWithoutPayment.filter(x => x.unpaid.length), [tripsWithoutPayment]);
   // Enrich each payment with its job group for table/grouping/search.
   const paymentRows = useMemo(() => payments.map(p => {
     const k = jobKeyByRowId[p.job_id];
@@ -5546,8 +5601,85 @@ export default function App() {
     }
     setTripSaving(false);
     if (error) { window.alert(error.message); return; }
-    setShowTripModal(false); loadTrips(); loadJobs();
+    setShowTripModal(false);
+    // "Trip sin payment": if any job left on the trip has no payment linked
+    // (and no reason recorded), pop the alert so it gets one or the other.
+    // Await the reloads so the alert modal opens against fresh trip/job state.
+    const reasonByKey = {};
+    for (const j of jobs) { if ((j.no_payment_reason || "").trim()) reasonByKey[jobKey(j)] = true; }
+    const unpaidNow = tripForm.job_keys.filter(k => !(paymentsByJobKey[k] || []).length && !reasonByKey[k]);
+    await Promise.all([loadTrips(), loadJobs()]);
+    if (unpaidNow.length) setTripPayAlert({ tripId });
   }
+  // Persist why a trip job has no payment ("" clears it). Applies to every
+  // storage_jobs row of the job group, like other per-job updates.
+  async function saveNoPaymentReason(k, reason) {
+    const ids = jobs.filter(j => jobKey(j) === k).map(j => j.id);
+    if (!ids.length) return;
+    setPayReasonSaving(true);
+    const { error } = await supabase.from("storage_jobs")
+      .update({ no_payment_reason: reason || null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    setPayReasonSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setPayReasonForm(null);
+    showToast(reason ? trAI("Reason saved", "Motivo guardado") : trAI("Reason cleared", "Motivo borrado"));
+    loadJobs();
+  }
+  // One job row for the "trip sin payment" alert modal and the trip-detail
+  // warning: job info + "add payment" / "why no payment" actions. onBeforePay
+  // runs before the payment modal opens (used to close a modal that would
+  // otherwise render on top of it).
+  const renderUnpaidJobRow = (j, { onBeforePay } = {}) => {
+    const k = jobKey(j);
+    const g = extraJobGroups.get(k);
+    const expected = jobExpected(g);
+    const editing = payReasonForm && payReasonForm.jobKey === k;
+    const hasReason = !!(j.no_payment_reason || "").trim();
+    const smallBtn = { padding:"4px 10px", fontSize:11.5 };
+    return (
+      <div key={k} style={{ border:"1px solid #F4DDB0", background:"#fff", borderRadius:8, padding:"8px 10px", marginBottom:6 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", fontSize:12.5 }}>
+          <b style={{ fontFamily:"monospace" }}>{j.job_number || "(sin #)"}</b>
+          <span style={{ flex:1, minWidth:110, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+          {expected > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(expected).toLocaleString()}</span>}
+          {can("payments", "create") && (
+            <Btn primary disabled={paymentsMissing} style={smallBtn}
+              onClick={() => { if (onBeforePay) onBeforePay(); openAddPayment({ job_id: g?.repId ?? j.id, amount: expected > 0 ? String(Math.round(expected)) : "" }); }}>
+              💵 {trAI("Add payment", "Cargar payment")}
+            </Btn>
+          )}
+          <Btn disabled={payReasonMissing} title={payReasonMissing ? trAI("Couldn't add the reason column — run the setup SQL in Supabase", "No se pudo crear la columna de motivo — corré el setup SQL en Supabase") : undefined}
+            style={smallBtn} onClick={() => setPayReasonForm(editing ? null : { jobKey: k, choice: "", custom: "" })}>
+            📝 {hasReason ? trAI("Edit reason", "Editar motivo") : trAI("Why no payment?", "Motivo")}
+          </Btn>
+        </div>
+        {hasReason && !editing && <div style={{ fontSize:12, color:"#854F0B", marginTop:5 }}>📝 {j.no_payment_reason}</div>}
+        {editing && (
+          <div style={{ marginTop:8, display:"flex", flexDirection:"column", gap:6 }}>
+            <select style={inp} value={payReasonForm.choice} onChange={e => { const v = e.target.value; setPayReasonForm(f => ({ ...f, choice: v })); }}>
+              <option value="">{trAI("— Why is there no payment? —", "— ¿Por qué no hay payment? —")}</option>
+              {NO_PAYMENT_REASONS.map(([v, en, es]) => <option key={v} value={v}>{trAI(en, es)}</option>)}
+            </select>
+            {payReasonForm.choice === "other" && (
+              <input style={inp} value={payReasonForm.custom} onChange={e => { const v = e.target.value; setPayReasonForm(f => ({ ...f, custom: v })); }} placeholder={trAI("Reason", "Motivo")} />
+            )}
+            <div style={{ display:"flex", gap:6, justifyContent:"flex-end", flexWrap:"wrap" }}>
+              {hasReason && <Btn danger disabled={payReasonSaving} style={smallBtn} onClick={() => saveNoPaymentReason(k, "")}>{trAI("Clear reason", "Borrar motivo")}</Btn>}
+              <Btn style={smallBtn} onClick={() => setPayReasonForm(null)}>{trAI("Cancel", "Cancelar")}</Btn>
+              <Btn primary style={smallBtn}
+                disabled={payReasonSaving || !payReasonForm.choice || (payReasonForm.choice === "other" && !payReasonForm.custom.trim())}
+                onClick={() => {
+                  const opt = NO_PAYMENT_REASONS.find(([v]) => v === payReasonForm.choice);
+                  saveNoPaymentReason(k, payReasonForm.choice === "other" ? payReasonForm.custom.trim() : (opt ? trAI(opt[1], opt[2]) : ""));
+                }}>
+                {payReasonSaving ? "…" : trAI("Save reason", "Guardar motivo")}
+              </Btn>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
   // Manual trip status change — always dispatcher-initiated and confirmed.
   async function setTripStatus(t, status) {
     const label = (TRIP_STATUS[status]?.l) || status;
@@ -7707,6 +7839,21 @@ export default function App() {
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
+            {tripPayAlerts.length > 0 && !tripPayBannerDismissed && (
+              <div style={{ background:"#FFF6E8", border:"1px solid #EF9F27", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"flex-start", gap:10 }}>
+                <div style={{ flex:1 }}>
+                  <strong>💰 {tripPayAlerts.length} trip(s) {trAI("with jobs without payment assigned:", "con jobs sin payment asignado:")}</strong>
+                  <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
+                    {tripPayAlerts.map(a => (
+                      <span key={a.trip.id} onClick={() => setTripPayAlert({ tripId: a.trip.id })} style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                        <strong style={{ fontFamily:"monospace" }}>{a.trip.trip_number || `#${a.trip.id}`}</strong> · {a.unpaid.length} job(s) {trAI("without payment", "sin payment")}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={() => setTripPayBannerDismissed(true)} title="Dismiss" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#854F0B", flexShrink:0 }}>×</button>
+              </div>
+            )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
               {[
                 { label:"Trips activos", value:tripMetrics.activeCount, color:"#7C3AED" },
@@ -7820,6 +7967,12 @@ export default function App() {
                           <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                             <button onClick={() => setTripDetailId(t.id)} style={{ fontSize:15, fontWeight:800, fontFamily:"monospace", color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button>
                             <TripBadge status={t.status} />
+                            {tripPayInfoById[t.id]?.unpaid.length > 0 && (
+                              <span onClick={() => setTripPayAlert({ tripId: t.id })} title={trAI("Jobs without payment — click to resolve", "Jobs sin payment — click para resolver")}
+                                style={{ fontSize:10.5, fontWeight:700, color:"#B45309", background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:20, padding:"2px 9px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                                💰 {trAI("No payment", "Sin payment")} ({tripPayInfoById[t.id].unpaid.length})
+                              </span>
+                            )}
                           </div>
                           <div style={{ fontSize:12, color:"#888", marginTop:2 }}>🚛 {truck?.name || "no truck"}{driverNm ? ` · 🧑‍✈️ ${driverNm}` : ""}{t.departure_date ? ` · ${t.departure_date}` : ""}</div>
                         </div>
@@ -7877,7 +8030,17 @@ export default function App() {
                           <td style={{ padding:"12px" }}>{c.count}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{Math.round(c.totalCf).toLocaleString()} CF</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }}>${Math.round(c.totalBol).toLocaleString()}</td>
-                          <td style={{ padding:"12px" }}><TripBadge status={t.status} /></td>
+                          <td style={{ padding:"12px" }}>
+                            <TripBadge status={t.status} />
+                            {tripPayInfoById[t.id]?.unpaid.length > 0 && (
+                              <div style={{ marginTop:4 }}>
+                                <span onClick={() => setTripPayAlert({ tripId: t.id })} title={trAI("Jobs without payment — click to resolve", "Jobs sin payment — click para resolver")}
+                                  style={{ fontSize:10.5, fontWeight:700, color:"#B45309", background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:20, padding:"2px 9px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                                  💰 {trAI("No payment", "Sin payment")} ({tripPayInfoById[t.id].unpaid.length})
+                                </span>
+                              </div>
+                            )}
+                          </td>
                           <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                             <Btn onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 10px", fontSize:12 }}>Open</Btn>
                             <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Edit</Btn>
@@ -10580,6 +10743,45 @@ export default function App() {
         );
       })()}
 
+      {/* ── "Trip sin payment" alert: trip jobs with no payment linked ──
+          Rendered BEFORE the payment modal so "Cargar payment" stacks on top. */}
+      {tripPayAlert && (() => {
+        const t = tripById[tripPayAlert.tripId];
+        if (!t) return null;
+        const info = tripPayInfoById[t.id];
+        const unpaid = info?.unpaid || [];
+        const excused = info?.excused || [];
+        const close = () => { setTripPayAlert(null); setPayReasonForm(null); };
+        return (
+          <Modal title={`💰 Payments — Trip ${t.trip_number || "#" + t.id}`} onClose={close}
+            footer={<>
+              <Btn onClick={() => { close(); setTripDetailId(t.id); }}>{trAI("Open trip", "Abrir trip")}</Btn>
+              <Btn primary onClick={close}>OK</Btn>
+            </>}>
+            {unpaid.length === 0 && excused.length === 0 ? (
+              <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"10px 12px", fontSize:13, color:"#3B6D11" }}>
+                ✅ {trAI("Every job on this trip has a payment or a reason recorded.", "Todos los jobs de este trip tienen payment o motivo cargado.")}
+              </div>
+            ) : (
+              <>
+                {unpaid.length > 0 && (
+                  <div style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:9, padding:"9px 12px", marginBottom:10, fontSize:12.5, color:"#854F0B" }}>
+                    ⚠️ {unpaid.length} job(s) {trAI("on this trip have no payment assigned. Add the payment or record why there is none.", "de este trip no tienen payment asignado. Cargá el payment o indicá el motivo de por qué no hay.")}
+                  </div>
+                )}
+                {unpaid.map(j => renderUnpaidJobRow(j))}
+                {excused.length > 0 && (
+                  <>
+                    <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"10px 0 6px" }}>{trAI("Without payment, with reason recorded", "Sin payment, con motivo cargado")}</div>
+                    {excused.map(j => renderUnpaidJobRow(j))}
+                  </>
+                )}
+              </>
+            )}
+          </Modal>
+        );
+      })()}
+
       {showPayModal && (() => {
         const groups = [...extraJobGroups.values()];
         const q = payJobSearch.trim().toLowerCase();
@@ -11201,6 +11403,25 @@ export default function App() {
               </div>
             ) : <div style={{ fontSize:12, color:"#999", marginBottom:6 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF on the trip</div>}
             {over > 0 && <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:8, padding:"8px 11px", fontSize:12.5, fontWeight:700, color:"#A32D2D", margin:"8px 0" }}>⚠️ Over capacity by {over.toLocaleString()} CF</div>}
+
+            {/* "Sin payment" warning: trip jobs with no payment row linked.
+                The payment modal renders before this one, so close this modal
+                first (onBeforePay) or the form would open underneath. */}
+            {(() => {
+              const info = tripPayInfoById[t.id];
+              if (!info) return null;
+              return (
+                <div style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:9, padding:"9px 11px", margin:"8px 0" }}>
+                  <div style={{ fontSize:12.5, fontWeight:700, color:"#854F0B", marginBottom:6 }}>
+                    💰 {info.unpaid.length
+                      ? <>{info.unpaid.length} job(s) {trAI("without payment assigned", "sin payment asignado")}</>
+                      : trAI("Jobs without payment (reason recorded)", "Jobs sin payment (con motivo cargado)")}
+                  </div>
+                  {info.unpaid.map(j => renderUnpaidJobRow(j, { onBeforePay: () => setTripDetailId(null) }))}
+                  {info.excused.map(j => renderUnpaidJobRow(j, { onBeforePay: () => setTripDetailId(null) }))}
+                </div>
+              );
+            })()}
 
             {/* Read-only delivery progress indicator (never changes trip status) */}
             {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>📦 Delivered: <b style={{ color: c.allDelivered ? "#3B6D11" : "#111" }}>{c.delivered}/{c.count}</b>{c.delivered < c.count ? ` · ${c.count - c.delivered} pending` : ""}</div>}
