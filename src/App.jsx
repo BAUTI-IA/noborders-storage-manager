@@ -3076,7 +3076,10 @@ export default function App() {
   const [handoffForm, setHandoffForm] = useState({ jobKey:"", to:"", reason:"better_fit", note:"" }); // jobKey "" = whole trip
   const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
   const [dropModal, setDropModal] = useState(null); // { trip, jobKey, label } drop-at-storage popup (trip cards)
-  const [dropSel, setDropSel] = useState("");       // selected drop target index in dropModal
+  const [dropSel, setDropSel] = useState("");       // selected drop target key ("u:<id>" | "w:<name>") in dropModal
+  const [dropCreating, setDropCreating] = useState(false); // inline "create storage unit" form open in dropModal
+  const [dropNewUnit, setDropNewUnit] = useState({ brand:"", unit:"", state:"", size:"" }); // quick-create fields
+  const [dropCreatingBusy, setDropCreatingBusy] = useState(false);
   const [unplannedForm, setUnplannedForm] = useState(EMPTY_UNPLANNED);
   const [tripBusy, setTripBusy] = useState(false);
   const [tripCompleteModal, setTripCompleteModal] = useState(null); // { trip } completion summary
@@ -11646,25 +11649,65 @@ export default function App() {
 
       {dropModal && (() => {
         const dropTargets = [
-          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
-          ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ value:`u:${r.id}`, kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
+          ...WAREHOUSES.map(w => ({ value:`w:${w}`, kind:"warehouse", name:w, label:`🏭 ${w}` })),
         ];
+        const resetDrop = () => { setDropModal(null); setDropSel(""); setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" }); };
+        // Quick-create a storage unit that isn't in the picklist yet, then auto-select it as the destination.
+        const createDropUnit = async () => {
+          const brand = dropNewUnit.brand.trim(), unit = dropNewUnit.unit.trim();
+          if (!brand || !unit) { showToast("Enter company and unit #"); return; }
+          const dup = findStorageDup(brand, unit, dropNewUnit.state);
+          if (dup) {
+            if (!window.confirm(`${dup.brand} Unit ${dup.unit}${dup.state ? ` in ${dup.state}` : ""} is already open in the system.\n\nUse the existing unit instead?`)) return;
+            setDropSel(`u:${dup.id}`); setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" });
+            return;
+          }
+          setDropCreatingBusy(true);
+          const payload = { brand, unit, state: dropNewUnit.state || null, size: dropNewUnit.size || null, situation: "Open", created_by: userEmail };
+          const { data, error } = await supabase.from("storages").insert([payload]).select().single();
+          setDropCreatingBusy(false);
+          if (error) { showToast(error.message); return; }
+          setRecords(r => r.some(x => x.id === data.id) ? r : [data, ...r]); // realtime may also add it
+          setDropSel(`u:${data.id}`); setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" });
+          showToast("Unit created");
+        };
         return (
-          <Modal title={`Dropped at storage · ${dropModal.label}`} onClose={() => setDropModal(null)}
+          <Modal title={`Dropped at storage · ${dropModal.label}`} onClose={resetDrop}
             footer={<>
-              <Btn onClick={() => setDropModal(null)}>Cancel</Btn>
+              <Btn onClick={resetDrop}>Cancel</Btn>
               <Btn primary disabled={tripBusy || dropSel === ""} onClick={async () => {
-                const dm = dropModal, tgt = dropTargets[Number(dropSel)];
+                const dm = dropModal, tgt = dropTargets.find(d => d.value === dropSel);
                 if (!tgt) return;
                 await tripDropAtStorage(dm.trip, dm.jobKey, tgt);
-                setDropModal(null); setDropSel("");
+                resetDrop();
               }}>{tripBusy ? "Saving…" : "Confirm drop"}</Btn>
             </>}>
             <div style={{ fontSize:13, color:"#555", marginBottom:10 }}>The job wasn't delivered to the final customer — choose the storage unit or warehouse where it was left. It'll leave the trip and go back to storage.</div>
             <select style={inp} value={dropSel} onChange={e => setDropSel(e.target.value)}>
               <option value="">— Choose destination —</option>
-              {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+              {dropTargets.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
             </select>
+            {!dropCreating ? (
+              <button type="button" onClick={() => setDropCreating(true)}
+                style={{ marginTop:10, background:"none", border:"none", padding:0, color:"#2563eb", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                + Unit not on the list? Create it
+              </button>
+            ) : (
+              <div style={{ marginTop:12, padding:12, border:"1px solid #e5e7eb", borderRadius:10, background:"#fafafa" }}>
+                <div style={{ fontSize:12, fontWeight:700, color:"#555", marginBottom:8 }}>New storage unit</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <Field label="Company"><input style={inp} list="brands-list" value={dropNewUnit.brand} onChange={e => setDropNewUnit(f => ({ ...f, brand:e.target.value }))} placeholder="CubeSmart..." /></Field>
+                  <Field label="Unit #"><input style={inp} value={dropNewUnit.unit} onChange={e => setDropNewUnit(f => ({ ...f, unit:e.target.value }))} placeholder="G13" /></Field>
+                  <Field label="State"><input style={inp} list="states-list" value={dropNewUnit.state} onChange={e => setDropNewUnit(f => ({ ...f, state:e.target.value.toUpperCase() }))} placeholder="TN" /></Field>
+                  <Field label="Tamano"><input style={inp} list="sizes-list" value={dropNewUnit.size} onChange={e => setDropNewUnit(f => ({ ...f, size:e.target.value }))} placeholder="10x10" /></Field>
+                </div>
+                <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10 }}>
+                  <Btn onClick={() => { setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" }); }}>Cancel</Btn>
+                  <Btn primary disabled={dropCreatingBusy || !dropNewUnit.brand.trim() || !dropNewUnit.unit.trim()} onClick={createDropUnit}>{dropCreatingBusy ? "Creating…" : "Create & select"}</Btn>
+                </div>
+              </div>
+            )}
           </Modal>
         );
       })()}
