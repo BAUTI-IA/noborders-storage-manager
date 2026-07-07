@@ -1330,6 +1330,24 @@ do $$ begin alter publication supabase_realtime add table public.trucks; excepti
 do $$ begin alter publication supabase_realtime add table public.trips; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.trip_events; exception when others then null; end $$;`;
 
+// Custom (non-job) stops on a trip: maintenance, DOT inspection, fuel, weigh
+// station, rest, etc. Each has a category, an optional address and a note.
+const TRIP_STOPS_SQL = `create table if not exists public.trip_stops (
+  id bigint generated always as identity primary key,
+  trip_id bigint references public.trips(id) on delete cascade,
+  category text,
+  address text,
+  note text,
+  stop_order integer,
+  done boolean default false,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.trip_stops enable row level security;
+drop policy if exists "trip_stops_all" on public.trip_stops;
+create policy "trip_stops_all" on public.trip_stops for all to anon, authenticated using (true) with check (true);
+do $$ begin alter publication supabase_realtime add table public.trip_stops; exception when others then null; end $$;`;
+
 // Manual per-job timeline events (logged directly on a job, no formal trip needed).
 const JOB_EVENTS_SQL = `create table if not exists public.job_events (
   id bigint generated always as identity primary key,
@@ -1566,6 +1584,23 @@ function OccupancyBar({ used, total, height = 8 }) {
   );
 }
 
+
+// ── Custom trip stops (non-job): categories with icon + color ──
+// Used for the "Add stop" button on each trip card: maintenance, inspections,
+// fuel, weigh stations, rest breaks, etc. — anything that isn't a job pickup/drop.
+const TRIP_STOP_CATEGORIES = [
+  { key:"maintenance",  label:"Mantenimiento",        icon:"🔧", color:"#185FA5" },
+  { key:"repair",       label:"Reparación",           icon:"🛠️", color:"#A32D2D" },
+  { key:"inspection",   label:"Inspección DOT",       icon:"🔍", color:"#7C3AED" },
+  { key:"scale",        label:"Báscula",              icon:"⚖️", color:"#B4690E" },
+  { key:"fuel",         label:"Combustible",          icon:"⛽", color:"#1A8A4E" },
+  { key:"rest",         label:"Descanso (horas DOT)", icon:"🛌", color:"#3B6D11" },
+  { key:"overnight",    label:"Pernocta / parking",   icon:"🅿️", color:"#4B5563" },
+  { key:"equipment",    label:"Equipo (pads/dollies)",icon:"🚚", color:"#B4690E" },
+  { key:"office",       label:"Oficina / terminal",   icon:"🏢", color:"#185FA5" },
+  { key:"other",        label:"Otro",                 icon:"📋", color:"#888888" },
+];
+const tripStopCat = (k) => TRIP_STOP_CATEGORIES.find(c => c.key === k) || TRIP_STOP_CATEGORIES[TRIP_STOP_CATEGORIES.length - 1];
 
 // ── Live-load map: truck GPS status colors + relative-time helper ──
 const LIVE_STATUS = {
@@ -2976,6 +3011,12 @@ export default function App() {
   const [editingTripId, setEditingTripId] = useState(null);
   const [tripSaving, setTripSaving] = useState(false);
   const [tripJobSearch, setTripJobSearch] = useState("");
+  // Custom (non-job) stops on a trip: maintenance, DOT inspection, fuel, etc.
+  const [tripStops, setTripStops] = useState([]);
+  const [tripStopsMissing, setTripStopsMissing] = useState(false); // trip_stops table not yet in DB
+  const [addStopModal, setAddStopModal] = useState(null); // { trip } — the "add stop" popup
+  const [stopForm, setStopForm] = useState({ category:"maintenance", address:"", note:"" });
+  const [stopSaving, setStopSaving] = useState(false);
   // AI trip suggestions ("✨ Sugerir trips (IA)")
   const [showTripAI, setShowTripAI] = useState(false);
   const [tripAILoading, setTripAILoading] = useState(false);
@@ -3181,6 +3222,10 @@ export default function App() {
   const loadTripEvents = useCallback(async () => {
     const { data, error } = await supabase.from("trip_events").select("*").order("created_at", { ascending: true });
     if (!error) setTripEvents(data || []);
+  }, []);
+  const loadTripStops = useCallback(async () => {
+    const { data, error } = await supabase.from("trip_stops").select("*").order("stop_order", { ascending: true });
+    if (!error) setTripStops(data || []);
   }, []);
   const loadJobEvents = useCallback(async () => {
     const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
@@ -3490,6 +3535,34 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session, tripsMissing, loadTripEvents]);
+
+  // Probe / auto-migrate the trip_stops table (custom non-job stops).
+  useEffect(() => {
+    if (!session || tripsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("trip_stops").select("id").limit(1);
+      if (cancelled) return;
+      if (!error) { setTripStopsMissing(false); loadTripStops(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: TRIP_STOPS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { setTripStopsMissing(false); loadTripStops(); }
+      else setTripStopsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, tripsMissing, loadTripStops]);
+
+  useEffect(() => {
+    if (!session || tripStopsMissing) return;
+    const channel = supabase.channel("trip-stops-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "trip_stops" }, () => loadTripStops())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, tripStopsMissing, loadTripStops]);
 
   // Probe the job_events table (manual per-job timeline; needs storage_jobs).
   useEffect(() => {
@@ -4379,6 +4452,13 @@ export default function App() {
     for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
     return { activeCount, cfTransit, bolTransit, deliveredToday };
   }, [trips, jobs, tripCalc]);
+  // Custom (non-job) stops grouped by trip, ordered by stop_order then creation.
+  const tripStopsByTrip = useMemo(() => {
+    const m = {};
+    for (const s of tripStops) { (m[s.trip_id] = m[s.trip_id] || []).push(s); }
+    for (const id of Object.keys(m)) m[id].sort((a, b) => (a.stop_order ?? 9999) - (b.stop_order ?? 9999) || (a.created_at || "").localeCompare(b.created_at || ""));
+    return m;
+  }, [tripStops]);
   // Trip events grouped by trip (newest first) for the audit log.
   const tripEventsByTrip = useMemo(() => {
     const m = {};
@@ -5477,6 +5557,36 @@ export default function App() {
       if (ids.length) await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids);
     }
     loadJobs();
+  }
+  // ── Custom (non-job) stops: maintenance, DOT inspection, fuel, etc. ──
+  function openAddStop(trip) {
+    setStopForm({ category:"maintenance", address:"", note:"" });
+    setAddStopModal({ trip });
+  }
+  async function saveCustomStop() {
+    const trip = addStopModal?.trip;
+    if (!trip) return;
+    setStopSaving(true);
+    const order = (tripStopsByTrip[trip.id]?.length || 0) + 1;
+    const { error } = await supabase.from("trip_stops").insert([{
+      trip_id: trip.id, category: stopForm.category,
+      address: stopForm.address.trim() || null, note: stopForm.note.trim() || null,
+      stop_order: order, created_by: userEmail,
+    }]);
+    setStopSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setAddStopModal(null);
+    loadTripStops();
+    logTripEvent(trip.id, "custom_stop_added", { notes: `${tripStopCat(stopForm.category).label}${stopForm.address ? ` · ${stopForm.address}` : ""}` });
+  }
+  async function toggleCustomStop(s) {
+    await supabase.from("trip_stops").update({ done: !s.done }).eq("id", s.id);
+    loadTripStops();
+  }
+  async function deleteCustomStop(s) {
+    if (!window.confirm(`Delete the "${tripStopCat(s.category).label}" stop?`)) return;
+    await supabase.from("trip_stops").delete().eq("id", s.id);
+    loadTripStops();
   }
   // Mark one trip job delivered (stamps date_out + status across its rows).
   async function tripMarkDelivered(j, trip) {
@@ -7651,6 +7761,7 @@ export default function App() {
                         <div style={{ display:"flex", gap:6, flexWrap:"wrap", justifyContent:"flex-end" }}>
                           <Btn primary onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 9px", fontSize:11 }}>Manage Loads</Btn>
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit Trip</Btn>
+                          <Btn disabled={tripStopsMissing} title={tripStopsMissing ? "Run the setup SQL to enable custom stops" : "Add a maintenance, inspection, fuel… stop"} onClick={() => openAddStop(t)} style={{ padding:"4px 9px", fontSize:11 }}>➕ Add stop</Btn>
                           {c.jobsIn.length
                             ? <Btn onClick={() => setTripRouteModal({ title: t.trip_number || `#${t.id}`, waypoints: tripRouteWaypoints(c.jobsIn, storageById), googleLink: tripRouteLink(c.jobsIn, storageById) })} style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>
                             : <Btn disabled title="No jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>}
@@ -7670,6 +7781,31 @@ export default function App() {
                         {c.jobsIn.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No jobs in this trip. Use “Edit” to add.</div>
                           : c.jobsIn.map((j, i) => <Stop key={j.id} trip={t} j={j} idx={i} ordered={c.jobsIn} />)}
                       </div>
+                      {(() => {
+                        const cstops = tripStopsByTrip[t.id] || [];
+                        if (!cstops.length) return null;
+                        return (
+                          <>
+                            <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"10px 0 4px" }}>Otras paradas ({cstops.length})</div>
+                            <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden" }}>
+                              {cstops.map(s => { const cat = tripStopCat(s.category); return (
+                                <div key={s.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: s.done ? "#fafafa" : "#fff", opacity: s.done ? 0.65 : 1 }}>
+                                  <span title="Marcar hecho" onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:14, lineHeight:1.2, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
+                                  <div style={{ flex:1, minWidth:0 }}>
+                                    <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                                      <span style={{ fontSize:10.5, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"1px 8px", whiteSpace:"nowrap" }}>{cat.icon} {cat.label}</span>
+                                      {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11" }}>Hecho</span>}
+                                    </div>
+                                    {s.address && <div style={{ color:"#555", marginTop:3 }}>📍 {s.address}</div>}
+                                    {s.note && <div style={{ color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
+                                  </div>
+                                  <button title="Eliminar parada" onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:14, lineHeight:1, flexShrink:0 }}>✕</button>
+                                </div>
+                              ); })}
+                            </div>
+                          </>
+                        );
+                      })()}
                       <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:10 }}>
                         <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
                         <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
@@ -9885,7 +10021,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -11216,6 +11352,29 @@ export default function App() {
                 })}
             </div>
 
+            {/* custom (non-job) stops */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"14px 0 6px" }}>
+              <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Otras paradas ({(tripStopsByTrip[t.id] || []).length})</span>
+              <Btn disabled={tripStopsMissing} onClick={() => openAddStop(t)} style={{ padding:"4px 10px", fontSize:11.5 }}>➕ Add stop</Btn>
+            </div>
+            {(tripStopsByTrip[t.id] || []).length === 0 ? (
+              <div style={{ fontSize:12, color:"#bbb", padding:"4px 2px" }}>Sin paradas de mantenimiento, inspección, etc.</div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {(tripStopsByTrip[t.id] || []).map(s => { const cat = tripStopCat(s.category); return (
+                  <div key={s.id} style={{ display:"flex", alignItems:"flex-start", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"9px 11px", background: s.done ? "#fafafa" : "#fff", opacity: s.done ? 0.7 : 1 }}>
+                    <span title="Marcar hecho" onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{cat.icon} {cat.label}</span>
+                      {s.address && <div style={{ fontSize:12, color:"#555", marginTop:4 }}>📍 {s.address}</div>}
+                      {s.note && <div style={{ fontSize:12, color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
+                    </div>
+                    <button title="Eliminar parada" onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:15, lineHeight:1, flexShrink:0 }}>✕</button>
+                  </div>
+                ); })}
+              </div>
+            )}
+
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
               <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
@@ -11299,6 +11458,38 @@ export default function App() {
       {tripRouteModal && (
         <TripRouteModal title={tripRouteModal.title} waypoints={tripRouteModal.waypoints} googleLink={tripRouteModal.googleLink} onClose={() => setTripRouteModal(null)} />
       )}
+
+      {addStopModal && (() => {
+        const tr = addStopModal.trip;
+        return (
+          <Modal title={`Agregar parada · ${tr.trip_number || "#"+tr.id}`} onClose={() => setAddStopModal(null)}
+            footer={<>
+              <Btn onClick={() => setAddStopModal(null)}>Cancel</Btn>
+              <Btn primary disabled={stopSaving} onClick={saveCustomStop}>{stopSaving ? "Saving…" : "Agregar parada"}</Btn>
+            </>}>
+            <div style={{ fontSize:13, color:"#555", marginBottom:12 }}>Una parada que no es un job — mantenimiento, inspección, combustible, báscula, descanso, etc. Se agrega al final de la lista del trip.</div>
+            <Field label="Categoría" full>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {TRIP_STOP_CATEGORIES.map(cat => {
+                  const sel = stopForm.category === cat.key;
+                  return (
+                    <button key={cat.key} onClick={() => setStopForm(f => ({ ...f, category: cat.key }))}
+                      style={{ fontSize:12, padding:"6px 11px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: sel ? cat.color : "#e5e5e5", background: sel ? cat.color+"18" : "#fff", color: sel ? cat.color : "#555", fontWeight: sel ? 700 : 500 }}>
+                      {cat.icon} {cat.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+            <Field label="Dirección (opcional)" full>
+              <input style={inp} value={stopForm.address} placeholder="Taller, estación, terminal…" onChange={e => setStopForm(f => ({ ...f, address: e.target.value }))} />
+            </Field>
+            <Field label="Nota (opcional)" full>
+              <textarea style={{ ...inp, minHeight:70, resize:"vertical" }} value={stopForm.note} placeholder="Detalle: cambio de aceite, DOT inspection, etc." onChange={e => setStopForm(f => ({ ...f, note: e.target.value }))} />
+            </Field>
+          </Modal>
+        );
+      })()}
 
       {dropModal && (() => {
         const dropTargets = [
