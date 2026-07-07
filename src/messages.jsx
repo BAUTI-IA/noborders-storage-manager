@@ -1,6 +1,7 @@
-// Internal team chat (Slack-style): public channels + direct messages between
-// CRM users, live via Supabase Realtime. Tables: chat_channels,
-// chat_channel_members (per-user read cursor) and chat_messages.
+// Internal team chat, Messenger-style: a "Chats" inbox listing conversations
+// (group channels + 1-to-1 DMs) with last-message preview and unread badges,
+// a bubble conversation view, and online presence (green dots) via Supabase
+// Realtime Presence. Tables: chat_channels, chat_channel_members, chat_messages.
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // Shown in the setup banner when the chat tables don't exist yet.
@@ -72,6 +73,7 @@ where not exists (select 1 from public.chat_channels where name = 'general' and 
 alter publication supabase_realtime add table public.chat_channels;
 alter publication supabase_realtime add table public.chat_messages;`;
 
+const BLUE = "#0A7CFF";                 // Messenger-style own-bubble blue
 const AVATAR_COLORS = ["#185FA5", "#3B6D11", "#B45309", "#A32D2D", "#6D28D9", "#0F766E", "#BE185D", "#4D7C0F"];
 const avatarColor = (id) => AVATAR_COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
 const initials = (name) => (name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
@@ -84,16 +86,29 @@ const fmtDay = (ts) => {
   if (d.toDateString() === yest.toDateString()) return "Yesterday";
   return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
 };
+// Inbox row timestamp: time if today, weekday if this week, date otherwise.
+const fmtListTime = (ts) => {
+  if (!ts) return "";
+  const d = new Date(ts), now = new Date();
+  if (d.toDateString() === now.toDateString()) return fmtTime(ts);
+  if (now - d < 6 * 24 * 3600 * 1000) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { month: "numeric", day: "numeric" });
+};
 
-function Avatar({ id, name, size = 30 }) {
+function Avatar({ id, name, size = 36, online = false, group = false }) {
   return (
-    <span style={{ width: size, height: size, borderRadius: 8, flexShrink: 0, background: avatarColor(id), color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.38, fontWeight: 700 }}>
-      {initials(name)}
+    <span style={{ position: "relative", width: size, height: size, flexShrink: 0, display: "inline-block" }}>
+      <span style={{ width: size, height: size, borderRadius: "50%", background: group ? "#e8e8ec" : avatarColor(id), color: group ? "#555" : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.36, fontWeight: 700 }}>
+        {group ? "#" : initials(name)}
+      </span>
+      {online && (
+        <span style={{ position: "absolute", right: -1, bottom: -1, width: Math.max(9, size * 0.28), height: Math.max(9, size * 0.28), borderRadius: "50%", background: "#31CC46", border: "2px solid #fff" }} />
+      )}
     </span>
   );
 }
 
-export function MessagesSection({ supabase, session, profile, isAdmin = false, onUnreadTotal = () => {} }) {
+export function MessagesSection({ supabase, session, profile, isAdmin = false, onlineIds = [], onUnreadTotal = () => {} }) {
   const me = session.user.id;
   const myName = profile?.full_name || session.user.email;
 
@@ -101,15 +116,18 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
   const [sqlCopied, setSqlCopied] = useState(false);
   const [people, setPeople] = useState([]);           // active profiles (teammates)
   const [channels, setChannels] = useState([]);       // rows from chat_channels visible to me
-  const [cursors, setCursors] = useState({});         // channel_id -> last_read_at (mine)
+  const [cursors, setCursors] = useState({});         // channel_id -> my last_read_at
   const [unread, setUnread] = useState({});           // channel_id -> count
+  const [lastMsg, setLastMsg] = useState({});         // channel_id -> latest message (inbox preview)
   const [activeId, setActiveId] = useState(null);
-  const [messages, setMessages] = useState([]);       // active channel messages, asc
+  const [messages, setMessages] = useState([]);       // active conversation, asc
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [showNewChannel, setShowNewChannel] = useState(false);
-  const [newChannelName, setNewChannelName] = useState("");
+  const [search, setSearch] = useState("");
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [newChatSearch, setNewChatSearch] = useState("");
+  const [newGroupName, setNewGroupName] = useState("");
 
   const scrollRef = useRef(null);
   const activeIdRef = useRef(null);
@@ -117,6 +135,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
 
+  const online = useMemo(() => new Set(onlineIds), [onlineIds]);
   const isMissingErr = (error) => error && (error.code === "42P01" || /chat_channels|chat_messages/.test(error.message || ""));
 
   // ── Loaders ────────────────────────────────────────────────────────────────
@@ -131,20 +150,23 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     setMissing(false);
     setChannels(data || []);
     const { data: mem } = await supabase.from("chat_channel_members").select("channel_id, last_read_at").eq("user_id", me);
-    const cur = Object.fromEntries((mem || []).map(m => [m.channel_id, m.last_read_at]));
-    setCursors(cur);
+    setCursors(Object.fromEntries((mem || []).map(m => [m.channel_id, m.last_read_at])));
     return data || [];
   }, [supabase, me]);
 
-  // Unread = messages from others newer than my read cursor, per channel.
-  const loadUnread = useCallback(async (chs, cur) => {
-    const counts = await Promise.all(chs.map(async ch => {
+  // Per conversation: unread count (others' messages newer than my cursor) + last message for the preview.
+  const loadMeta = useCallback(async (chs, cur) => {
+    const metas = await Promise.all(chs.map(async ch => {
       let q = supabase.from("chat_messages").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).neq("sender_id", me);
       if (cur[ch.id]) q = q.gt("created_at", cur[ch.id]);
-      const { count } = await q;
-      return [ch.id, count || 0];
+      const [{ count }, { data: last }] = await Promise.all([
+        q,
+        supabase.from("chat_messages").select("*").eq("channel_id", ch.id).order("created_at", { ascending: false }).limit(1),
+      ]);
+      return [ch.id, count || 0, last?.[0] || null];
     }));
-    setUnread(Object.fromEntries(counts));
+    setUnread(Object.fromEntries(metas.map(([id, n]) => [id, n])));
+    setLastMsg(Object.fromEntries(metas.filter(([, , m]) => m).map(([id, , m]) => [id, m])));
   }, [supabase, me]);
 
   const markRead = useCallback(async (channelId) => {
@@ -163,42 +185,37 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     setLoadingMsgs(false);
   }, [supabase]);
 
-  // Initial load: people + channels + unread, then land on #general.
+  // Initial load: people + channels, then previews/unread.
   useEffect(() => {
     (async () => {
       await loadPeople();
-      const chs = await loadChannels();
-      if (chs.length && activeIdRef.current == null) {
-        const general = chs.find(c => !c.is_dm) || chs[0];
-        setActiveId(general.id);
-      }
+      await loadChannels();
     })();
   }, [loadPeople, loadChannels]);
 
-  // Unread counts once channels + cursors are known.
   useEffect(() => {
-    if (channels.length) loadUnread(channels, cursors);
+    if (channels.length) loadMeta(channels, cursors);
   }, [channels.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Surface the total in the sidebar badge.
+  // Surface the total in the sidebar badge (open conversation doesn't count).
   useEffect(() => {
     onUnreadTotal(Object.entries(unread).reduce((a, [id, n]) => a + (Number(id) === activeId ? 0 : n), 0));
   }, [unread, activeId, onUnreadTotal]);
 
-  // Switch channel → load history + mark read.
+  // Open conversation → load history + mark read.
   useEffect(() => {
     if (activeId == null) return;
     loadMessages(activeId);
     markRead(activeId);
   }, [activeId, loadMessages, markRead]);
 
-  // Realtime: append new messages to the open channel, bump unread elsewhere.
+  // Realtime: append to the open conversation, bump unread + preview elsewhere.
   useEffect(() => {
     const channel = supabase.channel("chat-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, (payload) => {
         const msg = payload.new;
-        // RLS doesn't filter realtime rows for DMs we can't see; skip unknown channels.
-        if (!channelsRef.current.some(c => c.id === msg.channel_id)) { loadChannels(); return; }
+        if (!channelsRef.current.some(c => c.id === msg.channel_id)) { loadChannels(); }
+        setLastMsg(lm => ({ ...lm, [msg.channel_id]: msg }));
         if (msg.channel_id === activeIdRef.current) {
           setMessages(ms => ms.some(m => m.id === msg.id) ? ms : [...ms, msg]);
           if (msg.sender_id !== me) markRead(msg.channel_id);
@@ -214,7 +231,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     return () => supabase.removeChannel(channel);
   }, [supabase, me, loadChannels, markRead]);
 
-  // Keep the message list pinned to the bottom.
+  // Keep the conversation pinned to the bottom.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -232,6 +249,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     setSending(false);
     if (error) { setDraft(body); window.alert("Could not send: " + error.message); return; }
     setMessages(ms => ms.some(m => m.id === data.id) ? ms : [...ms, data]);
+    setLastMsg(lm => ({ ...lm, [activeId]: data }));
     markRead(activeId);
   };
 
@@ -240,21 +258,22 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     await supabase.from("chat_messages").delete().eq("id", id);
   };
 
-  const createChannel = async () => {
-    const name = newChannelName.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-_]/g, "");
+  const createGroup = async () => {
+    const name = newGroupName.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-_]/g, "");
     if (!name) return;
     const { data, error } = await supabase.from("chat_channels")
       .insert([{ name, is_dm: false, created_by: me }]).select().single();
     if (error) { window.alert(error.message); return; }
-    setShowNewChannel(false);
-    setNewChannelName("");
+    setShowNewChat(false);
+    setNewGroupName("");
     setChannels(cs => cs.some(c => c.id === data.id) ? cs : [...cs, data]);
     setActiveId(data.id);
   };
 
   const openDm = async (otherId) => {
+    setShowNewChat(false);
     const key = dmKey(me, otherId);
-    const existing = channels.find(c => c.dm_key === key);
+    const existing = channelsRef.current.find(c => c.dm_key === key);
     if (existing) { setActiveId(existing.id); return; }
     const { data, error } = await supabase.from("chat_channels")
       .insert([{ is_dm: true, dm_a: me, dm_b: otherId, dm_key: key, created_by: me }]).select().single();
@@ -278,16 +297,31 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const peopleById = useMemo(() => Object.fromEntries(people.map(p => [p.id, p])), [people]);
-  const dmName = (ch) => {
+  const personName = (p) => p?.full_name || p?.email || "Unknown user";
+  const dmOther = (ch) => {
     const otherId = ch.dm_a === me ? ch.dm_b : ch.dm_a;
-    const p = peopleById[otherId];
-    return { id: otherId, name: p?.full_name || p?.email || "Unknown user" };
+    return { id: otherId, name: personName(peopleById[otherId]) };
   };
-  const publicChannels = channels.filter(c => !c.is_dm);
-  const dmChannels = channels.filter(c => c.is_dm);
-  const dmByOther = Object.fromEntries(dmChannels.map(c => [c.dm_a === me ? c.dm_b : c.dm_a, c]));
+  const convName = (ch) => ch.is_dm ? dmOther(ch).name : ch.name;
+  const dmByOther = useMemo(() => Object.fromEntries(channels.filter(c => c.is_dm).map(c => [c.dm_a === me ? c.dm_b : c.dm_a, c])), [channels, me]);
   const active = channels.find(c => c.id === activeId) || null;
-  const activeTitle = active ? (active.is_dm ? dmName(active).name : `# ${active.name}`) : "";
+
+  // Inbox: every conversation sorted by latest activity (Messenger-style).
+  const conversations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return channels
+      .filter(ch => !q || convName(ch).toLowerCase().includes(q))
+      .sort((a, b) => new Date(lastMsg[b.id]?.created_at || b.created_at) - new Date(lastMsg[a.id]?.created_at || a.created_at));
+  }, [channels, lastMsg, search, peopleById]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // People matching the search who don't have a DM yet → offer to start one.
+  const searchPeople = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    return people.filter(p => p.id !== me && !dmByOther[p.id] && personName(p).toLowerCase().includes(q));
+  }, [search, people, me, dmByOther]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeNow = people.filter(p => p.id !== me && online.has(p.id));
 
   // ── Missing-tables banner ──────────────────────────────────────────────────
   if (missing) return (
@@ -306,107 +340,154 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     </div>
   );
 
-  const railBtn = (isActive) => ({
-    width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 7,
-    border: "none", cursor: "pointer", fontSize: 13, textAlign: "left", marginBottom: 1,
-    background: isActive ? "#111" : "transparent", color: isActive ? "#fff" : "#444", fontWeight: isActive ? 600 : 500,
-  });
-  const unreadPill = (n, isActive) => n > 0 && (
-    <span style={{ background: isActive ? "#fff" : "#E24B4A", color: isActive ? "#111" : "#fff", fontSize: 10, fontWeight: 700, borderRadius: 10, padding: "1px 6px" }}>{n}</span>
-  );
+  const otherOnline = active?.is_dm && online.has(dmOther(active).id);
 
   return (
-    <div style={{ display: "flex", background: "#fff", border: "1px solid #efefef", borderRadius: 12, overflow: "hidden", height: "calc(100vh - 150px)", minHeight: 420 }}>
+    <div style={{ display: "flex", background: "#fff", border: "1px solid #efefef", borderRadius: 12, overflow: "hidden", height: "calc(100vh - 150px)", minHeight: 460 }}>
 
-      {/* ── Channel rail ── */}
-      <div style={{ width: 230, flexShrink: 0, borderRight: "1px solid #f0f0f0", display: "flex", flexDirection: "column", background: "#fbfbfb" }}>
-        <div style={{ flex: 1, overflowY: "auto", padding: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", padding: "4px 10px 4px" }}>
-            <span style={{ flex: 1, fontSize: 10, fontWeight: 600, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em" }}>Channels</span>
-            <button onClick={() => setShowNewChannel(true)} title="New channel" style={{ border: "none", background: "transparent", cursor: "pointer", color: "#888", fontSize: 15, lineHeight: 1, padding: 2 }}>＋</button>
+      {/* ── Inbox: conversation list ── */}
+      <div style={{ width: 300, flexShrink: 0, borderRight: "1px solid #f0f0f0", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "14px 14px 8px" }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ flex: 1, fontSize: 19, fontWeight: 800, letterSpacing: "-0.02em" }}>Chats</span>
+            <button onClick={() => setShowNewChat(true)} title="New chat"
+              style={{ width: 30, height: 30, borderRadius: "50%", border: "none", background: "#f2f2f4", cursor: "pointer", fontSize: 15, lineHeight: 1, color: "#333" }}>✏️</button>
           </div>
-          {publicChannels.map(ch => {
-            const isActive = ch.id === activeId;
-            return (
-              <button key={ch.id} onClick={() => setActiveId(ch.id)} style={railBtn(isActive)}>
-                <span style={{ color: isActive ? "#999" : "#aaa", fontWeight: 700 }}>#</span>
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ch.name}</span>
-                {unreadPill(unread[ch.id], isActive)}
-              </button>
-            );
-          })}
-          {publicChannels.length === 0 && <div style={{ fontSize: 12, color: "#bbb", padding: "4px 10px" }}>No channels yet</div>}
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search chats…"
+            style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", background: "#f2f2f4", borderRadius: 18, padding: "8px 14px", fontSize: 13 }} />
+        </div>
 
-          <div style={{ fontSize: 10, fontWeight: 600, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", padding: "14px 10px 4px" }}>Direct messages</div>
-          {people.filter(p => p.id !== me).map(p => {
-            const ch = dmByOther[p.id];
-            const isActive = ch && ch.id === activeId;
+        {/* Active now (online teammates) */}
+        {activeNow.length > 0 && (
+          <div style={{ padding: "4px 14px 8px" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#999", marginBottom: 6 }}>Active now</div>
+            <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 2 }}>
+              {activeNow.slice(0, 12).map(p => (
+                <button key={p.id} onClick={() => openDm(p.id)} title={personName(p)}
+                  style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, width: 48, flexShrink: 0 }}>
+                  <Avatar id={p.id} name={personName(p)} size={40} online />
+                  <span style={{ fontSize: 10.5, color: "#666", maxWidth: 48, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{personName(p).split(/\s+/)[0]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "2px 8px 10px" }}>
+          {conversations.map(ch => {
+            const isActive = ch.id === activeId;
+            const last = lastMsg[ch.id];
+            const n = unread[ch.id] || 0;
+            const name = convName(ch);
+            const preview = last ? `${last.sender_id === me ? "You: " : (!ch.is_dm ? `${(last.sender_name || "").split(/\s+/)[0]}: ` : "")}${last.body.replace(/\n/g, " ")}` : (ch.is_dm ? "Say hi 👋" : "No messages yet");
             return (
-              <button key={p.id} onClick={() => openDm(p.id)} style={railBtn(isActive)}>
-                <Avatar id={p.id} name={p.full_name || p.email} size={20} />
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.full_name || p.email}</span>
-                {ch && unreadPill(unread[ch.id], isActive)}
+              <button key={ch.id} onClick={() => setActiveId(ch.id)}
+                style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, border: "none", cursor: "pointer", textAlign: "left", background: isActive ? "#f0f6ff" : "transparent", marginBottom: 1 }}>
+                {ch.is_dm
+                  ? <Avatar id={dmOther(ch).id} name={name} size={44} online={online.has(dmOther(ch).id)} />
+                  : <Avatar id={ch.id} name={name} size={44} group />}
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                    <span style={{ flex: 1, fontSize: 13.5, fontWeight: n ? 800 : 600, color: "#111", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                    <span style={{ fontSize: 11, color: n ? BLUE : "#aaa", fontWeight: n ? 700 : 400, flexShrink: 0 }}>{fmtListTime(last?.created_at)}</span>
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 1 }}>
+                    <span style={{ flex: 1, fontSize: 12.5, color: n ? "#111" : "#8a8d91", fontWeight: n ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{preview}</span>
+                    {n > 0 && <span style={{ background: BLUE, color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 10, padding: "1px 6px", flexShrink: 0 }}>{n}</span>}
+                  </span>
+                </span>
               </button>
             );
           })}
-          {people.filter(p => p.id !== me).length === 0 && (
-            <div style={{ fontSize: 12, color: "#bbb", padding: "4px 10px" }}>No teammates yet — if this list looks empty, run the chat setup SQL to allow reading teammate names.</div>
+          {searchPeople.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#999", padding: "10px 8px 4px" }}>People</div>
+              {searchPeople.map(p => (
+                <button key={p.id} onClick={() => openDm(p.id)}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, border: "none", cursor: "pointer", textAlign: "left", background: "transparent" }}>
+                  <Avatar id={p.id} name={personName(p)} size={36} online={online.has(p.id)} />
+                  <span style={{ fontSize: 13.5, fontWeight: 600 }}>{personName(p)}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {conversations.length === 0 && searchPeople.length === 0 && (
+            <div style={{ fontSize: 12.5, color: "#bbb", padding: "10px 8px" }}>No chats yet — tap ✏️ to start one.</div>
           )}
         </div>
       </div>
 
       {/* ── Conversation pane ── */}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "#fff" }}>
         {!active ? (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#bbb", fontSize: 14 }}>
-            Pick a channel or a teammate to start chatting 💬
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8, color: "#bbb", fontSize: 14 }}>
+            <span style={{ fontSize: 40 }}>💬</span>
+            Pick a chat to start messaging
           </div>
         ) : (
           <>
-            <div style={{ padding: "12px 16px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", gap: 10 }}>
-              {active.is_dm && <Avatar id={dmName(active).id} name={dmName(active).name} size={26} />}
-              <span style={{ fontSize: 15, fontWeight: 700 }}>{activeTitle}</span>
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", gap: 10 }}>
+              {active.is_dm
+                ? <Avatar id={dmOther(active).id} name={convName(active)} size={36} online={otherOnline} />
+                : <Avatar id={active.id} name={convName(active)} size={36} group />}
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 14.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{convName(active)}</span>
+                <span style={{ display: "block", fontSize: 11.5, color: otherOnline ? "#31A24C" : "#999" }}>
+                  {active.is_dm ? (otherOnline ? "Active now" : "Offline") : "Group chat · visible to the whole team"}
+                </span>
+              </span>
               {!active.is_dm && (isAdmin || active.created_by === me) && active.name !== "general" && (
-                <button onClick={() => deleteChannel(active)} title="Delete channel" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", color: "#ccc", fontSize: 13 }}>🗑</button>
+                <button onClick={() => deleteChannel(active)} title="Delete group" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", color: "#ccc", fontSize: 14 }}>🗑</button>
               )}
             </div>
 
-            <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "14px 16px" }}>
+            <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "14px 16px", background: "#fff" }}>
               {loadingMsgs ? (
                 <div style={{ color: "#bbb", fontSize: 13 }}>Loading…</div>
               ) : messages.length === 0 ? (
-                <div style={{ color: "#bbb", fontSize: 13 }}>No messages yet. Say hi! 👋</div>
+                <div style={{ color: "#bbb", fontSize: 13, textAlign: "center", marginTop: 30 }}>No messages yet. Say hi! 👋</div>
               ) : messages.map((m, i) => {
-                const prev = messages[i - 1];
+                const prev = messages[i - 1], next = messages[i + 1];
+                const mine = m.sender_id === me;
                 const newDay = !prev || fmtDay(prev.created_at) !== fmtDay(m.created_at);
-                const grouped = !newDay && prev && prev.sender_id === m.sender_id &&
-                  (new Date(m.created_at) - new Date(prev.created_at)) < 5 * 60 * 1000;
+                const gap = (a, b) => (new Date(b.created_at) - new Date(a.created_at)) > 5 * 60 * 1000;
+                const runStart = newDay || !prev || prev.sender_id !== m.sender_id || gap(prev, m);
+                const runEnd = !next || next.sender_id !== m.sender_id || gap(m, next) || fmtDay(next.created_at) !== fmtDay(m.created_at);
                 const name = peopleById[m.sender_id]?.full_name || m.sender_name || "Unknown";
+                // Messenger-style corner rounding within a run of bubbles.
+                const r = 18, rs = 5;
+                const radius = mine
+                  ? `${r}px ${runStart ? r : rs}px ${runEnd ? r : rs}px ${r}px`
+                  : `${runStart ? r : rs}px ${r}px ${r}px ${runEnd ? r : rs}px`;
                 return (
                   <div key={m.id}>
                     {newDay && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 10px" }}>
-                        <div style={{ flex: 1, height: 1, background: "#f0f0f0" }} />
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "#bbb" }}>{fmtDay(m.created_at)}</span>
-                        <div style={{ flex: 1, height: 1, background: "#f0f0f0" }} />
+                      <div style={{ textAlign: "center", margin: "16px 0 10px" }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "#aaa" }}>{fmtDay(m.created_at)} · {fmtTime(m.created_at)}</span>
                       </div>
                     )}
-                    <div className="chat-msg" style={{ display: "flex", gap: 10, padding: grouped ? "1px 6px" : "5px 6px", borderRadius: 8, position: "relative" }}
-                      onMouseEnter={e => { const b = e.currentTarget.querySelector(".msg-del"); if (b) b.style.opacity = 1; }}
-                      onMouseLeave={e => { const b = e.currentTarget.querySelector(".msg-del"); if (b) b.style.opacity = 0; }}>
-                      {grouped ? <span style={{ width: 30, flexShrink: 0 }} /> : <Avatar id={m.sender_id} name={name} />}
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        {!grouped && (
-                          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                            <span style={{ fontSize: 13.5, fontWeight: 700 }}>{name}{m.sender_id === me ? " (you)" : ""}</span>
-                            <span style={{ fontSize: 11, color: "#bbb" }}>{fmtTime(m.created_at)}</span>
-                          </div>
-                        )}
-                        <div style={{ fontSize: 13.5, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "#222" }}>{m.body}</div>
-                      </div>
-                      {(m.sender_id === me || isAdmin) && (
+                    {!mine && !active.is_dm && runStart && (
+                      <div style={{ fontSize: 11, color: "#8a8d91", margin: "6px 0 2px 46px" }}>{name}</div>
+                    )}
+                    <div onMouseEnter={e => { const b = e.currentTarget.querySelector(".msg-del"); if (b) b.style.opacity = 1; }}
+                      onMouseLeave={e => { const b = e.currentTarget.querySelector(".msg-del"); if (b) b.style.opacity = 0; }}
+                      style={{ display: "flex", justifyContent: mine ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 8, marginTop: runStart ? (active.is_dm || mine ? 6 : 0) : 2 }}>
+                      {!mine && (
+                        <span style={{ width: 28, flexShrink: 0 }}>
+                          {runEnd && <Avatar id={m.sender_id} name={name} size={28} />}
+                        </span>
+                      )}
+                      {mine && (m.sender_id === me || isAdmin) && (
                         <button className="msg-del" onClick={() => deleteMessage(m.id)} title="Delete message"
-                          style={{ opacity: 0, transition: "opacity .15s", border: "none", background: "transparent", cursor: "pointer", color: "#ccc", fontSize: 12, alignSelf: "flex-start" }}>✕</button>
+                          style={{ opacity: 0, transition: "opacity .15s", border: "none", background: "transparent", cursor: "pointer", color: "#ccc", fontSize: 12 }}>✕</button>
+                      )}
+                      <div title={fmtTime(m.created_at)}
+                        style={{ maxWidth: "62%", padding: "8px 12px", borderRadius: radius, background: mine ? BLUE : "#f0f0f2", color: mine ? "#fff" : "#111", fontSize: 13.5, lineHeight: 1.4, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {m.body}
+                      </div>
+                      {!mine && isAdmin && (
+                        <button className="msg-del" onClick={() => deleteMessage(m.id)} title="Delete message"
+                          style={{ opacity: 0, transition: "opacity .15s", border: "none", background: "transparent", cursor: "pointer", color: "#ccc", fontSize: 12 }}>✕</button>
                       )}
                     </div>
                   </div>
@@ -414,42 +495,53 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
               })}
             </div>
 
-            <div style={{ padding: "10px 14px 14px", borderTop: "1px solid #f0f0f0" }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", background: "#fafafa", border: "1px solid #eee", borderRadius: 10, padding: "8px 10px" }}>
-                <textarea
-                  value={draft}
-                  onChange={e => setDraft(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                  placeholder={active.is_dm ? `Message ${dmName(active).name}` : `Message #${active.name}`}
-                  rows={Math.min(5, Math.max(1, draft.split("\n").length))}
-                  style={{ flex: 1, border: "none", outline: "none", background: "transparent", resize: "none", fontSize: 13.5, fontFamily: "inherit", lineHeight: 1.45 }}
-                />
-                <button onClick={send} disabled={!draft.trim() || sending}
-                  style={{ border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: draft.trim() ? "pointer" : "default", background: draft.trim() ? "#111" : "#e8e8e8", color: draft.trim() ? "#fff" : "#aaa" }}>
-                  Send
-                </button>
-              </div>
-              <div style={{ fontSize: 10.5, color: "#ccc", marginTop: 4 }}>Enter to send · Shift+Enter for a new line</div>
+            <div style={{ padding: "10px 14px 12px", borderTop: "1px solid #f0f0f0", display: "flex", gap: 8, alignItems: "flex-end" }}>
+              <textarea
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+                placeholder="Aa"
+                rows={Math.min(5, Math.max(1, draft.split("\n").length))}
+                style={{ flex: 1, border: "none", outline: "none", background: "#f2f2f4", borderRadius: 18, padding: "9px 14px", resize: "none", fontSize: 13.5, fontFamily: "inherit", lineHeight: 1.4 }}
+              />
+              <button onClick={send} disabled={!draft.trim() || sending} title="Send"
+                style={{ width: 36, height: 36, borderRadius: "50%", border: "none", flexShrink: 0, cursor: draft.trim() ? "pointer" : "default", background: draft.trim() ? BLUE : "#e8e8ec", color: draft.trim() ? "#fff" : "#aaa", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                ➤
+              </button>
             </div>
           </>
         )}
       </div>
 
-      {/* ── New channel modal ── */}
-      {showNewChannel && (
-        <div onClick={() => setShowNewChannel(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: 360, boxShadow: "0 12px 40px rgba(0,0,0,.18)" }}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>New channel</div>
-            <div style={{ fontSize: 12, color: "#999", marginBottom: 12 }}>Channels are visible to the whole team.</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid #e5e5e5", borderRadius: 8, padding: "8px 10px" }}>
-              <span style={{ color: "#aaa", fontWeight: 700 }}>#</span>
-              <input autoFocus value={newChannelName} onChange={e => setNewChannelName(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") createChannel(); }}
-                placeholder="e.g. dispatch, sales, random" style={{ flex: 1, border: "none", outline: "none", fontSize: 13.5 }} />
+      {/* ── New chat modal ── */}
+      {showNewChat && (
+        <div onClick={() => setShowNewChat(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 18, width: 380, maxHeight: "70vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(0,0,0,.18)" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>New chat</div>
+            <input autoFocus value={newChatSearch} onChange={e => setNewChatSearch(e.target.value)} placeholder="Search people…"
+              style={{ border: "none", outline: "none", background: "#f2f2f4", borderRadius: 18, padding: "8px 14px", fontSize: 13, marginBottom: 10 }} />
+            <div style={{ flex: 1, overflowY: "auto", minHeight: 120 }}>
+              {people.filter(p => p.id !== me && personName(p).toLowerCase().includes(newChatSearch.trim().toLowerCase())).map(p => (
+                <button key={p.id} onClick={() => openDm(p.id)}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", borderRadius: 10, border: "none", cursor: "pointer", textAlign: "left", background: "transparent" }}>
+                  <Avatar id={p.id} name={personName(p)} size={34} online={online.has(p.id)} />
+                  <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{personName(p)}</span>
+                  {online.has(p.id) && <span style={{ fontSize: 11, color: "#31A24C" }}>Active now</span>}
+                </button>
+              ))}
+              {people.filter(p => p.id !== me).length === 0 && (
+                <div style={{ fontSize: 12.5, color: "#bbb", padding: "6px 8px" }}>No teammates found.</div>
+              )}
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-              <button onClick={() => setShowNewChannel(false)} style={{ border: "1px solid #eee", background: "#fff", borderRadius: 8, padding: "7px 14px", fontSize: 13, cursor: "pointer", color: "#666" }}>Cancel</button>
-              <button onClick={createChannel} disabled={!newChannelName.trim()} style={{ border: "none", background: newChannelName.trim() ? "#111" : "#e8e8e8", color: newChannelName.trim() ? "#fff" : "#aaa", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Create</button>
+            <div style={{ borderTop: "1px solid #f0f0f0", marginTop: 10, paddingTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#888", marginBottom: 6 }}>…or create a group chat (visible to the whole team)</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={newGroupName} onChange={e => setNewGroupName(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") createGroup(); }}
+                  placeholder="Group name, e.g. dispatch" style={{ flex: 1, border: "1px solid #e5e5e5", outline: "none", borderRadius: 10, padding: "7px 12px", fontSize: 13 }} />
+                <button onClick={createGroup} disabled={!newGroupName.trim()}
+                  style={{ border: "none", background: newGroupName.trim() ? "#111" : "#e8e8ec", color: newGroupName.trim() ? "#fff" : "#aaa", borderRadius: 10, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Create</button>
+              </div>
             </div>
           </div>
         </div>

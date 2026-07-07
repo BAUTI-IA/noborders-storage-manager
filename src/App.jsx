@@ -29,16 +29,26 @@ const I18N_ES = {
   "AI metrics and recommendations": "Métricas y recomendaciones con IA",
   "Account": "Cuenta",
   "Actions": "Acciones",
-  "Messages": "Mensajes",
-  "Team chat and direct messages": "Chat del equipo y mensajes directos",
-  "Channels": "Canales",
-  "Direct messages": "Mensajes directos",
-  "New channel": "Nuevo canal",
-  "Channels are visible to the whole team.": "Los canales son visibles para todo el equipo.",
-  "No channels yet": "Todavía no hay canales",
+  "Chats": "Chats",
+  "Team conversations and direct messages": "Conversaciones del equipo y mensajes directos",
+  "Active now": "En línea",
+  "Offline": "Desconectado",
+  "New chat": "Nuevo chat",
+  "Search chats…": "Buscar chats…",
+  "Search people…": "Buscar personas…",
+  "People": "Personas",
+  "Say hi 👋": "Saludá 👋",
+  "You: ": "Vos: ",
+  "No messages yet": "Todavía no hay mensajes",
   "No messages yet. Say hi! 👋": "Todavía no hay mensajes. ¡Saludá! 👋",
-  "Pick a channel or a teammate to start chatting 💬": "Elegí un canal o un compañero para empezar a chatear 💬",
-  "Enter to send · Shift+Enter for a new line": "Enter para enviar · Shift+Enter para nueva línea",
+  "No chats yet — tap ✏️ to start one.": "Todavía no hay chats — tocá ✏️ para empezar uno.",
+  "Pick a chat to start messaging": "Elegí un chat para empezar a conversar",
+  "Group chat · visible to the whole team": "Chat grupal · visible para todo el equipo",
+  "…or create a group chat (visible to the whole team)": "…o creá un chat grupal (visible para todo el equipo)",
+  "Group name, e.g. dispatch": "Nombre del grupo, ej. dispatch",
+  "No teammates found.": "No se encontraron compañeros.",
+  "Delete message": "Borrar mensaje",
+  "Delete group": "Borrar grupo",
   "Send": "Enviar",
   "One-time setup needed": "Se necesita una configuración única",
   "I ran it — retry": "Ya lo corrí — reintentar",
@@ -2564,7 +2574,7 @@ const NAV = [
     { id:"calendario", label:"Calendar", icon:"📅" },
     { id:"storage", label:"Storage", icon:"🏬" },
     { id:"jobs", label:"Jobs", icon:"💼" },
-    { id:"messages", label:"Messages", icon:"💬" },
+    { id:"messages", label:"Chats", icon:"💬" },
   ]},
   { section:"Finanzas", items:[
     { id:"brokers", label:"Brokers", icon:"🏦" },
@@ -2634,7 +2644,7 @@ const PAGE_META = {
   calendario:  { title:"Calendar", sub:"Pick ups programados" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
-  messages:    { title:"Messages", sub:"Team chat and direct messages" },
+  messages:    { title:"Chats", sub:"Team conversations and direct messages" },
   brokers:     { title:"Brokers", sub:"Brokers and outstanding balances" },
   billing:     { title:"Storage Billing", sub:"Monthly storage billing for clients" },
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
@@ -2911,6 +2921,7 @@ export default function App() {
   const [liveIndicator, setLiveIndicator] = useState(false);
   const [page, setPage] = useState("dispatching");   // sidebar navigation
   const [chatUnread, setChatUnread] = useState(0);   // unread team-chat messages (sidebar badge)
+  const [onlineIds, setOnlineIds] = useState([]);    // user ids currently online (Realtime Presence)
   const [bolJobNumber, setBolJobNumber] = useState(null); // job to pre-select in the BOL generator
   const [lang, setLang] = useState(() => { try { return localStorage.getItem("lang") || "en"; } catch { return "en"; } });
   const [showDupModal, setShowDupModal] = useState(false);  // duplicates review modal
@@ -4596,6 +4607,16 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session]);
   useEffect(() => { if (page === "messages") setChatUnread(0); }, [page]);
+
+  // Online presence: every signed-in tab announces itself on a shared Realtime
+  // Presence channel (keyed by user id); the synced key set = who's online.
+  useEffect(() => {
+    if (!session) return;
+    const ch = supabase.channel("online-users", { config: { presence: { key: session.user.id } } });
+    ch.on("presence", { event: "sync" }, () => setOnlineIds(Object.keys(ch.presenceState())))
+      .subscribe(status => { if (status === "SUBSCRIBED") ch.track({ online_at: new Date().toISOString() }); });
+    return () => { supabase.removeChannel(ch); setOnlineIds([]); };
+  }, [session]);
 
   // Trip status is MANUAL only — never auto-changed from job delivery state.
   // The `allDelivered` flag (from tripCalc) is used solely to surface a
@@ -6900,7 +6921,7 @@ export default function App() {
       {page === "users" && isAdmin && <UsersSection session={session} />}
 
       {/* ───────────────────────── MESSAGES (team chat) ───────────────────────── */}
-      {page === "messages" && can("messages","view") && <MessagesSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} onUnreadTotal={setChatUnread} />}
+      {page === "messages" && can("messages","view") && <MessagesSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} onlineIds={onlineIds} onUnreadTotal={setChatUnread} />}
 
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
