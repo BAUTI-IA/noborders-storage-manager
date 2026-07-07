@@ -225,6 +225,16 @@ Una tarjeta por camión activo: nombre + driver, **barra de capacidad** (verde <
 ### 11.3 Trucks (camiones)
 En **Trucks** cargás la flota (nombre, patente, **capacidad en CF**) y ves la **ocupación actual** de cada camión si está en un trip.
 
+### 11.4 Live map (GPS de los ELDs) 🛰️
+La pestaña **Live map** muestra cada camión sobre el mapa de USA con su **posición GPS real**, sacada de los ELDs de la flota (**Verizon Connect** y **Motive**). Se actualiza sola cada ~10 minutos y en vivo para todos.
+
+- **Vincular un camión**: en Trucks → editar → sección **"ELD / GPS"**, poné el número de vehículo de Verizon o el ID de Motive (una sola vez por camión).
+- **🛰️ Sync ELD** — botón arriba de la lista para forzar la actualización ya mismo.
+- **Update location** — sigue existiendo la carga manual, por si un camión no tiene ELD o hay que corregir algo. En la lista, cada camión muestra de dónde salió su última posición (Verizon / Motive / Manual) y hace cuánto.
+- Verde = en movimiento, rojo = detenido. Filtrás con los chips de arriba.
+
+> El setup técnico (credenciales de Verizon/Motive) está en `docs/eld-verizon-motive.md` — es una configuración que se hace una sola vez.
+
 ---
 
 ## 12. Payments (cobros, efectivo y depósitos) 💰

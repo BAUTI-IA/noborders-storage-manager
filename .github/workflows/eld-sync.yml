@@ -1,0 +1,37 @@
+name: ELD location sync
+
+# Cada ~10 minutos le pide al backend del CRM (/api/eld-sync en Vercel) que
+# traiga la posición de cada camión desde los ELDs (Verizon Connect Reveal y
+# Motive) y la guarde en Supabase. El mapa de Trips / Live Load se actualiza
+# solo vía Realtime. Ver docs/eld-verizon-motive.md para el setup completo.
+#
+# Secrets necesarios (Settings → Secrets and variables → Actions):
+#   APP_URL       - URL pública del CRM en Vercel (ej: https://crm.ejemplo.com)
+#   ELD_SYNC_KEY  - el mismo secreto configurado en Vercel como ELD_SYNC_KEY
+#
+# Mientras falten los secrets, el workflow no falla: se saltea con un aviso.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # cada 10 min (GitHub puede demorarlo unos minutos)
+  workflow_dispatch: {} # permite dispararlo a mano desde la pestaña Actions
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Llamar a /api/eld-sync
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          ELD_SYNC_KEY: ${{ secrets.ELD_SYNC_KEY }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$ELD_SYNC_KEY" ]; then
+            echo "::notice::Faltan los secrets APP_URL / ELD_SYNC_KEY — se saltea el sync de ELD."
+            exit 0
+          fi
+          echo "POST $APP_URL/api/eld-sync"
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "x-eld-sync-key: $ELD_SYNC_KEY" \
+            "${APP_URL%/}/api/eld-sync"
+          echo

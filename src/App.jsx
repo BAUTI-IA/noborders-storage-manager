@@ -557,7 +557,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
-const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
+const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"", motive_vehicle_id:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
 const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[] };
@@ -1281,13 +1281,16 @@ alter table public.trucks add column if not exists model text;
 alter table public.trucks add column if not exists year integer;
 alter table public.trucks add column if not exists license_plate text;
 alter table public.trucks add column if not exists license_state text;
--- Live load / GPS: last known position per truck (manual now, Verizon API later).
+-- Live load / GPS: last known position per truck (manual or synced from the
+-- ELDs via /api/eld-sync — Verizon Connect Reveal and Motive).
 alter table public.trucks add column if not exists last_lat numeric;
 alter table public.trucks add column if not exists last_lng numeric;
 alter table public.trucks add column if not exists last_location text;
 alter table public.trucks add column if not exists last_location_at timestamptz;
 alter table public.trucks add column if not exists last_status text;
 alter table public.trucks add column if not exists verizon_vehicle_id text;
+alter table public.trucks add column if not exists motive_vehicle_id text;
+alter table public.trucks add column if not exists eld_source text;
 alter table public.trucks enable row level security;
 drop policy if exists "trucks_all" on public.trucks;
 create policy "trucks_all" on public.trucks for all to anon, authenticated using (true) with check (true);
@@ -3007,6 +3010,7 @@ export default function App() {
   const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
   const [locBusy, setLocBusy] = useState(false);
   const [locErr, setLocErr] = useState(null);
+  const [eldSyncing, setEldSyncing] = useState(false); // "Sync ELD" (Verizon/Motive) in flight
   const [showTripModal, setShowTripModal] = useState(false);
   const [tripForm, setTripForm] = useState(EMPTY_TRIP);
   const [editingTripId, setEditingTripId] = useState(null);
@@ -3617,12 +3621,14 @@ export default function App() {
     if (!session || tripsMissing) return;
     let cancelled = false;
     (async () => {
-      const { error } = await supabase.from("trucks").select("last_lat").limit(1);
+      // Probes the newest column of the group so older DBs (with last_lat but
+      // without the ELD-link columns) still get migrated.
+      const { error } = await supabase.from("trucks").select("motive_vehicle_id").limit(1);
       if (cancelled) return;
       if (!error) { setTruckLocMissing(false); return; }
       let created = false;
       for (const fn of ["exec_sql", "exec", "execute_sql"]) {
-        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.trucks add column if not exists last_lat numeric, add column if not exists last_lng numeric, add column if not exists last_location text, add column if not exists last_location_at timestamptz, add column if not exists last_status text, add column if not exists verizon_vehicle_id text;" });
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.trucks add column if not exists last_lat numeric, add column if not exists last_lng numeric, add column if not exists last_location text, add column if not exists last_location_at timestamptz, add column if not exists last_status text, add column if not exists verizon_vehicle_id text, add column if not exists motive_vehicle_id text, add column if not exists eld_source text;" });
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled) setTruckLocMissing(!created);
@@ -5252,7 +5258,8 @@ export default function App() {
   function openEditTruck(t) {
     setEditingTruckId(t.id);
     setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false,
-      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "" });
+      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "",
+      verizon_vehicle_id: t.verizon_vehicle_id || "", motive_vehicle_id: t.motive_vehicle_id || "" });
     setShowTruckModal(true);
   }
   async function saveTruck() {
@@ -5266,6 +5273,10 @@ export default function App() {
       payload.vin = truckForm.vin ? truckForm.vin.toUpperCase().slice(0, 17) : null;
       payload.license_plate = truckForm.license_plate || null;
       payload.license_state = truckForm.license_state || null;
+    }
+    if (!truckLocMissing) {
+      payload.verizon_vehicle_id = truckForm.verizon_vehicle_id.trim() || null;
+      payload.motive_vehicle_id = truckForm.motive_vehicle_id.trim() || null;
     }
     let error = null;
     if (editingTruckId) ({ error } = await supabase.from("trucks").update(payload).eq("id", editingTruckId));
@@ -5303,12 +5314,36 @@ export default function App() {
     if (isNaN(lat) || isNaN(lng)) { setLocErr("Missing coordinates (search an address or enter lat/lng)."); return; }
     setLocBusy(true); setLocErr(null);
     const payload = { last_lat: lat, last_lng: lng, last_location: locForm.label || null, last_status: locForm.status || null, last_location_at: new Date().toISOString() };
+    if (!truckLocMissing) payload.eld_source = "manual";
     const { error } = await supabase.from("trucks").update(payload).eq("id", locModal.id);
     setLocBusy(false);
     if (error) { setLocErr(error.message); return; }
     setLocModal(null);
     showToast(`Location updated · ${locModal.name}`);
     loadTrucks();
+  }
+
+  // ── Live-load: pull every truck's position from the ELDs (Verizon / Motive) ──
+  async function syncEldNow() {
+    setEldSyncing(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const r = await fetch("/api/eld-sync", { method: "POST", headers: { Authorization: `Bearer ${s?.access_token || ""}` } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        window.alert(data?.error || `ELD sync failed (${r.status}).`);
+      } else {
+        const unlinked = (data.unmatched?.verizon?.length || 0) + (data.unmatched?.motive?.length || 0);
+        showToast(trAI(
+          `ELD sync · ${data.updated} truck(s) updated${unlinked ? ` · ${unlinked} vehicle(s) not linked yet` : ""}`,
+          `Sync ELD · ${data.updated} camión(es) actualizados${unlinked ? ` · ${unlinked} vehículo(s) sin vincular` : ""}`
+        ));
+        loadTrucks();
+      }
+    } catch {
+      window.alert(trAI("Could not reach /api/eld-sync.", "No se pudo conectar con /api/eld-sync."));
+    }
+    setEldSyncing(false);
   }
 
   // ── Legal & Compliance handlers ──
@@ -7685,10 +7720,14 @@ export default function App() {
                   <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 360px) 1fr", gap:14, alignItems:"start" }}>
                     {/* Verizon-style side list */}
                     <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", maxHeight:560, display:"flex", flexDirection:"column" }}>
-                      <div style={{ padding:"12px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, flexWrap:"wrap" }}>
+                      <div style={{ padding:"12px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
                         {[["all",`All (${located.length})`],["moving",`En movimiento (${moving})`],["stopped",`Detenidos (${stopped})`]].map(([v,l]) => (
                           <button key={v} onClick={() => setLiveStatusFilter(v)} style={{ fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: liveStatusFilter===v?"#111":"#e5e5e5", background: liveStatusFilter===v?"#111":"#fff", color: liveStatusFilter===v?"#fff":"#666", fontWeight: liveStatusFilter===v?600:500 }}>{l}</button>
                         ))}
+                        <button onClick={syncEldNow} disabled={eldSyncing} title={trAI("Pull every truck's live position from Verizon Connect / Motive", "Traer la posición en vivo de cada camión desde Verizon Connect / Motive")}
+                          style={{ marginLeft:"auto", fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor: eldSyncing?"default":"pointer", border:"1px solid #185FA5", background:"#fff", color:"#185FA5", fontWeight:600, opacity: eldSyncing?0.6:1 }}>
+                          {eldSyncing ? trAI("Syncing…", "Sincronizando…") : "🛰️ Sync ELD"}
+                        </button>
                       </div>
                       <div style={{ overflowY:"auto" }}>
                         {trucksList.length === 0 ? (
@@ -7710,6 +7749,7 @@ export default function App() {
                               <div style={{ display:"flex", alignItems:"center", gap:6, margin:"4px 0 2px" }}>
                                 <span style={{ fontSize:10.5, fontWeight:700, color:c.text, background:c.bg, borderRadius:20, padding:"1px 8px" }}>{c.l}</span>
                                 <span style={{ fontSize:11, color:"#999" }}>{timeAgo(t.last_location_at)}</span>
+                                {t.eld_source && <span style={{ fontSize:10, color:"#8a94a3", background:"#f1f4f8", borderRadius:20, padding:"1px 7px", fontWeight:600 }}>{t.eld_source === "verizon" ? "Verizon" : t.eld_source === "motive" ? "Motive" : "Manual"}</span>}
                               </div>
                               {t.last_location && <div style={{ fontSize:11.5, color:"#666", lineHeight:1.4 }}>{t.last_location}</div>}
                               <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:4 }}>
@@ -7736,7 +7776,7 @@ export default function App() {
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />En movimiento</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />Sin datos</span>
-                        <span style={{ marginLeft:"auto", color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
+                        <span style={{ marginLeft:"auto", color:"#aaa" }}>{trAI("GPS via Verizon Connect + Motive ELDs · manual override available", "GPS vía ELDs Verizon Connect + Motive · también se puede cargar a mano")}</span>
                       </div>
                     </div>
                   </div>
@@ -10164,6 +10204,28 @@ export default function App() {
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
             </Field>
           </div>
+
+          <SectionLabel>ELD / GPS</SectionLabel>
+          <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>
+            {trAI(
+              "Link this truck to its ELD so “Sync ELD” updates its position on the live map automatically. Fill in whichever provider the truck uses.",
+              "Vinculá este camión con su ELD para que “Sync ELD” actualice su posición en el mapa en vivo automáticamente. Completá solo el proveedor que usa este camión."
+            )}
+          </div>
+          {truckLocMissing && (
+            <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"8px 11px", marginBottom:10, fontSize:12, color:"#854F0B", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+              <span>Run the setup SQL once to save this data.</span>
+              <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:6, padding:"3px 9px", cursor:"pointer", fontSize:11 }}>View SQL</button>
+            </div>
+          )}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label={trAI("Verizon vehicle number", "Nº de vehículo en Verizon")}>
+              <input style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))} placeholder={trAI("Vehicle Number in Reveal", "Vehicle Number en Reveal")} />
+            </Field>
+            <Field label={trAI("Motive vehicle ID / number", "ID / Nº de vehículo en Motive")}>
+              <input style={inp} value={truckForm.motive_vehicle_id} onChange={e => setTruckForm(f => ({...f, motive_vehicle_id:e.target.value}))} placeholder={trAI("Vehicle id or number in Motive", "id o number del vehículo en Motive")} />
+            </Field>
+          </div>
         </Modal>
       )}
 
@@ -10174,7 +10236,10 @@ export default function App() {
             <Btn primary disabled={locBusy} onClick={saveLoc}>{locBusy ? "Saving..." : "Save location"}</Btn>
           </>}>
           <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
-            Set the truck's current location by address (we look it up on the map) or paste the coordinates. Once we connect the Verizon API, this will update automatically.
+            {trAI(
+              "Set the truck's current location by address (we look it up on the map) or paste the coordinates. If the truck is linked to Verizon Connect or Motive, “Sync ELD” updates this automatically — use this form as a manual override.",
+              "Cargá la ubicación del camión por dirección (la buscamos en el mapa) o pegá las coordenadas. Si el camión está vinculado a Verizon Connect o Motive, “Sync ELD” la actualiza sola — este formulario es para corregirla a mano."
+            )}
           </div>
           <Field label="Search by address / city">
             <div style={{ display:"flex", gap:8 }}>
