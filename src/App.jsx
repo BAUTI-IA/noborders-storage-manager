@@ -5642,24 +5642,36 @@ export default function App() {
     setStopForm({ category:"maintenance", address:"", note:"" });
     setAddStopModal({ trip });
   }
+  // Edit an existing custom stop (category / address / note).
+  function openEditStop(trip, s) {
+    setStopForm({ category: s.category || "other", address: s.address || "", note: s.note || "" });
+    setAddStopModal({ trip, editId: s.id });
+  }
   async function saveCustomStop() {
     const trip = addStopModal?.trip;
     if (!trip) return;
     setStopSaving(true);
-    // Append at the very end of the unified sequence (after jobs + custom stops).
-    // Use max existing order + 1 so it lands last even if orders have gaps.
-    const seq = tripSequenceByTrip[trip.id] || [];
-    const order = (seq.length ? Math.max(...seq.map(it => it.order || 0)) : 0) + 1;
-    const { error } = await supabase.from("trip_stops").insert([{
-      trip_id: trip.id, category: stopForm.category,
-      address: stopForm.address.trim() || null, note: stopForm.note.trim() || null,
-      stop_order: order, created_by: userEmail,
-    }]);
+    const fields = {
+      category: stopForm.category,
+      address: stopForm.address.trim() || null,
+      note: stopForm.note.trim() || null,
+    };
+    let error;
+    if (addStopModal.editId) {
+      ({ error } = await supabase.from("trip_stops").update(fields).eq("id", addStopModal.editId));
+    } else {
+      // Append at the very end of the unified sequence (after jobs + custom stops).
+      // Use max existing order + 1 so it lands last even if orders have gaps.
+      const seq = tripSequenceByTrip[trip.id] || [];
+      const order = (seq.length ? Math.max(...seq.map(it => it.order || 0)) : 0) + 1;
+      ({ error } = await supabase.from("trip_stops").insert([{ trip_id: trip.id, ...fields, stop_order: order, created_by: userEmail }]));
+    }
     setStopSaving(false);
     if (error) { window.alert(error.message); return; }
+    const wasEdit = !!addStopModal.editId;
     setAddStopModal(null);
     loadTripStops();
-    logTripEvent(trip.id, "custom_stop_added", { notes: `${catLabel(stopForm.category)}${stopForm.address ? ` · ${stopForm.address}` : ""}` });
+    if (!wasEdit) logTripEvent(trip.id, "custom_stop_added", { notes: `${catLabel(stopForm.category)}${stopForm.address ? ` · ${stopForm.address}` : ""}` });
   }
   async function toggleCustomStop(s) {
     await supabase.from("trip_stops").update({ done: !s.done }).eq("id", s.id);
@@ -7702,12 +7714,14 @@ export default function App() {
               <div {...dragProps} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: s.done ? "#fafafa" : "#fbfbfd", cursor:"grab", opacity: s.done ? 0.7 : 1 }}>
                 {handle}
                 {numBadge(cat.color)}
-                <div style={{ flex:1, minWidth:0 }}>
+                <div onClick={() => openEditStop(trip, s)} title={trAI("Edit address / note", "Editar dirección / nota")} style={{ flex:1, minWidth:0, cursor:"pointer" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                     <span style={{ fontSize:10.5, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"1px 8px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
                     {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11" }}>{trAI("Done", "Hecho")}</span>}
                   </div>
-                  {s.address && <div style={{ color:"#555", marginTop:3 }}>📍 {s.address}</div>}
+                  {s.address
+                    ? <div style={{ color:"#555", marginTop:3 }}>📍 {s.address}</div>
+                    : <div style={{ color:"#bbb", marginTop:3, fontStyle:"italic" }}>{trAI("Add address / note…", "Agregar dirección / nota…")}</div>}
                   {s.note && <div style={{ color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
@@ -11430,10 +11444,12 @@ export default function App() {
                           <div key={item.key} {...rowDrag(i)} style={{ display:"flex", alignItems:"flex-start", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"9px 11px", background: s.done ? "#fafafa" : "#fbfbfd", cursor:"grab", opacity: s.done ? 0.7 : 1 }}>
                             {handle}
                             {numBadge(cat.color, i + 1)}
-                            <div style={{ flex:1, minWidth:0 }}>
+                            <div onClick={() => openEditStop(t, s)} title={trAI("Edit address / note", "Editar dirección / nota")} style={{ flex:1, minWidth:0, cursor:"pointer" }}>
                               <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
                               {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11", marginLeft:6 }}>{trAI("Done", "Hecho")}</span>}
-                              {s.address && <div style={{ fontSize:12, color:"#555", marginTop:4 }}>📍 {s.address}</div>}
+                              {s.address
+                                ? <div style={{ fontSize:12, color:"#555", marginTop:4 }}>📍 {s.address}</div>
+                                : <div style={{ fontSize:12, color:"#bbb", marginTop:4, fontStyle:"italic" }}>{trAI("Add address / note…", "Agregar dirección / nota…")}</div>}
                               {s.note && <div style={{ fontSize:12, color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
                             </div>
                             <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
@@ -11576,13 +11592,14 @@ export default function App() {
 
       {addStopModal && (() => {
         const tr = addStopModal.trip;
+        const editing = !!addStopModal.editId;
         return (
-          <Modal title={`${trAI("Add stop", "Agregar parada")} · ${tr.trip_number || "#"+tr.id}`} onClose={() => setAddStopModal(null)}
+          <Modal title={`${editing ? trAI("Edit stop", "Editar parada") : trAI("Add stop", "Agregar parada")} · ${tr.trip_number || "#"+tr.id}`} onClose={() => setAddStopModal(null)}
             footer={<>
               <Btn onClick={() => setAddStopModal(null)}>{trAI("Cancel", "Cancelar")}</Btn>
-              <Btn primary disabled={stopSaving} onClick={saveCustomStop}>{stopSaving ? trAI("Saving…", "Guardando…") : trAI("Add stop", "Agregar parada")}</Btn>
+              <Btn primary disabled={stopSaving} onClick={saveCustomStop}>{stopSaving ? trAI("Saving…", "Guardando…") : (editing ? trAI("Save changes", "Guardar cambios") : trAI("Add stop", "Agregar parada"))}</Btn>
             </>}>
-            <div style={{ fontSize:13, color:"#555", marginBottom:12 }}>{trAI("A non-job stop — maintenance, inspection, fuel, weigh station, rest, etc. It's added at the end of the trip's list.", "Una parada que no es un job — mantenimiento, inspección, combustible, báscula, descanso, etc. Se agrega al final de la lista del trip.")}</div>
+            {!editing && <div style={{ fontSize:13, color:"#555", marginBottom:12 }}>{trAI("A non-job stop — maintenance, inspection, fuel, weigh station, rest, etc. It's added at the end of the trip's list.", "Una parada que no es un job — mantenimiento, inspección, combustible, báscula, descanso, etc. Se agrega al final de la lista del trip.")}</div>}
             <Field label={trAI("Category", "Categoría")} full>
               <select style={inp} value={stopForm.category} onChange={e => setStopForm(f => ({ ...f, category: e.target.value }))}>
                 {TRIP_STOP_CATEGORIES.map(cat => (
