@@ -4462,6 +4462,22 @@ export default function App() {
     for (const id of Object.keys(m)) m[id].sort((a, b) => (a.stop_order ?? 9999) - (b.stop_order ?? 9999) || (a.created_at || "").localeCompare(b.created_at || ""));
     return m;
   }, [tripStops]);
+  // Unified stop sequence per trip: jobs and custom stops interleaved in one
+  // 1..N order. Jobs order by trip_stop_order, custom stops by stop_order; both
+  // share the same integer space (persistUnifiedOrder renumbers across both).
+  const tripSequenceByTrip = useMemo(() => {
+    const m = {};
+    const ids = new Set([...Object.keys(jobsByTrip), ...Object.keys(tripStopsByTrip)]);
+    for (const id of ids) {
+      const items = [
+        ...(jobsByTrip[id] || []).map(j => ({ kind:"job", order: j.trip_stop_order ?? 9999, j, key: "j:" + jobKey(j) })),
+        ...(tripStopsByTrip[id] || []).map(s => ({ kind:"custom", order: s.stop_order ?? 9999, s, key: "c:" + s.id })),
+      ];
+      items.sort((a, b) => (a.order - b.order) || (a.kind === b.kind ? 0 : a.kind === "job" ? -1 : 1));
+      m[id] = items;
+    }
+    return m;
+  }, [jobsByTrip, tripStopsByTrip]);
   // Trip events grouped by trip (newest first) for the audit log.
   const tripEventsByTrip = useMemo(() => {
     const m = {};
@@ -5554,12 +5570,18 @@ export default function App() {
     loadTrips(); loadJobs();
   }
   // Persist a new stop order for a trip (array of jobKeys in the desired sequence).
-  async function persistTripOrder(orderedKeys) {
-    for (let i = 0; i < orderedKeys.length; i++) {
-      const ids = jobs.filter(j => jobKey(j) === orderedKeys[i]).map(j => j.id);
-      if (ids.length) await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids);
+  // Renumber a trip's full sequence (jobs + custom stops) into one 1..N order.
+  async function persistUnifiedOrder(trip, orderedItems) {
+    for (let i = 0; i < orderedItems.length; i++) {
+      const it = orderedItems[i];
+      if (it.kind === "job") {
+        const ids = jobs.filter(j => jobKey(j) === jobKey(it.j)).map(j => j.id);
+        if (ids.length) await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids);
+      } else {
+        await supabase.from("trip_stops").update({ stop_order: i + 1 }).eq("id", it.s.id);
+      }
     }
-    loadJobs();
+    loadJobs(); loadTripStops();
   }
   // ── Custom (non-job) stops: maintenance, DOT inspection, fuel, etc. ──
   function openAddStop(trip) {
@@ -5570,7 +5592,10 @@ export default function App() {
     const trip = addStopModal?.trip;
     if (!trip) return;
     setStopSaving(true);
-    const order = (tripStopsByTrip[trip.id]?.length || 0) + 1;
+    // Append at the very end of the unified sequence (after jobs + custom stops).
+    // Use max existing order + 1 so it lands last even if orders have gaps.
+    const seq = tripSequenceByTrip[trip.id] || [];
+    const order = (seq.length ? Math.max(...seq.map(it => it.order || 0)) : 0) + 1;
     const { error } = await supabase.from("trip_stops").insert([{
       trip_id: trip.id, category: stopForm.category,
       address: stopForm.address.trim() || null, note: stopForm.note.trim() || null,
@@ -7596,19 +7621,56 @@ export default function App() {
 
       {/* ───────────────────────── TRIPS / LIVE LOAD ───────────────────────── */}
       {page === "trips" && (() => {
-        const Stop = ({ trip, j, idx, ordered }) => {
+        // One row in a trip's unified stop sequence — a job or a custom stop.
+        // Drag-reorder operates on the whole sequence (jobs + custom interleaved).
+        const onSeqDrop = (trip, seq, idx) => (e) => {
+          e.preventDefault();
+          const from = parseInt(e.dataTransfer.getData("text/plain"));
+          if (isNaN(from) || from === idx) return;
+          const arr = [...seq]; const [mv] = arr.splice(from, 1); arr.splice(idx, 0, mv);
+          persistUnifiedOrder(trip, arr);
+        };
+        const SeqRow = ({ trip, item, idx, seq }) => {
+          const dragProps = {
+            draggable: true,
+            onDragStart: e => e.dataTransfer.setData("text/plain", String(idx)),
+            onDragOver: e => e.preventDefault(),
+            onDrop: onSeqDrop(trip, seq, idx),
+          };
+          const numBadge = (bg) => <span style={{ width:20, height:20, borderRadius:"50%", background:bg, color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{idx + 1}</span>;
+          const handle = <span title={trAI("Drag to reorder", "Arrastrá para reordenar")} style={{ color:"#ccc", cursor:"grab" }}>⠿</span>;
+          if (item.kind === "custom") {
+            const s = item.s, cat = tripStopCat(s.category);
+            return (
+              <div {...dragProps} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: s.done ? "#fafafa" : "#fbfbfd", cursor:"grab", opacity: s.done ? 0.7 : 1 }}>
+                {handle}
+                {numBadge(cat.color)}
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:10.5, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"1px 8px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
+                    {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11" }}>{trAI("Done", "Hecho")}</span>}
+                  </div>
+                  {s.address && <div style={{ color:"#555", marginTop:3 }}>📍 {s.address}</div>}
+                  {s.note && <div style={{ color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                  <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15 }}>{s.done ? "✅" : "⬜"}</span>
+                  <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:14, lineHeight:1 }}>✕</button>
+                </div>
+              </div>
+            );
+          }
+          const j = item.j;
           const delivered = !!j.date_out || j.status === "delivered";
           // Dropped at storage during the trip: still on the trip, but sitting in storage.
           const dropped = !delivered && j.status === "in_storage";
           const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
           const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
           return (
-            <div draggable onDragStart={e => e.dataTransfer.setData("text/plain", String(idx))}
-              onDragOver={e => e.preventDefault()}
-              onDrop={e => { e.preventDefault(); const from = parseInt(e.dataTransfer.getData("text/plain")); if (isNaN(from) || from === idx) return; const arr = ordered.map(jobKey); const [mv] = arr.splice(from, 1); arr.splice(idx, 0, mv); persistTripOrder(arr); }}
+            <div {...dragProps}
               style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 6px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: (delivered || dropped) ? "#fafafa" : "#fff", cursor:"grab", opacity: (delivered || dropped) ? 0.7 : 1 }}>
-              <span title="Drag to reorder" style={{ color:"#ccc", cursor:"grab" }}>⠿</span>
-              <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{idx + 1}</span>
+              {handle}
+              {numBadge("#111")}
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                   <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
@@ -7779,36 +7841,13 @@ export default function App() {
                           <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}><div style={{ background: occColor(c.occPct || 0), height:12, width:`${Math.min(100, c.occPct || 0)}%`, transition:"width .4s" }} /></div>
                         </div>
                       ) : <div style={{ fontSize:12, color:"#999", marginBottom:10 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
-                      <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Stops ({c.count})</div>
-                      <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:280, overflowY:"auto" }}>
-                        {c.jobsIn.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No jobs in this trip. Use “Edit” to add.</div>
-                          : c.jobsIn.map((j, i) => <Stop key={j.id} trip={t} j={j} idx={i} ordered={c.jobsIn} />)}
+                      {(() => { const seq = tripSequenceByTrip[t.id] || []; return (<>
+                      <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Stops ({seq.length})</div>
+                      <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:320, overflowY:"auto" }}>
+                        {seq.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No stops in this trip. Use “Edit” or “Add stop”.</div>
+                          : seq.map((item, i) => <SeqRow key={item.key} trip={t} item={item} idx={i} seq={seq} />)}
                       </div>
-                      {(() => {
-                        const cstops = tripStopsByTrip[t.id] || [];
-                        if (!cstops.length) return null;
-                        return (
-                          <>
-                            <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"10px 0 4px" }}>{trAI("Other stops", "Otras paradas")} ({cstops.length})</div>
-                            <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden" }}>
-                              {cstops.map(s => { const cat = tripStopCat(s.category); return (
-                                <div key={s.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12, background: s.done ? "#fafafa" : "#fff", opacity: s.done ? 0.65 : 1 }}>
-                                  <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:14, lineHeight:1.2, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
-                                  <div style={{ flex:1, minWidth:0 }}>
-                                    <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                                      <span style={{ fontSize:10.5, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"1px 8px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
-                                      {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11" }}>{trAI("Done", "Hecho")}</span>}
-                                    </div>
-                                    {s.address && <div style={{ color:"#555", marginTop:3 }}>📍 {s.address}</div>}
-                                    {s.note && <div style={{ color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
-                                  </div>
-                                  <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:14, lineHeight:1, flexShrink:0 }}>✕</button>
-                                </div>
-                              ); })}
-                            </div>
-                          </>
-                        );
-                      })()}
+                      </>); })()}
                       <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:10 }}>
                         <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
                         <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
@@ -11307,76 +11346,92 @@ export default function App() {
               </div>
             )}
 
-            {/* stops */}
-            <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", margin:"6px 0 6px" }}>Stops ({c.count})</div>
-            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-              {c.jobsIn.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"8px" }}>No jobs on this trip.</div>
-                : c.jobsIn.map((j, i) => {
-                  const delivered = !!j.date_out || j.status === "delivered";
-                  const dropped = !delivered && j.status === "in_storage";
-                  const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
-                  const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
-                  return (
-                    <div key={j.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: (delivered || dropped) ? "#fafafa" : "#fff", opacity: (delivered || dropped) ? 0.75 : 1 }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                        <span style={{ width:22, height:22, borderRadius:"50%", background:"#111", color:"#fff", fontSize:11, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i + 1}</span>
-                        <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
-                        <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
-                        {fromTo && <span style={{ fontSize:11, color:"#888" }}>· {fromTo}</span>}
-                        {delivered && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 9px" }}>Delivered</span>}
-                        {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>}
-                      </div>
-                      <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
-                        <span title={hasRealCf(j) ? `Real (est. ${Math.round(parseCf(j.volume))} CF)` : "Estimado del broker"}>
-                          {Math.round(effCf(j))} CF{hasRealCf(j) ? <b style={{ color:"#3B6D11" }}> ✓real</b> : <span style={{ color:"#aaa" }}> est.</span>}
-                        </span>
-                        {!realCfMissing && <button onClick={() => quickSetRealCf(j)} title="Cargar el CF real medido" style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:6, cursor:"pointer", fontSize:10.5, padding:"1px 7px", color:"#185FA5" }}>✏️ CF real</button>}
-                        {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
-                        {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
-                        <FaddBadge fadd={j.fadd} />
-                        {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
-                        {(() => {
-                          // A stop owned by a different driver than the trip's → show who.
-                          const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
-                          return jd && jd !== driverNm
-                            ? <span title="Este job está a cargo de otro driver (handoff)" style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>🧑‍✈️ {jd}</span>
-                            : null;
-                        })()}
-                      </div>
-                      {!delivered && !dropped && (
-                        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                          <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
-                          {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
-                          <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: jobKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
+            {/* stops — jobs + custom stops in one drag-reorderable sequence */}
+            {(() => {
+              const seq = tripSequenceByTrip[t.id] || [];
+              const onRowDrop = (idx) => (e) => {
+                e.preventDefault();
+                const from = parseInt(e.dataTransfer.getData("text/plain"));
+                if (isNaN(from) || from === idx) return;
+                const arr = [...seq]; const [mv] = arr.splice(from, 1); arr.splice(idx, 0, mv);
+                persistUnifiedOrder(t, arr);
+              };
+              const rowDrag = (idx) => ({ draggable:true, onDragStart:e => e.dataTransfer.setData("text/plain", String(idx)), onDragOver:e => e.preventDefault(), onDrop:onRowDrop(idx) });
+              const numBadge = (bg, n) => <span style={{ width:22, height:22, borderRadius:"50%", background:bg, color:"#fff", fontSize:11, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{n}</span>;
+              const handle = <span title={trAI("Drag to reorder", "Arrastrá para reordenar")} style={{ color:"#ccc", cursor:"grab", flexShrink:0 }}>⠿</span>;
+              return (<>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"6px 0 6px" }}>
+                  <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Stops ({seq.length})</span>
+                  <Btn disabled={tripStopsMissing} onClick={() => openAddStop(t)} style={{ padding:"4px 10px", fontSize:11.5 }}>➕ {trAI("Add stop", "Agregar parada")}</Btn>
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {seq.length === 0 ? <div style={{ fontSize:12, color:"#bbb", padding:"8px" }}>{trAI("No stops on this trip.", "Sin paradas en este trip.")}</div>
+                    : seq.map((item, i) => {
+                      if (item.kind === "custom") {
+                        const s = item.s, cat = tripStopCat(s.category);
+                        return (
+                          <div key={item.key} {...rowDrag(i)} style={{ display:"flex", alignItems:"flex-start", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"9px 11px", background: s.done ? "#fafafa" : "#fbfbfd", cursor:"grab", opacity: s.done ? 0.7 : 1 }}>
+                            {handle}
+                            {numBadge(cat.color, i + 1)}
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
+                              {s.done && <span style={{ fontSize:10, fontWeight:600, color:"#3B6D11", marginLeft:6 }}>{trAI("Done", "Hecho")}</span>}
+                              {s.address && <div style={{ fontSize:12, color:"#555", marginTop:4 }}>📍 {s.address}</div>}
+                              {s.note && <div style={{ fontSize:12, color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
+                            </div>
+                            <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                              <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15 }}>{s.done ? "✅" : "⬜"}</span>
+                              <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:15, lineHeight:1 }}>✕</button>
+                            </div>
+                          </div>
+                        );
+                      }
+                      const j = item.j;
+                      const delivered = !!j.date_out || j.status === "delivered";
+                      const dropped = !delivered && j.status === "in_storage";
+                      const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
+                      const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
+                      return (
+                        <div key={item.key} {...rowDrag(i)} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: (delivered || dropped) ? "#fafafa" : "#fff", cursor:"grab", opacity: (delivered || dropped) ? 0.75 : 1 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                            {handle}
+                            {numBadge("#111", i + 1)}
+                            <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                            <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
+                            {fromTo && <span style={{ fontSize:11, color:"#888" }}>· {fromTo}</span>}
+                            {delivered && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 9px" }}>Delivered</span>}
+                            {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>}
+                          </div>
+                          <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
+                            <span title={hasRealCf(j) ? `Real (est. ${Math.round(parseCf(j.volume))} CF)` : "Estimado del broker"}>
+                              {Math.round(effCf(j))} CF{hasRealCf(j) ? <b style={{ color:"#3B6D11" }}> ✓real</b> : <span style={{ color:"#aaa" }}> est.</span>}
+                            </span>
+                            {!realCfMissing && <button onClick={() => quickSetRealCf(j)} title="Cargar el CF real medido" style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:6, cursor:"pointer", fontSize:10.5, padding:"1px 7px", color:"#185FA5" }}>✏️ CF real</button>}
+                            {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
+                            {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
+                            <FaddBadge fadd={j.fadd} />
+                            {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                            {(() => {
+                              // A stop owned by a different driver than the trip's → show who.
+                              const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
+                              return jd && jd !== driverNm
+                                ? <span title="Este job está a cargo de otro driver (handoff)" style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>🧑‍✈️ {jd}</span>
+                                : null;
+                            })()}
+                          </div>
+                          {!delivered && !dropped && (
+                            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                              <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
+                              {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
+                              <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: jobKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
-
-            {/* custom (non-job) stops */}
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"14px 0 6px" }}>
-              <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>{trAI("Other stops", "Otras paradas")} ({(tripStopsByTrip[t.id] || []).length})</span>
-              <Btn disabled={tripStopsMissing} onClick={() => openAddStop(t)} style={{ padding:"4px 10px", fontSize:11.5 }}>➕ {trAI("Add stop", "Agregar parada")}</Btn>
-            </div>
-            {(tripStopsByTrip[t.id] || []).length === 0 ? (
-              <div style={{ fontSize:12, color:"#bbb", padding:"4px 2px" }}>{trAI("No maintenance, inspection, etc. stops.", "Sin paradas de mantenimiento, inspección, etc.")}</div>
-            ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {(tripStopsByTrip[t.id] || []).map(s => { const cat = tripStopCat(s.category); return (
-                  <div key={s.id} style={{ display:"flex", alignItems:"flex-start", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"9px 11px", background: s.done ? "#fafafa" : "#fff", opacity: s.done ? 0.7 : 1 }}>
-                    <span title={trAI("Mark done", "Marcar hecho")} onClick={() => toggleCustomStop(s)} style={{ cursor:"pointer", fontSize:15, flexShrink:0 }}>{s.done ? "✅" : "⬜"}</span>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{cat.icon} {catLabel(s.category)}</span>
-                      {s.address && <div style={{ fontSize:12, color:"#555", marginTop:4 }}>📍 {s.address}</div>}
-                      {s.note && <div style={{ fontSize:12, color:"#888", marginTop:2, whiteSpace:"pre-wrap" }}>{s.note}</div>}
-                    </div>
-                    <button title={trAI("Delete stop", "Eliminar parada")} onClick={() => deleteCustomStop(s)} style={{ background:"none", border:"none", color:"#c0392b", cursor:"pointer", fontSize:15, lineHeight:1, flexShrink:0 }}>✕</button>
-                  </div>
-                ); })}
-              </div>
-            )}
+                      );
+                    })}
+                </div>
+              </>);
+            })()}
 
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
