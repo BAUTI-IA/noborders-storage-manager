@@ -120,7 +120,27 @@ create policy "chat_members_select_mates" on public.chat_channel_members
     exists (select 1 from public.chat_channels c where c.id = channel_id and public.chat_can_see(c))
   );
 alter publication supabase_realtime add table public.chat_channel_members;
-alter publication supabase_realtime add table public.chat_presence;`;
+alter publication supabase_realtime add table public.chat_presence;
+
+-- Private group chats with hand-picked members (also standalone in
+-- scripts/setup-chat-groups.mjs). Redefines chat_can_see to add the
+-- private-group case on top of the public-channel/DM cases above.
+alter table public.chat_channels add column if not exists is_private boolean not null default false;
+create or replace function public.chat_is_member(cid bigint)
+returns boolean language sql security definer stable as
+$$ select exists(select 1 from public.chat_channel_members where channel_id = cid and user_id = auth.uid()) $$;
+create or replace function public.chat_can_see(ch public.chat_channels)
+returns boolean language sql stable as
+$$ select case
+     when ch.is_dm then auth.uid() in (ch.dm_a, ch.dm_b)
+     when coalesce(ch.is_private, false) then (ch.created_by = auth.uid() or public.chat_is_member(ch.id))
+     else true
+   end $$;
+drop policy if exists "chat_members_add_by_creator" on public.chat_channel_members;
+create policy "chat_members_add_by_creator" on public.chat_channel_members
+  for insert to authenticated with check (
+    exists (select 1 from public.chat_channels c where c.id = channel_id and c.created_by = auth.uid())
+  );`;
 
 if (!TOKEN) {
   console.error("Missing SUPABASE_ACCESS_TOKEN. Run:\n  SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-chat.mjs");
