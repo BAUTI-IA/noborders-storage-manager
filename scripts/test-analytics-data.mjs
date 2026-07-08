@@ -122,5 +122,61 @@ eq("effCf cae al estimado sin real", effCf({ volume: "550 cf" }), 550);
 eq("effCf ignora real inválido/0", effCf({ volume: "550 cf", real_cf: 0 }), 550);
 eq("hasRealCf", [hasRealCf({ real_cf: 620 }), hasRealCf({ volume: "550" }), hasRealCf({ real_cf: "abc" })], [true, false, false]);
 
+// ── split job across two trucks: money/analytics must NOT double-count ──
+// A split adds a "portion" row (same job_number, its own CF, money zeroed). The
+// job stays ONE job everywhere: revenue, active-job count and storage P&L must be
+// identical whether or not the portion row exists.
+{
+  // Base job (single row) vs the same job split into base + a zeroed portion.
+  const base = { id: 30, job_number: "S300", storage_id: 10, date_in: "2026-05-02", date_out: null, status: "in_storage",
+    billing_active: true, client_monthly_rate: "1000", broker_id: 7, bol_collected: "5000", broker_job_share_pct: "10",
+    volume: "1200 cf", real_cf: 1200, customer: "Sol" };
+  // After splitting 400 CF off: base keeps 800 CF, portion carries 400 CF, money zeroed.
+  const baseAfter = { ...base, real_cf: 800, split_group: "n:s300:1" };
+  const portion = { id: 31, job_number: "S300", storage_id: 10, date_in: "2026-05-02", date_out: null, status: "scheduled",
+    split_group: "n:s300:1", real_cf: 400, volume: "1200 cf", customer: "Sol", broker_id: 7,
+    billing_active: false, client_monthly_rate: null, bol_collected: null, bol_balance: 0,
+    pickup_balance: 0, delivery_balance: 0, broker_job_share_pct: null, broker_job_share_amount: null };
+
+  const recs = [{ id: 10, brand: "CubeSmart", unit: "1", state: "FL", monthly_cost: "300", situation: "Open", space_type: null, date_opened: "2026-01-05" }];
+  const sit1 = () => "Open";
+
+  const before = [base];
+  const after = [baseAfter, portion];
+
+  // dedupeJobs: same group count, and the representative must be the NON-portion row.
+  const gAfter = dedupeJobs(after);
+  eq("split dedupe → still one job", gAfter.size, 1);
+  eq("split rep is the non-portion row", gAfter.get("n:s300").rep.id, 30);
+
+  // Revenue: gross + broker share identical with/without the portion row.
+  const kbrB = {}; for (const j of before) kbrB[j.id] = jobKey(j);
+  const kbrA = {}; for (const j of after) kbrA[j.id] = jobKey(j);
+  const gbB = new Map([...dedupeJobs(before).values()].map(g => [g.key, g]));
+  const gbA = new Map([...gAfter.values()].map(g => [g.key, g]));
+  const revB = computeRevenueSplit(before, [], kbrB, gbB, null);
+  const revA = computeRevenueSplit(after, [], kbrA, gbA, null);
+  eq("split revenue gross unchanged", revA.gross, revB.gross);
+  eq("split revenue broker unchanged", revA.broker, revB.broker);
+
+  // Storage P&L: income identical (portion has no rate; billing lives on primary).
+  const pnlB = computeStoragePnl(recs, before, sit1);
+  const pnlA = computeStoragePnl(recs, after, sit1);
+  eq("split storage income unchanged", pnlA.totals.income, pnlB.totals.income);
+
+  // Active-job count: still one job (dedupe by jobKey).
+  eq("split active jobs = 1", computeMetrics(recs, after, pnlA).activeJobs, 1);
+
+  // Trip capacity math: each portion's effCf sums back to the original 1200 CF.
+  eq("split CF halves sum to original", effCf(baseAfter) + effCf(portion), 1200);
+
+  // Determinism: rows load newest-first, so the portion (higher id) is often seen
+  // BEFORE the source. Rep must still resolve to the money-bearing source (id 30).
+  const gRev = dedupeJobs([portion, baseAfter]);
+  eq("split rep deterministic regardless of order", gRev.get("n:s300").rep.id, 30);
+  const pnlRev = computeStoragePnl(recs, [portion, baseAfter], sit1);
+  eq("split storage income order-independent", pnlRev.totals.income, pnlB.totals.income);
+}
+
 if (failed) { console.error(`\n${failed} test(s) FAILED`); process.exit(1); }
 console.log("\nAll analytics-data tests passed ✓");
