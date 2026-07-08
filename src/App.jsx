@@ -984,6 +984,19 @@ const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"",
 // not delivered (date_out) and not already loaded onto a truck (out_for_delivery).
 const jobInStorageNow = (j) => !j.date_out && j.status !== "out_for_delivery";
 
+// Trip-layer identity. Everything OUTSIDE trips groups a job by jobKey (job_number),
+// so a job stays ONE job in billing/analytics/client view. But a split job has
+// "portion" rows (same job_number) that must ride different trucks, so inside the
+// Trips layer the assignment unit is the individual row. Non-split rows keep
+// collapsing by jobKey (no regression); split portions are addressed by row id.
+const tripUnitKey = (j) => j.split_group ? "row:" + j.id : jobKey(j);
+
+// Order rows of a job so the money-bearing one comes first: non-split unit rows
+// before split rows, then by id. Groupings that take job-level fields from the
+// first row per jobKey must iterate in this order, else a zeroed split portion
+// (created later, so newest-first in load order) could shadow the real balances.
+const moneyRowFirst = (a, b) => ((a.split_group ? 1 : 0) - (b.split_group ? 1 : 0)) || (a.id - b.id);
+
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
   const sp = g.parts.find(p => p.storage?.address);
@@ -1344,7 +1357,8 @@ create policy "trips_all" on public.trips for all to anon, authenticated using (
 
 alter table public.storage_jobs
   add column if not exists trip_id bigint references public.trips(id),
-  add column if not exists trip_stop_order integer;
+  add column if not exists trip_stop_order integer,
+  add column if not exists split_group text;
 
 -- Audit trail of dynamic changes while a trip is in transit.
 create table if not exists public.trip_events (
@@ -1742,7 +1756,7 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
     `STOPS:`,
   ];
   jobsIn.forEach((j, i) => {
-    lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}`);
+    lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}${j.split_group ? " (split load — partial)" : ""}`);
     lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
     lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
     lines.push(`   Balance to collect: $${numv(j.bol_balance).toLocaleString()}`);
@@ -3080,6 +3094,8 @@ export default function App() {
   const [tripAction, setTripAction] = useState(null);         // "add" | "pickup" | "unplanned" | "handoff" | null
   const [handoffForm, setHandoffForm] = useState({ jobKey:"", to:"", reason:"better_fit", note:"" }); // jobKey "" = whole trip
   const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
+  const [splitJobRow, setSplitJobRow] = useState(null);       // storage_jobs row being split across two trucks
+  const [splitCf, setSplitCf] = useState("");                 // CF to peel onto the second truck
   const [dropModal, setDropModal] = useState(null); // { trip, jobKey, label } drop-at-storage popup (trip cards)
   const [dropSel, setDropSel] = useState("");       // selected drop target key ("u:<id>" | "w:<name>") in dropModal
   const [dropCreating, setDropCreating] = useState(false); // inline "create storage unit" form open in dropModal
@@ -3122,6 +3138,7 @@ export default function App() {
   const [splitMissing, setSplitMissing] = useState(false);       // split_group / extra_type / source / payment_id
   const [allocMissing, setAllocMissing] = useState(false);       // payments.job_extra_id (charge allocation)
   const [realCfMissing, setRealCfMissing] = useState(false);     // storage_jobs.real_cf (measured cubic feet)
+  const [jobSplitColMissing, setJobSplitColMissing] = useState(false); // storage_jobs.split_group (job split across trips)
   const [expandedSplits, setExpandedSplits] = useState(() => new Set());
   const [commAssign, setCommAssign] = useState(null);            // pending commission assignment for a payment-split extra
   const [payDocUploading, setPayDocUploading] = useState(false);
@@ -3925,6 +3942,24 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session]);
 
+  // Probe storage_jobs.split_group (marks a row as one portion of a job split
+  // across two trucks/trips — same job_number, its own CF and trip_id).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("split_group").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storage_jobs add column if not exists split_group text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setJobSplitColMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
   // Probe the billing table + occupancy/billing columns (CRM v3).
   useEffect(() => {
     if (!session) return;
@@ -4120,7 +4155,7 @@ export default function App() {
         return true;
       });
     const map = new Map();
-    for (const p of parts) {
+    for (const p of [...parts].sort(moneyRowFirst)) {
       const key = jobKey(p);
       if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, trip_id:p.trip_id, trip_stop_order:p.trip_stop_order, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
@@ -4241,7 +4276,7 @@ export default function App() {
         return true;
       });
     const map = new Map();
-    for (const p of parts) {
+    for (const p of [...parts].sort(moneyRowFirst)) {
       const key = jobKey(p);
       if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, trip_id:p.trip_id, trip_stop_order:p.trip_stop_order, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
@@ -4464,7 +4499,7 @@ export default function App() {
     const m = {}; const seen = new Set();
     for (const j of jobs) {
       if (!j.trip_id) continue;
-      const sk = j.trip_id + "|" + jobKey(j);
+      const sk = j.trip_id + "|" + tripUnitKey(j);
       if (seen.has(sk)) continue; seen.add(sk);
       (m[j.trip_id] = m[j.trip_id] || []).push(j);
     }
@@ -4512,7 +4547,7 @@ export default function App() {
     const ids = new Set([...Object.keys(jobsByTrip), ...Object.keys(tripStopsByTrip)]);
     for (const id of ids) {
       const items = [
-        ...(jobsByTrip[id] || []).map(j => ({ kind:"job", order: j.trip_stop_order ?? 9999, j, key: "j:" + jobKey(j) })),
+        ...(jobsByTrip[id] || []).map(j => ({ kind:"job", order: j.trip_stop_order ?? 9999, j, key: "j:" + tripUnitKey(j) })),
         ...(tripStopsByTrip[id] || []).map(s => ({ kind:"custom", order: s.stop_order ?? 9999, s, key: "c:" + s.id })),
       ];
       items.sort((a, b) => (a.order - b.order) || (a.kind === b.kind ? 0 : a.kind === "job" ? -1 : 1));
@@ -4534,7 +4569,7 @@ export default function App() {
       if (j.date_out || j.trip_id) continue;
       if (j.status !== "in_storage" && !j.storage_id && !j.warehouse) continue;
       if (j.status === "delivered" || j.status === "cancelled") continue;
-      const k = jobKey(j);
+      const k = tripUnitKey(j);
       if (!m.has(k)) m.set(k, j);
     }
     return [...m.values()];
@@ -4546,7 +4581,7 @@ export default function App() {
     for (const j of jobs) {
       if (j.trip_id || j.date_out) continue;
       if (!["scheduled", "picked_up", "in_storage"].includes(j.status)) continue;
-      const k = jobKey(j);
+      const k = tripUnitKey(j);
       if (!m.has(k)) m.set(k, j);
     }
     return [...m.values()];
@@ -4894,7 +4929,10 @@ export default function App() {
     if (!jobDetailKey) return null;
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
-    const f = parts[0];
+    // Representative for the job-level fields (money, billing, addresses): the row
+    // that carries the money — a non-split unit if any, else the original (lowest id)
+    // split row. Split portions have their money zeroed, so never let one be `f`.
+    const f = parts.find(p => !p.split_group) || parts.reduce((a, b) => (b.id < a.id ? b : a));
     return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, calendar_status:f.calendar_status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
@@ -5503,7 +5541,7 @@ export default function App() {
   }
   function openEditTrip(t) {
     setEditingTripId(t.id);
-    const assigned = (jobsByTrip[t.id] || []).map(jobKey);
+    const assigned = (jobsByTrip[t.id] || []).map(tripUnitKey);
     setTripForm({ trip_number:t.trip_number||"", truck_id:t.truck_id||"", driver_id:t.driver_id||"", departure_date:t.departure_date||"", status:t.status||"loading", notes:t.notes||"", job_keys: assigned });
     setTripJobSearch(""); setShowTripModal(true);
   }
@@ -5521,10 +5559,11 @@ export default function App() {
       today: today(),
       lang, // the AI writes reasoning/notes in the user's display language
       jobs: sorted.slice(0, 150).map(j => ({
-        key: jobKey(j),
+        key: tripUnitKey(j),
         job_number: j.job_number || "",
         customer: j.customer || "",
         volume_cf: Math.round(effCf(j)),
+        split: !!j.split_group,
         fadd: j.fadd || "",
         status: j.status || "",
         // Load point with its real location: the customer's own pickup address,
@@ -5562,7 +5601,7 @@ export default function App() {
   // modal (create or edit) so the dispatcher picks the driver, reviews the live
   // capacity bar and confirms through saveTrip() as always.
   function applyTripSuggestion(s, kind) {
-    const live = new Set(tripCandidateJobs.map(jobKey));
+    const live = new Set(tripCandidateJobs.map(tripUnitKey));
     const valid = s.job_keys.filter(k => live.has(k));
     if (!valid.length) { window.alert(trAI("The jobs in this suggestion are no longer available.", "Los jobs de esta sugerencia ya no están disponibles.")); return; }
     if (valid.length < s.job_keys.length && !window.confirm(trAI(
@@ -5575,7 +5614,7 @@ export default function App() {
       setTripForm({
         trip_number: t.trip_number || "", truck_id: t.truck_id || "", driver_id: t.driver_id || "",
         departure_date: t.departure_date || "", status: t.status || "loading", notes: t.notes || "",
-        job_keys: [...(jobsByTrip[t.id] || []).map(jobKey), ...valid.filter(k => !(jobsByTrip[t.id] || []).some(j => jobKey(j) === k))],
+        job_keys: [...(jobsByTrip[t.id] || []).map(tripUnitKey), ...valid.filter(k => !(jobsByTrip[t.id] || []).some(j => tripUnitKey(j) === k))],
       });
     } else {
       setEditingTripId(null);
@@ -5616,12 +5655,13 @@ export default function App() {
     if (!error && tripId) {
       const wanted = tripForm.job_keys;
       // Assign trip_id + stop order in the chosen sequence; clear de-selected jobs.
+      // Keys are trip-unit keys: "row:<id>" for a split portion, jobKey otherwise.
       for (let i = 0; i < wanted.length; i++) {
-        const ids = jobs.filter(j => jobKey(j) === wanted[i]).map(j => j.id);
+        const ids = jobRowIdsForUnit(wanted[i]);
         if (ids.length) await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
       }
       const wantedSet = new Set(wanted);
-      const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(jobKey(j))).map(j => j.id);
+      const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(tripUnitKey(j))).map(j => j.id);
       if (toClear.length) await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
     }
     setTripSaving(false);
@@ -5655,7 +5695,7 @@ export default function App() {
     for (let i = 0; i < orderedItems.length; i++) {
       const it = orderedItems[i];
       if (it.kind === "job") {
-        const ids = jobs.filter(j => jobKey(j) === jobKey(it.j)).map(j => j.id);
+        const ids = jobRowIdsForUnit(tripUnitKey(it.j));
         if (ids.length) await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids);
       } else {
         await supabase.from("trip_stops").update({ stop_order: i + 1 }).eq("id", it.s.id);
@@ -5708,9 +5748,11 @@ export default function App() {
     await supabase.from("trip_stops").delete().eq("id", s.id);
     loadTripStops();
   }
-  // Mark one trip job delivered (stamps date_out + status across its rows).
+  // Mark one trip job delivered. A split portion delivers on its own (only its
+  // row) so a sibling portion on another truck stays in transit; an ordinary job
+  // still stamps all its unit rows together.
   async function tripMarkDelivered(j, trip) {
-    const ids = jobs.filter(x => jobKey(x) === jobKey(j)).map(x => x.id);
+    const ids = jobRowIdsForUnit(tripUnitKey(j));
     await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     if (trip) await logTripEvent(trip.id, "delivery_completed", { job_id: Math.min(...ids), notes: j.job_number || "" });
     loadJobs();
@@ -5719,6 +5761,17 @@ export default function App() {
   // ── Dynamic in-transit trip changes ──
   // All storage_jobs row ids that make up a job (by jobKey).
   const jobRowIds = (k) => jobs.filter(j => jobKey(j) === k).map(j => j.id);
+  // Row ids for a trip-unit key: a single portion row for "row:<id>" keys, else
+  // every row of the jobKey (whole-job ops keep their existing behavior).
+  const jobRowIdsForUnit = (k) => (typeof k === "string" && k.startsWith("row:")) ? [Number(k.slice(4))] : jobRowIds(k);
+  // The portion rows of a split job (same split_group), ordered stably by id.
+  const splitPartsOf = (j) => j?.split_group ? jobs.filter(x => x.split_group === j.split_group).sort((a, b) => a.id - b.id) : [];
+  // "Part i/N" label for a split portion row (empty for ordinary jobs).
+  const splitLabel = (j) => {
+    if (!j?.split_group) return "";
+    const parts = splitPartsOf(j); const i = parts.findIndex(x => x.id === j.id);
+    return parts.length > 1 ? `Part ${i + 1}/${parts.length}` : "Split";
+  };
   async function logTripEvent(tripId, event_type, opts = {}) {
     if (tripEventsMissing) return;
     await supabase.from("trip_events").insert([{ trip_id: tripId, event_type, job_id: opts.job_id ?? null, storage_id: opts.storage_id ?? null, notes: opts.notes || null, created_by: opts.created_by || "dispatcher" }]);
@@ -5729,7 +5782,8 @@ export default function App() {
   // primary (money follows him — cash-in-circulation defaults and new-extra
   // commission prefills read driver_ids[0]); other assigned drivers stay.
   async function handoffJob(k, toDriverId, reason, note) {
-    const rows = jobs.filter(j => jobKey(j) === k);
+    const ids0 = jobRowIdsForUnit(k);
+    const rows = jobs.filter(j => ids0.includes(j.id));
     if (!rows.length || !toDriverId) return;
     const toId = Number(toDriverId);
     const cur = Array.isArray(rows[0].driver_ids) ? rows[0].driver_ids.map(Number) : [];
@@ -5754,15 +5808,82 @@ export default function App() {
   // Quick-set the measured cubic feet of a job (from the trip stop card):
   // occupancy math switches from the broker estimate to this value.
   async function quickSetRealCf(j) {
-    const k = jobKey(j);
+    // A split portion carries its own CF, so only its row is updated; an ordinary
+    // job updates all its unit rows.
+    const ids = jobRowIdsForUnit(tripUnitKey(j));
     const cur = hasRealCf(j) ? String(Math.round(Number(j.real_cf))) : "";
     const v = window.prompt(`CF real medido para ${j.job_number || j.customer || "el job"} (estimado: ${Math.round(parseCf(j.volume))} CF).\nVacío = volver al estimado.`, cur);
     if (v === null) return;
     const val = v.trim() === "" ? null : Number(v.trim());
     if (val !== null && (!isFinite(val) || val < 0)) { window.alert("Número inválido."); return; }
-    await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", jobRowIds(k));
+    await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     await loadJobs();
     showToast(val === null ? "Real CF borrado — vuelve al estimado" : `Real CF: ${Math.round(val).toLocaleString()} CF`);
+  }
+  // Split one storage_jobs row into two portions so the job can ride two trucks.
+  // The portion keeps the SAME job_number (so it stays ONE job in billing/analytics/
+  // client view — see dedupeJobs), but gets its own CF, its own trip_id and status.
+  // Money fields are zeroed on the portion so totals never double-count.
+  async function splitJob(sourceRow, portionCf) {
+    if (!sourceRow) return;
+    const total = effCf(sourceRow);
+    const p = Number(portionCf);
+    if (!isFinite(p) || p <= 0 || p >= total) {
+      window.alert(trAI(`Enter a portion between 1 and ${Math.round(total) - 1} CF.`, `Ingresá una porción entre 1 y ${Math.round(total) - 1} CF.`));
+      return;
+    }
+    setTripBusy(true);
+    const sg = sourceRow.split_group || (jobKey(sourceRow) + ":" + Date.now());
+    // 1) Keep the remainder on the source row (and mark it as a split if new).
+    const { error: upErr } = await supabase.from("storage_jobs")
+      .update({ split_group: sg, real_cf: total - p, updated_by: userEmail, updated_at: new Date().toISOString() })
+      .eq("id", sourceRow.id);
+    if (upErr) { setTripBusy(false); window.alert(upErr.message); return; }
+    // 2) Insert the peeled-off portion: clone job-level columns, own CF, unassigned,
+    //    money zeroed. Drop row-specific / server-managed / non-column fields
+    //    (`storage` is a joined object attached in some views, not a real column).
+    const { id, created_at, updated_at, storage, ...rest } = sourceRow;
+    const portion = {
+      ...rest,
+      split_group: sg,
+      real_cf: p,
+      volume: sourceRow.volume || null,
+      storage_id: sourceRow.storage_id ?? null,
+      warehouse: sourceRow.warehouse ?? null,
+      trip_id: null, trip_stop_order: null, date_out: null, status: "scheduled",
+      bol_balance: 0, bol_collected: null, bol_collected_date: null,
+      pickup_balance: 0, delivery_balance: 0, client_monthly_rate: null, billing_active: false,
+      broker_job_share_amount: null, broker_job_share_pct: null, estimate: null, deposit: null, price_per_cf: null,
+      created_by: userEmail,
+    };
+    const { error } = await supabase.from("storage_jobs").insert([portion]);
+    setTripBusy(false);
+    if (error) { window.alert(error.message); return; }
+    setSplitJobRow(null); setSplitCf("");
+    showToast(trAI(`Job split: ${Math.round(total - p)} CF + ${Math.round(p)} CF`, `Job dividido: ${Math.round(total - p)} CF + ${Math.round(p)} CF`));
+    loadJobs();
+  }
+  // Undo a split: fold all portion CF back onto the original row and delete the
+  // rest. The original (lowest id) keeps the money; portions never had any.
+  async function mergeSplit(anyPortion) {
+    const parts = splitPartsOf(anyPortion);
+    if (parts.length < 2) return;
+    const totalCf = Math.round(parts.reduce((s, p) => s + effCf(p), 0));
+    const [primary, ...others] = parts;
+    const onActive = parts.filter(p => p.trip_id && TRIP_ACTIVE(tripById[p.trip_id]?.status));
+    const distinctTrips = new Set(onActive.map(p => p.trip_id));
+    if (distinctTrips.size > 1 && !window.confirm(trAI(
+      "These portions are on different active trips. Merge them back into one job anyway?",
+      "Estas porciones están en trips activos distintos. ¿Volver a unirlas en un solo job igual?"))) return;
+    setTripBusy(true);
+    const { error } = await supabase.from("storage_jobs")
+      .update({ split_group: null, real_cf: totalCf, updated_by: userEmail, updated_at: new Date().toISOString() })
+      .eq("id", primary.id);
+    if (!error && others.length) await supabase.from("storage_jobs").delete().in("id", others.map(p => p.id));
+    setTripBusy(false);
+    if (error) { window.alert(error.message); return; }
+    showToast(trAI(`Portions merged: ${totalCf} CF`, `Porciones unidas: ${totalCf} CF`));
+    loadJobs();
   }
   // Hand the whole trip (truck swap case) to another driver.
   async function handoffTrip(trip, toDriverId, reason, note) {
@@ -5779,10 +5900,10 @@ export default function App() {
   }
   // Add an existing (non-trip) job to a trip in transit, log it, queue a driver WA update.
   async function tripAddExistingJob(trip, k) {
-    const rows = jobs.filter(j => jobKey(j) === k);
+    const ids = jobRowIdsForUnit(k);
+    const rows = jobs.filter(j => ids.includes(j.id));
     if (!rows.length) return;
     setTripBusy(true);
-    const ids = rows.map(j => j.id);
     const order = (jobsByTrip[trip.id] || []).length + 1;
     await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: rows[0].date_out ? rows[0].status : "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: rows[0].job_number || "" });
@@ -5794,7 +5915,7 @@ export default function App() {
   }
   // Drop a job at a storage unit / warehouse: unlink from trip, set location, status in_storage.
   async function tripDropAtStorage(trip, k, target) {
-    const ids = jobRowIds(k);
+    const ids = jobRowIdsForUnit(k);
     if (!ids.length || !target) return;
     setTripBusy(true);
     // Keep the job on the trip (trip_id / stop order stay) so it still shows there,
@@ -5810,12 +5931,12 @@ export default function App() {
   }
   // Pick a job up from storage onto the trip: link to trip, status out_for_delivery.
   async function tripPickupFromStorage(trip, k) {
-    const ids = jobRowIds(k);
+    const ids = jobRowIdsForUnit(k);
     if (!ids.length) return;
     setTripBusy(true);
     const order = (jobsByTrip[trip.id] || []).length + 1;
     await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: jobs.find(j => jobKey(j) === k)?.job_number || "" });
+    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: jobs.find(j => ids.includes(j.id))?.job_number || "" });
     await loadJobs();
     setTripBusy(false); setTripAction(null);
     showToast(`Job loaded onto the trip`);
@@ -5848,7 +5969,7 @@ export default function App() {
     if (undeliveredKeys.length && dropTarget) {
       const t = dropTarget.kind === "warehouse" ? { warehouse: dropTarget.name, storage_id: null } : { storage_id: dropTarget.id, warehouse: null };
       for (const k of undeliveredKeys) {
-        const ids = jobRowIds(k);
+        const ids = jobRowIdsForUnit(k);
         await supabase.from("storage_jobs").update({ ...t, trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
         await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: dropTarget.kind === "warehouse" ? null : dropTarget.id, notes: dropTarget.label });
       }
@@ -7776,6 +7897,7 @@ export default function App() {
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                   <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                  {j.split_group && <span style={{ color:"#7C3AED", fontWeight:700, fontSize:10.5 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                   <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                   {fromTo && <span style={{ color:"#888" }}>· {fromTo}</span>}
                 </div>
@@ -7793,7 +7915,7 @@ export default function App() {
                 ? <span title={dropLoc} style={{ fontSize:10, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>
                 : <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
                     <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>
-                    <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
+                    <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
                   </div>}
             </div>
           );
@@ -9156,6 +9278,9 @@ export default function App() {
             {jobDetail.parts.some(p => p.date_out) && (
               <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Desentregar todo</Btn>
             )}
+            {!jobSplitColMissing && jobDetail.parts.some(p => p.split_group) && (
+              <Btn disabled={tripBusy} onClick={() => mergeSplit(jobDetail.parts.find(p => p.split_group))}>✂️ {trAI("Merge portions", "Unir porciones")}</Btn>
+            )}
             <Btn primary onClick={() => setJobDetailKey(null)}>Close</Btn>
           </>}>
           {/* Calendar / pickup-date block (Add to calendar + Edit pickup date) */}
@@ -9564,7 +9689,9 @@ export default function App() {
                       {delivered ? "Delivered" : "Active"}
                     </span>
                     <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
+                    {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
                     <span style={{ flex:1 }} />
+                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); }} title="Dividir en dos camiones" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
                     {!delivered
                       ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
                       : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Desentregar</Btn>}
@@ -11264,7 +11391,7 @@ export default function App() {
         const addableSeen = new Set(); const addable = [];
         for (const j of jobs) {
           if (j.trip_id || j.date_out || j.status === "delivered" || j.status === "cancelled") continue;
-          const k = jobKey(j); if (addableSeen.has(k)) continue; addableSeen.add(k);
+          const k = tripUnitKey(j); if (addableSeen.has(k)) continue; addableSeen.add(k);
           addable.push(j);
         }
         const q = tripAddJobSearch.trim().toLowerCase();
@@ -11389,7 +11516,7 @@ export default function App() {
                             {(j.storage_id || j.warehouse) && <span>📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</span>}
                           </div>
                         </div>
-                        <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Add</Btn>
+                        <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, tripUnitKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Add</Btn>
                       </div>
                     ))}
                 </div>
@@ -11408,7 +11535,7 @@ export default function App() {
                           <div><b style={{ fontFamily:"monospace" }}>{j.job_number || "(no #)"}</b> · {j.customer || "—"}</div>
                           <div style={{ color:"#888", marginTop:2 }}>{Math.round(effCf(j))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</div>
                         </div>
-                        <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Load</Btn>
+                        <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, tripUnitKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Load</Btn>
                       </div>
                     ))}
                 </div>
@@ -11505,6 +11632,7 @@ export default function App() {
                             {handle}
                             {numBadge("#111", i + 1)}
                             <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                            {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                             <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
                             {fromTo && <span style={{ fontSize:11, color:"#888" }}>· {fromTo}</span>}
                             {delivered && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 9px" }}>Delivered</span>}
@@ -11530,8 +11658,9 @@ export default function App() {
                           {!delivered && !dropped && (
                             <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                               <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
-                              {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
-                              <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: jobKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
+                              {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
+                              <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: tripUnitKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
+                              {!jobSplitColMissing && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); }} title="Dividir este job en dos camiones" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
                             </div>
                           )}
                         </div>
@@ -11591,7 +11720,7 @@ export default function App() {
           <Modal title={`Complete trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
             footer={<>
               <Btn onClick={() => setTripCompleteModal(null)}>Cancel</Btn>
-              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(jobKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
+              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(tripUnitKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
               {[
@@ -11717,14 +11846,45 @@ export default function App() {
         );
       })()}
 
+      {splitJobRow && (() => {
+        const total = effCf(splitJobRow);
+        const p = Number(splitCf);
+        const valid = isFinite(p) && p > 0 && p < total;
+        const remainder = valid ? total - p : total;
+        return (
+          <Modal title={trAI("Split job across two trucks", "Dividir job en dos camiones")} onClose={() => { setSplitJobRow(null); setSplitCf(""); }}
+            footer={<>
+              <Btn onClick={() => { setSplitJobRow(null); setSplitCf(""); }}>{trAI("Cancel", "Cancelar")}</Btn>
+              <Btn primary disabled={tripBusy || !valid} onClick={() => splitJob(splitJobRow, p)}>{tripBusy ? "…" : trAI("Split", "Dividir")}</Btn>
+            </>}>
+            <div style={{ fontSize:13, marginBottom:10 }}>
+              <b style={{ fontFamily:"monospace" }}>{splitJobRow.job_number || "(job)"}</b> · {splitJobRow.customer || "—"}
+              <div style={{ color:"#666", marginTop:4 }}>{trAI("Current load", "Carga actual")}: <b>{Math.round(total).toLocaleString()} CF</b>{hasRealCf(splitJobRow) ? " ✓real" : ` (${trAI("estimate", "estimado")})`}</div>
+            </div>
+            <Field label={trAI("CF to move to the second truck", "CF a mover al segundo camión")} full>
+              <input style={inp} type="number" min="1" max={Math.round(total) - 1} value={splitCf} onChange={e => setSplitCf(e.target.value)} autoFocus />
+            </Field>
+            <div style={{ fontSize:12.5, color: valid ? "#333" : "#A32D2D", marginTop:8 }}>
+              {valid
+                ? <>{trAI("Stays on this job", "Queda en este job")}: <b>{Math.round(remainder).toLocaleString()} CF</b> · {trAI("moves to new portion", "se mueve a la nueva porción")}: <b>{Math.round(p).toLocaleString()} CF</b></>
+                : trAI(`Enter a value between 1 and ${Math.round(total) - 1} CF.`, `Ingresá un valor entre 1 y ${Math.round(total) - 1} CF.`)}
+            </div>
+            <div style={{ fontSize:11.5, color:"#888", marginTop:10 }}>
+              {trAI("The new portion keeps the same job number and is billed as one job. Assign each portion to its truck from the trip's job picker.",
+                    "La nueva porción mantiene el mismo número de job y se factura como uno solo. Asigná cada porción a su camión desde el buscador de jobs del trip.")}
+            </div>
+          </Modal>
+        );
+      })()}
+
       {showTripModal && (() => {
         // Live capacity as jobs are added (using the form's selected jobs).
         const cap = numv(trucksList.find(tk => tk.id === Number(tripForm.truck_id))?.capacity_cf);
         let loadCf = 0; const seen = new Set();
-        for (const j of jobs) { const k = jobKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += effCf(j); } }
+        for (const j of jobs) { const k = tripUnitKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += effCf(j); } }
         const remaining = cap > 0 ? cap - loadCf : null;
         const pct = cap > 0 ? Math.min(100, Math.round((loadCf / cap) * 100)) : 0;
-        const repFor = (k) => jobs.find(j => jobKey(j) === k);
+        const repFor = (k) => jobs.find(j => tripUnitKey(j) === k);
         return (
         <Modal title={editingTripId ? "Edit trip" : "New trip"} onClose={() => setShowTripModal(false)}
           footer={<>
@@ -11789,6 +11949,7 @@ export default function App() {
                 <div key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderBottom:"1px solid #f5f5f5", fontSize:13 }}>
                   <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i+1}</span>
                   <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
+                  {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                   <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                   <span style={{ color:"#888" }}>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                   <FaddBadge fadd={j.fadd} />
@@ -11805,7 +11966,7 @@ export default function App() {
               const q = tripJobSearch.trim().toLowerCase();
               if (!q) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>Search for a job to add it to the trip.</div>;
               const seen2 = new Set(); const rows = [];
-              for (const j of jobs) { const k = jobKey(j); if (seen2.has(k)) continue; seen2.add(k);
+              for (const j of jobs) { const k = tripUnitKey(j); if (seen2.has(k)) continue; seen2.add(k);
                 const s = storageById[j.storage_id] || {};
                 const hay = [j.job_number, j.customer, j.driver, s.brand, s.unit].join(" ").toLowerCase();
                 if (!hay.includes(q)) continue;
@@ -11819,6 +11980,7 @@ export default function App() {
                   <label key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked?"#f0fdf4":"#fff" }}>
                     <input type="checkbox" checked={checked} onChange={() => tripToggleJob(k)} />
                     <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
+                    {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                     <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                     <span style={{ color:"#888" }}>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                     {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="On another active trip — will move here">on {otherTrip.trip_number || "#"+otherTrip.id}</span>}
@@ -11833,8 +11995,8 @@ export default function App() {
       })()}
 
       {showTripAI && (() => {
-        const live = new Set(tripCandidateJobs.map(jobKey));
-        const repFor = (k) => jobs.find(j => jobKey(j) === k);
+        const live = new Set(tripCandidateJobs.map(tripUnitKey));
+        const repFor = (k) => jobs.find(j => tripUnitKey(j) === k);
         const dropSuggestion = (kind, idx) => setTripAIResult(r => ({ ...r, [kind]: r[kind].filter((_, i) => i !== idx) }));
         const SuggestionCard = ({ s, kind, idx }) => {
           const truck = kind === "addition" ? truckById[tripById[s.trip_id]?.truck_id] : truckById[s.truck_id];

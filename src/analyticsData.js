@@ -85,6 +85,11 @@ export function dedupeJobs(jobs) {
       g = { key: k, rep: j, parts: [], anyOut: false, allOut: true, dateIn: j.date_in || null, dateOut: null };
       m.set(k, g);
     }
+    // A split job has extra "portion" rows (same job_number, own CF, money zeroed)
+    // so it can ride two trucks. The representative must be the row that carries the
+    // money: a non-split unit row if any, else the original (lowest id) split row —
+    // the peeled-off portions always have a higher id and zeroed money.
+    else if (g.rep.split_group && (!j.split_group || j.id < g.rep.id)) g.rep = j;
     g.parts.push(j);
     if (j.date_in && (!g.dateIn || j.date_in < g.dateIn)) g.dateIn = j.date_in;
     if (j.date_out) { g.anyOut = true; if (!g.dateOut || j.date_out > g.dateOut) g.dateOut = j.date_out; }
@@ -169,7 +174,9 @@ export function computeStoragePnl(records, jobs, sitFn) {
   for (const p of activeParts) { const k = jobKey(p); (partsByKey[k] = partsByKey[k] || []).push(p); }
   const incomeByStorage = {}, jobsByStorage = {};
   for (const parts of Object.values(partsByKey)) {
-    const j = parts[0];
+    // Billing lives on the money-bearing row: a non-split unit row if any, else the
+    // original (lowest id) split row. Peeled-off portions have billing zeroed.
+    const j = parts.find(p => !p.split_group) || parts.reduce((a, b) => (b.id < a.id ? b : a));
     const storageParts = parts.filter(p => p.storage_id);
     for (const p of storageParts) (jobsByStorage[p.storage_id] = jobsByStorage[p.storage_id] || []).push(p);
     if (!j.billing_active) continue;

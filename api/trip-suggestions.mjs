@@ -85,6 +85,7 @@ function buildPrompt({ today, jobs, trucks, loadingTrips, truncated, lang }) {
     "6. Order job_keys as delivery stops in a sensible geographic sequence (for additions, they are appended after the existing stops).",
     "7. Prefer fewer, fuller trips over many half-empty ones, but never exceed capacity.",
     "8. Jobs that don't fit any good trip (no delivery address, oversized for every truck, geographic outlier by delivery OR by load point) go in \"unassigned\" with a short reason.",
+    "9. A job with split:true is ONE portion of a larger job already divided across trucks (same job_number, its own volume_cf). Treat each portion as an independent load, but never put two portions that share a job_number on the SAME truck — the point of the split is to spread them across different trucks.",
     "",
     lang === "es"
       ? "Write \"reasoning\", \"reason\" and \"notes\" in Spanish, addressed to the dispatcher."
@@ -126,6 +127,7 @@ export default async function handler(req, res) {
       job_number: String(j.job_number || ""),
       customer: String(j.customer || ""),
       volume_cf: Number(j.volume_cf) || 0,
+      split: !!j.split,
       fadd: String(j.fadd || ""),
       status: String(j.status || ""),
       origin: String(j.origin || ""),
