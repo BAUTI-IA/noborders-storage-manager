@@ -3096,6 +3096,7 @@ export default function App() {
   const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
   const [splitJobRow, setSplitJobRow] = useState(null);       // storage_jobs row being split across two trucks
   const [splitCf, setSplitCf] = useState("");                 // CF to peel onto the second truck
+  const [splitDest, setSplitDest] = useState("");             // "" | "trip:<id>" | "truck:<id>" for the peeled portion
   const [dropModal, setDropModal] = useState(null); // { trip, jobKey, label } drop-at-storage popup (trip cards)
   const [dropSel, setDropSel] = useState("");       // selected drop target key ("u:<id>" | "w:<name>") in dropModal
   const [dropCreating, setDropCreating] = useState(false); // inline "create storage unit" form open in dropModal
@@ -5824,7 +5825,7 @@ export default function App() {
   // The portion keeps the SAME job_number (so it stays ONE job in billing/analytics/
   // client view — see dedupeJobs), but gets its own CF, its own trip_id and status.
   // Money fields are zeroed on the portion so totals never double-count.
-  async function splitJob(sourceRow, portionCf) {
+  async function splitJob(sourceRow, portionCf, dest) {
     if (!sourceRow) return;
     const total = effCf(sourceRow);
     const p = Number(portionCf);
@@ -5834,34 +5835,54 @@ export default function App() {
     }
     setTripBusy(true);
     const sg = sourceRow.split_group || (jobKey(sourceRow) + ":" + Date.now());
+    const now = new Date().toISOString();
+    const useReal = !realCfMissing; // real_cf column present → store the CF numerically
     // 1) Keep the remainder on the source row (and mark it as a split if new).
-    const { error: upErr } = await supabase.from("storage_jobs")
-      .update({ split_group: sg, real_cf: total - p, updated_by: userEmail, updated_at: new Date().toISOString() })
-      .eq("id", sourceRow.id);
+    const srcPatch = { split_group: sg, updated_by: userEmail, updated_at: now };
+    if (useReal) srcPatch.real_cf = total - p; else srcPatch.volume = String(Math.round(total - p));
+    const { error: upErr } = await supabase.from("storage_jobs").update(srcPatch).eq("id", sourceRow.id);
     if (upErr) { setTripBusy(false); window.alert(upErr.message); return; }
-    // 2) Insert the peeled-off portion: clone job-level columns, own CF, unassigned,
-    //    money zeroed. Drop row-specific / server-managed / non-column fields
-    //    (`storage` is a joined object attached in some views, not a real column).
+    // 2) Build the portion from the columns that ACTUALLY exist on the source row.
+    //    `select("*")` only returns real columns, so spreading `rest` never invents
+    //    one (schemas vary — broker-share / billing columns are optional).
     const { id, created_at, updated_at, storage, ...rest } = sourceRow;
-    const portion = {
-      ...rest,
-      split_group: sg,
-      real_cf: p,
-      volume: sourceRow.volume || null,
-      storage_id: sourceRow.storage_id ?? null,
-      warehouse: sourceRow.warehouse ?? null,
-      trip_id: null, trip_stop_order: null, date_out: null, status: "scheduled",
-      bol_balance: 0, bol_collected: null, bol_collected_date: null,
-      pickup_balance: 0, delivery_balance: 0, client_monthly_rate: null, billing_active: false,
-      broker_job_share_amount: null, broker_job_share_pct: null, estimate: null, deposit: null, price_per_cf: null,
-      created_by: userEmail,
-    };
-    const { error } = await supabase.from("storage_jobs").insert([portion]);
+    const portion = { ...rest, split_group: sg, trip_id: null, trip_stop_order: null, date_out: null, status: "scheduled", created_by: userEmail };
+    if (useReal) portion.real_cf = p; else portion.volume = String(Math.round(p));
+    // Zero money / identity-duplicating fields — only those present on this schema.
+    const zeroable = { bol_balance: 0, bol_collected: null, bol_collected_date: null, pickup_balance: 0, delivery_balance: 0, client_monthly_rate: null, billing_active: false, broker_job_share_amount: null, broker_job_share_pct: null, estimate: null, deposit: null, price_per_cf: null };
+    for (const k in zeroable) if (k in portion) portion[k] = zeroable[k];
+    // 3) Optionally place the portion straight onto an existing trip, or spin up a
+    //    brand-new loading trip on a chosen (free) truck.
+    let destTripId = null, destTrip = null;
+    if (typeof dest === "string" && dest.startsWith("trip:")) {
+      destTripId = Number(dest.slice(5));
+      destTrip = trips.find(t => t.id === destTripId) || null;
+    } else if (typeof dest === "string" && dest.startsWith("truck:")) {
+      const truckId = Number(dest.slice(6));
+      const tn = nextTripNumber();
+      const { data: newTrip, error: tErr } = await supabase.from("trips")
+        .insert([{ trip_number: tn, truck_id: truckId, departure_date: today(), status: "loading" }])
+        .select("id").single();
+      if (tErr) { setTripBusy(false); window.alert(tErr.message); return; }
+      destTripId = newTrip?.id; destTrip = { id: destTripId, status: "loading", trip_number: tn };
+    }
+    if (destTripId) {
+      portion.trip_id = destTripId;
+      portion.trip_stop_order = (jobsByTrip[destTripId] || []).length + 1;
+      // In-transit trip → the load is physically on the truck; loading trip → just
+      // assigned (keep it scheduled, same as saveTrip).
+      portion.status = (destTrip && destTrip.status !== "loading") ? "out_for_delivery" : "scheduled";
+    }
+    const { data: insData, error } = await supabase.from("storage_jobs").insert([portion]).select("id").single();
+    if (!error && destTripId) await logTripEvent(destTripId, "job_added", { job_id: insData?.id, notes: (sourceRow.job_number || "") + " (split)" });
     setTripBusy(false);
     if (error) { window.alert(error.message); return; }
-    setSplitJobRow(null); setSplitCf("");
-    showToast(trAI(`Job split: ${Math.round(total - p)} CF + ${Math.round(p)} CF`, `Job dividido: ${Math.round(total - p)} CF + ${Math.round(p)} CF`));
-    loadJobs();
+    setSplitJobRow(null); setSplitCf(""); setSplitDest("");
+    const destName = destTrip ? (destTrip.trip_number || trips.find(t => t.id === destTripId)?.trip_number) : null;
+    showToast(destName
+      ? trAI(`Split: ${Math.round(p)} CF → ${destName}`, `Dividido: ${Math.round(p)} CF → ${destName}`)
+      : trAI(`Job split: ${Math.round(total - p)} CF + ${Math.round(p)} CF`, `Job dividido: ${Math.round(total - p)} CF + ${Math.round(p)} CF`));
+    loadJobs(); loadTrips();
   }
   // Undo a split: fold all portion CF back onto the original row and delete the
   // rest. The original (lowest id) keeps the money; portions never had any.
@@ -7916,7 +7937,7 @@ export default function App() {
                 : <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
                     <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>
                     <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
-                    {!jobSplitColMissing && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); }} title="Dividir este job en dos camiones" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
+                    {!jobSplitColMissing && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
                   </div>}
             </div>
           );
@@ -9692,7 +9713,7 @@ export default function App() {
                     <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
                     {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
                     <span style={{ flex:1 }} />
-                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); }} title="Dividir en dos camiones" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
+                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Dividir en dos camiones" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
                     {!delivered
                       ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
                       : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Desentregar</Btn>}
@@ -11661,7 +11682,7 @@ export default function App() {
                               <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
                               {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
                               <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: tripUnitKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
-                              {!jobSplitColMissing && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); }} title="Dividir este job en dos camiones" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
+                              {!jobSplitColMissing && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
                             </div>
                           )}
                         </div>
@@ -11852,11 +11873,21 @@ export default function App() {
         const p = Number(splitCf);
         const valid = isFinite(p) && p > 0 && p < total;
         const remainder = valid ? total - p : total;
+        const closeSplit = () => { setSplitJobRow(null); setSplitCf(""); setSplitDest(""); };
+        // Where can the peeled portion go: any active trip except the source's own,
+        // plus a brand-new trip on any free truck.
+        const destTrips = trips.filter(t => TRIP_ACTIVE(t.status) && t.id !== splitJobRow.trip_id)
+          .map(t => { const c = tripCalc(t); return { t, free: c.cap > 0 ? Math.round(c.cap - c.loadedCf) : null }; });
+        // Free CF at the chosen destination (null = unknown capacity), for an overload hint.
+        let destFree = null;
+        if (splitDest.startsWith("trip:")) destFree = destTrips.find(d => d.t.id === Number(splitDest.slice(5)))?.free ?? null;
+        else if (splitDest.startsWith("truck:")) { const cap = numv(truckById[Number(splitDest.slice(6))]?.capacity_cf); destFree = cap > 0 ? cap : null; }
+        const overloads = valid && destFree != null && p > destFree;
         return (
-          <Modal title={trAI("Split job across two trucks", "Dividir job en dos camiones")} onClose={() => { setSplitJobRow(null); setSplitCf(""); }}
+          <Modal title={trAI("Split job across two trucks", "Dividir job en dos camiones")} onClose={closeSplit}
             footer={<>
-              <Btn onClick={() => { setSplitJobRow(null); setSplitCf(""); }}>{trAI("Cancel", "Cancelar")}</Btn>
-              <Btn primary disabled={tripBusy || !valid} onClick={() => splitJob(splitJobRow, p)}>{tripBusy ? "…" : trAI("Split", "Dividir")}</Btn>
+              <Btn onClick={closeSplit}>{trAI("Cancel", "Cancelar")}</Btn>
+              <Btn primary disabled={tripBusy || !valid} onClick={() => splitJob(splitJobRow, p, splitDest)}>{tripBusy ? "…" : (splitDest.startsWith("truck:") ? trAI("Split & create trip", "Dividir y crear trip") : trAI("Split", "Dividir"))}</Btn>
             </>}>
             <div style={{ fontSize:13, marginBottom:10 }}>
               <b style={{ fontFamily:"monospace" }}>{splitJobRow.job_number || "(job)"}</b> · {splitJobRow.customer || "—"}
@@ -11870,9 +11901,36 @@ export default function App() {
                 ? <>{trAI("Stays on this job", "Queda en este job")}: <b>{Math.round(remainder).toLocaleString()} CF</b> · {trAI("moves to new portion", "se mueve a la nueva porción")}: <b>{Math.round(p).toLocaleString()} CF</b></>
                 : trAI(`Enter a value between 1 and ${Math.round(total) - 1} CF.`, `Ingresá un valor entre 1 y ${Math.round(total) - 1} CF.`)}
             </div>
+            <Field label={trAI("Send the new portion to", "Mandar la nueva porción a")} full>
+              <select style={inp} value={splitDest} onChange={e => setSplitDest(e.target.value)}>
+                <option value="">{trAI("— Leave unassigned (add later) —", "— Dejar sin asignar (agregar después) —")}</option>
+                {destTrips.length > 0 && (
+                  <optgroup label={trAI("Existing trips", "Trips existentes")}>
+                    {destTrips.map(({ t, free }) => (
+                      <option key={t.id} value={"trip:" + t.id}>
+                        {t.trip_number || "#" + t.id}{truckById[t.truck_id]?.name ? ` · ${truckById[t.truck_id].name}` : ""}{free != null ? ` · ${free.toLocaleString()} CF ${trAI("free", "libres")}` : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {freeTrucks.length > 0 && (
+                  <optgroup label={trAI("Create a new trip on", "Crear un trip nuevo en")}>
+                    {freeTrucks.map(tk => (
+                      <option key={tk.id} value={"truck:" + tk.id}>🆕 {tk.name || "Truck #" + tk.id} · {numv(tk.capacity_cf).toLocaleString()} CF</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </Field>
+            {overloads && (
+              <div style={{ fontSize:11.5, color:"#A32D2D", marginTop:6 }}>
+                ⚠️ {trAI(`This portion (${Math.round(p).toLocaleString()} CF) is over the destination's ${destFree.toLocaleString()} CF free — it will be over capacity.`,
+                        `Esta porción (${Math.round(p).toLocaleString()} CF) supera los ${destFree.toLocaleString()} CF libres del destino — quedará sobre capacidad.`)}
+              </div>
+            )}
             <div style={{ fontSize:11.5, color:"#888", marginTop:10 }}>
-              {trAI("The new portion keeps the same job number and is billed as one job. Assign each portion to its truck from the trip's job picker.",
-                    "La nueva porción mantiene el mismo número de job y se factura como uno solo. Asigná cada porción a su camión desde el buscador de jobs del trip.")}
+              {trAI("The new portion keeps the same job number and is billed as one job. Leave it unassigned to add it from a trip's job picker later.",
+                    "La nueva porción mantiene el mismo número de job y se factura como uno solo. Dejala sin asignar para agregarla después desde el buscador de un trip.")}
             </div>
           </Modal>
         );
