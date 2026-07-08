@@ -5995,6 +5995,12 @@ export default function App() {
         await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: dropTarget.kind === "warehouse" ? null : dropTarget.id, notes: dropTarget.label });
       }
     }
+    // Jobs dropped at a storage mid-trip stay linked so they keep showing on the
+    // trip; unlink them now so future trips can pick them up from storage.
+    const storedIds = (jobsByTrip[trip.id] || []).filter(j => !j.date_out && j.status === "in_storage").map(j => j.id);
+    if (storedIds.length) {
+      await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", storedIds);
+    }
     await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id);
     setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget("");
     loadTrips(); loadJobs();
@@ -11728,8 +11734,11 @@ export default function App() {
       {tripCompleteModal && (() => {
         const t = tripCompleteModal.trip;
         const c = tripCalc(t);
-        const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
+        // Jobs already dropped at a storage/warehouse mid-trip are settled — only
+        // jobs still physically on the truck need a storage destination here.
         const deliveredJobs = c.jobsIn.filter(j => j.date_out || j.status === "delivered");
+        const alreadyStored = c.jobsIn.filter(j => !j.date_out && j.status !== "delivered" && j.status === "in_storage");
+        const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered" || j.status === "in_storage"));
         const cfDelivered = deliveredJobs.reduce((s, j) => s + effCf(j), 0);
         const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
         const bolPending = c.jobsIn.reduce((s, j) => s + Math.max(0, numv(j.bol_balance) - numv(j.bol_collected)), 0);
@@ -11758,6 +11767,14 @@ export default function App() {
                 </div>
               ))}
             </div>
+            {alreadyStored.length > 0 && (
+              <div style={{ background:"#F4FAEC", border:"1px solid #B9D79A", borderRadius:9, padding:"11px 13px", marginBottom:10 }}>
+                <div style={{ fontSize:12.5, color:"#3B6D11", fontWeight:600, marginBottom:4 }}>🏬 {alreadyStored.length} job(s) already dropped at a storage / warehouse — nothing to do.</div>
+                <div style={{ fontSize:11.5, color:"#888" }}>
+                  {alreadyStored.map(j => `${j.job_number || j.customer || "#"+j.id} (${j.warehouse ? "🏭 " + j.warehouse : (storageById[j.storage_id]?.brand || "storage")})`).join(", ")}
+                </div>
+              </div>
+            )}
             {undelivered.length > 0 && (
               <div style={{ background:"#FFF8F0", border:"1px solid #EF9F27", borderRadius:9, padding:"11px 13px" }}>
                 <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {undelivered.length} job(s) not delivered on the truck. Send to storage?</div>
