@@ -8359,10 +8359,12 @@ export default function App() {
         // contadores de los tabs (no al tab de circulación, que usa `circulation`).
         const q = paySearch.trim().toLowerCase();
         const matchesFilters = (p) =>
-          (!q || (p._g?.job_number || "").toLowerCase().includes(q) || (p._g?.customer || "").toLowerCase().includes(q) || (payRef(p) || "").toLowerCase().includes(q)) &&
+          (!q || (p._g?.job_number || "").toLowerCase().includes(q) || (p._g?.customer || "").toLowerCase().includes(q) || String(payRef(p) || "").toLowerCase().includes(q)) &&
           (!payMethodFilter || p.method === payMethodFilter) &&
-          (!payFrom || (p.payment_date || "") >= payFrom) &&
-          (!payTo || (p.payment_date || "") <= payTo);
+          // Pagos sin fecha quedan fuera cuando hay CUALQUIER límite de fecha
+          // (si no, entraban con "Hasta" pero salían con "Desde").
+          (!payFrom || (!!p.payment_date && p.payment_date >= payFrom)) &&
+          (!payTo || (!!p.payment_date && p.payment_date <= payTo));
         // Una sola pasada: filas filtradas + contadores de tabs. El contador de
         // circulación se calcula SIN filtros porque su tab (las cards por persona)
         // tampoco los aplica — así el badge siempre coincide con el contenido.
@@ -8427,7 +8429,7 @@ export default function App() {
               <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.payment_date || "—"}</td>
               <td style={td2}>{estadoPill(p)}</td>
               <td style={{ ...td2, whiteSpace:"nowrap" }}>
-                {p.concept === "on_account" && p.job_id && !allocMissing && can("payments","edit") && (
+                {p.concept === "on_account" && p.job_id && !allocMissing && !splitMissing && can("payments","edit") && (
                   <button onClick={() => openReallocatePayment(p)} title="Imputar este pago a cuenta contra los cargos del job" style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"2px 8px", cursor:"pointer", marginRight:4 }}>Asignar</button>
                 )}
                 <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
@@ -8534,7 +8536,7 @@ export default function App() {
                           {tag("#FCEBEB", "#A32D2D", trAI(`Undeposited ${daysSince(p.received_date || p.payment_date)}d`, `Sin depositar ${daysSince(p.received_date || p.payment_date)}d`))}
                           <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || ("#" + (p.job_id || "—"))}</button>
                           <span>{p._g?.customer || "—"} · <b>${p._net.toLocaleString()}</b> {payMethodLabel(p.method)} · {trAI("held by", "lo tiene")} {p.cash_with_whom || p.received_by || "—"}</span>
-                          <button onClick={() => { setPayTab("circulation"); setDepositSel(new Set([p.id])); setAttnOpen(false); }} style={goBtn}>{trAI("Deposit", "Depositar")} →</button>
+                          <button onClick={() => { setPayTab("circulation"); setDepositSel(prev => { const n = new Set(prev); n.add(p.id); return n; }); setAttnOpen(false); }} style={goBtn}>{trAI("Deposit", "Depositar")} →</button>
                         </div>
                       ))}
                       {duplicateReport.payments.length > 0 && (
@@ -10960,7 +10962,9 @@ export default function App() {
         // Si payStep apunta a un paso que no existe en este modo (p.ej. "alloc"
         // cuando splitMissing), cae al primer paso en vez de dejar todo colapsado.
         const payStepSafe = stepIds.includes(payStep) ? payStep : stepIds[0];
-        const methodSerial = payForm.check_serial || payForm.mo_serial || "";
+        // Serial del método ELEGIDO (un cheque tipeado y después cambiado a Zelle
+        // no debe seguir mostrando su № en el resumen del paso).
+        const methodSerial = payForm.method === "check" ? (payForm.check_serial || "") : payForm.method === "money_order" ? (payForm.mo_serial || "") : "";
         const allocUsed = allocLines.filter(l => numv(l.amount) > 0).length;
         const allocLeft = allocState && !allocState.error ? allocState.unassigned : 0;
         const stepSummaries = {
