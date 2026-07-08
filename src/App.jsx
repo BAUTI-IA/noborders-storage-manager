@@ -1819,6 +1819,8 @@ const HANDOFF_REASONS = [
 const handoffReasonLabel = (v) => HANDOFF_REASONS.find(r => r[0] === v)?.[1] || v;
 // Why a trip job may legitimately have no payment yet — the picklist offered
 // by the "trip sin payment" alert ("other" enables free text). [value, en, es]
+// Statuses que implican que el pickup del job ya sucedió.
+const PICKUP_DONE_STATUSES = ["picked_up", "in_storage", "out_for_delivery", "delivered"];
 const NO_PAYMENT_REASONS = [
   ["pay_on_delivery", "Pays on delivery (COD)", "Paga al entregar (COD)"],
   ["broker_pending", "Broker payment pending", "Pago del broker pendiente"],
@@ -3065,6 +3067,9 @@ export default function App() {
   const [payReasonForm, setPayReasonForm] = useState(null);   // { jobKey, choice, custom } — inline "why no payment" editor
   const [payReasonSaving, setPayReasonSaving] = useState(false);
   const [payReasonMissing, setPayReasonMissing] = useState(false); // storage_jobs.no_payment_reason not yet in DB
+  // "Falta imputar el pago": popup al marcar un pickup/entrega sin su pago.
+  const [stagePayAlert, setStagePayAlert] = useState(null);   // { jobKey, stage: "pickup"|"delivery" }
+  const [stagePayBannerDismissed, setStagePayBannerDismissed] = useState(false);
   const [showTruckModal, setShowTruckModal] = useState(false);
   const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
   const [editingTruckId, setEditingTruckId] = useState(null);
@@ -4715,6 +4720,34 @@ export default function App() {
   }, [trips, jobsByTrip, paymentsByJobKey]);
   const tripPayInfoById = useMemo(() => { const m = {}; for (const x of tripsWithoutPayment) m[x.trip.id] = x; return m; }, [tripsWithoutPayment]);
   const tripPayAlerts = useMemo(() => tripsWithoutPayment.filter(x => x.unpaid.length), [tripsWithoutPayment]);
+  // ¿Al job le falta imputar el pago de la etapa? Regla elegida por el usuario:
+  // sin NINGÚN payment cargado, o lo cobrado (neto recibido) no cubre el balance
+  // de la etapa (pickup → pickup_balance; delivery → el total esperado del job).
+  const stagePayMissing = useCallback((k, stage) => {
+    if (!(paymentsByJobKey[k] || []).length) return true;
+    const g = extraJobGroups.get(k);
+    const due = stage === "pickup" ? numv(g?.pickup_balance) : jobExpected(g);
+    return due > 0 && (jobReceivedByKey[k] || 0) < due - 0.01;
+  }, [paymentsByJobKey, jobReceivedByKey, extraJobGroups, jobExpected]);
+  // Jobs con el pickup/entrega ya hecha y el pago sin imputar. Cada job aparece
+  // solo con su etapa más avanzada; un no_payment_reason lo excusa (lista aparte).
+  const stagePayAlerts = useMemo(() => {
+    const unpaid = [], excused = [], seen = new Set();
+    for (const j of jobs) {
+      if (["cancelled", "on_hold", "redispatched"].includes(j.status)) continue;
+      const k = jobKey(j);
+      if (seen.has(k)) continue; seen.add(k);
+      const deliveryDone = j.status === "delivered" || !!j.date_out;
+      const stage = deliveryDone ? "delivery" : PICKUP_DONE_STATUSES.includes(j.status) ? "pickup" : null;
+      if (!stage || !stagePayMissing(k, stage)) continue;
+      const g = extraJobGroups.get(k);
+      const due = stage === "pickup" ? numv(g?.pickup_balance) : jobExpected(g);
+      const missing = Math.max(0, due - (jobReceivedByKey[k] || 0));
+      const item = { key: k, job: j, stage, missing };
+      if ((j.no_payment_reason || "").trim()) excused.push(item); else unpaid.push(item);
+    }
+    return { unpaid, excused };
+  }, [jobs, stagePayMissing, extraJobGroups, jobExpected, jobReceivedByKey]);
   // Enrich each payment with its job group for table/grouping/search.
   const paymentRows = useMemo(() => payments.map(p => {
     const k = jobKeyByRowId[p.job_id];
@@ -5199,6 +5232,18 @@ export default function App() {
     if (ns === "picked_up" && !g.pickup_date) patch.pickup_date = today();
     await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id));
     loadJobs();
+    maybeStagePayAlert(jobKey(g.parts[0]), ns);
+  }
+  // "Falta imputar el pago": popup si el status recién aplicado marca un pickup
+  // (picked_up / out_for_delivery) o una entrega (delivered) y el cobro de esa
+  // etapa no está. Usa el estado ya cargado en memoria (mismo patrón que saveTrip).
+  function maybeStagePayAlert(k, newStatus) {
+    const stage = newStatus === "delivered" ? "delivery"
+      : (newStatus === "picked_up" || newStatus === "out_for_delivery") ? "pickup" : null;
+    if (!stage) return;
+    const j = jobs.find(x => jobKey(x) === k);
+    if (j && (j.no_payment_reason || "").trim()) return;
+    if (stagePayMissing(k, stage)) setStagePayAlert({ jobKey: k, stage });
   }
 
   // ── Brokers CRUD ──
@@ -5639,22 +5684,28 @@ export default function App() {
   // warning: job info + "add payment" / "why no payment" actions. onBeforePay
   // runs before the payment modal opens (used to close a modal that would
   // otherwise render on top of it).
-  const renderUnpaidJobRow = (j, { onBeforePay } = {}) => {
+  // stage ("pickup"|"delivery") acota la fila a esa etapa: chip, monto faltante
+  // de la etapa (en vez del total del job) y prefill de payment_stage en el form.
+  const renderUnpaidJobRow = (j, { onBeforePay, stage } = {}) => {
     const k = jobKey(j);
     const g = extraJobGroups.get(k);
     const expected = jobExpected(g);
+    const received = jobReceivedByKey[k] || 0;
+    const stageDue = stage === "pickup" ? numv(g?.pickup_balance) : expected;
+    const suggest = stage ? Math.max(0, Math.round((stageDue || expected) - received)) : (expected > 0 ? Math.round(expected) : 0);
     const editing = payReasonForm && payReasonForm.jobKey === k;
     const hasReason = !!(j.no_payment_reason || "").trim();
     const smallBtn = { padding:"4px 10px", fontSize:11.5 };
     return (
-      <div key={k} style={{ border:"1px solid #F4DDB0", background:"#fff", borderRadius:8, padding:"8px 10px", marginBottom:6 }}>
+      <div key={k + (stage || "")} style={{ border:"1px solid #F4DDB0", background:"#fff", borderRadius:8, padding:"8px 10px", marginBottom:6 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", fontSize:12.5 }}>
           <b style={{ fontFamily:"monospace" }}>{j.job_number || "(sin #)"}</b>
+          {stage && <span style={{ fontSize:10.5, fontWeight:700, color:"#667", background:"#F1F2F4", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>{stage === "pickup" ? "🔼 Pickup" : "📦 Delivery"}</span>}
           <span style={{ flex:1, minWidth:110, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
-          {expected > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(expected).toLocaleString()}</span>}
+          {suggest > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${suggest.toLocaleString()}</span>}
           {can("payments", "create") && (
             <Btn primary disabled={paymentsMissing} style={smallBtn}
-              onClick={() => { if (onBeforePay) onBeforePay(); openAddPayment({ job_id: g?.repId ?? j.id, amount: expected > 0 ? String(Math.round(expected)) : "" }); }}>
+              onClick={() => { if (onBeforePay) onBeforePay(); openAddPayment({ job_id: g?.repId ?? j.id, amount: suggest > 0 ? String(suggest) : "", ...(stage ? { payment_stage: stage } : {}) }); }}>
               💵 {trAI("Add payment", "Cargar payment")}
             </Btn>
           )}
@@ -5764,6 +5815,7 @@ export default function App() {
     await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     if (trip) await logTripEvent(trip.id, "delivery_completed", { job_id: Math.min(...ids), notes: j.job_number || "" });
     loadJobs();
+    maybeStagePayAlert(jobKey(j), "delivered");
   }
 
   // ── Dynamic in-transit trip changes ──
@@ -5841,6 +5893,7 @@ export default function App() {
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
     setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} added` });
     showToast(`Job added to the trip`);
+    if (!rows[0].date_out) maybeStagePayAlert(k, "out_for_delivery");
   }
   // Drop a job at a storage unit / warehouse: unlink from trip, set location, status in_storage.
   async function tripDropAtStorage(trip, k, target) {
@@ -5869,6 +5922,7 @@ export default function App() {
     await loadJobs();
     setTripBusy(false); setTripAction(null);
     showToast(`Job loaded onto the trip`);
+    maybeStagePayAlert(k, "out_for_delivery");
   }
   // Create an unplanned new job and immediately add it to the trip.
   async function saveUnplannedPickup(trip) {
@@ -5891,6 +5945,7 @@ export default function App() {
     setTripBusy(false); setTripAction(null); setUnplannedForm(EMPTY_UNPLANNED);
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
     showToast("Unplanned pickup added");
+    maybeStagePayAlert(jobKey({ id: data?.id, job_number: f.job_number || "" }), "out_for_delivery");
   }
   // Complete a trip: optionally drop the still-on-truck jobs at a storage, then mark completed.
   async function completeTrip(trip, undeliveredKeys, dropTarget) {
@@ -5933,6 +5988,7 @@ export default function App() {
         if (meta.status === "delivered") patch.date_out = f.event_date || today();
         await supabase.from("storage_jobs").update(patch).in("id", ids);
         loadJobs();
+        maybeStagePayAlert(jobKeyStr, meta.status);
       }
     }
     showToast("Event added");
@@ -7104,6 +7160,23 @@ export default function App() {
                 </div>
               </div>
               <button onClick={() => setBannerDismissed(true)} title="Dismiss" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#A32D2D", flexShrink:0 }}>×</button>
+            </div>
+          )}
+
+          {stagePayAlerts.unpaid.length > 0 && !stagePayBannerDismissed && (
+            <div style={{ background:"#FFF6E8", border:"1px solid #EF9F27", borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:13, color:"#854F0B", display:"flex", alignItems:"flex-start", gap:10 }}>
+              <div style={{ flex:1 }}>
+                <strong>💰 {stagePayAlerts.unpaid.length} pickup(s)/{trAI("deliverie(s) without their payment recorded:", "entrega(s) sin el pago imputado:")}</strong>
+                <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
+                  {stagePayAlerts.unpaid.slice(0, 8).map(it => (
+                    <span key={it.key + it.stage} onClick={() => setStagePayAlert({ jobKey: it.key, stage: it.stage })} style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
+                      {it.stage === "pickup" ? "🔼" : "📦"} <strong style={{ fontFamily:"monospace" }}>{it.job.job_number || "(sin #)"}</strong> · {it.job.customer || "—"}{it.missing > 0 ? ` · $${Math.round(it.missing).toLocaleString()}` : ""}
+                    </span>
+                  ))}
+                  {stagePayAlerts.unpaid.length > 8 && <span style={{ color:"#B08A3E", fontWeight:600 }}>+{stagePayAlerts.unpaid.length - 8} {trAI("more", "más")}</span>}
+                </div>
+              </div>
+              <button onClick={() => setStagePayBannerDismissed(true)} title="Dismiss" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#854F0B", flexShrink:0 }}>×</button>
             </div>
           )}
 
@@ -8518,7 +8591,7 @@ export default function App() {
             {(() => {
               // Los duplicados cuentan 1: se renderizan como una sola fila-resumen,
               // y así el badge siempre coincide con las filas visibles.
-              const attnCount = stalePayments.length + (duplicateReport.payments.length ? 1 : 0) + tripPayAlerts.length;
+              const attnCount = stalePayments.length + (duplicateReport.payments.length ? 1 : 0) + tripPayAlerts.length + stagePayAlerts.unpaid.length;
               if (!attnCount) return null;
               const goBtn = { marginLeft:"auto", border:"none", background:"none", cursor:"pointer", fontSize:12, fontWeight:600, color:"#185FA5", whiteSpace:"nowrap" };
               const tag = (bg, fg, text) => <span style={{ fontSize:10.5, fontWeight:700, borderRadius:20, padding:"2px 9px", background:bg, color:fg, whiteSpace:"nowrap" }}>{text}</span>;
@@ -8552,6 +8625,14 @@ export default function App() {
                           <span style={{ fontFamily:"monospace", fontWeight:700 }}>{a.trip.trip_number || `#${a.trip.id}`}</span>
                           <span>· {a.unpaid.length} {trAI("job(s) without payment", "job(s) sin payment")}</span>
                           <button onClick={() => setTripPayAlert({ tripId: a.trip.id })} style={goBtn}>{trAI("Resolve", "Resolver")} →</button>
+                        </div>
+                      ))}
+                      {stagePayAlerts.unpaid.map(it => (
+                        <div key={"g" + it.key + it.stage} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:"#6B5620", flexWrap:"wrap" }}>
+                          {tag("#FDF3E3", "#92760B", it.stage === "pickup" ? trAI("Pickup w/o payment", "Pickup sin pago") : trAI("Delivery w/o payment", "Entrega sin pago"))}
+                          <span style={{ fontFamily:"monospace", fontWeight:700 }}>{it.job.job_number || "(sin #)"}</span>
+                          <span>{it.job.customer || "—"}{it.missing > 0 ? <> · <b>${Math.round(it.missing).toLocaleString()}</b></> : null}</span>
+                          <button onClick={() => setStagePayAlert({ jobKey: it.key, stage: it.stage })} style={goBtn}>{trAI("Resolve", "Resolver")} →</button>
                         </div>
                       ))}
                     </div>
@@ -12393,6 +12474,27 @@ export default function App() {
               </Modal>
             )}
           </>
+        );
+      })()}
+
+      {/* "Falta imputar el pago" del pickup/entrega recién marcada. Renderizado al
+          final para quedar sobre el detalle de trip; "Cargar payment" cierra este
+          modal y el de trip (onBeforePay) porque el form renderiza antes que ellos. */}
+      {stagePayAlert && (() => {
+        const j = jobs.find(x => jobKey(x) === stagePayAlert.jobKey);
+        if (!j) return null;
+        const isPk = stagePayAlert.stage === "pickup";
+        const close = () => { setStagePayAlert(null); setPayReasonForm(null); };
+        return (
+          <Modal title={`💰 ${isPk ? trAI("Missing pickup payment", "Falta imputar el pago del pickup") : trAI("Missing delivery payment", "Falta imputar el pago de la entrega")}`} onClose={close}
+            footer={<Btn primary onClick={close}>OK</Btn>}>
+            <div style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:9, padding:"9px 12px", marginBottom:10, fontSize:12.5, color:"#854F0B" }}>
+              ⚠️ {isPk
+                ? trAI("You just marked this pickup done and its payment isn't recorded yet. Add it or record why there is none.", "Marcaste este pickup como hecho y todavía no está imputado el pago. Cargalo o indicá el motivo de por qué no hay.")
+                : trAI("This job was delivered and what's collected doesn't cover it yet. Add the payment or record why.", "Este job se entregó y lo cobrado todavía no lo cubre. Cargá el payment o indicá el motivo.")}
+            </div>
+            {renderUnpaidJobRow(j, { stage: stagePayAlert.stage, onBeforePay: () => { setStagePayAlert(null); setTripDetailId(null); } })}
+          </Modal>
         );
       })()}
 

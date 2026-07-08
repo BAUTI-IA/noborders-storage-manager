@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(src/**)",
+      "Edit(scripts/**)",
+      "Edit(api/**)",
+      "Edit(docs/**)",
+      "Write(src/**)",
+      "Write(scripts/**)",
+      "Bash(npm run build)"
+    ]
+  }
+}
