@@ -7916,6 +7916,7 @@ export default function App() {
                 : <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
                     <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>
                     <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
+                    {!jobSplitColMissing && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); }} title="Dividir este job en dos camiones" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
                   </div>}
             </div>
           );
