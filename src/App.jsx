@@ -8467,15 +8467,19 @@ export default function App() {
           return [mainRow, detailRow];
         };
         // Group split-payment rows (share a split_group) into one expandable parent.
-        const splitMap = {};
-        for (const p of rows) { if (p.split_group) (splitMap[p.split_group] = splitMap[p.split_group] || []).push(p); }
+        // La pertenencia a la vista sale de las filas filtradas, pero el grupo en sí
+        // (chip, total, hijos y borrado) usa TODAS sus líneas: con búsqueda/fechas un
+        // grupo parcialmente visible mostraría un total parcial y su × borraría solo
+        // esa parte, dejando líneas hermanas huérfanas.
+        const splitAll = {};
+        for (const p of paymentRows) { if (p.split_group) (splitAll[p.split_group] = splitAll[p.split_group] || []).push(p); }
         const seenSplit = new Set();
         const displayItems = [];
         for (const p of rows) {
-          if (p.split_group && (splitMap[p.split_group] || []).length > 1) {
+          if (p.split_group && (splitAll[p.split_group] || []).length > 1) {
             if (seenSplit.has(p.split_group)) continue;
             seenSplit.add(p.split_group);
-            const grp = splitMap[p.split_group];
+            const grp = splitAll[p.split_group];
             displayItems.push({ type:"group", key:"g"+p.split_group, group:p.split_group, rows:grp, total: grp.reduce((s, x) => s + x._net, 0), rep: grp[0] });
           } else {
             displayItems.push({ type:"single", p });
@@ -8496,7 +8500,7 @@ export default function App() {
               {[
                 { c:"#EF9F27", l:trAI("Pending collection", "Pendiente de cobro"), v:m.pending, sub:trAI(`of $${Math.round(m.expected).toLocaleString()} expected this month`, `de $${Math.round(m.expected).toLocaleString()} esperados este mes`) },
                 { c:"#1A8A4E", l:trAI("Received (month)", "Recibido (mes)"), v:m.received, sub:trAI(`includes $${Math.round(m.ccFees).toLocaleString()} CC fees`, `incluye $${Math.round(m.ccFees).toLocaleString()} de CC fees`) },
-                { c:"#E24B4A", l:trAI("In circulation", "En circulación"), v:m.inCirc, sub:`${circulation.length} ${trAI("people hold it", "persona(s) lo tienen")} · ${trAI("all-time", "total histórico")}`, tip:trAI(`$${Math.round(m.inCircThisMonth).toLocaleString()} of this is from this month. Digital payments auto-deposit; cash, checks and money orders stay in circulation until deposited.`, `$${Math.round(m.inCircThisMonth).toLocaleString()} es de este mes. Los pagos digitales se depositan solos; cash, cheques y money orders quedan en circulación hasta depositarse.`) },
+                { c:"#E24B4A", l:trAI("In circulation", "En circulación"), v:m.inCirc, sub:`$${Math.round(m.inCircThisMonth).toLocaleString()} ${trAI("this month", "de este mes")} · ${circulation.length} ${trAI("people hold it", "persona(s) lo tienen")} · ${trAI("all-time total", "total histórico")}`, tip:trAI("Digital payments auto-deposit; cash, checks and money orders stay in circulation until marked deposited, whatever month they were received.", "Los pagos digitales se depositan solos; cash, cheques y money orders quedan en circulación hasta marcarse depositados, sin importar el mes en que se recibieron.") },
                 { c:"#185FA5", l:trAI("Deposited (month)", "Depositado (mes)"), v:m.banked },
               ].flatMap((st, i) => [
                 ...(i > 0 ? [<span key={"arr" + i} style={{ alignSelf:"center", color:"#C6CBD1", fontSize:15, flexShrink:0 }}>→</span>] : []),
@@ -10953,6 +10957,9 @@ export default function App() {
         // El paso "alloc" solo existe cuando se puede dividir (canSplit); los ids
         // son strings para que el número de cada paso no dependa de índices fijos.
         const stepIds = ["job", "method", ...(canSplit ? ["alloc"] : []), "receipt"];
+        // Si payStep apunta a un paso que no existe en este modo (p.ej. "alloc"
+        // cuando splitMissing), cae al primer paso en vez de dejar todo colapsado.
+        const payStepSafe = stepIds.includes(payStep) ? payStep : stepIds[0];
         const methodSerial = payForm.check_serial || payForm.mo_serial || "";
         const allocUsed = allocLines.filter(l => numv(l.amount) > 0).length;
         const allocLeft = allocState && !allocState.error ? allocState.unassigned : 0;
@@ -10978,7 +10985,7 @@ export default function App() {
         const stepBody = { borderTop:"1px solid #f0f0f0", padding:"4px 13px 12px" };
         const stepBox = (id) => ({ border:"1px solid #ececec", borderRadius:10, overflow:"hidden", background:"#fff" });
         const stepHead = (id, title) => {
-          const idx = stepIds.indexOf(id); const open = payStep === id;
+          const idx = stepIds.indexOf(id); const open = payStepSafe === id;
           return (
             <div onClick={() => setPayStep(id)} style={{ display:"flex", alignItems:"center", gap:9, padding:"10px 13px", background:"#FAFBFC", cursor: open ? "default" : "pointer" }}>
               <span style={{ width:22, height:22, borderRadius:"50%", flexShrink:0, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:11.5, fontWeight:700, background: open ? "#111" : "#EDEFF2", color: open ? "#fff" : "#667" }}>{idx + 1}</span>
@@ -11009,7 +11016,7 @@ export default function App() {
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
             <div style={stepBox("job")}>
             {stepHead("job", trAI("Job & amount", "Job y monto"))}
-            {payStep === "job" && <div style={stepBody}>
+            {payStepSafe === "job" && <div style={stepBody}>
             <Field label="Job">
               {selectedG ? (
                 <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
@@ -11069,7 +11076,7 @@ export default function App() {
             {/* Method pill tabs */}
             <div style={stepBox("method")}>
             {stepHead("method", trAI("Method", "Método"))}
-            {payStep === "method" && <div style={stepBody}>
+            {payStepSafe === "method" && <div style={stepBody}>
             <div style={{ marginTop:12 }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Method</div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
@@ -11213,7 +11220,7 @@ export default function App() {
             {canSplit && (
               <div style={stepBox("alloc")}>
               {stepHead("alloc", trAI("Allocation (optional)", "Asignación (opcional)"))}
-              {payStep === "alloc" && <div style={stepBody}>
+              {payStepSafe === "alloc" && <div style={stepBody}>
               <div style={{ marginTop:10 }}>
                 {!reallocPay && (
                   <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
@@ -11299,7 +11306,7 @@ export default function App() {
 
             <div style={stepBox("receipt")}>
             {stepHead("receipt", trAI("Receipt & deposit", "Recepción y depósito"))}
-            {payStep === "receipt" && <div style={stepBody}>
+            {payStepSafe === "receipt" && <div style={stepBody}>
             <div style={{ marginTop:10, padding:"10px 12px", background:"#fafafa", borderRadius:8 }}>
               <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer" }}>
                 <input type="checkbox" checked={digital ? true : payForm.received} disabled={digital} onChange={e => setF({ received:e.target.checked })} />
