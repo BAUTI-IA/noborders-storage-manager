@@ -1248,6 +1248,15 @@ do $$ begin
   alter publication supabase_realtime add table public.drivers;
 exception when others then null; end $$;`;
 
+// Audit columns on brokers/drivers, needed by the concurrent-edit (anti-pisón)
+// guard: saves stamp updated_at/updated_by and compare on conflicting writes.
+const AUDIT_COLS_SQL = `alter table public.brokers
+  add column if not exists updated_at timestamptz,
+  add column if not exists updated_by text;
+alter table public.drivers
+  add column if not exists updated_at timestamptz,
+  add column if not exists updated_by text;`;
+
 // Carrier Settlements: closing sheets + BOL collection fields + a public docs bucket.
 const SETTLEMENTS_SQL = `create table if not exists public.closing_sheets (
   id bigint generated always as identity primary key,
@@ -3022,10 +3031,9 @@ export default function App() {
   const [jobSaving, setJobSaving] = useState(false);
   const [jobErr, setJobErr] = useState(null);
   const [editingJobKey, setEditingJobKey] = useState(null);
-  // Concurrent-edit guard for the job form (the main entity, which stamps
-  // updated_at). editConflict.job === true means a newer save landed while you
-  // were editing; the save is held until you Recargar or Sobrescribir. Other
-  // entities rely on the softer live "X está editando" presence warning.
+  // Concurrent-edit guard: keyed by form ('job' | 'broker' | 'driver'). true
+  // means a newer save landed while you were editing (detected via updated_at);
+  // the save is held until you reload/close or choose "Sobrescribir igual".
   const [editConflict, setEditConflict] = useState({});
   // Warehouse "+ Job" picker: choose an existing job to add here, or create a new one.
   const [whPicker, setWhPicker] = useState(null); // { name } | null
@@ -3171,6 +3179,7 @@ export default function App() {
   const [extrasMissing, setExtrasMissing] = useState(false);
   const [extrasColsMissing, setExtrasColsMissing] = useState(false);  // extra-CF / fuel columns
   const [brokerShareMissing, setBrokerShareMissing] = useState(false);  // broker-share columns (job_extras + storage_jobs)
+  const [auditColsMissing, setAuditColsMissing] = useState(false);      // updated_at/updated_by on brokers + drivers (anti-pisón guard)
   const [extrasTabExpanded, setExtrasTabExpanded] = useState(() => new Set());  // collapsible driver/month cards
   const [jobExtras, setJobExtras] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -3809,6 +3818,26 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session, extrasMissing]);
+
+  // Probe the audit columns (updated_at/updated_by) on brokers + drivers, used
+  // by the concurrent-edit guard. Auto-create them via the exec_sql RPC when
+  // available; otherwise fall back to the soft presence warning only.
+  useEffect(() => {
+    if (!session || crmV2Missing || crmV3Missing) return;
+    let cancelled = false;
+    (async () => {
+      const { error: e1 } = await supabase.from("brokers").select("updated_at").limit(1);
+      const { error: e2 } = await supabase.from("drivers").select("updated_at").limit(1);
+      if (cancelled || (!e1 && !e2)) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: AUDIT_COLS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setAuditColsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, crmV2Missing, crmV3Missing]);
 
   // Probe the Payments module (payments + payment_accounts tables).
   useEffect(() => {
@@ -5347,16 +5376,28 @@ export default function App() {
   function openAddBroker() { setEditingBrokerId(null); setBrokerForm(EMPTY_BROKER); setShowBrokerModal(true); }
   function openEditBroker(b) {
     setEditingBrokerId(b.id);
-    setBrokerForm({ name:b.name||"", contact_name:b.contact_name||"", contact_phone:b.contact_phone||"", contact_email:b.contact_email||"", notes:b.notes||"" });
+    setEditConflict(c => ({ ...c, broker:false }));
+    setBrokerForm({ _loadedUpdatedAt: b.updated_at || null, name:b.name||"", contact_name:b.contact_name||"", contact_phone:b.contact_phone||"", contact_email:b.contact_email||"", notes:b.notes||"" });
     setShowBrokerModal(true);
   }
   async function saveBroker() {
     if (!brokerForm.name.trim()) return;
     setBrokerSaving(true);
     const payload = { name:brokerForm.name.trim(), contact_name:brokerForm.contact_name||null, contact_phone:brokerForm.contact_phone||null, contact_email:brokerForm.contact_email||null, notes:brokerForm.notes||null };
-    if (editingBrokerId) await supabase.from("brokers").update(payload).eq("id", editingBrokerId);
-    else await supabase.from("brokers").insert([payload]);
+    if (editingBrokerId) {
+      // Concurrent-edit guard (same as saveJob): hold and warn if a newer save
+      // landed since the form was opened, unless "Sobrescribir igual" was chosen.
+      if (!auditColsMissing && !editConflict.broker) {
+        const { data: fresh } = await supabase.from("brokers").select("updated_at").eq("id", editingBrokerId).single();
+        if (fresh?.updated_at && (!brokerForm._loadedUpdatedAt || fresh.updated_at > brokerForm._loadedUpdatedAt)) {
+          setEditConflict(c => ({ ...c, broker:true })); setBrokerSaving(false); return;
+        }
+      }
+      if (!auditColsMissing) { payload.updated_at = new Date().toISOString(); payload.updated_by = userEmail; }
+      await supabase.from("brokers").update(payload).eq("id", editingBrokerId);
+    } else await supabase.from("brokers").insert([payload]);
     setBrokerSaving(false); setShowBrokerModal(false);
+    setEditConflict(c => ({ ...c, broker:false }));
     loadBrokers();
   }
   async function deleteBroker(b) {
@@ -5369,16 +5410,26 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", notes:d.notes||"", active: d.active !== false });
+    setEditConflict(c => ({ ...c, driver:false }));
+    setDriverForm({ _loadedUpdatedAt: d.updated_at || null, name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", notes:d.notes||"", active: d.active !== false });
     setShowDriverModal(true);
   }
   async function saveDriver() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
     const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, notes:driverForm.notes||null, active: !!driverForm.active };
-    if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
-    else await supabase.from("drivers").insert([payload]);
+    if (editingDriverId) {
+      if (!auditColsMissing && !editConflict.driver) {
+        const { data: fresh } = await supabase.from("drivers").select("updated_at").eq("id", editingDriverId).single();
+        if (fresh?.updated_at && (!driverForm._loadedUpdatedAt || fresh.updated_at > driverForm._loadedUpdatedAt)) {
+          setEditConflict(c => ({ ...c, driver:true })); setDriverSaving(false); return;
+        }
+      }
+      if (!auditColsMissing) { payload.updated_at = new Date().toISOString(); payload.updated_by = userEmail; }
+      await supabase.from("drivers").update(payload).eq("id", editingDriverId);
+    } else await supabase.from("drivers").insert([payload]);
     setDriverSaving(false); setShowDriverModal(false);
+    setEditConflict(c => ({ ...c, driver:false }));
     loadDrivers();
   }
   async function deleteDriver(d) {
@@ -9938,13 +9989,13 @@ export default function App() {
         <Modal title={editingJobKey ? "Edit job" : "New job"} onClose={() => setShowAddJob(false)}
           footer={<>
             <Btn onClick={() => setShowAddJob(false)}>Cancel</Btn>
-            <Btn primary disabled={jobSaving} onClick={() => saveJob()}>{jobSaving ? "Saving..." : (editConflict.job ? "Sobrescribir igual" : (editingJobKey ? "Save changes" : "Save job"))}</Btn>
+            <Btn primary disabled={jobSaving} onClick={() => saveJob()}>{jobSaving ? "Saving..." : (editingJobKey && editConflict.job ? "Sobrescribir igual" : (editingJobKey ? "Save changes" : "Save job"))}</Btn>
           </>}>
           {editingJobKey && !editConflict.job && (() => {
             const w = presenceOn("job", editingJobKey).filter(x => x.focus?.mode === "editing");
             return w.length ? <Banner tone="warn">⚠️ {w.map(x => x.name || "Alguien").join(", ")} también {w.length > 1 ? "están" : "está"} editando este job ahora mismo — coordiná para no pisar los cambios.</Banner> : null;
           })()}
-          {editConflict.job && (
+          {editingJobKey && editConflict.job && (
             <Banner tone="danger">
               <span style={{ flex:1 }}>🔄 Otra persona guardó cambios en este job mientras lo editabas. Si guardás vas a pisar lo suyo.</span>
               <a onClick={() => { setEditConflict(c => ({ ...c, job:false })); setShowAddJob(false); setJobDetailKey(editingJobKey); }}
@@ -10307,7 +10358,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, AUDIT_COLS_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -10330,12 +10381,19 @@ export default function App() {
         <Modal title={editingBrokerId ? "Edit broker" : "New broker"} onClose={() => setShowBrokerModal(false)}
           footer={<>
             <Btn onClick={() => setShowBrokerModal(false)}>Cancel</Btn>
-            <Btn primary disabled={brokerSaving || !brokerForm.name.trim()} onClick={saveBroker}>{brokerSaving ? "Saving..." : "Save"}</Btn>
+            <Btn primary disabled={brokerSaving || !brokerForm.name.trim()} onClick={saveBroker}>{brokerSaving ? "Saving..." : (editingBrokerId && editConflict.broker ? "Sobrescribir igual" : "Save")}</Btn>
           </>}>
-          {editingBrokerId && (() => {
+          {editingBrokerId && !editConflict.broker && (() => {
             const w = presenceOn("broker", editingBrokerId).filter(x => x.focus?.mode === "editing");
             return w.length ? <Banner tone="warn">⚠️ {w.map(x => x.name || "Alguien").join(", ")} también {w.length > 1 ? "están" : "está"} editando este broker ahora mismo — coordiná para no pisar los cambios.</Banner> : null;
           })()}
+          {editingBrokerId && editConflict.broker && (
+            <Banner tone="danger">
+              <span style={{ flex:1 }}>🔄 Otra persona guardó cambios en este broker mientras lo editabas. Si guardás vas a pisar lo suyo.</span>
+              <a onClick={() => { setEditConflict(c => ({ ...c, broker:false })); setShowBrokerModal(false); }}
+                style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700, whiteSpace:"nowrap" }}>Cerrar sin guardar</a>
+            </Banner>
+          )}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name" full><input style={inp} value={brokerForm.name} onChange={e => setBrokerForm(f => ({...f, name:e.target.value}))} placeholder="Allied Van Lines" /></Field>
             <Field label="Contact"><input style={inp} value={brokerForm.contact_name} onChange={e => setBrokerForm(f => ({...f, contact_name:e.target.value}))} placeholder="Contact name" /></Field>
@@ -10350,12 +10408,19 @@ export default function App() {
         <Modal title={editingDriverId ? "Edit driver" : "New driver"} onClose={() => setShowDriverModal(false)}
           footer={<>
             <Btn onClick={() => setShowDriverModal(false)}>Cancel</Btn>
-            <Btn primary disabled={driverSaving || !driverForm.name.trim()} onClick={saveDriver}>{driverSaving ? "Saving..." : "Save"}</Btn>
+            <Btn primary disabled={driverSaving || !driverForm.name.trim()} onClick={saveDriver}>{driverSaving ? "Saving..." : (editingDriverId && editConflict.driver ? "Sobrescribir igual" : "Save")}</Btn>
           </>}>
-          {editingDriverId && (() => {
+          {editingDriverId && !editConflict.driver && (() => {
             const w = presenceOn("driver", editingDriverId).filter(x => x.focus?.mode === "editing");
             return w.length ? <Banner tone="warn">⚠️ {w.map(x => x.name || "Alguien").join(", ")} también {w.length > 1 ? "están" : "está"} editando este driver ahora mismo — coordiná para no pisar los cambios.</Banner> : null;
           })()}
+          {editingDriverId && editConflict.driver && (
+            <Banner tone="danger">
+              <span style={{ flex:1 }}>🔄 Otra persona guardó cambios en este driver mientras lo editabas. Si guardás vas a pisar lo suyo.</span>
+              <a onClick={() => { setEditConflict(c => ({ ...c, driver:false })); setShowDriverModal(false); }}
+                style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700, whiteSpace:"nowrap" }}>Cerrar sin guardar</a>
+            </Banner>
+          )}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
