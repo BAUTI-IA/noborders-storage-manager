@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
-import { MessagesSection } from "./messages.jsx";
+import { MessagesSection, Avatar, avatarColor, initials } from "./messages.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta } from "./analyticsData.js";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
@@ -2673,6 +2673,69 @@ const PAGE_META = {
   settings:    { title:"Settings", sub:"Operation settings" },
 };
 
+// Live collaboration presence — describe where a teammate is and what they're
+// touching right now (used for the header avatar stack tooltips and record chips).
+const focusVerb = (m) => (m === "editing" ? "editando" : "viendo");
+const focusNoun = (t) => ({ job: "un job", broker: "un broker", driver: "un driver", trip: "un trip" }[t] || "algo");
+function presenceLabel(o) {
+  const where = PAGE_META[o.page]?.title || o.page || "la app";
+  if (o.focus && o.focus.type) {
+    const noun = o.focus.isNew ? `un ${o.focus.type} nuevo` : focusNoun(o.focus.type);
+    return `${o.name || "Alguien"} · ${focusVerb(o.focus.mode)} ${noun} · ${where}`;
+  }
+  return `${o.name || "Alguien"} · en ${where}`;
+}
+// Compact, harmonious avatar stack of teammates currently online. Hover a face
+// to see who it is and what they're doing. Renders nothing when alone.
+function PresenceBar({ others }) {
+  if (!others || others.length === 0) return null;
+  const shown = others.slice(0, 5);
+  const extra = others.length - shown.length;
+  return (
+    <div style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
+      <div style={{ display:"inline-flex" }}>
+        {shown.map((o, i) => (
+          <span key={o.uid} title={presenceLabel(o)}
+            style={{ marginLeft: i === 0 ? 0 : -8, position:"relative", zIndex: shown.length - i, cursor:"default", boxShadow:"0 0 0 2px #fff", borderRadius:"50%" }}>
+            <Avatar id={o.uid} name={o.name} size={26} online />
+          </span>
+        ))}
+      </div>
+      {extra > 0 && <span style={{ fontSize:11, color:"#999", fontWeight:600 }}>+{extra}</span>}
+    </div>
+  );
+}
+// Subtle inline chip: "👁 Ana está viendo · ✏️ Beto está editando" for a record.
+function PresenceChip({ watchers }) {
+  if (!watchers || watchers.length === 0) return null;
+  const editing = watchers.filter(w => w.focus?.mode === "editing");
+  const viewing = watchers.filter(w => w.focus?.mode !== "editing");
+  const names = (arr) => arr.map(w => w.name || "Alguien").join(", ");
+  return (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20,
+      background: editing.length ? "#FDF3E7" : "#EEF4FB", color: editing.length ? "#B45309" : "#185FA5" }}>
+      {editing.length > 0 && <span>✏️ {names(editing)} {editing.length > 1 ? "están editando" : "está editando"}</span>}
+      {editing.length > 0 && viewing.length > 0 && <span style={{ opacity:0.5 }}>·</span>}
+      {viewing.length > 0 && <span>👁 {names(viewing)} {viewing.length > 1 ? "están viendo" : "está viendo"}</span>}
+    </span>
+  );
+}
+
+// Soft inline banner for awareness/conflict notices inside modals.
+function Banner({ tone = "warn", children }) {
+  const palette = {
+    warn:   { bg:"#FDF3E7", bd:"#F1D8B0", fg:"#8A5410" },
+    danger: { bg:"#FCEDED", bd:"#F0C9C9", fg:"#9A2C2C" },
+    info:   { bg:"#EEF4FB", bd:"#CFE0F2", fg:"#185FA5" },
+  }[tone] || {};
+  return (
+    <div style={{ display:"flex", alignItems:"flex-start", gap:8, fontSize:12.5, lineHeight:1.45, fontWeight:500,
+      padding:"9px 12px", borderRadius:10, marginBottom:14, background:palette.bg, border:`1px solid ${palette.bd}`, color:palette.fg }}>
+      {children}
+    </div>
+  );
+}
+
 // Sections that carry per-section permissions (everything except the admin-only Users section).
 const PERMISSION_SECTIONS = NAV.flatMap(g => g.items).filter(it => it.id !== "users");
 const PERM_LEVELS = ["view", "edit", "create"];
@@ -2934,6 +2997,8 @@ export default function App() {
   const [page, setPage] = useState("dispatching");   // sidebar navigation
   const [chatUnread, setChatUnread] = useState(0);   // unread team-chat messages (sidebar badge)
   const [onlineIds, setOnlineIds] = useState([]);    // user ids currently online (Realtime Presence)
+  const [presence, setPresence] = useState({});      // user_id -> { name, page, focus:{type,id,mode} } (live "who's doing what")
+  const presenceChanRef = useRef(null);              // handle to the online-users channel, so focus can be re-tracked live
   const [bolJobNumber, setBolJobNumber] = useState(null); // job to pre-select in the BOL generator
   const [lang, setLang] = useState(() => { try { return localStorage.getItem("lang") || "en"; } catch { return "en"; } });
   const [showDupModal, setShowDupModal] = useState(false);  // duplicates review modal
@@ -2957,6 +3022,11 @@ export default function App() {
   const [jobSaving, setJobSaving] = useState(false);
   const [jobErr, setJobErr] = useState(null);
   const [editingJobKey, setEditingJobKey] = useState(null);
+  // Concurrent-edit guard for the job form (the main entity, which stamps
+  // updated_at). editConflict.job === true means a newer save landed while you
+  // were editing; the save is held until you Recargar or Sobrescribir. Other
+  // entities rely on the softer live "X está editando" presence warning.
+  const [editConflict, setEditConflict] = useState({});
   // Warehouse "+ Job" picker: choose an existing job to add here, or create a new one.
   const [whPicker, setWhPicker] = useState(null); // { name } | null
   const [whPickerKey, setWhPickerKey] = useState(""); // selected existing job key
@@ -4642,14 +4712,58 @@ export default function App() {
   useEffect(() => { if (page === "messages") setChatUnread(0); }, [page]);
 
   // Online presence: every signed-in tab announces itself on a shared Realtime
-  // Presence channel (keyed by user id); the synced key set = who's online.
+  // Presence channel (keyed by user id). Beyond "who's online" we also broadcast
+  // WHAT each person is doing right now (current page + focused record) so
+  // teammates see live who is viewing/editing the same job/broker/driver/trip.
+  const myName = profile?.full_name || session?.user?.email || "Alguien";
+  // Derive my current focus from existing UI state. Open edit modals win over
+  // plain detail views. type/id identify the record; mode is viewing|editing.
+  const myFocus = useMemo(() => {
+    if (showAddJob) return { type: "job", id: editingJobKey || null, mode: "editing", isNew: !editingJobKey };
+    if (jobDetailKey) return { type: "job", id: jobDetailKey, mode: "viewing" };
+    if (showBrokerModal) return { type: "broker", id: editingBrokerId || null, mode: "editing", isNew: !editingBrokerId };
+    if (brokerDetailId) return { type: "broker", id: brokerDetailId, mode: "viewing" };
+    if (showDriverModal) return { type: "driver", id: editingDriverId || null, mode: "editing", isNew: !editingDriverId };
+    if (driverDetailId) return { type: "driver", id: driverDetailId, mode: "viewing" };
+    if (showTripModal) return { type: "trip", id: editingTripId || null, mode: "editing", isNew: !editingTripId };
+    return null;
+  }, [showAddJob, editingJobKey, jobDetailKey, showBrokerModal, editingBrokerId, brokerDetailId, showDriverModal, editingDriverId, driverDetailId, showTripModal, editingTripId]);
+
   useEffect(() => {
     if (!session) return;
     const ch = supabase.channel("online-users", { config: { presence: { key: session.user.id } } });
-    ch.on("presence", { event: "sync" }, () => setOnlineIds(Object.keys(ch.presenceState())))
-      .subscribe(status => { if (status === "SUBSCRIBED") ch.track({ online_at: new Date().toISOString() }); });
-    return () => { supabase.removeChannel(ch); setOnlineIds([]); };
+    presenceChanRef.current = ch;
+    ch.on("presence", { event: "sync" }, () => {
+      const st = ch.presenceState();
+      setOnlineIds(Object.keys(st));
+      const map = {};
+      for (const [uid, metas] of Object.entries(st)) map[uid] = (metas && metas[metas.length - 1]) || {};
+      setPresence(map);
+    }).subscribe(status => {
+      if (status === "SUBSCRIBED") ch.track({ online_at: new Date().toISOString(), name: myName, page, focus: myFocus });
+    });
+    return () => { supabase.removeChannel(ch); presenceChanRef.current = null; setOnlineIds([]); setPresence({}); };
   }, [session]);
+
+  // Re-broadcast my focus whenever the page or focused record changes, so others
+  // see in real time where I moved (a fresh track() replaces my presence meta).
+  useEffect(() => {
+    const ch = presenceChanRef.current;
+    if (!ch || !session) return;
+    ch.track({ online_at: new Date().toISOString(), name: myName, page, focus: myFocus });
+  }, [page, myFocus, myName, session]);
+
+  // Presence readers: everyone online except me, and who (else) is on a record.
+  const myUid = session?.user?.id;
+  const others = useMemo(
+    () => Object.entries(presence).filter(([uid]) => uid !== myUid).map(([uid, m]) => ({ uid, ...m })),
+    [presence, myUid]
+  );
+  // Other users currently focused on a given record (matched by type + id).
+  const presenceOn = useCallback(
+    (type, id) => (id == null ? [] : others.filter(o => o.focus && o.focus.type === type && String(o.focus.id) === String(id))),
+    [others]
+  );
 
   // Last-connection heartbeat: stamp my chat_presence row every minute while
   // the app is open (silently a no-op until the chat receipts SQL is run).
@@ -5032,7 +5146,11 @@ export default function App() {
   }
   function openEditJob(jd) {
     setEditingJobKey(jd.key);
+    setEditConflict(c => ({ ...c, job:false }));
+    // Snapshot the job's latest updated_at so saveJob can detect a concurrent write.
+    const loadedUpdatedAt = (jd.parts || []).reduce((mx, p) => (p.updated_at && (!mx || p.updated_at > mx) ? p.updated_at : mx), jd.updated_at || null);
     setJobForm({
+      _loadedUpdatedAt: loadedUpdatedAt,
       storage_ids: [...new Set(jd.parts.filter(p => p.storage_id).map(p => p.storage_id))],
       warehouses: [...new Set(jd.parts.filter(p => p.warehouse).map(p => p.warehouse))],
       driver_ids: Array.isArray(jd.driver_ids) ? jd.driver_ids : [],
@@ -5152,6 +5270,14 @@ export default function App() {
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
     if (editingJobKey) {
       const current = jobs.filter(j => jobKey(j) === editingJobKey);
+      // Concurrent-edit guard: if a newer save landed since the form was opened,
+      // hold and warn instead of silently clobbering — unless the user already
+      // chose "Sobrescribir igual" (editConflict.job stays true through retry).
+      if (!editConflict.job && jobForm._loadedUpdatedAt && current.length) {
+        const { data: fresh } = await supabase.from("storage_jobs").select("updated_at").in("id", current.map(p => p.id));
+        const latest = (fresh || []).reduce((mx, r) => (r.updated_at && (!mx || r.updated_at > mx) ? r.updated_at : mx), null);
+        if (latest && latest > jobForm._loadedUpdatedAt) { setEditConflict(c => ({ ...c, job:true })); setJobSaving(false); return; }
+      }
       const created = { ...fields, created_by: userEmail };
       let error = null;
       // Update job-level fields on every existing part first.
@@ -5197,6 +5323,7 @@ export default function App() {
       if (error) { setJobErr(error.message); return; }
     }
     setShowAddJob(false);
+    setEditConflict(c => ({ ...c, job:false }));
     loadJobs();
     if (!settlementsMissing) loadClosingSheets();
   }
@@ -6877,6 +7004,7 @@ export default function App() {
               <span style={{ width:6, height:6, borderRadius:"50%", background: liveIndicator ? "#639922" : "#ccc", transition:"all .3s" }} />
               {liveIndicator ? "Actualizado" : "Live"}
             </span>
+            <PresenceBar others={others} />
           </div>
           <div style={{ fontSize:13, color:"#999", marginTop:2 }}>{PAGE_META[page].sub}</div>
         </div>
@@ -9158,6 +9286,9 @@ export default function App() {
             )}
             <Btn primary onClick={() => setJobDetailKey(null)}>Close</Btn>
           </>}>
+          {(() => { const w = presenceOn("job", jobDetail.key); return w.length ? (
+            <div style={{ marginBottom:12 }}><PresenceChip watchers={w} /></div>
+          ) : null; })()}
           {/* Calendar / pickup-date block (Add to calendar + Edit pickup date) */}
           {(() => {
             const ids = jobDetail.parts.map(p => p.id);
@@ -9807,8 +9938,19 @@ export default function App() {
         <Modal title={editingJobKey ? "Edit job" : "New job"} onClose={() => setShowAddJob(false)}
           footer={<>
             <Btn onClick={() => setShowAddJob(false)}>Cancel</Btn>
-            <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Saving..." : (editingJobKey ? "Save changes" : "Save job")}</Btn>
+            <Btn primary disabled={jobSaving} onClick={() => saveJob()}>{jobSaving ? "Saving..." : (editConflict.job ? "Sobrescribir igual" : (editingJobKey ? "Save changes" : "Save job"))}</Btn>
           </>}>
+          {editingJobKey && !editConflict.job && (() => {
+            const w = presenceOn("job", editingJobKey).filter(x => x.focus?.mode === "editing");
+            return w.length ? <Banner tone="warn">⚠️ {w.map(x => x.name || "Alguien").join(", ")} también {w.length > 1 ? "están" : "está"} editando este job ahora mismo — coordiná para no pisar los cambios.</Banner> : null;
+          })()}
+          {editConflict.job && (
+            <Banner tone="danger">
+              <span style={{ flex:1 }}>🔄 Otra persona guardó cambios en este job mientras lo editabas. Si guardás vas a pisar lo suyo.</span>
+              <a onClick={() => { setEditConflict(c => ({ ...c, job:false })); setShowAddJob(false); setJobDetailKey(editingJobKey); }}
+                style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700, whiteSpace:"nowrap" }}>Recargar</a>
+            </Banner>
+          )}
           {(() => {
             const t = jobForm.job_type;
             const u = (k) => (e) => setJobForm(f => ({ ...f, [k]: e.target.value }));
@@ -10190,6 +10332,10 @@ export default function App() {
             <Btn onClick={() => setShowBrokerModal(false)}>Cancel</Btn>
             <Btn primary disabled={brokerSaving || !brokerForm.name.trim()} onClick={saveBroker}>{brokerSaving ? "Saving..." : "Save"}</Btn>
           </>}>
+          {editingBrokerId && (() => {
+            const w = presenceOn("broker", editingBrokerId).filter(x => x.focus?.mode === "editing");
+            return w.length ? <Banner tone="warn">⚠️ {w.map(x => x.name || "Alguien").join(", ")} también {w.length > 1 ? "están" : "está"} editando este broker ahora mismo — coordiná para no pisar los cambios.</Banner> : null;
+          })()}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name" full><input style={inp} value={brokerForm.name} onChange={e => setBrokerForm(f => ({...f, name:e.target.value}))} placeholder="Allied Van Lines" /></Field>
             <Field label="Contact"><input style={inp} value={brokerForm.contact_name} onChange={e => setBrokerForm(f => ({...f, contact_name:e.target.value}))} placeholder="Contact name" /></Field>
@@ -10206,6 +10352,10 @@ export default function App() {
             <Btn onClick={() => setShowDriverModal(false)}>Cancel</Btn>
             <Btn primary disabled={driverSaving || !driverForm.name.trim()} onClick={saveDriver}>{driverSaving ? "Saving..." : "Save"}</Btn>
           </>}>
+          {editingDriverId && (() => {
+            const w = presenceOn("driver", editingDriverId).filter(x => x.focus?.mode === "editing");
+            return w.length ? <Banner tone="warn">⚠️ {w.map(x => x.name || "Alguien").join(", ")} también {w.length > 1 ? "están" : "está"} editando este driver ahora mismo — coordiná para no pisar los cambios.</Banner> : null;
+          })()}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
@@ -11732,6 +11882,10 @@ export default function App() {
             {editingTripId && <Btn danger onClick={() => { setShowTripModal(false); deleteTrip(trips.find(x=>x.id===editingTripId)); }}>Delete</Btn>}
             <Btn primary disabled={tripSaving} onClick={saveTrip}>{tripSaving ? "Saving..." : (editingTripId ? "Save changes" : "Create trip")}</Btn>
           </>}>
+          {editingTripId && (() => {
+            const w = presenceOn("trip", editingTripId).filter(x => x.focus?.mode === "editing");
+            return w.length ? <Banner tone="warn">⚠️ {w.map(x => x.name || "Alguien").join(", ")} también {w.length > 1 ? "están" : "está"} editando este trip ahora mismo.</Banner> : null;
+          })()}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Trip number"><input style={inp} value={tripForm.trip_number} onChange={e => setTripForm(f => ({...f, trip_number:e.target.value}))} placeholder="TRIP-001" /></Field>
             <Field label="Departure date"><input style={inp} type="date" value={tripForm.departure_date} onChange={e => setTripForm(f => ({...f, departure_date:e.target.value}))} /></Field>

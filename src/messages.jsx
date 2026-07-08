@@ -116,8 +116,8 @@ create policy "chat_members_add_by_creator" on public.chat_channel_members
 
 const BLUE = "#0A7CFF";                 // Messenger-style own-bubble blue
 const AVATAR_COLORS = ["#185FA5", "#3B6D11", "#B45309", "#A32D2D", "#6D28D9", "#0F766E", "#BE185D", "#4D7C0F"];
-const avatarColor = (id) => AVATAR_COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
-const initials = (name) => (name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+export const avatarColor = (id) => AVATAR_COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
+export const initials = (name) => (name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
 const dmKey = (a, b) => [a, b].sort().join(":");
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const fmtDay = (ts) => {
@@ -146,7 +146,7 @@ const relTime = (ts) => {
 };
 const after = (a, b) => a && b && new Date(a) >= new Date(b);
 
-function Avatar({ id, name, size = 36, online = false, group = false }) {
+export function Avatar({ id, name, size = 36, online = false, group = false }) {
   return (
     <span style={{ position: "relative", width: size, height: size, flexShrink: 0, display: "inline-block" }}>
       <span style={{ width: size, height: size, borderRadius: "50%", background: group ? "#e8e8ec" : avatarColor(id), color: group ? "#555" : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.36, fontWeight: 700 }}>
