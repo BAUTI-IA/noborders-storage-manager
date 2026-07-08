@@ -3117,6 +3117,16 @@ export default function App() {
   const [payJobSearch, setPayJobSearch] = useState("");   // job search inside the payment form
   const [extraJobSearch, setExtraJobSearch] = useState(""); // job search inside the quick-extra modal (Payments page flow)
   const [reallocPay, setReallocPay] = useState(null);       // "A cuenta" payment being re-assigned to charges
+  // Rediseño Payments: menú ⋯ del header, panel Atención, filtros de la tabla,
+  // detalle desplegable por fila y paso abierto del modal.
+  const [payMenuOpen, setPayMenuOpen] = useState(false);
+  const [attnOpen, setAttnOpen] = useState(true);
+  const [paySearch, setPaySearch] = useState("");
+  const [payMethodFilter, setPayMethodFilter] = useState("");
+  const [payFrom, setPayFrom] = useState("");
+  const [payTo, setPayTo] = useState("");
+  const [expandedPayRows, setExpandedPayRows] = useState(() => new Set());
+  const [payStep, setPayStep] = useState("job");            // "job" | "method" | "alloc" | "receipt"
   // Legal & Compliance
   const [complianceMissing, setComplianceMissing] = useState(false);
   const [companies, setCompanies] = useState([]);
@@ -6166,6 +6176,7 @@ export default function App() {
       base.alloc_lines = seedAllocLines(base.job_id, base.amount);
     }
     setPayForm(base);
+    setPayStep("job");
     setPayJobSearch(""); setShowPayModal(true);
   }
   function openEditPayment(p) {
@@ -6186,7 +6197,7 @@ export default function App() {
       mo_issuer_location: p.mo_issuer_location || "", mo_photo_url: p.mo_photo_url || "",
       cc_fee_enabled: p.cc_fee_enabled !== false, cc_fee_pct: p.cc_fee_pct ?? "3", cc_fee_amount: p.cc_fee_amount ?? "", cc_fee_payment_id: p.cc_fee_payment_id || null,
     });
-    setReallocPay(null); setPayJobSearch(""); setShowPayModal(true);
+    setReallocPay(null); setPayStep("job"); setPayJobSearch(""); setShowPayModal(true);
   }
   // Re-assign an "A cuenta" payment: open it with the allocation panel forced
   // on and the (fixed) amount pre-spread over the outstanding charges.
@@ -6194,6 +6205,7 @@ export default function App() {
     openEditPayment(p);
     setReallocPay(p);
     setPayForm(f => ({ ...f, split_enabled: true, alloc_lines: seedAllocLines(p.job_id, numv(p.amount)) }));
+    setPayStep("alloc"); // después de openEditPayment, que lo resetea a "job"
   }
   // Upload a check / money-order photo to the payment-docs bucket; stash url in the form field.
   async function uploadPaymentDoc(file, field) {
@@ -6922,8 +6934,9 @@ export default function App() {
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           {(() => {
-            // Per-section duplicate alert: shown top-right only when this section has duplicates.
-            const dupSection = page === "jobs" ? "jobs" : page === "payments" ? "payments" : page === "storage" ? "storages" : null;
+            // Per-section duplicate alert: shown top-right only when this section has
+            // duplicates. Payments lo muestra en su panel de Atención y en el menú ⋯.
+            const dupSection = page === "jobs" ? "jobs" : page === "storage" ? "storages" : null;
             const n = dupSection ? duplicateReport[dupSection].length : 0;
             if (!dupSection || n === 0) return null;
             return (
@@ -6942,8 +6955,28 @@ export default function App() {
           {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
           {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
-          {page === "payments" && can("payments","create") && <Btn disabled={paymentsMissing} onClick={() => setShowAccountsModal(true)}>🏦 Bank accounts</Btn>}
-          {page === "payments" && can("payments","create") && !paymentsMissing && !extrasMissing && <Btn onClick={openAddExtraFromPayments}>+ Extra</Btn>}
+          {page === "payments" && can("payments","create") && (
+            <div style={{ position:"relative" }}>
+              <Btn onClick={() => setPayMenuOpen(o => !o)} title={trAI("More actions", "Más acciones")} style={{ padding:"8px 13px", fontWeight:700 }}>⋯</Btn>
+              {payMenuOpen && (
+                <>
+                  <div style={{ position:"fixed", inset:0, zIndex:40 }} onClick={() => setPayMenuOpen(false)} />
+                  <div style={{ position:"absolute", right:0, top:"calc(100% + 6px)", zIndex:41, background:"#fff", border:"1px solid #eee", borderRadius:10, boxShadow:"0 6px 24px rgba(0,0,0,0.12)", minWidth:210, padding:5 }}>
+                    {[
+                      { icon:"🏦", label:trAI("Bank accounts", "Cuentas bancarias"), disabled:paymentsMissing, onClick:() => setShowAccountsModal(true) },
+                      ...(!paymentsMissing && !extrasMissing ? [{ icon:"➕", label:"Extra", onClick:openAddExtraFromPayments }] : []),
+                      ...(duplicateReport.payments.length > 0 ? [{ icon:"🔍", label:`${duplicateReport.payments.length} ${trAI("possible duplicates", "posibles duplicados")}`, onClick:() => { setDupFocus("payments"); setShowDupModal(true); } }] : []),
+                    ].map(it => (
+                      <button key={it.label} disabled={it.disabled} onClick={() => { setPayMenuOpen(false); it.onClick(); }}
+                        style={{ display:"flex", alignItems:"center", gap:8, width:"100%", textAlign:"left", border:"none", background:"none", borderRadius:7, padding:"8px 11px", fontSize:13, cursor: it.disabled ? "not-allowed" : "pointer", opacity: it.disabled ? 0.45 : 1, color:"#111" }}>
+                        <span>{it.icon}</span>{it.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
           {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
           {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
@@ -8322,7 +8355,29 @@ export default function App() {
       {page === "payments" && (() => {
         const m = paymentMetrics;
         const tabFilter = (p) => payTab === "pending" ? !p.received : payTab === "received" ? p.received : payTab === "banked" ? (p.received && effectiveBanked(p)) : true;
-        const rows = paymentRows.filter(tabFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        // Búsqueda + filtros de método/fechas: aplican a la tabla y a los
+        // contadores de los tabs (no al tab de circulación, que usa `circulation`).
+        const q = paySearch.trim().toLowerCase();
+        const matchesFilters = (p) =>
+          (!q || (p._g?.job_number || "").toLowerCase().includes(q) || (p._g?.customer || "").toLowerCase().includes(q) || (payRef(p) || "").toLowerCase().includes(q)) &&
+          (!payMethodFilter || p.method === payMethodFilter) &&
+          (!payFrom || (p.payment_date || "") >= payFrom) &&
+          (!payTo || (p.payment_date || "") <= payTo);
+        // Una sola pasada: filas filtradas + contadores de tabs. El contador de
+        // circulación se calcula SIN filtros porque su tab (las cards por persona)
+        // tampoco los aplica — así el badge siempre coincide con el contenido.
+        const base = [];
+        const tabCounts = { all:0, pending:0, received:0, circulation:0, banked:0 };
+        for (const p of paymentRows) {
+          if (isPhysical(p.method) && p.received && !effectiveBanked(p)) tabCounts.circulation++;
+          if (!matchesFilters(p)) continue;
+          base.push(p);
+          tabCounts.all++;
+          if (!p.received) tabCounts.pending++;
+          else { tabCounts.received++; if (effectiveBanked(p)) tabCounts.banked++; }
+        }
+        const filtersActive = !!(q || payMethodFilter || payFrom || payTo);
+        const rows = base.filter(tabFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
         // Weekly window (Mon–Sun) for the cash-flow summary.
         const td = today(); const dd = new Date(td + "T00:00:00"); const dow = dd.getDay();
         const mon = new Date(dd); mon.setDate(dd.getDate() - ((dow + 6) % 7));
@@ -8335,54 +8390,82 @@ export default function App() {
           if (p.received && inWeek(p.received_date || p.payment_date)) recvWeek += paymentNet(p);
           if (p.banked && inWeek(p.banked_date)) bankWeek += paymentNet(p);
         }
-        const metricDefs = [
-          { label:"Expected this month", value:"$"+Math.round(m.expected).toLocaleString(), color:"#666" },
-          { label:"Received this month", value:"$"+Math.round(m.received).toLocaleString(), color:"#1A8A4E" },
-          { label:"In circulation (not deposited)", value:"$"+Math.round(m.inCirc).toLocaleString(), color:"#E24B4A" },
-          { label:"Deposited this month", value:"$"+Math.round(m.banked).toLocaleString(), color:"#185FA5" },
-          { label:"Pending collection", value:"$"+Math.round(m.pending).toLocaleString(), color:"#EF9F27" },
-          { label:"CC fees collected", value:"$"+Math.round(m.ccFees).toLocaleString(), color:"#7C3AED" },
-        ];
         const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
         const td2 = { padding:"9px 10px", fontSize:12.5, verticalAlign:"middle" };
         const Toggle = ({ on, onClick, disabled }) => (
           <button onClick={onClick} disabled={disabled} style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, border:"none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, background: on ? "#EAF3DE" : "#F1F1F1", color: on ? "#3B6D11" : "#999" }}>{on ? "Yes" : "No"}</button>
         );
-        // One payment row (also used for split children, slightly indented + tinted).
-        const renderPayRow = (p, child = false) => (
-          <tr key={p.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"middle", background: child ? "#FBFAFE" : undefined }}>
-            <td style={{ ...td2, paddingLeft: child ? 26 : td2.padding }}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{child ? "↳ " : ""}{p._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>{child ? "↳ " : ""}—</span>}</td>
-            <td style={td2}>{p._g?.customer || "—"}</td>
-            <td style={td2}>{brokerName(p._g?.broker_id) || "—"}</td>
-            <td style={td2}>{p._g ? (jobDriverNames(p._g) || "—") : "—"}</td>
-            <td style={td2}><ConceptBadge concept={p.concept} />{p.extra_type && p.concept === "extra" && <div style={{ fontSize:9.5, color:"#6D28D9", marginTop:2 }}>{extraTypeLabel(p.extra_type)}</div>}</td>
-            <td style={td2}>
-              <PaymentMethodBadge method={p.method} />
-              {p.check_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{checkTypeLabel(p.check_type)}</div>}
-              {p.mo_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{moTypeLabel(p.mo_type)}</div>}
-            </td>
-            <td style={{ ...td2, fontFamily:"monospace", fontSize:11.5, whiteSpace:"nowrap" }}>{payRef(p) || "—"}</td>
-            <td style={{ ...td2, fontSize:11.5, whiteSpace:"nowrap" }}>{payIssuer(p) || "—"}</td>
-            <td style={{ ...td2, textAlign:"center" }}>{payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="View document" style={{ border:"none", background:"none", cursor:"pointer", fontSize:15 }}>📷</button> : <span style={{ color:"#ddd" }}>—</span>}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:600 }}>{money(p.amount) || "$0"}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap", color: numv(p.discount) ? "#E24B4A" : "#ccc" }}>{numv(p.discount) ? "-"+money(p.discount) : "—"}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.payment_date || "—"}</td>
-            <td style={td2}><Toggle on={!!p.received} onClick={() => togglePayReceived(p)} /></td>
-            <td style={td2}>{p.received_by || "—"}</td>
-            <td style={td2}>{!p.banked && isPhysical(p.method) ? (p.cash_with_whom || "—") : "—"}</td>
-            <td style={td2}><Toggle on={!!p.banked} disabled={!p.received} onClick={() => togglePayBanked(p)} /></td>
-            <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.banked_date || "—"}</td>
-            <td style={td2}>{p.bank_account || "—"}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap" }}>
-              {p.concept === "on_account" && p.job_id && !allocMissing && can("payments","edit") && (
-                <button onClick={() => openReallocatePayment(p)} title="Imputar este pago a cuenta contra los cargos del job" style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"2px 8px", cursor:"pointer", marginRight:4 }}>Asignar</button>
-              )}
-              <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
-              <button onClick={() => deletePaymentRow(p)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
-            </td>
-          </tr>
-        );
+        // Pill único de estado del ciclo de vida (reemplaza las 5 columnas de
+        // toggles; los toggles viven en la fila de detalle). Orden de derivación:
+        // pendiente → depositado (digitales vía effectiveBanked) → circulación → recibido.
+        const estadoPill = (p) => {
+          const s = !p.received ? { bg:"#FDF3E3", fg:"#92760B", t: trAI("Pending", "Pendiente") }
+            : effectiveBanked(p) ? { bg:"#E6F1FB", fg:"#185FA5", t: trAI("Deposited", "Depositado") + (p.bank_account ? " · " + p.bank_account : "") }
+            : isPhysical(p.method) ? { bg:"#FCEBEB", fg:"#A32D2D", t: trAI("In circulation", "En circulación") + " · " + (p.cash_with_whom || p.received_by || "—") }
+            : { bg:"#EAF3DE", fg:"#3B6D11", t: trAI("Received", "Recibido") };
+          return <span style={{ fontSize:10.5, fontWeight:700, borderRadius:20, padding:"3px 9px", background:s.bg, color:s.fg, whiteSpace:"nowrap", display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:6, height:6, borderRadius:"50%", background:s.fg }} />{s.t}</span>;
+        };
+        const kvLabel = { fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#aaa" };
+        const togglePayDetail = (id) => setExpandedPayRows(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+        // Una fila de payment + su fila de detalle si está expandida. Devuelve un
+        // ARRAY de <tr> — los call sites deben aplanar. child = línea de un split.
+        const renderPayRow = (p, child = false) => {
+          const open = expandedPayRows.has(p.id);
+          const mainRow = (
+            <tr key={p.id} style={{ borderBottom: open ? "none" : "1px solid #fafafa", verticalAlign:"middle", background: child ? "#FBFAFE" : undefined }}>
+              <td style={{ ...td2, whiteSpace:"nowrap", paddingLeft: child ? 26 : td2.padding }}>
+                <button onClick={() => togglePayDetail(p.id)} title={trAI("Details", "Detalle")} style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:10, padding:"0 6px 0 0" }}>{open ? "▾" : "▸"}</button>
+                {p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{child ? "↳ " : ""}{p._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>{child ? "↳ " : ""}—</span>}
+              </td>
+              <td style={td2}>{p._g?.customer || "—"}</td>
+              <td style={td2}><ConceptBadge concept={p.concept} />{p.extra_type && p.concept === "extra" && <div style={{ fontSize:9.5, color:"#6D28D9", marginTop:2 }}>{extraTypeLabel(p.extra_type)}</div>}</td>
+              <td style={td2}>
+                <PaymentMethodBadge method={p.method} />
+                {payRef(p) && <div style={{ fontSize:9.5, fontFamily:"monospace", color:"#999", marginTop:2 }}>№ {payRef(p)}</div>}
+              </td>
+              <td style={{ ...td2, whiteSpace:"nowrap", textAlign:"right", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
+              <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.payment_date || "—"}</td>
+              <td style={td2}>{estadoPill(p)}</td>
+              <td style={{ ...td2, whiteSpace:"nowrap" }}>
+                {p.concept === "on_account" && p.job_id && !allocMissing && can("payments","edit") && (
+                  <button onClick={() => openReallocatePayment(p)} title="Imputar este pago a cuenta contra los cargos del job" style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"2px 8px", cursor:"pointer", marginRight:4 }}>Asignar</button>
+                )}
+                <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+                <button onClick={() => deletePaymentRow(p)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
+              </td>
+            </tr>
+          );
+          if (!open) return [mainRow];
+          const kv = (label, value) => <div><div style={kvLabel}>{label}</div><div style={{ fontSize:12.5, marginTop:3 }}>{value || "—"}</div></div>;
+          const detailRow = (
+            <tr key={p.id + "-d"} style={{ borderBottom:"1px solid #f0f0f0" }}>
+              <td colSpan={8} style={{ background:"#FBFBFD", padding:"12px 16px" }}>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:"10px 18px" }}>
+                  {kv("Broker", brokerName(p._g?.broker_id))}
+                  {kv("Driver", p._g ? jobDriverNames(p._g) : "")}
+                  {(p.check_type || p.mo_type) && kv(p.method === "money_order" ? "Money order" : trAI("Check", "Cheque"), [p.check_type ? checkTypeLabel(p.check_type) : moTypeLabel(p.mo_type), payRef(p) && `№ ${payRef(p)}`].filter(Boolean).join(" · "))}
+                  {kv(trAI("Issuer", "Emisor"), payIssuer(p))}
+                  {kv(trAI("Amount", "Monto"), money(p.amount) || "$0")}
+                  {kv(trAI("Discount", "Descuento"), numv(p.discount) ? <span style={{ color:"#E24B4A" }}>-{money(p.discount)}{p.discount_reason ? ` · ${p.discount_reason}` : ""}</span> : "")}
+                  {kv(trAI("Photo", "Foto"), payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} style={{ border:"none", background:"none", cursor:"pointer", fontSize:13, padding:0, color:"#185FA5" }}>📷 {trAI("View", "Ver")}</button> : "")}
+                  {kv(trAI("Received", "Recibido"), <span style={{ display:"inline-flex", alignItems:"center", gap:6 }}><Toggle on={!!p.received} onClick={() => togglePayReceived(p)} />{p.received_date || ""}</span>)}
+                  {kv(trAI("Received by", "Recibido por"), p.received_by)}
+                  {kv(trAI("Who has it", "Lo tiene"), !p.banked && isPhysical(p.method) ? p.cash_with_whom : "")}
+                  {kv(trAI("Deposited", "Depositado"), <span style={{ display:"inline-flex", alignItems:"center", gap:6 }}><Toggle on={!!p.banked} disabled={!p.received} onClick={() => togglePayBanked(p)} />{p.banked_date || ""}</span>)}
+                  {kv(trAI("Account", "Cuenta"), p.bank_account)}
+                  {!payStageMissing && kv(trAI("Stage", "Etapa"), p.payment_stage)}
+                </div>
+                {(p.notes || numv(p.discount) > 0) && (
+                  <div style={{ fontSize:11.5, color:"#888", borderTop:"1px dashed #eee", marginTop:10, paddingTop:8 }}>
+                    {numv(p.discount) > 0 && <span>{money(p.amount) || "$0"} − {money(p.discount)} = <b style={{ color:"#1A8A4E" }}>${p._net.toLocaleString()}</b>{p.notes ? " · " : ""}</span>}
+                    {p.notes}
+                  </div>
+                )}
+              </td>
+            </tr>
+          );
+          return [mainRow, detailRow];
+        };
         // Group split-payment rows (share a split_group) into one expandable parent.
         const splitMap = {};
         for (const p of rows) { if (p.split_group) (splitMap[p.split_group] = splitMap[p.split_group] || []).push(p); }
@@ -8407,41 +8490,87 @@ export default function App() {
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10, marginBottom:16 }}>
-              {metricDefs.map(mt => (
-                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
-                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
-                  <div style={{ fontSize:19, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
-                </div>
-              ))}
+            {/* El ciclo del dinero: pendiente → recibido → en circulación → depositado.
+                Reemplaza las 6 tarjetas + la nota de reconciliación: las flechas cuentan la historia. */}
+            <div style={{ display:"flex", alignItems:"stretch", gap:6, marginBottom:16, flexWrap:"wrap" }}>
+              {[
+                { c:"#EF9F27", l:trAI("Pending collection", "Pendiente de cobro"), v:m.pending, sub:trAI(`of $${Math.round(m.expected).toLocaleString()} expected this month`, `de $${Math.round(m.expected).toLocaleString()} esperados este mes`) },
+                { c:"#1A8A4E", l:trAI("Received (month)", "Recibido (mes)"), v:m.received, sub:trAI(`includes $${Math.round(m.ccFees).toLocaleString()} CC fees`, `incluye $${Math.round(m.ccFees).toLocaleString()} de CC fees`) },
+                { c:"#E24B4A", l:trAI("In circulation", "En circulación"), v:m.inCirc, sub:`${circulation.length} ${trAI("people hold it", "persona(s) lo tienen")} · ${trAI("all-time", "total histórico")}`, tip:trAI(`$${Math.round(m.inCircThisMonth).toLocaleString()} of this is from this month. Digital payments auto-deposit; cash, checks and money orders stay in circulation until deposited.`, `$${Math.round(m.inCircThisMonth).toLocaleString()} es de este mes. Los pagos digitales se depositan solos; cash, cheques y money orders quedan en circulación hasta depositarse.`) },
+                { c:"#185FA5", l:trAI("Deposited (month)", "Depositado (mes)"), v:m.banked },
+              ].flatMap((st, i) => [
+                ...(i > 0 ? [<span key={"arr" + i} style={{ alignSelf:"center", color:"#C6CBD1", fontSize:15, flexShrink:0 }}>→</span>] : []),
+                <div key={st.l} title={st.tip} style={{ flex:"1 1 170px", minWidth:160, background:"#fff", borderRadius:10, border:"1px solid #efefef", borderLeft:`4px solid ${st.c}`, padding:"11px 13px" }}>
+                  <div style={{ fontSize:10.5, color:"#999", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", display:"flex", alignItems:"center", gap:6 }}><span style={{ width:7, height:7, borderRadius:"50%", background:st.c, flexShrink:0 }} />{st.l}</div>
+                  <div style={{ fontSize:21, fontWeight:800, color:st.c, marginTop:3 }}>${Math.round(st.v).toLocaleString()}</div>
+                  {st.sub && <div style={{ fontSize:10.5, color:"#aaa", marginTop:2 }}>{st.sub}</div>}
+                </div>,
+              ])}
             </div>
 
-            {/* Reconciliation note: the three figures use different time windows by design. */}
-            <div style={{ background:"#F5F7FA", border:"1px solid #e3e8ef", borderRadius:10, padding:"10px 13px", marginBottom:16, fontSize:12, color:"#556", lineHeight:1.5 }}>
-              💡 <b>How these reconcile:</b> “Received this month” and “Deposited this month” only count the current month. “In circulation” shows <b>all</b> undeposited cash/checks regardless of when they were received, so it won’t always equal Received − Deposited.
-              {" "}Of this month’s <b>${Math.round(m.received).toLocaleString()}</b> received, <b>${Math.round(m.inCircThisMonth).toLocaleString()}</b> is still in circulation and the rest has been deposited. Digital payments (Zelle, Venmo, wire, card…) are auto-deposited on receipt; cash, checks and money orders stay in circulation until marked deposited.
-            </div>
-
-            {stalePayments.length > 0 && (
-              <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
-                <div style={{ fontSize:13, fontWeight:700, color:"#A32D2D", marginBottom:6 }}>⚠️ Received, not deposited for 7+ days ({stalePayments.length})</div>
-                <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                  {stalePayments.map(p => (
-                    <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#7A2222", flexWrap:"wrap" }}>
-                      <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#A32D2D", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || ("#"+(p.job_id||"—"))}</button>
-                      <span style={{ fontWeight:700 }}>${p._net.toLocaleString()}</span>
-                      <span>· {payMethodLabel(p.method)}</span>
-                      <span>· {(p.cash_with_whom || p.received_by || "—")}</span>
-                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{daysSince(p.received_date || p.payment_date)} days</span>
+            {/* Panel único de Atención: sin depositar 7+ días, duplicados y trips sin payment. */}
+            {(() => {
+              // Los duplicados cuentan 1: se renderizan como una sola fila-resumen,
+              // y así el badge siempre coincide con las filas visibles.
+              const attnCount = stalePayments.length + (duplicateReport.payments.length ? 1 : 0) + tripPayAlerts.length;
+              if (!attnCount) return null;
+              const goBtn = { marginLeft:"auto", border:"none", background:"none", cursor:"pointer", fontSize:12, fontWeight:600, color:"#185FA5", whiteSpace:"nowrap" };
+              const tag = (bg, fg, text) => <span style={{ fontSize:10.5, fontWeight:700, borderRadius:20, padding:"2px 9px", background:bg, color:fg, whiteSpace:"nowrap" }}>{text}</span>;
+              return (
+                <div style={{ border:"1px solid #F0D9A8", background:"#FFFBF2", borderRadius:10, marginBottom:16 }}>
+                  <div onClick={() => setAttnOpen(o => !o)} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 14px", cursor:"pointer", fontSize:13, fontWeight:700, color:"#854F0B" }}>
+                    ⚠️ {trAI("Attention", "Atención")}
+                    <span style={{ background:"#EF9F27", color:"#fff", borderRadius:20, fontSize:11, padding:"1px 8px" }}>{attnCount}</span>
+                    <span style={{ marginLeft:"auto", fontSize:11, fontWeight:600, color:"#B08A3E" }}>{attnOpen ? "▲ " + trAI("hide", "ocultar") : "▼ " + trAI("show", "ver")}</span>
+                  </div>
+                  {attnOpen && (
+                    <div style={{ borderTop:"1px solid #F4E5C3", padding:"8px 14px 11px", display:"flex", flexDirection:"column", gap:6 }}>
+                      {stalePayments.map(p => (
+                        <div key={"s" + p.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:"#6B5620", flexWrap:"wrap" }}>
+                          {tag("#FCEBEB", "#A32D2D", trAI(`Undeposited ${daysSince(p.received_date || p.payment_date)}d`, `Sin depositar ${daysSince(p.received_date || p.payment_date)}d`))}
+                          <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || ("#" + (p.job_id || "—"))}</button>
+                          <span>{p._g?.customer || "—"} · <b>${p._net.toLocaleString()}</b> {payMethodLabel(p.method)} · {trAI("held by", "lo tiene")} {p.cash_with_whom || p.received_by || "—"}</span>
+                          <button onClick={() => { setPayTab("circulation"); setDepositSel(new Set([p.id])); setAttnOpen(false); }} style={goBtn}>{trAI("Deposit", "Depositar")} →</button>
+                        </div>
+                      ))}
+                      {duplicateReport.payments.length > 0 && (
+                        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:"#6B5620", flexWrap:"wrap" }}>
+                          {tag("#EDE9FE", "#6D28D9", trAI("Possible duplicate", "Posible duplicado"))}
+                          <span>🔍 {duplicateReport.payments.length} {trAI("possible duplicate payment(s)", "posible(s) payment(s) duplicado(s)")}</span>
+                          <button onClick={() => { setDupFocus("payments"); setShowDupModal(true); }} style={goBtn}>{trAI("Review", "Revisar")} →</button>
+                        </div>
+                      )}
+                      {tripPayAlerts.map(a => (
+                        <div key={"t" + a.trip.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:"#6B5620", flexWrap:"wrap" }}>
+                          {tag("#FDF3E3", "#92760B", trAI("Trip w/o payment", "Trip sin payment"))}
+                          <span style={{ fontFamily:"monospace", fontWeight:700 }}>{a.trip.trip_number || `#${a.trip.id}`}</span>
+                          <span>· {a.unpaid.length} {trAI("job(s) without payment", "job(s) sin payment")}</span>
+                          <button onClick={() => setTripPayAlert({ tripId: a.trip.id })} style={goBtn}>{trAI("Resolve", "Resolver")} →</button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
+              );
+            })()}
+
+            {/* Búsqueda + filtros (no aplican al tab de circulación) */}
+            {payTab !== "circulation" && (
+              <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+                <input style={{ ...inp, flex:"1 1 220px" }} value={paySearch} onChange={e => setPaySearch(e.target.value)} placeholder={trAI("🔍 Search by job #, client or ref №…", "🔍 Buscar por job #, cliente o № de referencia…")} />
+                <select style={{ ...inp, minWidth:140 }} value={payMethodFilter} onChange={e => setPayMethodFilter(e.target.value)}>
+                  <option value="">{trAI("— Method —", "— Método —")}</option>
+                  {PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
+                </select>
+                <input style={inp} type="date" value={payFrom} onChange={e => setPayFrom(e.target.value)} title={trAI("From", "Desde")} />
+                <input style={inp} type="date" value={payTo} onChange={e => setPayTo(e.target.value)} title={trAI("To", "Hasta")} />
+                {filtersActive && <button onClick={() => { setPaySearch(""); setPayMethodFilter(""); setPayFrom(""); setPayTo(""); }} title={trAI("Clear filters", "Limpiar filtros")} style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:16 }}>×</button>}
               </div>
             )}
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
-              {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
-                <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+              {[["all", trAI("All", "Todos")], ["pending", trAI("Pending", "Pendientes")], ["received", trAI("Received", "Recibidos")], ["circulation", trAI("In circulation", "En circulación")], ["banked", trAI("Deposited", "Depositados")]].map(([v, l]) => (
+                <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l} <span style={{ fontSize:11, fontWeight:700, color: payTab===v ? "#888" : "#b5b5b5", marginLeft:3 }}>{tabCounts[v]}</span></button>
               ))}
             </div>
 
@@ -8510,34 +8639,31 @@ export default function App() {
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                     <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Client","Broker","Driver","Concept","Method","Ref #","Issuer","Photo","Amount","Desc.","Net","Date","Received","Received by","Who has it","Deposited","Dep. date","Account","Actions"].map((h, i) => <th key={i} style={th}>{h}</th>)}
+                      {["Job #", trAI("Client", "Cliente"), trAI("Concept", "Concepto"), trAI("Method", "Método"), trAI("Net", "Neto"), trAI("Date", "Fecha"), trAI("Status", "Estado"), ""].map((h, i) => <th key={i} style={{ ...th, textAlign: i === 4 ? "right" : "left" }}>{h}</th>)}
                     </tr></thead>
                     <tbody>
                       {rows.length === 0 ? (
-                        <tr><td colSpan={20} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin pagos en este filtro.</td></tr>
+                        <tr><td colSpan={8} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin pagos en este filtro.</td></tr>
                       ) : displayItems.flatMap(it => {
-                        if (it.type === "single") return [renderPayRow(it.p)];
+                        if (it.type === "single") return renderPayRow(it.p);
                         const rep = it.rep, open = expandedSplits.has(it.group);
                         const parent = (
                           <tr key={it.key} style={{ borderBottom:"1px solid #f3f0fb", verticalAlign:"middle", background:"#FBFAFE" }}>
-                            <td style={td2}>{rep._key ? <button onClick={() => setJobDetailKey(rep._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{rep._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
+                            <td style={{ ...td2, whiteSpace:"nowrap" }}>{rep._key ? <button onClick={() => setJobDetailKey(rep._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{rep._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
                             <td style={td2}>{rep._g?.customer || "—"}</td>
-                            <td style={td2}>{brokerName(rep._g?.broker_id) || "—"}</td>
-                            <td style={td2}>{rep._g ? (jobDriverNames(rep._g) || "—") : "—"}</td>
                             <td style={td2}>
-                              <button onClick={() => toggleSplit(it.group)} style={{ border:"none", background:"none", cursor:"pointer", fontSize:12, color:"#6D28D9", fontWeight:700, padding:0 }}>{open ? "▾" : "▸"} <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Split ({it.rows.length})</span></button>
+                              <button onClick={() => toggleSplit(it.group)} style={{ border:"none", background:"none", cursor:"pointer", fontSize:12, color:"#6D28D9", fontWeight:700, padding:0 }}>{open ? "▾" : "▸"} <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>✂️ Split ({it.rows.length})</span></button>
                             </td>
-                            <td style={td2} colSpan={4}><span style={{ fontSize:11.5, color:"#999" }}><PaymentMethodBadge method={rep.method} /> · {it.rows.length} lines</span></td>
-                            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700 }}>{money(it.total) || "$0"}</td>
+                            <td style={td2}><span style={{ fontSize:11.5, color:"#999" }}><PaymentMethodBadge method={rep.method} /> · {it.rows.length} {trAI("lines", "líneas")}</span></td>
+                            <td style={{ ...td2, whiteSpace:"nowrap", textAlign:"right", fontWeight:800, color:"#6D28D9" }}>${Math.round(it.total).toLocaleString()}</td>
+                            <td style={{ ...td2, whiteSpace:"nowrap" }}>{rep.payment_date || "—"}</td>
                             <td style={td2}><span style={{ color:"#ccc" }}>—</span></td>
-                            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:800, color:"#6D28D9" }}>${Math.round(it.total).toLocaleString()}</td>
-                            <td style={td2} colSpan={7}><span style={{ fontSize:11.5, color:"#999" }}>{rep.payment_date || "—"}</span></td>
                             <td style={{ ...td2, whiteSpace:"nowrap" }}>
                               <button onClick={() => deleteSplitGroup(it.rows)} title="Delete split" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15 }}>×</button>
                             </td>
                           </tr>
                         );
-                        return open ? [parent, ...it.rows.map(p => renderPayRow(p, true))] : [parent];
+                        return open ? [parent, ...it.rows.flatMap(p => renderPayRow(p, true))] : [parent];
                       })}
                     </tbody>
                   </table>
@@ -8546,26 +8672,35 @@ export default function App() {
               </div>
             )}
 
-            {!paymentsMissing && (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px", marginTop:18 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Weekly cash flow</div>
-                <div style={{ fontSize:11, color:"#aaa", marginBottom:12 }}>{wkStart} → {wkEnd}</div>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10 }}>
-                  {[
-                    { l:"Expected this week", v:expWeek, c:"#666" },
-                    { l:"Received this week", v:recvWeek, c:"#1A8A4E" },
-                    { l:"In circulation (total)", v:m.inCirc, c:"#E24B4A" },
-                    { l:"Deposited this week", v:bankWeek, c:"#185FA5" },
-                    { l:"Projection if everything is deposited", v:m.banked + m.inCirc, c:"#7C3AED" },
-                  ].map(x => (
-                    <div key={x.l} style={{ border:"1px solid #f0f0f0", borderRadius:8, padding:"10px 12px" }}>
-                      <div style={{ fontSize:10.5, color:"#999", fontWeight:500 }}>{x.l}</div>
-                      <div style={{ fontSize:16, fontWeight:800, color:x.c, marginTop:2 }}>${Math.round(x.v).toLocaleString()}</div>
-                    </div>
-                  ))}
+            {!paymentsMissing && (() => {
+              const bars = [
+                { l:trAI("Expected this week", "Esperado esta semana"), v:expWeek, c:"#9aa1a9" },
+                { l:trAI("Received this week", "Recibido esta semana"), v:recvWeek, c:"#1A8A4E" },
+                { l:trAI("In circulation (total)", "En circulación (total)"), v:m.inCirc, c:"#E24B4A" },
+                { l:trAI("Deposited this week", "Depositado esta semana"), v:bankWeek, c:"#185FA5" },
+                { l:trAI("If everything gets deposited", "Si se deposita todo"), v:m.banked + m.inCirc, c:"#7C3AED" },
+              ];
+              const maxV = Math.max(1, ...bars.map(b => b.v));
+              return (
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px", marginTop:18, maxWidth:600 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12, gap:10 }}>
+                    <div style={{ fontSize:12, fontWeight:700, color:"#666", textTransform:"uppercase", letterSpacing:"0.05em" }}>{trAI("Weekly cash flow", "Cash flow semanal")}</div>
+                    <div style={{ fontSize:11, color:"#aaa" }}>{wkStart} → {wkEnd}</div>
+                  </div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {bars.map(b => (
+                      <div key={b.l} style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <span style={{ flex:"0 0 185px", fontSize:11, color:"#888" }}>{b.l}</span>
+                        <div style={{ flex:1, height:10, background:"#f3f3f3", borderRadius:6, overflow:"hidden" }}>
+                          <div style={{ height:10, borderRadius:6, background:b.c, width:`${Math.round(b.v / maxV * 100)}%`, minWidth: b.v > 0 ? 4 : 0, transition:"width .3s" }} />
+                        </div>
+                        <span style={{ flex:"0 0 84px", textAlign:"right", fontSize:12, fontWeight:700, color:b.c }}>${Math.round(b.v).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </>
         );
       })()}
@@ -10814,12 +10949,67 @@ export default function App() {
         };
         const saveDisabled = paySaving || (reallocPay ? (!allocState || !!allocState.error || !allocState.rows.length)
           : (payForm.amount === "" || (allocOn ? !!allocState.error : (splitOn && (!splitMatches || splitLines.every(l => l.amount === ""))))));
+        // ── Acordeón de pasos ──
+        // El paso "alloc" solo existe cuando se puede dividir (canSplit); los ids
+        // son strings para que el número de cada paso no dependa de índices fijos.
+        const stepIds = ["job", "method", ...(canSplit ? ["alloc"] : []), "receipt"];
+        const methodSerial = payForm.check_serial || payForm.mo_serial || "";
+        const allocUsed = allocLines.filter(l => numv(l.amount) > 0).length;
+        const allocLeft = allocState && !allocState.error ? allocState.unassigned : 0;
+        const stepSummaries = {
+          job: `${selectedG ? (selectedG.job_number || "(sin #)") : trAI("no job", "sin job")} · $${numv(payForm.amount).toLocaleString()}${payForm.payment_date ? " · " + payForm.payment_date : ""}`,
+          method: payMethodLabel(payForm.method) + (methodSerial ? ` · №${methodSerial}` : "") + (payForm.method === "credit_card" && payForm.cc_fee_enabled ? " · +CC fee" : ""),
+          alloc: reallocPay ? trAI("Reassigning on-account payment", "Reasignando pago a cuenta")
+            : allocOn ? `✂️ ${allocUsed} ${trAI("line(s)", "línea(s)")} · $${allocLeft.toLocaleString(undefined, { maximumFractionDigits:2 })} ${trAI("on account", "a cuenta")}`
+            : splitOn ? `✂️ Split (${splitLines.length})` : trAI("No split", "Sin dividir"),
+          receipt: digital ? trAI("Automatic (digital payment)", "Automático (pago digital)")
+            : payForm.received ? `${trAI("Received by", "Recibido por")} ${payForm.received_by || "—"}${payForm.banked ? " · " + trAI("deposited", "depositado") : ""}`
+            : trAI("Not received yet", "Aún no recibido"),
+        };
+        // Chips de advertencia visibles aun con el paso colapsado — sin esto el
+        // botón de guardar queda deshabilitado sin explicación a la vista.
+        const stepWarns = {
+          method: (checkSerialDup || moSerialDup) ? "⚠️ " + trAI("possible duplicate", "posible duplicado") : null,
+          alloc: (allocOn && allocState?.error) ? "✗ " + allocState.error
+            : (splitOn && !allocOn && !splitMatches) ? "✗ " + trAI("doesn't match the total", "no coincide con el total") : null,
+        };
+        // Helpers de render planos (NO componentes: definir un componente acá
+        // adentro remontaría el subárbol en cada render y los inputs perderían foco).
+        const stepBody = { borderTop:"1px solid #f0f0f0", padding:"4px 13px 12px" };
+        const stepBox = (id) => ({ border:"1px solid #ececec", borderRadius:10, overflow:"hidden", background:"#fff" });
+        const stepHead = (id, title) => {
+          const idx = stepIds.indexOf(id); const open = payStep === id;
+          return (
+            <div onClick={() => setPayStep(id)} style={{ display:"flex", alignItems:"center", gap:9, padding:"10px 13px", background:"#FAFBFC", cursor: open ? "default" : "pointer" }}>
+              <span style={{ width:22, height:22, borderRadius:"50%", flexShrink:0, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:11.5, fontWeight:700, background: open ? "#111" : "#EDEFF2", color: open ? "#fff" : "#667" }}>{idx + 1}</span>
+              <b style={{ fontSize:13, whiteSpace:"nowrap" }}>{title}</b>
+              <span style={{ flex:1 }} />
+              {!open && stepSummaries[id] && <span style={{ fontSize:12, color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0, textAlign:"right" }}>{stepSummaries[id]}</span>}
+              {stepWarns[id] && <span style={{ fontSize:11, fontWeight:700, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap", flexShrink:0 }}>{stepWarns[id]}</span>}
+              {!open && <span style={{ fontSize:11.5, fontWeight:600, color:"#185FA5", flexShrink:0 }}>{trAI("edit", "editar")}</span>}
+            </div>
+          );
+        };
+        const stepFoot = (id) => {
+          const idx = stepIds.indexOf(id);
+          if (idx >= stepIds.length - 1) return null;
+          return (
+            <div style={{ display:"flex", justifyContent:"flex-end", marginTop:12 }}>
+              <Btn primary style={{ padding:"6px 14px", fontSize:12 }} onClick={() => setPayStep(stepIds[idx + 1])}>{trAI("Continue", "Continuar")} →</Btn>
+            </div>
+          );
+        };
         return (
           <Modal title={reallocPay ? "Asignar pago a cuenta" : editingPayId ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); }}
             footer={<>
+              <span style={{ marginRight:"auto", alignSelf:"center", fontSize:13, color:"#666" }}>{trAI("Net", "Neto")}: <b style={{ color:"#1A8A4E", fontSize:14 }}>${net.toLocaleString()}</b></span>
               <Btn onClick={() => { setShowPayModal(false); setReallocPay(null); }}>Cancel</Btn>
               <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : (reallocPay ? "Asignar" : editingPayId ? "Save changes" : splitOn ? (allocOn ? "Create payment" : "Create split payments") : "Create payment")}</Btn>
             </>}>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <div style={stepBox("job")}>
+            {stepHead("job", trAI("Job & amount", "Job y monto"))}
+            {payStep === "job" && <div style={stepBody}>
             <Field label="Job">
               {selectedG ? (
                 <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
@@ -10872,90 +11062,14 @@ export default function App() {
                 </select>
               </Field>}
             </div>
-
-            {/* Split payment toggle + builder (charge allocation when possible) */}
-            {canSplit && (
-              <div style={{ marginTop:10 }}>
-                {!reallocPay && (
-                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
-                    <input type="checkbox" checked={!!payForm.split_enabled} onChange={e => {
-                      const on = e.target.checked;
-                      const fields = { split_enabled: on };
-                      if (on && !allocMissing && payForm.job_id) fields.alloc_lines = payForm.alloc_lines || seedAllocLines(payForm.job_id, payForm.amount);
-                      if (on && !fields.alloc_lines && !splitLines.length) fields.split_lines = [{ concept:"job", amount:"", notes:"" }];
-                      setF(fields);
-                    }} />
-                    {!allocMissing && payForm.job_id ? "✂️ Asignar a cargos (split)" : "✂️ Split the payment"}
-                  </label>
-                )}
-                {allocOn && (
-                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
-                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Repartí el pago entre el balance del job y los extras pendientes. Lo que no asignes queda <b>a cuenta</b>.</div>
-                    {allocLines.map((l, i) => {
-                      const entered = numv(l.amount);
-                      const after = Math.max(0, l.remaining - entered);
-                      const over = entered > l.remaining + 0.01;
-                      return (
-                        <div key={i} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:7, flexWrap:"wrap" }}>
-                          <div style={{ flex:"1 1 170px", minWidth:150 }}>
-                            <div style={{ fontSize:12.5, fontWeight:600 }}>{l.kind === "custom" ? (
-                              <select style={{ ...inp, padding:"5px 8px" }} value={l.concept} onChange={e => patchAlloc(i, { concept: e.target.value })}>
-                                {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                              </select>
-                            ) : l.label}</div>
-                            {l.kind !== "custom" && <div style={{ fontSize:10.5, color:"#888" }}>Pendiente: ${l.remaining.toLocaleString(undefined,{maximumFractionDigits:2})}</div>}
-                          </div>
-                          <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchAlloc(i, { amount: e.target.value })} placeholder="$" />
-                          {l.kind !== "custom" && (
-                            over
-                              ? <span style={{ fontSize:11, color:"#C2410C", fontWeight:600 }}>Sobrepago ${ (entered - l.remaining).toLocaleString(undefined,{maximumFractionDigits:2}) } — se registra igual</span>
-                              : <span style={{ fontSize:11, color: after > 0 ? "#92760B" : "#1A8A4E" }}>Restante: ${after.toLocaleString(undefined,{maximumFractionDigits:2})}</span>
-                          )}
-                          {l.kind === "custom" && (
-                            <>
-                              <input style={{ ...inp, flex:"1 1 120px", minWidth:110 }} value={l.notes} onChange={e => patchAlloc(i, { notes: e.target.value })} placeholder="Notes (optional)" />
-                              <button onClick={() => setF({ alloc_lines: allocLines.filter((_, ix) => ix !== i) })} title="Remove line" style={{ border:"none", background:"none", cursor:"pointer", color:"#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                    <button onClick={() => setF({ alloc_lines: [...allocLines, { kind:"custom", concept:"packing", amount:"", notes:"", touched:true }] })} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Nuevo extra / otra línea</button>
-                    {(() => {
-                      const st = allocState || { unassigned: 0, error: null };
-                      return (
-                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
-                          <span style={{ color:"#666" }}>Sin asignar (a cuenta): <b style={{ color: st.error ? "#E24B4A" : st.unassigned > 0 ? "#92760B" : "#1A8A4E" }}>${(st.error ? 0 : st.unassigned).toLocaleString(undefined,{maximumFractionDigits:2})}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${allocTotal.toLocaleString(undefined,{maximumFractionDigits:2})}</span></span>
-                          {st.error ? <span style={{ color:"#E24B4A" }}>✗ {st.error}</span> : <span style={{ color:"#1A8A4E" }}>✓</span>}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-                {splitOn && !allocOn && (
-                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
-                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Split the total amount into concepts. Extra lines are recorded automatically for commissions.</div>
-                    {splitLines.map((l, i) => (
-                      <div key={i} style={{ display:"flex", gap:6, alignItems:"flex-start", marginBottom:7, flexWrap:"wrap" }}>
-                        <select style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.concept} onChange={e => patchLine(i, { concept: e.target.value })}>
-                          {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                        </select>
-                        <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchLine(i, { amount: e.target.value })} placeholder="$" />
-                        <input style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.notes} onChange={e => patchLine(i, { notes: e.target.value })} placeholder="Notes (optional)" />
-                        <button onClick={() => setLines(splitLines.filter((_, ix) => ix !== i))} disabled={splitLines.length <= 1} title="Remove line" style={{ border:"none", background:"none", cursor: splitLines.length <= 1 ? "not-allowed" : "pointer", color: splitLines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
-                      </div>
-                    ))}
-                    <button onClick={() => setLines([...splitLines, { concept:"job", amount:"", notes:"" }])} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Add line</button>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
-                      <span style={{ color:"#666" }}>Split total: <b style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>${splitSum.toLocaleString(undefined, { maximumFractionDigits:2 })}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${numv(payForm.amount).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></span>
-                      <span style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>{splitMatches ? "✓ matches" : `✗ difiere $${Math.abs(splitSum - numv(payForm.amount)).toLocaleString(undefined, { maximumFractionDigits:2 })}`}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            {stepFoot("job")}
+            </div>}
+            </div>
 
             {/* Method pill tabs */}
+            <div style={stepBox("method")}>
+            {stepHead("method", trAI("Method", "Método"))}
+            {payStep === "method" && <div style={stepBody}>
             <div style={{ marginTop:12 }}>
               <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Method</div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
@@ -11091,7 +11205,101 @@ export default function App() {
                 </div>
               );
             })()}
+            {stepFoot("method")}
+            </div>}
+            </div>
 
+            {/* Paso "Asignación": split payment toggle + builder (charge allocation when possible) */}
+            {canSplit && (
+              <div style={stepBox("alloc")}>
+              {stepHead("alloc", trAI("Allocation (optional)", "Asignación (opcional)"))}
+              {payStep === "alloc" && <div style={stepBody}>
+              <div style={{ marginTop:10 }}>
+                {!reallocPay && (
+                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
+                    <input type="checkbox" checked={!!payForm.split_enabled} onChange={e => {
+                      const on = e.target.checked;
+                      const fields = { split_enabled: on };
+                      if (on && !allocMissing && payForm.job_id) fields.alloc_lines = payForm.alloc_lines || seedAllocLines(payForm.job_id, payForm.amount);
+                      if (on && !fields.alloc_lines && !splitLines.length) fields.split_lines = [{ concept:"job", amount:"", notes:"" }];
+                      setF(fields);
+                    }} />
+                    {!allocMissing && payForm.job_id ? "✂️ Asignar a cargos (split)" : "✂️ Split the payment"}
+                  </label>
+                )}
+                {allocOn && (
+                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
+                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Repartí el pago entre el balance del job y los extras pendientes. Lo que no asignes queda <b>a cuenta</b>.</div>
+                    {allocLines.map((l, i) => {
+                      const entered = numv(l.amount);
+                      const after = Math.max(0, l.remaining - entered);
+                      const over = entered > l.remaining + 0.01;
+                      return (
+                        <div key={i} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:7, flexWrap:"wrap" }}>
+                          <div style={{ flex:"1 1 170px", minWidth:150 }}>
+                            <div style={{ fontSize:12.5, fontWeight:600 }}>{l.kind === "custom" ? (
+                              <select style={{ ...inp, padding:"5px 8px" }} value={l.concept} onChange={e => patchAlloc(i, { concept: e.target.value })}>
+                                {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                              </select>
+                            ) : l.label}</div>
+                            {l.kind !== "custom" && <div style={{ fontSize:10.5, color:"#888" }}>Pendiente: ${l.remaining.toLocaleString(undefined,{maximumFractionDigits:2})}</div>}
+                          </div>
+                          <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchAlloc(i, { amount: e.target.value })} placeholder="$" />
+                          {l.kind !== "custom" && (
+                            over
+                              ? <span style={{ fontSize:11, color:"#C2410C", fontWeight:600 }}>Sobrepago ${ (entered - l.remaining).toLocaleString(undefined,{maximumFractionDigits:2}) } — se registra igual</span>
+                              : <span style={{ fontSize:11, color: after > 0 ? "#92760B" : "#1A8A4E" }}>Restante: ${after.toLocaleString(undefined,{maximumFractionDigits:2})}</span>
+                          )}
+                          {l.kind === "custom" && (
+                            <>
+                              <input style={{ ...inp, flex:"1 1 120px", minWidth:110 }} value={l.notes} onChange={e => patchAlloc(i, { notes: e.target.value })} placeholder="Notes (optional)" />
+                              <button onClick={() => setF({ alloc_lines: allocLines.filter((_, ix) => ix !== i) })} title="Remove line" style={{ border:"none", background:"none", cursor:"pointer", color:"#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button onClick={() => setF({ alloc_lines: [...allocLines, { kind:"custom", concept:"packing", amount:"", notes:"", touched:true }] })} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Nuevo extra / otra línea</button>
+                    {(() => {
+                      const st = allocState || { unassigned: 0, error: null };
+                      return (
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
+                          <span style={{ color:"#666" }}>Sin asignar (a cuenta): <b style={{ color: st.error ? "#E24B4A" : st.unassigned > 0 ? "#92760B" : "#1A8A4E" }}>${(st.error ? 0 : st.unassigned).toLocaleString(undefined,{maximumFractionDigits:2})}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${allocTotal.toLocaleString(undefined,{maximumFractionDigits:2})}</span></span>
+                          {st.error ? <span style={{ color:"#E24B4A" }}>✗ {st.error}</span> : <span style={{ color:"#1A8A4E" }}>✓</span>}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+                {splitOn && !allocOn && (
+                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
+                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Split the total amount into concepts. Extra lines are recorded automatically for commissions.</div>
+                    {splitLines.map((l, i) => (
+                      <div key={i} style={{ display:"flex", gap:6, alignItems:"flex-start", marginBottom:7, flexWrap:"wrap" }}>
+                        <select style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.concept} onChange={e => patchLine(i, { concept: e.target.value })}>
+                          {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                        </select>
+                        <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchLine(i, { amount: e.target.value })} placeholder="$" />
+                        <input style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.notes} onChange={e => patchLine(i, { notes: e.target.value })} placeholder="Notes (optional)" />
+                        <button onClick={() => setLines(splitLines.filter((_, ix) => ix !== i))} disabled={splitLines.length <= 1} title="Remove line" style={{ border:"none", background:"none", cursor: splitLines.length <= 1 ? "not-allowed" : "pointer", color: splitLines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
+                      </div>
+                    ))}
+                    <button onClick={() => setLines([...splitLines, { concept:"job", amount:"", notes:"" }])} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Add line</button>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
+                      <span style={{ color:"#666" }}>Split total: <b style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>${splitSum.toLocaleString(undefined, { maximumFractionDigits:2 })}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${numv(payForm.amount).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></span>
+                      <span style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>{splitMatches ? "✓ matches" : `✗ difiere $${Math.abs(splitSum - numv(payForm.amount)).toLocaleString(undefined, { maximumFractionDigits:2 })}`}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {stepFoot("alloc")}
+              </div>}
+              </div>
+            )}
+
+            <div style={stepBox("receipt")}>
+            {stepHead("receipt", trAI("Receipt & deposit", "Recepción y depósito"))}
+            {payStep === "receipt" && <div style={stepBody}>
             <div style={{ marginTop:10, padding:"10px 12px", background:"#fafafa", borderRadius:8 }}>
               <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer" }}>
                 <input type="checkbox" checked={digital ? true : payForm.received} disabled={digital} onChange={e => setF({ received:e.target.checked })} />
@@ -11140,8 +11348,10 @@ export default function App() {
                 </div>
               </div>
             )}
+            </div>}
+            </div>
+            </div>
             <Field label="Notes" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notes" /></Field>
-            <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Net: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
             <datalist id="who-list">{whoList.map((n, i) => <option key={i} value={n} />)}</datalist>
           </Modal>
         );
