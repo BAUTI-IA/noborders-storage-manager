@@ -3164,6 +3164,7 @@ export default function App() {
   const [payments, setPayments] = useState([]);
   const [payAccounts, setPayAccounts] = useState([]);
   const [payTab, setPayTab] = useState("all");            // all | pending | received | circulation | banked
+  const [paySearch, setPaySearch] = useState("");         // job # / client / ref filter + "does this job have payments?" lookup
   const [depositSel, setDepositSel] = useState(() => new Set());  // payment ids ticked for batch deposit (circulation tab)
   const [depositForm, setDepositForm] = useState({ bank_account:"", date:"" });
   const [showAccountsModal, setShowAccountsModal] = useState(false);
@@ -8606,7 +8607,12 @@ export default function App() {
       {page === "payments" && (() => {
         const m = paymentMetrics;
         const tabFilter = (p) => payTab === "pending" ? !p.received : payTab === "received" ? p.received : payTab === "banked" ? (p.received && effectiveBanked(p)) : true;
-        const rows = paymentRows.filter(tabFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        const pq = paySearch.trim().toLowerCase();
+        const searchFilter = (p) => !pq || [p._g?.job_number, p._g?.customer, payRef(p)].filter(Boolean).join(" ").toLowerCase().includes(pq);
+        const rows = paymentRows.filter(tabFilter).filter(searchFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        // Jobs matching the search, to answer "does this job have a payment?" even when
+        // it has zero payment rows (an empty table alone doesn't say if the job exists).
+        const searchedJobs = pq ? [...extraJobGroups.values()].filter(g => (g.job_number || "").toLowerCase().includes(pq)).slice(0, 5) : [];
         // Weekly window (Mon–Sun) for the cash-flow summary.
         const td = today(); const dd = new Date(td + "T00:00:00"); const dow = dd.getDay();
         const mon = new Date(dd); mon.setDate(dd.getDate() - ((dow + 6) % 7));
@@ -8723,11 +8729,47 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
-              {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
-                <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
-              ))}
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, flexWrap:"wrap" }}>
+                {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+                ))}
+              </div>
+              <input style={{ ...inp, minWidth:230 }} value={paySearch} onChange={e => setPaySearch(e.target.value)} placeholder="🔎 Search job # / client / ref…" />
+              {paySearch && <button onClick={() => setPaySearch("")} title="Clear search" style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:15 }}>✕</button>}
             </div>
+
+            {/* Search verdict: does each matching job have payments loaded or not? */}
+            {pq && searchedJobs.length === 0 && (
+              <div style={{ background:"#FEF9C3", border:"1px solid #FACC15", borderRadius:10, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#854D0E" }}>
+                ⚠️ Ningún job coincide con “{paySearch.trim()}”. Revisá el número de job.
+              </div>
+            )}
+            {searchedJobs.map(g => {
+              const pays = paymentsByJobKey[g.key] || [];
+              const totalNet = pays.reduce((s, p) => s + paymentNet(p), 0);
+              const receivedNet = pays.filter(p => p.received).reduce((s, p) => s + paymentNet(p), 0);
+              const expected = jobExpected(g);
+              const has = pays.length > 0;
+              return (
+                <div key={g.key} style={{ background: has ? "#F0FAF4" : "#FCEBEB", border:`1px solid ${has ? "#CDEBD8" : "#E24B4A"}`, borderRadius:10, padding:"10px 14px", marginBottom:10, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:12.5 }}>
+                  <span style={{ fontSize:15 }}>{has ? "✅" : "🚫"}</span>
+                  <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:13 }}>{g.job_number || "(sin #)"}</button>
+                  <span style={{ color:"#555" }}>{g.customer || "—"}</span>
+                  {g.status === "cancelled" && <StatusBadge status={g.status} />}
+                  {has ? (
+                    <span style={{ color:"#1A8A4E", fontWeight:700 }}>{pays.length} pago(s) · ${Math.round(totalNet).toLocaleString()}{receivedNet !== totalNet ? ` (recibido $${Math.round(receivedNet).toLocaleString()})` : ""}</span>
+                  ) : (
+                    <span style={{ color:"#A32D2D", fontWeight:700 }}>Sin pagos cargados</span>
+                  )}
+                  {expected > 0 && <span style={{ color:"#777" }}>Esperado ${Math.round(expected).toLocaleString()} · Pendiente ${Math.max(0, Math.round(expected - receivedNet)).toLocaleString()}</span>}
+                  <span style={{ flex:1 }} />
+                  {can("payments","create") && !paymentsMissing && (
+                    <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={() => openAddPayment({ job_id: g.repId })}>+ Payment</Btn>
+                  )}
+                </div>
+              );
+            })}
 
             {paymentsMissing ? null : payTab === "circulation" ? (
               circulation.length === 0 ? (
