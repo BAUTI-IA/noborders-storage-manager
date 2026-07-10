@@ -463,6 +463,14 @@ const I18N_ES = {
   "Today": "Hoy",
   "➕ Add existing job": "➕ Agregar job existente",
   "Add existing job to calendar": "Agregar job existente al calendario",
+  "Pickup Calendar": "Calendario de Pickups",
+  "Delivery Calendar": "Calendario de Entregas",
+  "Scheduled deliveries": "Entregas programadas",
+  "Add existing job to delivery calendar": "Agregar job existente al calendario de entregas",
+  "Delivery date": "Fecha de delivery",
+  "Only jobs without a delivery date are listed. Pick a date above, then click a job to put it on the calendar.": "Solo se listan jobs sin fecha de delivery. Elegí una fecha arriba y hacé clic en un job para ponerlo en el calendario.",
+  "No matching jobs without a delivery date.": "No hay jobs sin fecha de delivery que coincidan.",
+  "No jobs pending a delivery date.": "No hay jobs pendientes de fecha de delivery.",
   "Add to calendar": "Agregar al calendario",
   "Edit pickup date": "Editar fecha de pickup",
   "Remove from calendar": "Quitar del calendario",
@@ -2597,7 +2605,8 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
 const NAV = [
   { section:"Operations", items:[
     { id:"dispatching", label:"Dispatching", icon:"🚚" },
-    { id:"calendario", label:"Calendar", icon:"📅" },
+    { id:"calendario", label:"Pickup Calendar", icon:"📅" },
+    { id:"calendario_entregas", label:"Delivery Calendar", icon:"📦" },
     { id:"storage", label:"Storage", icon:"🏬" },
     { id:"jobs", label:"Jobs", icon:"💼" },
     { id:"messages", label:"Chats", icon:"💬" },
@@ -2667,7 +2676,8 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAd
 
 const PAGE_META = {
   dispatching: { title:"Dispatching", sub:"Pickup & delivery dispatch" },
-  calendario:  { title:"Calendar", sub:"Pick ups programados" },
+  calendario:  { title:"Pickup Calendar", sub:"Pick ups programados" },
+  calendario_entregas: { title:"Delivery Calendar", sub:"Scheduled deliveries" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
   messages:    { title:"Chats", sub:"Team conversations and direct messages" },
@@ -3047,6 +3057,13 @@ export default function App() {
   const [calAddSearch, setCalAddSearch] = useState("");
   const [calAddDate, setCalAddDate] = useState("");
   const [pickupEditor, setPickupEditor] = useState(null); // { from, to } — inline pickup-date editor inside job detail
+  // Delivery calendar (same UX as the pickup calendar, indexed by delivery_date)
+  const [dcalView, setDcalView] = useState("week");      // week | month
+  const [dcalAnchor, setDcalAnchor] = useState(today()); // ISO date inside the visible range
+  const [dcalDayMenu, setDcalDayMenu] = useState(null);  // ISO date — "what to add" menu for a clicked day
+  const [dcalAddExisting, setDcalAddExisting] = useState(null); // { date } — search existing jobs to put on the delivery calendar
+  const [dcalAddSearch, setDcalAddSearch] = useState("");
+  const [dcalAddDate, setDcalAddDate] = useState("");
   // Trips / Live Load + trucks
   const [tripsMissing, setTripsMissing] = useState(false);
   const [truckLocMissing, setTruckLocMissing] = useState(false); // live-load location columns not yet in DB
@@ -3147,6 +3164,7 @@ export default function App() {
   const [payments, setPayments] = useState([]);
   const [payAccounts, setPayAccounts] = useState([]);
   const [payTab, setPayTab] = useState("all");            // all | pending | received | circulation | banked
+  const [paySearch, setPaySearch] = useState("");         // job # / client / ref filter + "does this job have payments?" lookup
   const [depositSel, setDepositSel] = useState(() => new Set());  // payment ids ticked for batch deposit (circulation tab)
   const [depositForm, setDepositForm] = useState({ bank_account:"", date:"" });
   const [showAccountsModal, setShowAccountsModal] = useState(false);
@@ -4318,6 +4336,20 @@ export default function App() {
     return byDate;
   }, [jobs]);
 
+  // Delivery calendar: deliveries grouped by job and indexed by delivery_date
+  // (a single day — unlike pickups, deliveries have no date range).
+  const deliveryEvents = useMemo(() => {
+    const map = new Map();
+    const byDate = {};
+    for (const j of jobs) {
+      if (!j.delivery_date) continue;
+      const k = jobKey(j);
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, calendar_status:j.calendar_status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, delivery_date:j.delivery_date, pickup_state:j.pickup_state, delivery_state:j.delivery_state });
+    }
+    for (const g of map.values()) (byDate[g.delivery_date] = byDate[g.delivery_date] || []).push(g);
+    return byDate;
+  }, [jobs]);
+
   // Top-bar metrics for the Dispatching page (distinct active jobs).
   const dispatchMetrics = useMemo(() => {
     const td = today();
@@ -5043,6 +5075,30 @@ export default function App() {
     await setJobPickup(ids, date, "");
     setCalAddExisting(null);
     showToast(`Job ${g.job_number || ""} added to the calendar`.replace(/\s+/g, " ").trim());
+  }
+  function openAddJobDeliveryDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, delivery_date: dateStr }); setJobErr(null); setShowAddJob(true); }
+  // Open the "add existing job to the delivery calendar" search modal, optionally seeded with a day.
+  function openDcalAddExisting(dateStr) {
+    setDcalDayMenu(null);
+    setDcalAddSearch("");
+    setDcalAddDate(dateStr || today());
+    setDcalAddExisting({ date: dateStr || "" });
+  }
+  // Set a job's delivery date across all of its rows. Empty `date` clears the job
+  // off the delivery calendar.
+  async function setJobDelivery(ids, date) {
+    if (!ids?.length) return;
+    const patch = { delivery_date: date || null, updated_by: userEmail, updated_at: new Date().toISOString() };
+    await supabase.from("storage_jobs").update(patch).in("id", ids);
+    loadJobs();
+  }
+  // Add an existing (no-delivery-date) job to the delivery calendar on the chosen date.
+  async function addExistingJobToDeliveryCalendar(g, dateStr) {
+    const date = dateStr || today();
+    const ids = jobs.filter(j => jobKey(j) === g.key).map(j => j.id);
+    await setJobDelivery(ids, date);
+    setDcalAddExisting(null);
+    showToast(`Job ${g.job_number || ""} added to the delivery calendar`.replace(/\s+/g, " ").trim());
   }
   function showToast(msg) {
     setToast(msg);
@@ -7049,7 +7105,7 @@ export default function App() {
           {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
           {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
           {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
-          {(page === "dispatching" || page === "jobs" || page === "calendario") && (can("jobs","create") || can("dispatching","create") || can("calendario","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
+          {(page === "dispatching" || page === "jobs" || page === "calendario" || page === "calendario_entregas") && (can("jobs","create") || can("dispatching","create") || can("calendario","create") || can("calendario_entregas","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
       </div>
 
@@ -7430,6 +7486,152 @@ export default function App() {
                     </div>
                   </div>
                   <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={(e) => { e.stopPropagation(); addExistingJobToCalendar(g, calAddDate); }}>Add</Btn>
+                </div>
+              ))}
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ───────────────────── DELIVERY CALENDAR ───────────────────── */}
+      {page === "calendario_entregas" && (() => {
+        const range = dcalView === "week" ? weekDays(dcalAnchor) : null;
+        const grid = dcalView === "month" ? monthGrid(dcalAnchor) : null;
+        const anchorD = new Date(dcalAnchor + "T00:00:00");
+        const title = dcalView === "week"
+          ? (() => { const w = weekDays(dcalAnchor); return `${w[0]} → ${w[6]}`; })()
+          : `${MONTHS_ES[anchorD.getMonth()]} ${anchorD.getFullYear()}`;
+        const step = dcalView === "week" ? 7 : 30;
+        const Event = ({ g }) => {
+          const c = calEventColor(g);
+          const route = [g.pickup_state, g.delivery_state].filter(Boolean).join(" to ");
+          const drv = jobDriverNames(g);
+          return (
+            <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
+              style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${c.bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
+              <div style={{ fontWeight:700, fontFamily:"monospace" }}>{g.job_number || "(job)"}</div>
+              {route && <div>{route}</div>}
+              {drv && <div style={{ opacity:0.85 }}>🧑‍✈️ {drv}</div>}
+            </div>
+          );
+        };
+        return (
+          <>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+              <Btn onClick={() => setDcalAnchor(shiftDate(dcalAnchor, -step))}>←</Btn>
+              <Btn onClick={() => setDcalAnchor(today())}>Today</Btn>
+              <Btn onClick={() => setDcalAnchor(shiftDate(dcalAnchor, step))}>→</Btn>
+              <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
+              <span style={{ flex:1 }} />
+              <Btn onClick={() => openDcalAddExisting("")}>➕ Add existing job</Btn>
+              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+                {[["week","Week"],["month","Month"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setDcalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: dcalView===v?"#fff":"none", color: dcalView===v?"#111":"#888", fontWeight: dcalView===v?600:400, boxShadow: dcalView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap", fontSize:11, color:"#666" }}>
+              {[["#639922","Active"],["#FACC15","On hold / Redispatch"],["#E24B4A","Cancelled"],["#7C3AED","Long haul"],["#378ADD","Delivered"]].map(([c,l]) => (
+                <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
+              ))}
+            </div>
+
+            {dcalView === "week" ? (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
+                {range.map(ds => {
+                  const d = new Date(ds + "T00:00:00");
+                  const evs = deliveryEvents[ds] || [];
+                  const isToday = ds === today();
+                  return (
+                    <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday?"#378ADD":"#efefef"}`, borderRadius:10, minHeight:160, display:"flex", flexDirection:"column" }}>
+                      <div onClick={() => setDcalDayMenu(ds)} title="Add to this day" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <span style={{ fontSize:11, fontWeight:600 }}>{DOW_ES[d.getDay()]} {d.getDate()}</span>
+                        <span style={{ color:"#bbb", fontSize:13 }}>+</span>
+                      </div>
+                      <div style={{ padding:7, flex:1 }}>{evs.map(g => <Event key={g.key} g={g} />)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+                  {DOW_ES.map(d => <div key={d} style={{ padding:"8px 6px", textAlign:"center", fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", borderBottom:"1px solid #efefef" }}>{d}</div>)}
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+                  {grid.map(({ date, inMonth }) => {
+                    const d = new Date(date + "T00:00:00");
+                    const evs = deliveryEvents[date] || [];
+                    const isToday = date === today();
+                    return (
+                      <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth?"#fff":"#fafafa", opacity: inMonth?1:0.6 }}>
+                        <div onClick={() => setDcalDayMenu(date)} title="Add to this day" style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
+                        {evs.slice(0,3).map(g => <Event key={g.key} g={g} />)}
+                        {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} more</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+
+      {/* Delivery calendar: "what do you want to add to this day?" menu */}
+      {dcalDayMenu && (
+        <Modal title={`Add to ${dcalDayMenu}`} onClose={() => setDcalDayMenu(null)}
+          footer={<><Btn onClick={() => setDcalDayMenu(null)}>Cancel</Btn></>}>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <Btn primary onClick={() => { const d = dcalDayMenu; setDcalDayMenu(null); openAddJobDeliveryDate(d); }} style={{ justifyContent:"center", padding:"12px" }}>🆕 Create new job on this day</Btn>
+            <Btn onClick={() => openDcalAddExisting(dcalDayMenu)} style={{ justifyContent:"center", padding:"12px" }}>📋 Add an existing job to this day</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delivery calendar: search existing jobs (no delivery date yet) and put them on a date */}
+      {dcalAddExisting && (() => {
+        const q = dcalAddSearch.trim().toLowerCase();
+        const seen = new Set(); const results = [];
+        for (const j of jobs) {
+          if (j.delivery_date) continue;                            // only jobs not on the delivery calendar yet
+          if (j.date_out || j.status === "cancelled") continue;     // skip closed/cancelled jobs
+          const k = jobKey(j); if (seen.has(k)) continue; seen.add(k);
+          const names = jobDriverNames(j);
+          const hay = [j.job_number, j.customer, j.driver, names].filter(Boolean).join(" ").toLowerCase();
+          if (q && !hay.includes(q)) continue;
+          results.push({ key:k, job_number:j.job_number, customer:j.customer, status:j.status, drivers:names });
+        }
+        const shown = results.slice(0, 60);
+        return (
+          <Modal title="Add existing job to delivery calendar" onClose={() => setDcalAddExisting(null)}
+            footer={<><Btn onClick={() => setDcalAddExisting(null)}>Close</Btn></>}>
+            <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", marginBottom:10 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Delivery date</label>
+                <input style={inp} type="date" value={dcalAddDate} onChange={e => setDcalAddDate(e.target.value)} />
+              </div>
+              <div style={{ flex:1, minWidth:180, display:"flex", flexDirection:"column", gap:3 }}>
+                <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Search</label>
+                <input style={inp} value={dcalAddSearch} onChange={e => setDcalAddSearch(e.target.value)} placeholder="Search job # / client / driver…" autoFocus />
+              </div>
+            </div>
+            <div style={{ fontSize:11.5, color:"#999", marginBottom:8 }}>Only jobs without a delivery date are listed. Pick a date above, then click a job to put it on the calendar.</div>
+            <div style={{ border:"1px solid #eee", borderRadius:9, maxHeight:340, overflowY:"auto", background:"#fff" }}>
+              {shown.length === 0 ? (
+                <div style={{ padding:"16px", fontSize:12.5, color:"#bbb", textAlign:"center" }}>{q ? "No matching jobs without a delivery date." : "No jobs pending a delivery date."}</div>
+              ) : shown.map(g => (
+                <div key={g.key} onClick={() => addExistingJobToDeliveryCalendar(g, dcalAddDate)}
+                  style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderBottom:"1px solid #f6f6f6", cursor:"pointer", fontSize:12.5 }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#f7faf1"} onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div><b style={{ fontFamily:"monospace" }}>{g.job_number || "(no #)"}</b> · {g.customer || "—"}</div>
+                    <div style={{ color:"#999", marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
+                      <StatusBadge status={g.status} />{g.drivers && <span>🧑‍✈️ {g.drivers}</span>}
+                    </div>
+                  </div>
+                  <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={(e) => { e.stopPropagation(); addExistingJobToDeliveryCalendar(g, dcalAddDate); }}>Add</Btn>
                 </div>
               ))}
             </div>
@@ -8405,7 +8607,12 @@ export default function App() {
       {page === "payments" && (() => {
         const m = paymentMetrics;
         const tabFilter = (p) => payTab === "pending" ? !p.received : payTab === "received" ? p.received : payTab === "banked" ? (p.received && effectiveBanked(p)) : true;
-        const rows = paymentRows.filter(tabFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        const pq = paySearch.trim().toLowerCase();
+        const searchFilter = (p) => !pq || [p._g?.job_number, p._g?.customer, payRef(p)].filter(Boolean).join(" ").toLowerCase().includes(pq);
+        const rows = paymentRows.filter(tabFilter).filter(searchFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        // Jobs matching the search, to answer "does this job have a payment?" even when
+        // it has zero payment rows (an empty table alone doesn't say if the job exists).
+        const searchedJobs = pq ? [...extraJobGroups.values()].filter(g => (g.job_number || "").toLowerCase().includes(pq)).slice(0, 5) : [];
         // Weekly window (Mon–Sun) for the cash-flow summary.
         const td = today(); const dd = new Date(td + "T00:00:00"); const dow = dd.getDay();
         const mon = new Date(dd); mon.setDate(dd.getDate() - ((dow + 6) % 7));
@@ -8522,11 +8729,47 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
-              {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
-                <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
-              ))}
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, flexWrap:"wrap" }}>
+                {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+                ))}
+              </div>
+              <input style={{ ...inp, minWidth:230 }} value={paySearch} onChange={e => setPaySearch(e.target.value)} placeholder="🔎 Search job # / client / ref…" />
+              {paySearch && <button onClick={() => setPaySearch("")} title="Clear search" style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:15 }}>✕</button>}
             </div>
+
+            {/* Search verdict: does each matching job have payments loaded or not? */}
+            {pq && searchedJobs.length === 0 && (
+              <div style={{ background:"#FEF9C3", border:"1px solid #FACC15", borderRadius:10, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#854D0E" }}>
+                ⚠️ Ningún job coincide con “{paySearch.trim()}”. Revisá el número de job.
+              </div>
+            )}
+            {searchedJobs.map(g => {
+              const pays = paymentsByJobKey[g.key] || [];
+              const totalNet = pays.reduce((s, p) => s + paymentNet(p), 0);
+              const receivedNet = pays.filter(p => p.received).reduce((s, p) => s + paymentNet(p), 0);
+              const expected = jobExpected(g);
+              const has = pays.length > 0;
+              return (
+                <div key={g.key} style={{ background: has ? "#F0FAF4" : "#FCEBEB", border:`1px solid ${has ? "#CDEBD8" : "#E24B4A"}`, borderRadius:10, padding:"10px 14px", marginBottom:10, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:12.5 }}>
+                  <span style={{ fontSize:15 }}>{has ? "✅" : "🚫"}</span>
+                  <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:13 }}>{g.job_number || "(sin #)"}</button>
+                  <span style={{ color:"#555" }}>{g.customer || "—"}</span>
+                  {g.status === "cancelled" && <StatusBadge status={g.status} />}
+                  {has ? (
+                    <span style={{ color:"#1A8A4E", fontWeight:700 }}>{pays.length} pago(s) · ${Math.round(totalNet).toLocaleString()}{receivedNet !== totalNet ? ` (recibido $${Math.round(receivedNet).toLocaleString()})` : ""}</span>
+                  ) : (
+                    <span style={{ color:"#A32D2D", fontWeight:700 }}>Sin pagos cargados</span>
+                  )}
+                  {expected > 0 && <span style={{ color:"#777" }}>Esperado ${Math.round(expected).toLocaleString()} · Pendiente ${Math.max(0, Math.round(expected - receivedNet)).toLocaleString()}</span>}
+                  <span style={{ flex:1 }} />
+                  {can("payments","create") && !paymentsMissing && (
+                    <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={() => openAddPayment({ job_id: g.repId })}>+ Payment</Btn>
+                  )}
+                </div>
+              );
+            })}
 
             {paymentsMissing ? null : payTab === "circulation" ? (
               circulation.length === 0 ? (

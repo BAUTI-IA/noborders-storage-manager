@@ -25,8 +25,8 @@ if (!TOKEN) {
 
 // table -> { view: [sections that read it], owner: section that governs writes }
 const MAP = {
-  storages:             { view: ["storage", "jobs", "dispatching", "calendario", "billing"], owner: "storage" },
-  storage_jobs:         { view: ["jobs", "dispatching", "calendario", "storage", "billing", "brokers", "settlements", "clientes"], owner: "jobs" },
+  storages:             { view: ["storage", "jobs", "dispatching", "calendario", "calendario_entregas", "billing"], owner: "storage" },
+  storage_jobs:         { view: ["jobs", "dispatching", "calendario", "calendario_entregas", "storage", "billing", "brokers", "settlements", "clientes"], owner: "jobs" },
   job_events:           { view: ["dispatching", "jobs"], owner: "dispatching" },
   brokers:              { view: ["brokers"], owner: "brokers" },
   storage_billing:      { view: ["billing"], owner: "billing" },
