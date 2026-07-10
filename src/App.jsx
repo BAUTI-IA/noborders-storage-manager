@@ -1005,6 +1005,12 @@ const tripUnitKey = (j) => j.split_group ? "row:" + j.id : jobKey(j);
 // (created later, so newest-first in load order) could shadow the real balances.
 const moneyRowFirst = (a, b) => ((a.split_group ? 1 : 0) - (b.split_group ? 1 : 0)) || (a.id - b.id);
 
+// Total to collect from the client for a job: pickup + delivery balances
+// (whichever the job type uses) plus the broker BOL balance. numv() treats
+// blank/null as 0, so jobs with only one balance sum correctly. Split portions
+// carry zeroed money fields (see splitJob), so per-row sums never double-count.
+const jobToCollect = (j) => numv(j.pickup_balance) + numv(j.delivery_balance) + numv(j.bol_balance);
+
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
   const sp = g.parts.find(p => p.storage?.address);
@@ -1754,12 +1760,12 @@ function settlementWaLink(sheet, calc, brokerName, driverName) {
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
 // Full trip manifest to the driver's WhatsApp group (jobsIn already ordered by stop).
-function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, totalBol) {
+function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, totalCollect) {
   const lines = [
     `TRIP #${trip.trip_number || "-"} — ${truckName || "-"}`,
     `Driver: ${driverName || "-"} | Departure: ${trip.departure_date || "-"}`,
     `Total load: ${Math.round(totalCf || 0)} CF (${occPct != null ? occPct + "% capacity" : "—"})`,
-    `Total to collect: $${Math.round(totalBol || 0).toLocaleString()}`,
+    `Total to collect: $${Math.round(totalCollect || 0).toLocaleString()}`,
     ``,
     `STOPS:`,
   ];
@@ -1767,7 +1773,7 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
     lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}${j.split_group ? " (split load — partial)" : ""}`);
     lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
     lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
-    lines.push(`   Balance to collect: $${numv(j.bol_balance).toLocaleString()}`);
+    lines.push(`   Balance to collect: $${Math.round(jobToCollect(j)).toLocaleString()}`);
     lines.push("");
   });
   return lines.join("\n");
@@ -4545,25 +4551,25 @@ export default function App() {
     // the truck right now — delivered jobs and jobs sitting in storage (dropped
     // mid-trip or not picked up yet) don't take up space. Occupancy uses loadedCf
     // so the bar matches the stops' "Delivered" / "Dropped in storage" badges.
-    let totalCf = 0, loadedCf = 0, totalBol = 0, delivered = 0;
+    let totalCf = 0, loadedCf = 0, totalCollect = 0, delivered = 0;
     for (const j of jobsIn) {
       const cf = effCf(j);
-      totalCf += cf; totalBol += numv(j.bol_balance);
+      totalCf += cf; totalCollect += jobToCollect(j);
       if (j.date_out || j.status === "delivered") delivered++;
       else if (j.status !== "in_storage") loadedCf += cf;
     }
     const cap = numv(truckById[trip.truck_id]?.capacity_cf);
     const occPct = cap > 0 ? Math.round((loadedCf / cap) * 100) : null;
-    return { jobsIn, totalCf, loadedCf, totalBol, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
+    return { jobsIn, totalCf, loadedCf, totalCollect, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
   }, [jobsByTrip, truckById]);
   const tripMetrics = useMemo(() => {
     const td = today();
-    let activeCount = 0, cfTransit = 0, bolTransit = 0, deliveredToday = 0;
+    let activeCount = 0, cfTransit = 0, collectTransit = 0, deliveredToday = 0;
     for (const t of trips) {
-      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.loadedCf; bolTransit += c.totalBol; }
+      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.loadedCf; collectTransit += c.totalCollect; }
     }
     for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
-    return { activeCount, cfTransit, bolTransit, deliveredToday };
+    return { activeCount, cfTransit, collectTransit, deliveredToday };
   }, [trips, jobs, tripCalc]);
   // Custom (non-job) stops grouped by trip, ordered by stop_order then creation.
   const tripStopsByTrip = useMemo(() => {
@@ -4754,7 +4760,7 @@ export default function App() {
     return m;
   }, [jobs]);
   // Expected to be collected for a job = pickup + delivery balances (+ broker BOL balance).
-  const jobExpected = useCallback((g) => g ? numv(g.pickup_balance) + numv(g.delivery_balance) + numv(g.bol_balance) : 0, []);
+  const jobExpected = useCallback((g) => g ? jobToCollect(g) : 0, []);
   const groupMonth = useCallback((g) => (g.date_in || g.created_at || "").slice(0, 7), []);
   const extrasByJobKey = useMemo(() => {
     const m = {};
@@ -7272,7 +7278,7 @@ export default function App() {
                     const ns = nextStatus(g);
                     const gTrip = g.trip_id ? tripById[g.trip_id] : null;
                     const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
-                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalBol); })()
+                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalCollect); })()
                       : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
                     const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
                     const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
@@ -8129,7 +8135,7 @@ export default function App() {
                   {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                   {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                   <FaddBadge fadd={j.fadd} />
-                  {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                  {jobToCollect(j) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                 </div>
               </div>
               {delivered
@@ -8159,7 +8165,7 @@ export default function App() {
               {[
                 { label:"Trips activos", value:tripMetrics.activeCount, color:"#7C3AED" },
                 { label:"CF in transit", value:Math.round(tripMetrics.cfTransit).toLocaleString()+" CF", color:"#185FA5" },
-                { label:"BOL in transit", value:"$"+Math.round(tripMetrics.bolTransit).toLocaleString(), color:"#1A8A4E" },
+                { label:"To collect in transit", value:"$"+Math.round(tripMetrics.collectTransit).toLocaleString(), color:"#1A8A4E" },
                 { label:"Delivered today", value:tripMetrics.deliveredToday, color:"#3B6D11" },
               ].map(mt => (
                 <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
@@ -8298,10 +8304,10 @@ export default function App() {
                       </>); })()}
                       <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:10 }}>
                         <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-                        <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+                        <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalCollect).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
-                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalCollect)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
                         {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart</Btn>}
                       </div>
                     </div>
@@ -8324,7 +8330,7 @@ export default function App() {
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{t.departure_date || "—"}</td>
                           <td style={{ padding:"12px" }}>{c.count}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{Math.round(c.totalCf).toLocaleString()} CF</td>
-                          <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }}>${Math.round(c.totalBol).toLocaleString()}</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }}>${Math.round(c.totalCollect).toLocaleString()}</td>
                           <td style={{ padding:"12px" }}><TripBadge status={t.status} /></td>
                           <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                             <Btn onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 10px", fontSize:12 }}>Open</Btn>
@@ -11911,7 +11917,7 @@ export default function App() {
                             {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                             {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                             <FaddBadge fadd={j.fadd} />
-                            {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                            {jobToCollect(j) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                             {(() => {
                               // A stop owned by a different driver than the trip's → show who.
                               const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
@@ -11937,9 +11943,9 @@ export default function App() {
 
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-              <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+              <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalCollect).toLocaleString()}</b></span>
             </div>
-            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalCollect)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
 
             {/* event log */}
             <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
