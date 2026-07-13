@@ -2748,6 +2748,7 @@ function UsersSection({ session }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [warn, setWarn] = useState(null); // non-fatal: the admin service is down but the RLS fallback works
   const [modal, setModal] = useState(null); // null | { mode, id, email, full_name, role, permissions, active }
   const [busy, setBusy] = useState(false);
 
@@ -2758,7 +2759,10 @@ function UsersSection({ session }) {
       body: JSON.stringify({ action, payload }),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json.error || `Error ${res.status}`);
+    if (!res.ok) {
+      const msg = json.error || `Error ${res.status}`;
+      throw new Error(json.detail ? `${msg} (${json.detail})` : msg);
+    }
     return json;
   }, [session]);
 
@@ -2788,8 +2792,13 @@ function UsersSection({ session }) {
       // Fall back to the direct RLS query if the function is unavailable (then
       // last_login is simply absent).
       let list;
-      try { const r = await api("list"); list = r.users || []; }
-      catch (e1) { list = await listProfiles(); }
+      try { const r = await api("list"); list = r.users || []; setWarn(null); }
+      catch (e1) {
+        list = await listProfiles();
+        // Surface the outage instead of failing silently (it also explains why
+        // Last login shows "—"): invites won't work until the service is fixed.
+        setWarn(`Admin service unavailable: ${e1.message}. User list loaded in read-only fallback mode (no last login, invites will fail). Open /api/admin-users in the browser for a config health check.`);
+      }
       setUsers(list);
     } catch (e) { setError(e.message); }
     setLoading(false);
@@ -2887,6 +2896,7 @@ function UsersSection({ session }) {
         <Btn primary onClick={openNew}>+ New user</Btn>
       </div>
       {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
+      {warn && <div style={{ background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#92400e", marginBottom:12 }}>{warn}</div>}
       {notice && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{notice}</div>}
 
       <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>

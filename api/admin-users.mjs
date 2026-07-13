@@ -9,15 +9,55 @@
 //   APP_URL - public app origin, used for invite/redirect links
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const APP_URL = process.env.APP_URL || "";
+// Env values pasted into Vercel often carry stray whitespace/newlines or wrapping
+// quotes; any of those makes the key silently invalid (every call fails 401).
+const cleanEnv = (v) => (v || "").trim().replace(/^["']+|["']+$/g, "");
 
-const admin = SERVICE_KEY
+const SUPABASE_URL = cleanEnv(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL).replace(/\/+$/, "");
+const SERVICE_KEY = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
+const APP_URL = cleanEnv(process.env.APP_URL).replace(/\/+$/, "");
+
+const admin = SERVICE_KEY && SUPABASE_URL
   ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
   : null;
 
+// The service key never leaves the server; the health check only classifies its
+// format so a wrong paste (publishable key, disabled legacy key) is identifiable.
+function serviceKeyFormat() {
+  if (!SERVICE_KEY) return "missing";
+  if (SERVICE_KEY.startsWith("sb_secret_")) return "sb_secret (formato correcto)";
+  if (SERVICE_KEY.startsWith("sb_publishable_")) return "sb_publishable (INCORRECTA: es la key pública del navegador, usá la secret key)";
+  if (SERVICE_KEY.startsWith("eyJ")) return "JWT legacy (service_role vieja; si las legacy keys están deshabilitadas en Supabase ya no sirve)";
+  return "formato no reconocido";
+}
+
 export default async function handler(req, res) {
+  // GET → configuration health check, no auth required (a broken service key is
+  // exactly the case where auth can't be validated). Exposes no secrets: the
+  // Supabase URL already ships in the browser bundle and the key is only
+  // classified by format, never echoed.
+  if (req.method === "GET") {
+    const report = {
+      deployment_env: process.env.VERCEL_ENV || "unknown",
+      supabase_url: SUPABASE_URL || "(no configurada)",
+      supabase_url_source: process.env.SUPABASE_URL ? "SUPABASE_URL" : (process.env.VITE_SUPABASE_URL ? "VITE_SUPABASE_URL" : "ninguna"),
+      service_key: serviceKeyFormat(),
+      app_url: APP_URL || "(no configurada)",
+    };
+    if (!admin) {
+      res.status(200).json({ ...report, admin_api: "NO CONFIGURADA: falta SUPABASE_SERVICE_ROLE_KEY o SUPABASE_URL" });
+      return;
+    }
+    try {
+      const { error } = await admin.auth.admin.listUsers({ page: 1, perPage: 1 });
+      report.admin_api = error ? `FALLANDO: ${error.message}` : "ok";
+    } catch (e) {
+      report.admin_api = `FALLANDO: ${e?.message || e}`;
+    }
+    res.status(200).json(report);
+    return;
+  }
+
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -35,7 +75,9 @@ export default async function handler(req, res) {
   }
   const { data: { user }, error: uErr } = await admin.auth.getUser(token);
   if (uErr || !user) {
-    res.status(401).json({ error: "No autorizado." });
+    // The Supabase error distinguishes a stale caller session ("token is expired")
+    // from a bad service key ("Invalid API key") — surface it for diagnosis.
+    res.status(401).json({ error: "No autorizado.", detail: uErr?.message || "token inválido" });
     return;
   }
 
