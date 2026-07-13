@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
 import { MessagesSection } from "./messages.jsx";
+import { SuggestionsSection } from "./suggestions.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta } from "./analyticsData.js";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
@@ -63,6 +64,31 @@ const I18N_ES = {
   "Send": "Enviar",
   "One-time setup needed": "Se necesita una configuración única",
   "I ran it — retry": "Ya lo corrí — reintentar",
+  "Employee feedback and improvement ideas": "Feedback del equipo e ideas de mejora",
+  "💡 Share a suggestion": "💡 Compartí una sugerencia",
+  "Tell us what's working, what isn't, and what you'd change — ideas here go straight to management.": "Contanos qué funciona, qué no, y qué cambiarías — las ideas llegan directo a la gerencia.",
+  "Your idea or feedback… e.g. 'The pickup calendar should show the driver's phone'": "Tu idea o feedback… ej: 'El calendario de pickups debería mostrar el teléfono del driver'",
+  "Post without my name": "Publicar sin mi nombre",
+  "Send suggestion": "Enviar sugerencia",
+  "Sending…": "Enviando…",
+  "Write your suggestion first.": "Escribí tu sugerencia primero.",
+  "In review": "En revisión",
+  "Implemented": "Implementada",
+  "Rejected": "Rechazada",
+  "Most recent": "Más recientes",
+  "Most voted": "Más votadas",
+  "No suggestions yet": "Todavía no hay sugerencias",
+  "No suggestions in this status": "No hay sugerencias en este estado",
+  "Be the first — every idea helps us improve.": "Sé el primero — cada idea nos ayuda a mejorar.",
+  "Anonymous": "Anónimo",
+  "(you)": "(vos)",
+  "Management reply:": "Respuesta de la gerencia:",
+  "Reply": "Responder",
+  "Edit reply": "Editar respuesta",
+  "Save reply": "Guardar respuesta",
+  "Reply to the team about this suggestion…": "Respondele al equipo sobre esta sugerencia…",
+  "Vote for this": "Votar esta sugerencia",
+  "Remove my vote": "Quitar mi voto",
   "Active": "Activo",
   "Active companies": "Empresas activas",
   "Active jobs": "Jobs activos",
@@ -2657,6 +2683,7 @@ const NAV = [
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
     { id:"analytics", label:"Analytics", icon:"📊" },
+    { id:"suggestions", label:"Suggestions", icon:"💡" },
     { id:"bol", label:"BOL", icon:"📄" },
     { id:"users", label:"Users", icon:"👤" },
     { id:"settings", label:"Settings", icon:"⚙️" },
@@ -2668,7 +2695,7 @@ const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
 function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAdmin = false }) {
   // Only show sections the user can view; the Users section is admin-only.
   const visibleNav = NAV
-    .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : can(it.id, "view")) }))
+    .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : it.id === "suggestions" ? true : can(it.id, "view")) }))
     .filter(group => group.items.length > 0);
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
@@ -2722,13 +2749,15 @@ const PAGE_META = {
   trips:       { title:"Trips / Live Load", sub:"Live load per truck" },
   compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
   analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
+  suggestions: { title:"Suggestions", sub:"Employee feedback and improvement ideas" },
   users:       { title:"Users", sub:"Team members, roles and permissions" },
   bol:         { title:"BOL", sub:"Bill of Lading templates and generation" },
   settings:    { title:"Settings", sub:"Operation settings" },
 };
 
-// Sections that carry per-section permissions (everything except the admin-only Users section).
-const PERMISSION_SECTIONS = NAV.flatMap(g => g.items).filter(it => it.id !== "users");
+// Sections that carry per-section permissions (everything except the admin-only
+// Users section and Suggestions, which is open to every employee by design).
+const PERMISSION_SECTIONS = NAV.flatMap(g => g.items).filter(it => it.id !== "users" && it.id !== "suggestions");
 const PERM_LEVELS = ["view", "edit", "create"];
 const EMPTY_PERMS = () => Object.fromEntries(PERMISSION_SECTIONS.map(s => [s.id, { view:false, edit:false, create:false }]));
 
@@ -3284,7 +3313,7 @@ export default function App() {
   // Keep `page` pointed at a section the user is actually allowed to see.
   useEffect(() => {
     if (!profile) return;
-    const allowed = (id) => id === "users" ? isAdmin : can(id, "view");
+    const allowed = (id) => id === "users" ? isAdmin : id === "suggestions" ? true : can(id, "view");
     if (!allowed(page)) {
       const first = SECTION_IDS.find(allowed);
       if (first) setPage(first);
@@ -7253,6 +7282,9 @@ export default function App() {
 
       {/* ───────────────────────── MESSAGES (team chat) ───────────────────────── */}
       {page === "messages" && can("messages","view") && <MessagesSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} onlineIds={onlineIds} onUnreadTotal={setChatUnread} />}
+
+      {/* ───────────────────────── SUGGESTIONS (employee feedback) ───────────────────────── */}
+      {page === "suggestions" && <SuggestionsSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} />}
 
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
