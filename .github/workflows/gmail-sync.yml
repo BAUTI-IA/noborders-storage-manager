@@ -1,0 +1,45 @@
+name: Gmail sync
+
+# Cada 30 minutos le pide a la app que lea la casilla Gmail donde llegan los
+# mails de las empresas de storage (recibos, vencimientos, lien notices,
+# confirmaciones de alquiler) y los procese. El trabajo real lo hace
+# api/gmail-sync.mjs en Vercel; este workflow solo lo dispara.
+#
+# REQUISITO (una sola vez): crear los secrets GMAIL_SYNC_SECRET (el mismo valor
+# que la env var GMAIL_SYNC_SECRET en Vercel) y APP_URL (ej.
+# https://tu-app.vercel.app, sin barra final). Ver docs/gmail-sync.md.
+# Si faltan, se saltea sin fallar.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # cada 30 minutos
+  workflow_dispatch: {} # permite dispararlo a mano
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que los secrets estén configurados
+        id: guard
+        env:
+          SECRET: ${{ secrets.GMAIL_SYNC_SECRET }}
+          APP_URL: ${{ secrets.APP_URL }}
+        run: |
+          if [ -z "$SECRET" ] || [ -z "$APP_URL" ]; then
+            echo "::warning::Faltan los secrets GMAIL_SYNC_SECRET y/o APP_URL. Se omite el sync."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sincronizar Gmail
+        if: steps.guard.outputs.run == 'true'
+        env:
+          SECRET: ${{ secrets.GMAIL_SYNC_SECRET }}
+          APP_URL: ${{ secrets.APP_URL }}
+        # -f hace fallar el step si el endpoint devuelve error → GitHub avisa por mail.
+        run: |
+          curl -sf -X POST "${APP_URL%/}/api/gmail-sync" \
+            -H "x-sync-secret: $SECRET" \
+            -H "Content-Type: application/json" \
+            --max-time 90

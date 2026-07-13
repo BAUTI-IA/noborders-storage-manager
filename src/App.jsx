@@ -1110,6 +1110,73 @@ function PaymentBadge({ record, situation }) {
   );
 }
 
+// Gmail sync (Storage → Mails). Emails from the storage companies' inbox are
+// pulled by api/gmail-sync.mjs into storage_emails; this maps email_type to a
+// badge and holds the setup SQL shown when the table is missing.
+const GMAIL_EMAILS_SQL = `create table if not exists public.storage_emails (
+  id uuid primary key default gen_random_uuid(),
+  gmail_message_id text not null unique,
+  gmail_thread_id text,
+  from_address text, subject text, snippet text,
+  received_at timestamptz,
+  body_text text,
+  brand text,
+  email_type text,
+  extracted jsonb, confidence numeric,
+  storage_id bigint references public.storages(id) on delete set null,
+  match_method text, suggested_action text, action_payload jsonb,
+  status text not null default 'pending',
+  applied_at timestamptz, error text,
+  created_at timestamptz default now()
+);
+create index if not exists storage_emails_status_idx on public.storage_emails (status);
+create index if not exists storage_emails_type_idx on public.storage_emails (email_type);
+create index if not exists storage_emails_received_idx on public.storage_emails (received_at desc);
+create table if not exists public.gmail_sync_state (
+  id int primary key default 1 check (id = 1),
+  last_internal_date bigint, last_run_at timestamptz, last_status text, last_error text
+);
+insert into public.gmail_sync_state (id) values (1) on conflict do nothing;
+alter table public.storage_emails enable row level security;
+drop policy if exists storage_emails_sel on public.storage_emails;
+create policy storage_emails_sel on public.storage_emails for select to authenticated
+  using ( public.has_perm('storage','view') );
+drop policy if exists storage_emails_upd on public.storage_emails;
+create policy storage_emails_upd on public.storage_emails for update to authenticated
+  using ( public.has_perm('storage','edit') ) with check ( public.has_perm('storage','edit') );
+drop policy if exists storage_emails_del on public.storage_emails;
+create policy storage_emails_del on public.storage_emails for delete to authenticated
+  using ( public.has_perm('storage','edit') );
+alter table public.gmail_sync_state enable row level security;
+drop policy if exists gmail_sync_state_sel on public.gmail_sync_state;
+create policy gmail_sync_state_sel on public.gmail_sync_state for select to authenticated
+  using ( public.has_perm('storage','view') );
+do $$ begin
+  alter publication supabase_realtime add table public.storage_emails;
+exception when duplicate_object then null;
+end $$;`;
+
+const EMAIL_TYPE_META = {
+  lien_notice:         { l:"⚠️ Lien notice", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+  payment_reminder:    { l:"Payment reminder", bg:"#FDE3CF", text:"#C2410C", dot:"#EA580C" },
+  payment_receipt:     { l:"Payment receipt", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  rental_confirmation: { l:"New rental", bg:"#EEF2FF", text:"#185FA5", dot:"#3B82F6" },
+  rate_increase:       { l:"Rate increase", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
+  other:               { l:"Other", bg:"#f1f1f1", text:"#888", dot:"#bbb" },
+};
+function EmailTypeBadge({ type }) {
+  const c = EMAIL_TYPE_META[type] || EMAIL_TYPE_META.other;
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
+}
+const EMAIL_STATUS_META = {
+  pending:      { l:"Pendiente", bg:"#FEF3C7", text:"#92760B" },
+  auto_applied: { l:"Auto-aplicado", bg:"#EAF3DE", text:"#3B6D11" },
+  approved:     { l:"Aprobado", bg:"#EAF3DE", text:"#3B6D11" },
+  dismissed:    { l:"Descartado", bg:"#f1f1f1", text:"#888" },
+  ignored:      { l:"Ignorado", bg:"#f1f1f1", text:"#888" },
+  error:        { l:"Error", bg:"#FCEBEB", text:"#A32D2D" },
+};
+
 // FADD = First Available Delivery Date (per job). Drives dispatching urgency.
 function daysUntilFadd(fadd) {
   if (!fadd) return null;
@@ -3134,7 +3201,14 @@ export default function App() {
   const [billingJobSearch, setBillingJobSearch] = useState("");
   const [billingSaving, setBillingSaving] = useState(false);
   const [storageTab, setStorageTab] = useState("storage_units");  // storage_units | <warehouse name>
-  const [unitsSubTab, setUnitsSubTab] = useState("units");        // units | unit_jobs (inside Storage Units)
+  const [unitsSubTab, setUnitsSubTab] = useState("units");        // units | unit_jobs | mails (inside Storage Units)
+  // Gmail sync: processed storage-company emails (audit + review queue).
+  const [storageEmails, setStorageEmails] = useState([]);
+  const [emailsMissing, setEmailsMissing] = useState(false);      // storage_emails table not created yet
+  const [emailsFilter, setEmailsFilter] = useState("pending");    // pending | auto_applied | error | all
+  const [mailsSyncing, setMailsSyncing] = useState(false);
+  const [mailsSyncMsg, setMailsSyncMsg] = useState("");
+  const [emailApprovalId, setEmailApprovalId] = useState(null);   // storage_emails.id being approved via the unit form
   const [storageView, setStorageView] = useState("list");         // list | map (units sub-tab)
   const [mapStateFilter, setMapStateFilter] = useState("");       // 2-letter state selected on the map
   const [billingTab, setBillingTab] = useState("all");       // all | pending | overdue | paid
@@ -3419,6 +3493,11 @@ export default function App() {
     if (!error) setDriversList(data || []);
   }, []);
 
+  const loadStorageEmails = useCallback(async () => {
+    const { data, error } = await supabase.from("storage_emails").select("*").order("received_at", { ascending: false }).limit(300);
+    if (!error) setStorageEmails(data || []);
+  }, []);
+
   const loadClosingSheets = useCallback(async () => {
     const { data, error } = await supabase.from("closing_sheets").select("*").order("created_at", { ascending: false });
     if (!error) setClosingSheets(data || []);
@@ -3498,6 +3577,29 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, dbReady, loadJobs]);
+
+  // Gmail sync: probe storage_emails (created by scripts/setup-gmail-emails.sql).
+  // If it's missing the Mails tab shows the SQL instead of the queue.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_emails").select("id").limit(1);
+      if (cancelled) return;
+      if (error) { setEmailsMissing(true); return; }
+      setEmailsMissing(false);
+      loadStorageEmails();
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadStorageEmails]);
+
+  useEffect(() => {
+    if (!session || emailsMissing) return;
+    const channel = supabase.channel("storage-emails-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "storage_emails" }, () => loadStorageEmails())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, emailsMissing, loadStorageEmails]);
 
   // Ensure the payment_due_date column exists; with the anon key DDL isn't
   // possible, so probe it and (if missing) try an exec_sql RPC, else flag a banner.
@@ -4394,6 +4496,10 @@ export default function App() {
     [records, sit]
   );
 
+  // Gmail queue: pending suggestions need review; pending lien notices are urgent.
+  const mailsPending = useMemo(() => storageEmails.filter(e => e.status === "pending").length, [storageEmails]);
+  const lienPending = useMemo(() => storageEmails.filter(e => e.status === "pending" && e.email_type === "lien_notice").length, [storageEmails]);
+
   // FADD dispatching stats (distinct active jobs).
   const faddStats = useMemo(() => {
     const overdue = new Set(), dueWeek = new Set();
@@ -4647,8 +4753,8 @@ export default function App() {
     dispatching: faddStats.overdue,
     calendario_entregas: deliveryToSchedule,
     billing: billingOverdueCount,
-    storage: urgentPayments,
-  }), [faddStats.overdue, deliveryToSchedule, billingOverdueCount, urgentPayments]);
+    storage: urgentPayments + mailsPending,
+  }), [faddStats.overdue, deliveryToSchedule, billingOverdueCount, urgentPayments, mailsPending]);
 
   // ── Carrier settlements derived data ──
   const sheetById = useMemo(() => { const m = {}; for (const s of closingSheets) m[s.id] = s; return m; }, [closingSheets]);
@@ -5152,8 +5258,9 @@ export default function App() {
     return () => { obs.disconnect(); i18nRestore(); };
   }, [lang]);
 
-  function openAdd() { setForm(EMPTY_FORM); setEditId(null); setShowAdd(true); }
+  function openAdd() { setForm(EMPTY_FORM); setEditId(null); setEmailApprovalId(null); setShowAdd(true); }
   function openEdit(r) {
+    setEmailApprovalId(null);
     setForm({ brand:r.brand||"", state:r.state||"", zip:r.zip||"", address:r.address||"", unit:r.unit||"", size:r.size||"", gate_code:r.gate_code||"", lock:r.lock||"", email:r.email||"", account:r.account||"", phone:r.phone||"", situation:r.situation==="Close"?"Close":"Open", monthly_cost:r.monthly_cost||"", card_on_file:r.card_on_file||"", date_opened:r.date_opened||"", payment_due_date:r.payment_due_date||"", driver_id:r.driver_id ? String(r.driver_id) : "" });
     setEditId(r.id); setShowAdd(true);
   }
@@ -5171,7 +5278,15 @@ export default function App() {
     // Driver who opens the unit — only if the column exists.
     if (!driverColMissing) payload.driver_id = form.driver_id ? Number(form.driver_id) : null;
     if (editId) { await supabase.from("storages").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editId); }
-    else { await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]); }
+    else {
+      const { data: inserted } = await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]).select("id");
+      // Unit created from a Gmail suggestion → close the loop on the email row.
+      if (emailApprovalId && inserted?.[0]?.id) {
+        await supabase.from("storage_emails").update({ status: "approved", storage_id: inserted[0].id, applied_at: new Date().toISOString() }).eq("id", emailApprovalId);
+        loadStorageEmails();
+      }
+    }
+    setEmailApprovalId(null);
     setSaving(false); setShowAdd(false);
   }
 
@@ -7191,6 +7306,75 @@ export default function App() {
     setSaving(true);
     await supabase.from("storages").insert(toAdd);
     setSaving(false); setShowImport(false);
+  }
+
+  // ── Gmail queue (Storage → Mails) ──
+  async function syncMailsNow() {
+    setMailsSyncing(true); setMailsSyncMsg("");
+    try {
+      const { data: { session: s } = {} } = await supabase.auth.getSession();
+      const r = await fetch("/api/gmail-sync", { method: "POST", headers: { Authorization: "Bearer " + (s?.access_token || "") } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
+      setMailsSyncMsg(`✓ ${j.processed || 0} procesados · ${j.applied || 0} auto-aplicados · ${j.pending || 0} para revisar${j.errors ? ` · ${j.errors} con error` : ""}`);
+      loadStorageEmails(); loadData();
+    } catch (e) { setMailsSyncMsg("✗ " + (e?.message || "Error de sincronización")); }
+    setMailsSyncing(false);
+  }
+
+  async function setEmailStatus(id, status, extra = {}) {
+    await supabase.from("storage_emails").update({ status, ...extra }).eq("id", id);
+    loadStorageEmails();
+  }
+
+  // Manual unit pick for mails the matcher couldn't resolve.
+  async function setEmailUnit(e, storageId) {
+    await supabase.from("storage_emails").update({ storage_id: storageId || null, match_method: storageId ? "manual" : "none" }).eq("id", e.id);
+    loadStorageEmails();
+  }
+
+  async function approveEmail(e) {
+    const payload = e.action_payload || {};
+    if (e.suggested_action === "create_unit") {
+      // Pre-fill the standard unit form; saveForm links the email once inserted.
+      setForm({ ...EMPTY_FORM,
+        brand: e.brand || "", unit: payload.unit || "", address: payload.address || "",
+        state: payload.state || "", zip: payload.zip || "", size: payload.size || "",
+        gate_code: payload.gate_code || "", account: payload.account || "",
+        monthly_cost: payload.monthly_cost != null ? String(payload.monthly_cost) : "",
+        date_opened: payload.date_opened || today(),
+      });
+      setEditId(null); setEmailApprovalId(e.id); setShowAdd(true);
+      return;
+    }
+    if (e.suggested_action === "set_due_date" && e.storage_id && payload.payment_due_date) {
+      await supabase.from("storages").update({ payment_due_date: payload.payment_due_date, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", e.storage_id);
+      await setEmailStatus(e.id, "approved", { applied_at: new Date().toISOString() });
+      loadData();
+      return;
+    }
+    if (e.suggested_action === "update_monthly_cost" && e.storage_id && payload.monthly_cost != null) {
+      await supabase.from("storages").update({ monthly_cost: payload.monthly_cost, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", e.storage_id);
+      await setEmailStatus(e.id, "approved", { applied_at: new Date().toISOString() });
+      loadData();
+      return;
+    }
+    // flag_lien / none: approving just acknowledges the alert.
+    await setEmailStatus(e.id, "approved", { applied_at: new Date().toISOString() });
+  }
+
+  // Failed rows: ask the endpoint to re-fetch and re-parse that specific mail.
+  async function retryEmail(e) {
+    setMailsSyncing(true); setMailsSyncMsg("");
+    try {
+      const { data: { session: s } = {} } = await supabase.auth.getSession();
+      const r = await fetch("/api/gmail-sync", { method: "POST", headers: { Authorization: "Bearer " + (s?.access_token || ""), "Content-Type": "application/json" }, body: JSON.stringify({ message_id: e.gmail_message_id }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
+      setMailsSyncMsg(j.errors ? "✗ El mail volvió a fallar" : "✓ Mail re-procesado");
+      loadStorageEmails(); loadData();
+    } catch (err) { setMailsSyncMsg("✗ " + (err?.message || "Error")); }
+    setMailsSyncing(false);
   }
 
   const tabStyle = (t) => ({ fontSize:13, fontWeight: tab === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: tab === t ? "#111" : "#999", borderBottom: tab === t ? "2px solid #111" : "2px solid transparent" });
@@ -9429,9 +9613,9 @@ export default function App() {
       {/* Nested tabs inside Storage Units */}
       {page === "storage" && storageTab === "storage_units" && (
         <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
-          {[["units","Units"],["unit_jobs","Jobs in units"]].map(([t,l]) => (
+          {[["units","Units"],["unit_jobs","Jobs in units"],["mails", mailsPending ? `📧 Mails (${mailsPending})` : "📧 Mails"]].map(([t,l]) => (
             <button key={t} onClick={() => setUnitsSubTab(t)}
-              style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: unitsSubTab === t ? "#fff" : "none", color: unitsSubTab === t ? "#111" : "#888", fontWeight: unitsSubTab === t ? 600 : 400, boxShadow: unitsSubTab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
+              style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: unitsSubTab === t ? "#fff" : "none", color: unitsSubTab === t ? "#111" : (t === "mails" && lienPending ? "#A32D2D" : "#888"), fontWeight: unitsSubTab === t || (t === "mails" && lienPending) ? 600 : 400, boxShadow: unitsSubTab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
           ))}
         </div>
       )}
@@ -9514,6 +9698,114 @@ export default function App() {
           </div>
         </>
       )}
+
+      {/* MAILS — storage-company emails pulled from Gmail: review queue + audit */}
+      {page === "storage" && storageTab === "storage_units" && unitsSubTab === "mails" && (() => {
+        if (emailsMissing) return (
+          <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:24, maxWidth:760 }}>
+            <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>📧 Conectar la casilla de Gmail</div>
+            <div style={{ fontSize:13, color:"#777", marginBottom:12 }}>
+              Para que el sistema lea los mails de las empresas de storage (recibos, vencimientos, lien notices, unidades nuevas), primero hay que crear las tablas: pegá este SQL en el SQL editor de Supabase y corrélo una vez. Después seguí la guía <b>docs/gmail-sync.md</b> para conectar la cuenta de Google.
+            </div>
+            <textarea readOnly value={GMAIL_EMAILS_SQL} style={{ width:"100%", height:180, fontFamily:"monospace", fontSize:11, border:"1px solid #eee", borderRadius:8, padding:10, color:"#555", resize:"vertical" }} />
+            <div style={{ marginTop:10 }}>
+              <Btn primary onClick={() => { navigator.clipboard.writeText(GMAIL_EMAILS_SQL); setSqlCopied(true); setTimeout(() => setSqlCopied(false), 2000); }}>{sqlCopied ? "✓ Copiado" : "Copiar SQL"}</Btn>
+            </div>
+          </div>
+        );
+        const counts = storageEmails.reduce((m, e) => { m[e.status] = (m[e.status] || 0) + 1; return m; }, {});
+        const filtered = storageEmails.filter(e =>
+          emailsFilter === "all" ? true
+          : emailsFilter === "pending" ? e.status === "pending"
+          : emailsFilter === "auto_applied" ? (e.status === "auto_applied" || e.status === "approved")
+          : e.status === emailsFilter);
+        const pageRows = filtered.slice(listPage*PAGE_SIZE, (listPage+1)*PAGE_SIZE);
+        const openUnits = records.filter(r => r.space_type !== "warehouse" && (r.situation || "Open") !== "Close");
+        const storageById = {}; for (const r of records) storageById[r.id] = r;
+        const ACTION_LABEL = { set_due_date:"Actualizar vencimiento de pago", create_unit:"Dar de alta la unidad", update_monthly_cost:"Actualizar tarifa mensual", flag_lien:"Riesgo de lien / subasta — atender YA", none:"" };
+        return (
+        <>
+          {lienPending > 0 && (
+            <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D" }}>
+              <strong>🚨 {lienPending} lien notice(s) sin resolver.</strong> Una unidad con aviso de lien puede terminar en subasta con la mercadería de los clientes adentro. Revisalas abajo.
+            </div>
+          )}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+              {[["pending",`Pendientes${counts.pending ? ` (${counts.pending})` : ""}`],["auto_applied","Aplicados"],["error",`Errores${counts.error ? ` (${counts.error})` : ""}`],["all","Todos"]].map(([v,l]) => (
+                <button key={v} onClick={() => { setEmailsFilter(v); setListPage(0); }}
+                  style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: emailsFilter === v ? "#fff" : "none", color: emailsFilter === v ? "#111" : "#888", fontWeight: emailsFilter === v ? 600 : 400, boxShadow: emailsFilter === v ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
+              ))}
+            </div>
+            <div style={{ flex:1 }} />
+            {mailsSyncMsg && <span style={{ fontSize:12.5, color: mailsSyncMsg.startsWith("✗") ? "#A32D2D" : "#3B6D11" }}>{mailsSyncMsg}</span>}
+            <Btn primary disabled={mailsSyncing} onClick={syncMailsNow}>{mailsSyncing ? "Sincronizando…" : "↻ Sincronizar ahora"}</Btn>
+          </div>
+          {pageRows.length === 0 ? (
+            <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>
+              {emailsFilter === "pending" ? "No hay mails pendientes de revisión. 🎉" : "No hay mails en esta vista."}
+              <div style={{ fontSize:12, marginTop:6 }}>El sistema revisa la casilla cada 30 minutos. Si es la primera vez, corré una sincronización y verificá la guía docs/gmail-sync.md.</div>
+            </div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {pageRows.map(e => {
+                const matched = e.storage_id ? storageById[e.storage_id] : null;
+                const needsUnit = !e.storage_id && (e.suggested_action === "set_due_date" || e.suggested_action === "update_monthly_cost" || e.suggested_action === "flag_lien");
+                const canApprove = e.suggested_action === "create_unit" || !needsUnit;
+                const isLien = e.email_type === "lien_notice";
+                const st = EMAIL_STATUS_META[e.status] || EMAIL_STATUS_META.pending;
+                return (
+                <div key={e.id} style={{ background:"#fff", border: isLien && e.status === "pending" ? "1px solid #E24B4A" : "1px solid #efefef", borderRadius:12, padding:"14px 16px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <EmailTypeBadge type={e.email_type} />
+                    <span style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:st.bg, color:st.text }}>{st.l}</span>
+                    {e.confidence != null && <span style={{ fontSize:11, color:"#aaa" }}>{Math.round(e.confidence*100)}% conf.</span>}
+                    <span style={{ flex:1 }} />
+                    <span style={{ fontSize:12, color:"#999", whiteSpace:"nowrap" }}>{e.received_at ? new Date(e.received_at).toLocaleString() : "—"}</span>
+                  </div>
+                  <div style={{ fontSize:14, fontWeight:600, marginTop:8 }}>{e.subject || "(sin asunto)"}</div>
+                  <div style={{ fontSize:12, color:"#999", marginTop:2 }}>{e.brand || "?"} · {e.from_address || "—"}</div>
+                  {(e.extracted?.notes || e.snippet) && <div style={{ fontSize:13, color:"#666", marginTop:6 }}>{e.extracted?.notes || e.snippet}</div>}
+                  {e.status === "error" && e.error && <div style={{ fontSize:12, color:"#A32D2D", marginTop:6 }}>Error: {e.error}</div>}
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10, flexWrap:"wrap", borderTop:"1px solid #fafafa", paddingTop:10 }}>
+                    {matched ? (
+                      <span style={{ fontSize:12.5 }}>
+                        Unidad: <button onClick={() => setDetailId(matched.id)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12.5, fontWeight:600 }}>{[matched.brand, matched.unit, matched.state].filter(Boolean).join(" ")}</button>
+                        {e.match_method && e.match_method !== "exact" && <span style={{ color:"#aaa" }}> ({e.match_method === "fuzzy" ? "aprox." : "manual"})</span>}
+                      </span>
+                    ) : e.suggested_action !== "create_unit" && (e.status === "pending") ? (
+                      <select value="" onChange={ev => ev.target.value && setEmailUnit(e, Number(ev.target.value))} style={{ fontSize:12.5, padding:"5px 8px", borderRadius:7, border:"1px solid #e5e5e5", color:"#555" }}>
+                        <option value="">Elegir unidad…</option>
+                        {openUnits.map(r => <option key={r.id} value={r.id}>{[r.brand, r.unit, r.state].filter(Boolean).join(" ")}</option>)}
+                      </select>
+                    ) : null}
+                    {e.suggested_action && e.suggested_action !== "none" && (
+                      <span style={{ fontSize:12.5, color: isLien ? "#A32D2D" : "#555", fontWeight: isLien ? 700 : 400 }}>
+                        → {ACTION_LABEL[e.suggested_action]}
+                        {e.suggested_action === "set_due_date" && e.action_payload?.payment_due_date ? `: ${e.action_payload.payment_due_date}` : ""}
+                        {e.suggested_action === "update_monthly_cost" && e.action_payload?.monthly_cost != null ? `: $${e.action_payload.monthly_cost}` : ""}
+                      </span>
+                    )}
+                    <span style={{ flex:1 }} />
+                    {e.status === "pending" && can("storage","edit") && (
+                      <>
+                        <Btn primary disabled={!canApprove} onClick={() => approveEmail(e)}>{e.suggested_action === "create_unit" ? "+ Dar de alta" : isLien ? "Marcar resuelto" : "Aprobar"}</Btn>
+                        <Btn onClick={() => setEmailStatus(e.id, "dismissed")}>Descartar</Btn>
+                      </>
+                    )}
+                    {e.status === "error" && can("storage","edit") && <Btn onClick={() => retryEmail(e)}>↻ Reintentar</Btn>}
+                  </div>
+                </div>
+                );
+              })}
+              <div style={{ padding:"4px 2px" }}>
+                <Pager page={listPage} total={filtered.length} unit="mail(s)" onPage={setListPage} />
+              </div>
+            </div>
+          )}
+        </>
+        );
+      })()}
 
       {/* WAREHOUSE (owned) — one tab per warehouse: occupancy header + jobs table */}
       {page === "storage" && WAREHOUSES.includes(storageTab) && (() => {
