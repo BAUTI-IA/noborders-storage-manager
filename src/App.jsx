@@ -1121,6 +1121,30 @@ function FaddCell({ group, onSet }) {
   );
 }
 
+// One row of the "Entregas por agendar" panel on the delivery calendar: job info +
+// FADD urgency + a date picker (defaults to max(FADD, today)) + one-click schedule.
+// Module-level so the date input keeps focus across App re-renders (see FaddCell).
+function ScheduleDeliveryRow({ cand, onSchedule, onOpen }) {
+  const td = today();
+  const [date, setDate] = useState((cand.fadd && cand.fadd > td) ? cand.fadd : td);
+  const where = cand.warehouse ? `🏭 ${cand.warehouse}`
+    : cand.storage_id ? "🏬 Storage"
+    : [cand.delivery_city, cand.delivery_state].filter(Boolean).join(", ");
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderBottom:"1px solid #f6f6f6", fontSize:12.5, flexWrap:"wrap" }}>
+      <button onClick={() => onOpen(cand.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:12.5 }}>{cand.job_number || "(sin #)"}</button>
+      <span style={{ color:"#555", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:180 }}>{cand.customer || "—"}</span>
+      {cand.job_type === "broker_delivery" && <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Broker</span>}
+      <FaddBadge fadd={cand.fadd} />
+      {where && <span style={{ color:"#999", fontSize:11.5 }}>{where}</span>}
+      <span style={{ flex:1 }} />
+      <input type="date" value={date} min={cand.fadd || undefined} onChange={e => setDate(e.target.value)}
+        style={{ fontSize:12, padding:"4px 7px", borderRadius:7, border:"1px solid #ddd" }} />
+      <Btn primary disabled={!date} onClick={() => onSchedule(cand, date)} style={{ padding:"5px 12px", fontSize:12 }}>Agendar</Btn>
+    </div>
+  );
+}
+
 // Click-to-edit field used in the job detail. Date inputs commit on change
 // (the native calendar steals focus); text/datalist inputs commit on blur/Enter.
 function InlineField({ value, onSave, type = "text", listId, placeholder = "—", display, transform, mono }) {
@@ -3070,6 +3094,7 @@ export default function App() {
   const [dcalAddExisting, setDcalAddExisting] = useState(null); // { date } — search existing jobs to put on the delivery calendar
   const [dcalAddSearch, setDcalAddSearch] = useState("");
   const [dcalAddDate, setDcalAddDate] = useState("");
+  const [dcalPanelOpen, setDcalPanelOpen] = useState(true); // "Entregas por agendar" strip
   // Trips / Live Load + trucks
   const [tripsMissing, setTripsMissing] = useState(false);
   const [truckLocMissing, setTruckLocMissing] = useState(false); // live-load location columns not yet in DB
@@ -4314,6 +4339,7 @@ export default function App() {
     else if (dispatchFilter === "on_hold") arr = arr.filter(g => (g.status || "scheduled") === "on_hold");
     else if (dispatchFilter === "no_trip") arr = arr.filter(g => !g.trip_id);
     else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
+    else if (dispatchFilter === "no_delivery") arr = arr.filter(g => !g.delivery_date);
     // Most urgent FADD first; jobs with no FADD sink to the bottom.
     arr.sort((a, b) => {
       const da = daysUntilFadd(a.fadd), db = daysUntilFadd(b.fadd);
@@ -4355,6 +4381,39 @@ export default function App() {
     for (const g of map.values()) (byDate[g.delivery_date] = byDate[g.delivery_date] || []).push(g);
     return byDate;
   }, [jobs]);
+
+  // Jobs that should get a delivery date: picked up and waiting (in storage /
+  // warehouse / client not ready) or broker deliveries, with no delivery_date yet.
+  // Grouped by job (ids collects every row so scheduling patches split jobs too)
+  // and sorted by FADD urgency, no-FADD last. Deliberately NOT filtered by trip_id:
+  // a job dropped at storage mid-trip keeps its trip_id and is a prime candidate.
+  const deliveryCandidates = useMemo(() => {
+    const map = new Map();
+    for (const j of jobs) {
+      if (j.date_out || j.delivery_date) continue;
+      const st = j.status || "scheduled";
+      if (st === "cancelled" || st === "delivered" || st === "out_for_delivery") continue;
+      const stored = st === "in_storage" || st === "picked_up" || j.storage_id || j.warehouse;
+      if (!stored && j.job_type !== "broker_delivery") continue;
+      const k = jobKey(j);
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, fadd:j.fadd, job_type:j.job_type, status:st, warehouse:j.warehouse, storage_id:j.storage_id, delivery_city:j.delivery_city, delivery_state:j.delivery_state, ids:[] });
+      const g = map.get(k);
+      g.ids.push(j.id);
+      // Split jobs: a later row may carry the field the first one lacks.
+      if (!g.fadd && j.fadd) g.fadd = j.fadd;
+      if (!g.warehouse && j.warehouse) g.warehouse = j.warehouse;
+      if (!g.storage_id && j.storage_id) g.storage_id = j.storage_id;
+    }
+    return [...map.values()].sort((a, b) => {
+      const da = daysUntilFadd(a.fadd), db = daysUntilFadd(b.fadd);
+      return (da === null ? Infinity : da) - (db === null ? Infinity : db);
+    });
+  }, [jobs]);
+  // Menu badge: candidates whose FADD is within a week (or overdue).
+  const deliveryToSchedule = useMemo(() => deliveryCandidates.filter(c => {
+    const d = daysUntilFadd(c.fadd);
+    return d !== null && d <= 7;
+  }).length, [deliveryCandidates]);
 
   // Top-bar metrics for the Dispatching page (distinct active jobs).
   const dispatchMetrics = useMemo(() => {
@@ -4485,9 +4544,10 @@ export default function App() {
   // Sidebar alert badges.
   const sidebarBadges = useMemo(() => ({
     dispatching: faddStats.overdue,
+    calendario_entregas: deliveryToSchedule,
     billing: billingOverdueCount,
     storage: urgentPayments,
-  }), [faddStats.overdue, billingOverdueCount, urgentPayments]);
+  }), [faddStats.overdue, deliveryToSchedule, billingOverdueCount, urgentPayments]);
 
   // ── Carrier settlements derived data ──
   const sheetById = useMemo(() => { const m = {}; for (const s of closingSheets) m[s.id] = s; return m; }, [closingSheets]);
@@ -6010,7 +6070,8 @@ export default function App() {
     await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label });
     await loadJobs();
     setTripBusy(false); setStorageDropJob(null);
-    showToast(`Job dropped at ${target.label}`);
+    const hasDelivery = jobs.some(j => ids.includes(j.id) && j.delivery_date);
+    showToast(`Job dropped at ${target.label}${hasDelivery ? "" : " — pendiente agendar delivery"}`);
   }
   // Pick a job up from storage onto the trip: link to trip, status out_for_delivery.
   async function tripPickupFromStorage(trip, k) {
@@ -7242,7 +7303,7 @@ export default function App() {
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"]].map(([t,l]) => (
+            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"],["no_delivery","Sin delivery"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -7515,7 +7576,7 @@ export default function App() {
           return (
             <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
               style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${c.bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
-              <div style={{ fontWeight:700, fontFamily:"monospace" }}>{g.job_number || "(job)"}</div>
+              <div style={{ fontWeight:700, fontFamily:"monospace" }}>{g.job_number || "(job)"}{g.job_type === "broker_delivery" && <span style={{ fontWeight:600, opacity:0.8 }}> · Broker</span>}</div>
               {route && <div>{route}</div>}
               {drv && <div style={{ opacity:0.85 }}>🧑‍✈️ {drv}</div>}
             </div>
@@ -7542,6 +7603,32 @@ export default function App() {
                 <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
               ))}
             </div>
+
+            {/* Jobs picked up & waiting (or broker deliveries) with no delivery date yet. */}
+            {deliveryCandidates.length > 0 && (
+              <div style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:10, marginBottom:14, overflow:"hidden" }}>
+                <div onClick={() => setDcalPanelOpen(o => !o)} style={{ padding:"10px 14px", cursor:"pointer", display:"flex", alignItems:"center", gap:8, background:"#FFF9EE" }}>
+                  <span style={{ fontSize:13, fontWeight:700, color:"#854F0B" }}>📋 Entregas por agendar ({deliveryCandidates.length})</span>
+                  {deliveryToSchedule > 0 && <span style={{ fontSize:10.5, fontWeight:700, background:"#E24B4A", color:"#fff", borderRadius:10, padding:"1px 7px" }}>{deliveryToSchedule} con FADD ≤ 7 días</span>}
+                  <span style={{ flex:1 }} />
+                  <span style={{ color:"#B58B3D", fontSize:12 }}>{dcalPanelOpen ? "▾ ocultar" : "▸ mostrar"}</span>
+                </div>
+                {dcalPanelOpen && (
+                  <>
+                    {deliveryCandidates.slice(0, 10).map(c => (
+                      <ScheduleDeliveryRow key={c.key} cand={c}
+                        onOpen={setJobDetailKey}
+                        onSchedule={(cand, date) => { setJobDelivery(cand.ids, date); showToast(`Entrega de ${cand.job_number || "job"} agendada para ${date}`.replace(/\s+/g, " ").trim()); }} />
+                    ))}
+                    {deliveryCandidates.length > 10 && (
+                      <div style={{ padding:"8px 14px", fontSize:11.5, color:"#999" }}>
+                        +{deliveryCandidates.length - 10} más — <button onClick={() => openDcalAddExisting("")} style={{ border:"none", background:"none", color:"#185FA5", cursor:"pointer", padding:0, fontSize:11.5, textDecoration:"underline" }}>buscar con “Add existing job”</button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             {dcalView === "week" ? (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
