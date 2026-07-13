@@ -105,6 +105,7 @@ const I18N_ES = {
   "Cancel": "Cancelar",
   "Cancelled": "Cancelado",
   "Cash": "Cash",
+  "Change password": "Cambiar contraseña",
   "Check": "Check",
   "Choose a destination.": "Elegí un destino.",
   "Choose a unit first": "Elegí una unidad primero",
@@ -139,6 +140,7 @@ const I18N_ES = {
   "Completed": "Completado",
   "Concept": "Concepto",
   "Confirm": "Confirmar",
+  "Confirm new password": "Confirmar nueva contraseña",
   "Contact": "Contacto",
   "Copy the summary:": "Copiá el resumen:",
   "Create": "Crear",
@@ -149,6 +151,8 @@ const I18N_ES = {
   "Create split payments": "Crear pagos divididos",
   "Create trip": "Crear trip",
   "Create your account to sign in": "Crea tu cuenta para acceder",
+  "Current password": "Contraseña actual",
+  "Current password is incorrect.": "La contraseña actual es incorrecta.",
   "Database": "Base de datos",
   "Database setup": "Configuración de base de datos",
   "Date": "Fecha",
@@ -253,6 +257,7 @@ const I18N_ES = {
   "New document": "Nuevo documento",
   "New driver": "Nuevo driver",
   "New job": "Nuevo job",
+  "New password": "Nueva contraseña",
   "New payment": "Nuevo pago",
   "New trip": "Nuevo trip",
   "New truck": "Nuevo camión",
@@ -298,6 +303,9 @@ const I18N_ES = {
   "Pads outstanding ($)": "Pads pendientes ($)",
   "Pads received from broker": "Pads recibidos del broker",
   "Pads returned (post-delivery)": "Pads devueltos (post-delivery)",
+  "Password must be at least 8 characters.": "La contraseña debe tener al menos 8 caracteres.",
+  "Password updated.": "Contraseña actualizada.",
+  "Passwords do not match.": "Las contraseñas no coinciden.",
   "Payment date": "Fecha de pago",
   "Payment due date": "Vencimiento de pago",
   "Payment method": "Método de pago",
@@ -385,6 +393,7 @@ const I18N_ES = {
   "Unit status": "Estado de la unidad",
   "Units": "Unidades",
   "Up to date": "Al día",
+  "Update password": "Actualizar contraseña",
   "User": "Usuario",
   "View": "Ver",
   "We owe": "Le debemos",
@@ -2979,6 +2988,9 @@ export default function App() {
   const [nameInput, setNameInput] = useState("");    // editable name in Settings
   const [savingName, setSavingName] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState(null);
+  const [pwForm, setPwForm] = useState({ current:"", next:"", confirm:"" }); // change-password form in Settings
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwNotice, setPwNotice] = useState(null); // { ok, text }
   const [pwRecovery, setPwRecovery] = useState(false); // invite / reset-password landing
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3279,6 +3291,20 @@ export default function App() {
       setSettingsNotice("Saved.");
     } catch (e) { setSettingsNotice(e.message); }
     setSavingName(false);
+  }
+
+  // Change the current user's own password. Re-authenticates with the current
+  // password first so a borrowed open session can't silently take over the account.
+  async function changeMyPassword() {
+    if (pwForm.next.length < 8) { setPwNotice({ ok:false, text:"Password must be at least 8 characters." }); return; }
+    if (pwForm.next !== pwForm.confirm) { setPwNotice({ ok:false, text:"Passwords do not match." }); return; }
+    setPwSaving(true); setPwNotice(null);
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email: session.user.email, password: pwForm.current });
+    if (authErr) { setPwSaving(false); setPwNotice({ ok:false, text:"Current password is incorrect." }); return; }
+    const { error } = await supabase.auth.updateUser({ password: pwForm.next });
+    setPwSaving(false);
+    if (error) setPwNotice({ ok:false, text: error.message });
+    else { setPwNotice({ ok:true, text:"Password updated." }); setPwForm({ current:"", next:"", confirm:"" }); }
   }
 
   // Keep `page` pointed at a section the user is actually allowed to see.
@@ -9191,6 +9217,28 @@ export default function App() {
               {settingsNotice && <span style={{ fontSize:13, color: settingsNotice === "Saved." ? "#3B6D11" : "#b91c1c" }}>{settingsNotice}</span>}
               <span style={{ flex:1 }} />
               <Btn onClick={() => supabase.auth.signOut()}>Sign out</Btn>
+            </div>
+          </div>
+
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:14 }}>Change password</div>
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Current password</label>
+            <input type="password" autoComplete="current-password" value={pwForm.current} onChange={e => setPwForm(f => ({ ...f, current: e.target.value }))} placeholder="Current password"
+              style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box", marginBottom:16 }} />
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>New password</label>
+            <input type="password" autoComplete="new-password" value={pwForm.next} onChange={e => setPwForm(f => ({ ...f, next: e.target.value }))} placeholder="New password"
+              style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box", marginBottom:16 }} />
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Confirm new password</label>
+            <input type="password" autoComplete="new-password" value={pwForm.confirm} onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))} placeholder="Confirm new password"
+              onKeyDown={e => e.key === "Enter" && !pwSaving && pwForm.current && pwForm.next && pwForm.confirm && changeMyPassword()}
+              style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box" }} />
+
+            <div style={{ marginTop:20, display:"flex", alignItems:"center", gap:12 }}>
+              <Btn primary disabled={pwSaving || !pwForm.current || !pwForm.next || !pwForm.confirm} onClick={changeMyPassword}>{pwSaving ? "Saving…" : "Update password"}</Btn>
+              {pwNotice && <span style={{ fontSize:13, color: pwNotice.ok ? "#3B6D11" : "#b91c1c" }}>{pwNotice.text}</span>}
             </div>
           </div>
         </div>
