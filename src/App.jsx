@@ -2831,17 +2831,53 @@ function UsersSection({ session }) {
     setModal(m => ({ ...m, permissions: Object.fromEntries(PERMISSION_SECTIONS.map(s => [s.id, { view:value, edit:value, create:value }])) }));
   }
 
+  // Fallback invite that needs no server credentials: sign the person up with a
+  // random throwaway password on a secondary client (so the admin's own session
+  // is never replaced), let the on_auth_user_created trigger create the profile
+  // row, attach role/permissions through the admin's RLS write access, and make
+  // sure an email goes out so they can set their password.
+  async function inviteFallback(email, full_name) {
+    const tmp = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const password = Array.from(crypto.getRandomValues(new Uint8Array(24)), b => alphabet[b % alphabet.length]).join("");
+    const { data, error } = await tmp.auth.signUp({
+      email, password,
+      options: { emailRedirectTo: window.location.origin + "/?invited=1", data: { full_name } },
+    });
+    if (error) throw new Error(error.message);
+    // With email confirmation on, an existing email comes back as a fake user
+    // with no identities instead of an error — detect it so we don't mislead.
+    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0)
+      throw new Error(`${email} already has an account. Use Send reset instead.`);
+    await writeProfile(data.user.id, { email, full_name, role: modal.role, permissions: modal.permissions, active: true });
+    if (!data.session) {
+      // Email confirmation is on → Supabase already sent the confirmation link;
+      // opening it lands on /?invited=1 where they set their password.
+      return `Invitation sent to ${email} (signup confirmation email).`;
+    }
+    // Confirmation off → no email was sent; send a set-your-password email.
+    const { error: rErr } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + "/?invited=1" });
+    if (rErr) return `Account for ${email} was created, but the email failed (${rErr.message}). Use Send reset from the list.`;
+    return `Invitation sent to ${email} (set-password email).`;
+  }
+
   async function save() {
     setBusy(true); setError(null); setNotice(null);
     try {
       if (modal.mode === "new") {
-        // Creating a login requires the service role → must go through the API.
+        const email = modal.email.trim(), full_name = modal.full_name.trim();
+        // Preferred path: the serverless invite (needs the service role key).
         try {
-          await api("invite", { email: modal.email.trim(), full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions });
+          await api("invite", { email, full_name, role: modal.role, permissions: modal.permissions });
+          setNotice(`Invitation sent to ${email}.`);
         } catch (e) {
-          throw new Error(`Couldn't invite ${modal.email.trim()}: ${e.message}. Inviting a new login needs the admin service configured in Vercel (SUPABASE_SERVICE_ROLE_KEY + SUPABASE_URL). Existing users can still be edited here.`);
+          // Admin service down/misconfigured → create the login from the browser.
+          try {
+            setNotice(await inviteFallback(email, full_name));
+          } catch (e2) {
+            throw new Error(`Couldn't invite ${email}. Admin service: ${e.message}. Direct signup fallback: ${e2.message}`);
+          }
         }
-        setNotice(`Invitation sent to ${modal.email.trim()}.`);
       } else {
         const patch = { full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions, active: modal.active };
         // Try the API; fall back to a direct RLS-protected update if it's down.
