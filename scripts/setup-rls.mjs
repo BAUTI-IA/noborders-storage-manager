@@ -41,6 +41,8 @@ const MAP = {
   payment_accounts:     { view: ["payments"], owner: "payments" },
   companies:            { view: ["compliance"], owner: "compliance" },
   compliance_documents: { view: ["compliance"], owner: "compliance" },
+  claims:               { view: ["claims", "trips", "jobs"], owner: "claims" },
+  claim_notes:          { view: ["claims"], owner: "claims" },
 };
 
 function policiesFor(table, { view, owner }) {
