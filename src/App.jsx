@@ -1989,7 +1989,10 @@ function jobOrigin(j, storageById) { return jobOriginOptions(j, storageById)[0] 
 // Per job: ALL origin options (only the auto-picked one on by default) then the
 // delivery (always emitted — even non-locatable — so it's listed). Custom stops ride
 // at their sequence position; ones with no address are listed off and unroutable.
-// overrides = trips.route_overrides: { stopKey: bool }, only deviations from default.
+// overrides = trips.route_overrides: { stopKey: bool } (only deviations from
+// default), plus an optional ROUTE_ORDER_KEY entry: the full key list in the
+// dispatcher's custom order. Bool-only readers skip it (non-boolean value).
+const ROUTE_ORDER_KEY = "__order";
 function tripRouteStopOptions(seq, storageById, overrides) {
   const ov = overrides || {};
   const out = [];
@@ -2011,7 +2014,18 @@ function tripRouteStopOptions(seq, storageById, overrides) {
         query: addr, candidates: addr ? [addr] : [], defaultOn: !!addr });
     }
   }
-  return out.map(o => ({ ...o, on: typeof ov[o.key] === "boolean" ? ov[o.key] : o.defaultOn }));
+  // defaultIdx = position in the auto-built journey; kept so the modal can tell
+  // a custom order apart from the default one (and only persist real deviations).
+  let opts = out.map((o, i) => ({ ...o, defaultIdx: i, on: typeof ov[o.key] === "boolean" ? ov[o.key] : o.defaultOn }));
+  const saved = Array.isArray(ov[ROUTE_ORDER_KEY]) ? ov[ROUTE_ORDER_KEY] : null;
+  if (saved) {
+    // Saved order first (skipping keys that no longer exist); stops added to the
+    // trip after the reorder keep their default position at the end.
+    const byKey = Object.fromEntries(opts.map(o => [o.key, o]));
+    const seen = new Set(saved);
+    opts = [...saved.map(k => byKey[k]).filter(Boolean), ...opts.filter(o => !seen.has(o.key))];
+  }
+  return opts;
 }
 
 // WhatsApp "trip update" sent to the driver group when a job is added mid-trip.
@@ -2389,6 +2403,7 @@ const PICKUP_COLOR = "#1A8A4E", DELIVERY_COLOR = "#111", CUSTOM_COLOR = "#4B5563
 function TripRouteModal({ title, tripId, options, canPersist, tr, onClose }) {
   const [geo, setGeo] = useState({});     // key → {lat,lng,resolvedLabel,approx} | {failed:true}
   const [on, setOn] = useState(() => Object.fromEntries(options.map(o => [o.key, !!o.on])));
+  const [ord, setOrd] = useState(() => options.map(o => o.key)); // route order (options come pre-sorted by any saved order)
   const [err, setErr] = useState(null);
   const [saveErr, setSaveErr] = useState(false);
 
@@ -2426,20 +2441,32 @@ function TripRouteModal({ title, tripId, options, canPersist, tr, onClose }) {
   }, []);
 
   // Persist the full recomputed deviations map (also prunes keys of deleted jobs/stops).
-  const persist = (onMap) => {
+  const persist = (onMap, ordArr) => {
     if (!tripId) return;
     if (!canPersist) { setSaveErr(true); return; }
     const overrides = {};
     for (const o of options) if (!!onMap[o.key] !== !!o.defaultOn) overrides[o.key] = !!onMap[o.key];
+    // Only store the order when it deviates from the auto-built journey, so trips
+    // the dispatcher never reordered keep following the sequence on the trip card.
+    const defaultOrd = [...options].sort((a, b) => a.defaultIdx - b.defaultIdx).map(o => o.key);
+    if (ordArr.join("|") !== defaultOrd.join("|")) overrides[ROUTE_ORDER_KEY] = ordArr;
     supabase.from("trips").update({ route_overrides: overrides }).eq("id", tripId)
       .then(({ error }) => setSaveErr(!!error));
   };
-  const toggle = (key) => setOn(prev => { const next = { ...prev, [key]: !prev[key] }; persist(next); return next; });
+  const toggle = (key) => setOn(prev => { const next = { ...prev, [key]: !prev[key] }; persist(next, ord); return next; });
+  const move = (key, dir) => setOrd(prev => {
+    const i = prev.indexOf(key), j = i + dir;
+    if (i < 0 || j < 0 || j >= prev.length) return prev;
+    const next = [...prev]; [next[i], next[j]] = [next[j], next[i]];
+    persist(on, next);
+    return next;
+  });
 
   const done = options.every(o => geo[o.key]);
   // Sequential route number for each SELECTED locatable stop (shared by map + list).
+  const optByKey = Object.fromEntries(options.map(o => [o.key, o]));
   let n = 0;
-  const rows = options.map(o => {
+  const rows = ord.map(k => optByKey[k]).filter(Boolean).map(o => {
     const g = geo[o.key] || null;
     const checked = !!on[o.key];
     return { ...o, ...(g || {}), checked, pending: !g, num: checked && g && g.lat != null ? ++n : null };
@@ -2495,13 +2522,21 @@ function TripRouteModal({ title, tripId, options, canPersist, tr, onClose }) {
             <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:PICKUP_COLOR }} />Pickup / loaded from</span>
             <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:DELIVERY_COLOR }} />Delivery</span>
             <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:CUSTOM_COLOR }} />{tr("Custom stop", "Parada personalizada")}</span>
-            <span style={{ marginLeft:"auto", color:"#aaa" }}>{tr("Tick the stops the truck actually makes", "Ticá las paradas que el camión hace de verdad")}</span>
+            <span style={{ marginLeft:"auto", color:"#aaa" }}>{tr("Tick the real stops · reorder with the arrows", "Ticá las paradas reales · ordenalas con las flechas")}</span>
           </div>
           {!done && <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>Geolocating stops… ({Object.keys(geo).length}/{options.length})</div>}
           <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden" }}>
-            {rows.map((p) => {
+            {rows.map((p, idx) => {
               const routable = p.candidates.length > 0;
               const locFailed = p.checked && routable && !p.pending && p.lat == null;
+              // Arrows live inside the row <label>: preventDefault stops the click
+              // from also activating the checkbox.
+              const arrow = (dir, glyph, disabled) => (
+                <button type="button" disabled={disabled}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); move(p.key, dir); }}
+                  title={dir < 0 ? tr("Move up", "Subir") : tr("Move down", "Bajar")}
+                  style={{ border:"1px solid #eee", background:"#fff", borderRadius:5, width:22, height:18, lineHeight:"14px", fontSize:9, color: disabled ? "#ddd" : "#888", cursor: disabled ? "default" : "pointer", padding:0 }}>{glyph}</button>
+              );
               return (
               <label key={p.key} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12.5, cursor:"pointer", opacity: p.checked ? 1 : 0.55, background: p.checked ? "#fff" : "#fafafa" }}>
                 <input type="checkbox" checked={p.checked} onChange={() => toggle(p.key)} style={{ marginTop:3, flexShrink:0, cursor:"pointer" }} />
@@ -2525,6 +2560,10 @@ function TripRouteModal({ title, tripId, options, canPersist, tr, onClose }) {
                       : locFailed ? `Couldn't locate: ${p.query}` : (p.resolvedLabel || p.query)}
                     {p.note ? <span style={{ color:"#aaa" }}> · {p.note}</span> : null}
                   </div>
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:2, flexShrink:0, marginTop:1 }}>
+                  {arrow(-1, "▲", idx === 0)}
+                  {arrow(1, "▼", idx === rows.length - 1)}
                 </div>
               </label>
             ); })}
