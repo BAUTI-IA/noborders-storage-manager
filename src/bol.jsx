@@ -426,7 +426,7 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <button style={btn(false)} onClick={() => setView("documents")}>Documents</button>
         <button style={btn(false)} onClick={() => { setReopenDoc(null); setView("generate"); }}>Generate BOL</button>
         {canEdit && <button style={btn(true)} onClick={() => { setEditing(null); setView("editor"); }}>+ New template</button>}
@@ -845,7 +845,7 @@ function FieldConfigModal({ supabase, session, fieldConfig, onClose }) {
             <button style={smallBtn} onClick={addCustom}>+ Add</button>
           </div>
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 18px", borderTop: "1px solid #f3f4f6" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 18px", borderTop: "1px solid #f3f4f6", flexWrap: "wrap" }}>
           <button style={btn(false)} onClick={() => onClose(false)}>Cancel</button>
           <button style={btn(true)} disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
         </div>

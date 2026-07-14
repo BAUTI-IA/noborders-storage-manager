@@ -757,7 +757,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
                 placeholder="Group name (optional)" style={{ border: "1px solid #e5e5e5", outline: "none", borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 10 }} />
             )}
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
               <button onClick={() => setShowNewChat(false)} style={{ border: "1px solid #eee", background: "#fff", borderRadius: 10, padding: "8px 14px", fontSize: 13, cursor: "pointer", color: "#666" }}>Cancel</button>
               <button onClick={confirmNewChat} disabled={!canGo}
                 style={{ border: "none", background: canGo ? BLUE : "#e8e8ec", color: canGo ? "#fff" : "#aaa", borderRadius: 10, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: canGo ? "pointer" : "default" }}>{btnLabel}</button>

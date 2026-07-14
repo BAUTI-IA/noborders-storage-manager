@@ -2388,7 +2388,7 @@ function Modal({ title, onClose, children, footer }) {
           <button onClick={onClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>x</button>
         </div>
         <div style={{ padding:"16px 20px" }}>{children}</div>
-        {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8 }}>{footer}</div>}
+        {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8, flexWrap:"wrap" }}>{footer}</div>}
       </div>
     </div>
   );
@@ -3295,7 +3295,7 @@ function UsersSection({ session }) {
               </>
             )}
 
-            <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:18 }}>
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:18, flexWrap:"wrap" }}>
               <button onClick={() => setModal(null)} disabled={busy} style={{ padding:"9px 16px", borderRadius:8, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:13 }}>Cancel</button>
               <Btn primary disabled={busy || !modal.email} onClick={save}>{busy ? "Saving…" : modal.mode === "new" ? "Send invitation" : "Save changes"}</Btn>
             </div>
@@ -11055,7 +11055,7 @@ export default function App() {
                       <Field label="Trip # (opcional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Historical ref." /></Field>
                       <Field label="Notes" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="What happened" /></Field>
                     </div>
-                    <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10 }}>
+                    <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10, flexWrap:"wrap" }}>
                       <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancel</Btn>
                       <Btn primary onClick={() => saveJobEvent(jobDetail.key, repId)} style={{ padding:"5px 12px", fontSize:12 }}>Save event</Btn>
                     </div>
@@ -13525,7 +13525,7 @@ export default function App() {
                   <Field label="State"><input style={inp} list="states-list" value={dropNewUnit.state} onChange={e => setDropNewUnit(f => ({ ...f, state:e.target.value.toUpperCase() }))} placeholder="TN" /></Field>
                   <Field label="Tamano"><input style={inp} list="sizes-list" value={dropNewUnit.size} onChange={e => setDropNewUnit(f => ({ ...f, size:e.target.value }))} placeholder="10x10" /></Field>
                 </div>
-                <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10 }}>
+                <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10, flexWrap:"wrap" }}>
                   <Btn onClick={() => { setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" }); }}>Cancel</Btn>
                   <Btn primary disabled={dropCreatingBusy || !dropNewUnit.brand.trim() || !dropNewUnit.unit.trim()} onClick={createDropUnit}>{dropCreatingBusy ? "Creating…" : "Create & select"}</Btn>
                 </div>
@@ -13771,7 +13771,7 @@ export default function App() {
                   <span><b>Why this trip:</b> {s.reasoning}</span>
                 </div>
               )}
-              <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10 }}>
+              <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10, flexWrap:"wrap" }}>
                 <Btn onClick={() => dropSuggestion(kind === "addition" ? "trip_additions" : "new_trips", idx)}>Dismiss</Btn>
                 <Btn primary onClick={() => applyTripSuggestion(s, kind)}>{kind === "addition" ? "Review & add" : "Review & create"}</Btn>
               </div>
