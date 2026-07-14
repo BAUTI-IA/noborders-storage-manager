@@ -3,17 +3,16 @@
 <head>
 <meta charset="utf-8">
 <style>
-  @page { size: A4; margin: 14mm 13mm 15mm 13mm; }
+  @page { size: A4; margin: 13mm 12mm 14mm 12mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   html,body { margin:0; padding:0; }
-  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color:#1a1a1a; font-size:11.2px; line-height:1.55; }
-  h1,h2,h3 { margin:0; letter-spacing:-0.02em; }
+  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color:#1a1a1a; font-size:11px; line-height:1.55; }
+  h1,h2,h3,h4 { margin:0; letter-spacing:-0.02em; }
   p { margin:0 0 8px; }
   .muted { color:#888; }
-  .accent { color:#185FA5; }
   a { color:#185FA5; text-decoration:none; }
   .break { page-break-before: always; }
-  h1.sec, h3 { break-after: avoid; }
+  h1.sec, h3, h4 { break-after: avoid; }
   table.g, table.t { break-inside: auto; }
   tr { break-inside: avoid; }
   ul { margin:4px 0 10px; padding-left:18px; }
@@ -21,124 +20,152 @@
   .avoid { break-inside: avoid; }
 
   /* ---------- Cover ---------- */
-  .cover { page-break-after: always; height: 261mm; border-radius:20px; overflow:hidden;
-           background: linear-gradient(160deg,#0f172a 0%, #122a44 55%, #0c1f33 100%); color:#fff; position:relative; padding:34mm 24mm; }
+  .cover { page-break-after: always; height: 263mm; border-radius:20px; overflow:hidden;
+           background: linear-gradient(160deg,#0f172a 0%, #122a44 55%, #0c1f33 100%); color:#fff; position:relative; padding:32mm 22mm; }
   .cover .kicker { font-size:12px; font-weight:700; letter-spacing:0.22em; text-transform:uppercase; color:#7Fb2e6; }
-  .cover h1 { font-size:54px; font-weight:800; margin:14px 0 6px; line-height:1.02; }
-  .cover .sub { font-size:19px; color:#c9d6e5; font-weight:500; }
-  .cover .pill { display:inline-block; margin-top:30px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18);
-                 border-radius:30px; padding:9px 18px; font-size:13px; color:#e7eef7; }
-  .cover .foot { position:absolute; left:24mm; right:24mm; bottom:26mm; display:flex; justify-content:space-between; align-items:flex-end;
+  .cover h1 { font-size:50px; font-weight:800; margin:14px 0 6px; line-height:1.02; }
+  .cover .sub { font-size:18px; color:#c9d6e5; font-weight:500; }
+  .cover .pill { display:inline-block; margin-top:26px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18);
+                 border-radius:30px; padding:9px 18px; font-size:12.5px; color:#e7eef7; }
+  .cover .foot { position:absolute; left:22mm; right:22mm; bottom:24mm; display:flex; justify-content:space-between; align-items:flex-end;
                  border-top:1px solid rgba(255,255,255,0.14); padding-top:16px; font-size:12px; color:#9fb3c8; }
-  .cover .mock { position:absolute; right:18mm; top:120mm; display:flex; gap:10px; opacity:0.96; }
-  .cover .chip { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:14px 16px; min-width:120px; }
-  .cover .chip .n { font-size:26px; font-weight:800; }
-  .cover .chip .l { font-size:11px; color:#9fb3c8; margin-top:2px; }
+  .cover .mock { position:absolute; right:16mm; top:118mm; display:flex; gap:10px; opacity:0.96; }
+  .cover .chip { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:13px 15px; min-width:112px; }
+  .cover .chip .n { font-size:24px; font-weight:800; }
+  .cover .chip .l { font-size:10.5px; color:#9fb3c8; margin-top:2px; }
 
   /* ---------- Section headers ---------- */
-  .sec { font-size:21px; font-weight:800; margin:24px 0 4px; }
-  .sec .num { display:inline-flex; align-items:center; justify-content:center; min-width:30px; height:30px; border-radius:9px;
-              background:#111; color:#fff; font-size:15px; margin-right:10px; vertical-align:middle; padding:0 6px; }
-  .lead { color:#666; margin:0 0 14px; font-size:12px; }
-  .divider { height:1px; background:#eee; margin:20px 0; }
+  .sec { font-size:20px; font-weight:800; margin:22px 0 4px; }
+  .sec .num { display:inline-flex; align-items:center; justify-content:center; min-width:29px; height:29px; border-radius:9px;
+              background:#111; color:#fff; font-size:14px; margin-right:10px; vertical-align:middle; padding:0 6px; }
+  .lead { color:#666; margin:0 0 12px; font-size:11.5px; }
+  h3.how { font-size:14px; margin:18px 0 6px; padding:7px 12px; background:#0f172a; color:#fff; border-radius:9px; display:block; }
+  h3.how .k { color:#7FB2E6; font-weight:800; }
+
+  /* ---------- Step list ---------- */
+  ol.steps { counter-reset: st; list-style:none; margin:8px 0 12px; padding:0; }
+  ol.steps > li { counter-increment: st; position:relative; padding:0 0 8px 34px; margin:0; }
+  ol.steps > li::before { content: counter(st); position:absolute; left:0; top:0; width:22px; height:22px; border-radius:50%;
+       background:#185FA5; color:#fff; font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; }
+  ol.steps > li b.ui { color:#0f172a; }
+  .kbd { display:inline-block; border:1px solid #d8d8d8; border-bottom-width:2px; border-radius:6px; background:#f8f8f8; padding:0 6px; font-size:10px; font-weight:700; white-space:nowrap; }
+  .es { color:#9aa3ad; font-style:italic; font-size:10px; }
 
   /* ---------- Screenshot frame ---------- */
-  .shot { border:1px solid #e6e6e6; border-radius:12px; overflow:hidden; box-shadow:0 10px 30px rgba(15,23,42,0.10); break-inside:avoid; margin:10px 0 6px; background:#fff; }
-  .shot .bar { background:#f3f4f6; padding:8px 12px; display:flex; gap:7px; align-items:center; border-bottom:1px solid #e9e9e9; }
-  .tl { width:11px; height:11px; border-radius:50%; }
-  .url { margin-left:8px; font-size:10.5px; color:#9aa3ad; background:#fff; border-radius:7px; padding:4px 12px; flex:1; }
-  .cap { font-size:10.5px; color:#9aa3ad; margin:6px 2px 16px; font-style:italic; }
+  .shot { border:1px solid #e6e6e6; border-radius:12px; overflow:hidden; box-shadow:0 10px 30px rgba(15,23,42,0.10); break-inside:avoid; margin:10px 0 4px; background:#fff; }
+  .shot .bar { background:#f3f4f6; padding:7px 12px; display:flex; gap:7px; align-items:center; border-bottom:1px solid #e9e9e9; }
+  .tl { width:10px; height:10px; border-radius:50%; }
+  .url { margin-left:8px; font-size:10px; color:#9aa3ad; background:#fff; border-radius:7px; padding:3px 12px; flex:1; }
+  .cap { font-size:10px; color:#9aa3ad; margin:6px 2px 14px; font-style:italic; }
 
   /* ---------- App UI mock primitives ---------- */
   .app { display:flex; background:#fafafa; }
-  .side { width:150px; flex-shrink:0; background:#fff; border-right:1px solid #efefef; padding:0; }
-  .side .brand { padding:13px 13px 11px; border-bottom:1px solid #f3f3f3; }
-  .side .brand .t { font-size:13px; font-weight:800; }
-  .side .brand .s { font-size:8px; font-weight:700; letter-spacing:0.09em; text-transform:uppercase; color:#aaa; margin-top:3px; }
-  .side .grp { padding:9px 9px 2px; }
-  .side .glabel { font-size:8px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#bbb; padding:5px 9px 4px; }
-  .side .item { display:flex; align-items:center; gap:8px; padding:6px 9px; border-radius:8px; font-size:10.5px; color:#444; font-weight:500; margin-bottom:1px; }
+  .side { width:148px; flex-shrink:0; background:#fff; border-right:1px solid #efefef; }
+  .side .brand { padding:12px 13px 10px; border-bottom:1px solid #f3f3f3; }
+  .side .brand .t { font-size:12.5px; font-weight:800; }
+  .side .brand .s { font-size:7.5px; font-weight:700; letter-spacing:0.09em; text-transform:uppercase; color:#aaa; margin-top:3px; }
+  .side .grp { padding:7px 8px 2px; }
+  .side .glabel { font-size:7.5px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#bbb; padding:4px 9px 3px; }
+  .side .item { display:flex; align-items:center; gap:7px; padding:4.5px 9px; border-radius:8px; font-size:10px; color:#444; font-weight:500; margin-bottom:1px; }
   .side .item.on { background:#111; color:#fff; font-weight:600; }
-  .side .item .ico { font-size:11px; }
-  .side .badge { margin-left:auto; background:#E24B4A; color:#fff; font-size:8.5px; font-weight:800; border-radius:10px; padding:1px 6px; }
-  .main { flex:1; padding:15px 16px; min-width:0; }
+  .side .item .ico { font-size:10px; }
+  .side .badge { margin-left:auto; background:#E24B4A; color:#fff; font-size:8px; font-weight:800; border-radius:10px; padding:1px 6px; }
+  .main { flex:1; padding:14px 15px; min-width:0; }
   .phead { display:flex; align-items:center; gap:9px; margin-bottom:3px; }
-  .phead h2 { font-size:17px; font-weight:800; }
-  .live { display:inline-flex; align-items:center; gap:4px; font-size:8.5px; font-weight:700; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#3B6D11; }
+  .phead h2 { font-size:16px; font-weight:800; }
+  .live { display:inline-flex; align-items:center; gap:4px; font-size:8px; font-weight:700; padding:2px 7px; border-radius:20px; background:#EAF3DE; color:#3B6D11; }
   .live i { width:5px; height:5px; border-radius:50%; background:#639922; display:inline-block; }
-  .psub { font-size:11px; color:#999; margin-bottom:12px; }
-  .btn { display:inline-block; font-size:10.5px; font-weight:600; padding:6px 12px; border-radius:8px; border:1px solid #e5e5e5; background:#fff; }
+  .psub { font-size:10.5px; color:#999; margin-bottom:11px; }
+  .btn { display:inline-block; font-size:10px; font-weight:600; padding:5px 11px; border-radius:8px; border:1px solid #e5e5e5; background:#fff; white-space:nowrap; }
   .btn.dark { background:#111; color:#fff; border-color:#111; }
+  .btn.blue { background:#185FA5; color:#fff; border-color:#185FA5; }
+  .btn.red { background:#fff; color:#A32D2D; border-color:#f3c9c9; }
+  .btn.green { background:#1A8A4E; color:#fff; border-color:#1A8A4E; }
 
-  .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
-  .mc { background:#fff; border:1px solid #efefef; border-radius:9px; padding:9px 11px; }
-  .mc .l { font-size:9px; color:#aaa; font-weight:600; }
-  .mc .n { font-size:18px; font-weight:800; margin-top:3px; }
+  .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-bottom:11px; }
+  .mc { background:#fff; border:1px solid #efefef; border-radius:9px; padding:8px 10px; }
+  .mc .l { font-size:8.5px; color:#aaa; font-weight:600; }
+  .mc .n { font-size:16px; font-weight:800; margin-top:3px; }
 
-  .alert { background:#FCEBEB; border:1px solid #E24B4A; border-radius:9px; padding:9px 12px; font-size:10px; color:#A32D2D; margin-bottom:11px; }
+  .alert { background:#FCEBEB; border:1px solid #E24B4A; border-radius:9px; padding:8px 12px; font-size:9.5px; color:#A32D2D; margin-bottom:10px; }
   .alert b { font-weight:800; }
-  .achip { display:inline-block; background:#fff; border:1px solid #f3c9c9; border-radius:20px; padding:2px 9px; margin:5px 5px 0 0; font-size:9.5px; }
+  .achip { display:inline-block; background:#fff; border:1px solid #f3c9c9; border-radius:20px; padding:2px 9px; margin:4px 5px 0 0; font-size:9px; }
 
-  .subtabs { display:flex; gap:2px; border-bottom:1px solid #efefef; margin-bottom:11px; flex-wrap:wrap; }
-  .subtabs span { font-size:10.5px; padding:6px 12px; color:#999; }
+  .subtabs { display:flex; gap:2px; border-bottom:1px solid #efefef; margin-bottom:10px; flex-wrap:wrap; }
+  .subtabs span { font-size:10px; padding:5px 11px; color:#999; white-space:nowrap; }
   .subtabs span.on { color:#111; font-weight:700; border-bottom:2px solid #111; }
 
-  table.t { width:100%; border-collapse:collapse; font-size:9.5px; }
-  table.t th { text-align:left; font-size:8px; font-weight:700; color:#aaa; text-transform:uppercase; letter-spacing:0.04em; padding:8px 9px; background:#fafafa; border-bottom:1px solid #efefef; white-space:nowrap; }
-  table.t td { padding:9px 9px; border-bottom:1px solid #f4f4f4; vertical-align:top; }
+  table.t { width:100%; border-collapse:collapse; font-size:9px; }
+  table.t th { text-align:left; font-size:7.5px; font-weight:700; color:#aaa; text-transform:uppercase; letter-spacing:0.04em; padding:7px 8px; background:#fafafa; border-bottom:1px solid #efefef; white-space:nowrap; }
+  table.t td { padding:8px; border-bottom:1px solid #f4f4f4; vertical-align:top; }
   .jobn { font-family: ui-monospace, monospace; font-weight:700; color:#185FA5; text-decoration:underline; }
   .mono { font-family: ui-monospace, monospace; }
 
-  .pill2 { display:inline-flex; align-items:center; gap:4px; font-size:9px; font-weight:700; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+  .pill2 { display:inline-flex; align-items:center; gap:4px; font-size:8.5px; font-weight:700; padding:2px 8px; border-radius:20px; white-space:nowrap; }
   .pill2 i { width:5px; height:5px; border-radius:50%; }
-  .tag { display:inline-block; font-size:9px; font-weight:700; padding:2px 7px; border-radius:6px; }
-  .swatch { width:10px; height:10px; border-radius:50%; border:1px solid #ccc; display:inline-block; vertical-align:-1px; margin-right:4px; }
-  .act { color:#185FA5; font-size:9.5px; white-space:nowrap; }
+  .tag { display:inline-block; font-size:8.5px; font-weight:700; padding:2px 7px; border-radius:6px; }
+  .swatch { width:9px; height:9px; border-radius:50%; border:1px solid #ccc; display:inline-block; vertical-align:-1px; margin-right:4px; }
+  .act { color:#185FA5; font-size:9px; white-space:nowrap; }
   .act.g { color:#1A8A4E; }
-  .miniadv { display:inline-block; font-size:8.5px; font-weight:700; border:1px solid #e5e5e5; border-radius:6px; padding:2px 7px; }
+  .miniadv { display:inline-block; font-size:8px; font-weight:700; border:1px solid #e5e5e5; border-radius:6px; padding:2px 7px; white-space:nowrap; }
 
-  /* status colors */
   .s-sch{background:#E6F1FB;color:#185FA5} .s-sch i{background:#378ADD}
   .s-pic{background:#FDE3CF;color:#C2410C} .s-pic i{background:#EA580C}
   .s-sto{background:#EDE9FE;color:#6D28D9} .s-sto i{background:#7C3AED}
   .s-ofd{background:#FEF3C7;color:#92760B} .s-ofd i{background:#EAB308}
   .s-del{background:#EAF3DE;color:#3B6D11} .s-del i{background:#639922}
-  .s-hold{background:#FEF9C3;color:#854D0E} .s-hold i{background:#CA8A04}
-  /* type colors */
   .t-full{background:#E6F1FB;color:#185FA5} .t-dir{background:#EAF3DE;color:#3B6D11} .t-bro{background:#FDE3CF;color:#C2410C}
-  /* fadd colors */
   .f-over{background:#FCEBEB;color:#A32D2D} .f-over i{background:#E24B4A}
   .f-3{background:#FDE3CF;color:#C2410C} .f-3 i{background:#EA580C}
   .f-7{background:#FEF3C7;color:#92760B} .f-7 i{background:#EAB308}
   .f-ok{background:#EAF3DE;color:#3B6D11} .f-ok i{background:#639922}
   .f-no{background:#f1f1f1;color:#888}
 
-  /* callout */
-  .note { background:#F1F7FD; border:1px solid #D6E6F5; border-left:4px solid #378ADD; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; break-inside:avoid; }
+  .note { background:#F1F7FD; border:1px solid #D6E6F5; border-left:4px solid #378ADD; border-radius:8px; padding:9px 13px; font-size:10.5px; margin:10px 0; break-inside:avoid; }
   .note b { color:#185FA5; }
-  .warn { background:#FFF6E8; border:1px solid #F4DDB0; border-left:4px solid #EF9F27; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; break-inside:avoid; }
+  .warn { background:#FFF6E8; border:1px solid #F4DDB0; border-left:4px solid #EF9F27; border-radius:8px; padding:9px 13px; font-size:10.5px; margin:10px 0; break-inside:avoid; }
 
-  /* flow diagram */
-  .flow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:10px 0; }
-  .fbox { border:1.5px solid #d8d8d8; border-radius:9px; padding:8px 12px; font-size:10.5px; font-weight:700; text-align:center; background:#fff; }
+  .flow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:8px 0; }
+  .fbox { border:1.5px solid #d8d8d8; border-radius:9px; padding:7px 11px; font-size:10px; font-weight:700; text-align:center; background:#fff; }
   .farrow { color:#bbb; font-weight:800; }
 
-  /* glossary / generic table */
-  table.g { width:100%; border-collapse:collapse; font-size:11px; margin-top:6px; }
-  table.g th { text-align:left; background:#111; color:#fff; padding:8px 11px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
-  table.g td { padding:8px 11px; border-bottom:1px solid #eee; vertical-align:top; }
+  table.g { width:100%; border-collapse:collapse; font-size:10.5px; margin-top:6px; }
+  table.g th { text-align:left; background:#111; color:#fff; padding:7px 10px; font-size:9.5px; text-transform:uppercase; letter-spacing:0.04em; }
+  table.g td { padding:7px 10px; border-bottom:1px solid #eee; vertical-align:top; }
   table.g tr:nth-child(even) td { background:#fafafa; }
-  table.g td:first-child { font-weight:700; white-space:nowrap; }
+  table.g td:first-child { font-weight:700; }
 
   .occ { background:#f0f0f0; border-radius:6px; height:9px; overflow:hidden; }
   .occ > div { height:9px; }
 
-  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .three { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
-  .card { border:1px solid #ececec; border-radius:11px; padding:13px 15px; break-inside:avoid; }
-  .card h3 { font-size:13px; margin-bottom:4px; }
-  .legend .row { display:flex; align-items:center; gap:8px; margin:5px 0; font-size:11px; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+  .three { display:grid; grid-template-columns:1fr 1fr 1fr; gap:11px; }
+  .card { border:1px solid #ececec; border-radius:11px; padding:12px 14px; break-inside:avoid; }
+  .card h3 { font-size:12.5px; margin-bottom:4px; }
+  .legend .row { display:flex; align-items:center; gap:8px; margin:5px 0; font-size:10.5px; }
   .gloss { color:#9aa3ad; font-style:italic; }
+
+  /* ---------- Modal mock ---------- */
+  .mm { border:1px solid #dfe3e8; border-radius:14px; overflow:hidden; box-shadow:0 14px 40px rgba(15,23,42,0.16); break-inside:avoid; margin:10px 0 4px; background:#fff; max-width:660px; }
+  .mm .mh { display:flex; align-items:center; justify-content:space-between; padding:10px 15px; border-bottom:1px solid #f0f0f0; background:#fff; }
+  .mm .mh .ttl { font-size:13px; font-weight:800; }
+  .mm .mh .x { color:#bbb; font-weight:700; }
+  .mm .mb { padding:12px 15px; background:#fcfcfd; }
+  .mm .mf { display:flex; justify-content:flex-end; gap:8px; padding:10px 15px; border-top:1px solid #f0f0f0; background:#fff; }
+  .fgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .fgrid .full { grid-column:1 / -1; }
+  .fld { min-width:0; }
+  .fld .fl { font-size:8.5px; font-weight:700; color:#8a929c; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:3px; }
+  .fld .fv { border:1px solid #e3e6ea; border-radius:8px; background:#fff; padding:6px 9px; font-size:10px; color:#333; min-height:14px; }
+  .fld .fv.ph { color:#b6bcc4; }
+  .fld .fv.sel::after { content:"▾"; float:right; color:#aab; }
+  .fsec { font-size:9px; font-weight:800; letter-spacing:0.07em; text-transform:uppercase; color:#185FA5; margin:12px 0 6px; border-bottom:1px solid #e8eef5; padding-bottom:3px; }
+  .fsec:first-child { margin-top:0; }
+  .chk { display:flex; gap:7px; align-items:flex-start; font-size:10px; margin:4px 0; }
+  .chk .bx { width:12px; height:12px; border:1.5px solid #c9ced6; border-radius:3.5px; flex-shrink:0; margin-top:1px; background:#fff; }
+  .chk .bx.on { background:#185FA5; border-color:#185FA5; position:relative; }
+  .chk .bx.on::after { content:"✓"; color:#fff; font-size:9px; position:absolute; left:1.5px; top:-1.5px; }
+  .radio { width:12px; height:12px; border:1.5px solid #c9ced6; border-radius:50%; flex-shrink:0; margin-top:1px; background:#fff; }
 </style>
 </head>
 <body>
@@ -146,9 +173,9 @@
 <!-- ============ COVER ============ -->
 <div class="cover">
   <div class="kicker">No Borders Moving &amp; Storage</div>
-  <h1>Operations<br>CRM</h1>
-  <div class="sub">Team user guide — how the whole system works</div>
-  <div class="pill">📘 Dispatching · Jobs · Trips · Payments · BOL · Claims</div>
+  <h1>Operations CRM<br>Step-by-Step Manual</h1>
+  <div class="sub">How to do everything in the system — with pictures</div>
+  <div class="pill">📘 Jobs · Dispatching · Trips · Payments · BOL · Claims · Chats</div>
 
   <div class="mock">
     <div class="chip"><div class="n" style="color:#7FB2E6">4</div><div class="l">Pickups today</div></div>
@@ -157,575 +184,731 @@
   </div>
 
   <div class="foot">
-    <div>Version 2.0 · July 2026 · Internal use</div>
-    <div>Up and running in 15 minutes 🚚</div>
+    <div>Version 3.0 · July 2026 · Internal use</div>
+    <div>Every screen, every button 🚚</div>
   </div>
 </div>
 
 <!-- ============ INTRO + INDEX ============ -->
 <h1 class="sec"><span class="num">›</span>Before you start</h1>
-<p class="lead">The essentials to run the system day to day.</p>
-<p>This is the system we use to manage <b>pickups, deliveries, storage, trips and money</b> — the full life of every moving job. The key things:</p>
+<p class="lead">Read this page first — it explains how the guide and the system work.</p>
 <ul>
-  <li><b>Everything is live:</b> if a teammate adds or changes something, you see it instantly — no need to reload the page.</li>
+  <li><b>Everything is live:</b> when a teammate changes something you see it instantly, no reload needed.</li>
   <li><b>It runs in the browser</b> (computer or phone). Nothing to install.</li>
-  <li><b>Your work screen is Dispatching.</b> That's where you'll spend 80% of your time.</li>
-  <li><b>What you see depends on your permissions.</b> If a section is missing from your menu, you don't have access to it (ask an admin).</li>
-  <li>The app can be displayed in <b>English or Spanish</b> — switch it in Settings. This guide shows the English labels.</li>
+  <li><b>What you see depends on your permissions</b> — missing sections in your menu means no access (ask an admin).</li>
+  <li>The images in this guide are <b>faithful recreations of the real screens</b> so you know exactly what to look for.</li>
+  <li>A few labels in the app appear in Spanish even in English mode (e.g. <span class="kbd">🗺️ Ruta</span>). The guide shows them <b>exactly as they appear on screen</b>, with the meaning in <span class="es">(italics)</span>.</li>
+  <li>Steps are numbered <b>1, 2, 3…</b> — buttons you tap look like this: <span class="kbd">+ New job</span>.</li>
 </ul>
 
-<div class="card avoid" style="margin-top:12px">
+<div class="card avoid" style="margin-top:10px">
   <h3>Contents</h3>
   <table class="g" style="margin-top:8px">
-    <tr><td>1 · Access</td><td>How to sign in</td></tr>
-    <tr><td>2 · The menu</td><td>The sidebar sections</td></tr>
-    <tr><td>3 · Dispatching</td><td>The daily board (the most important part)</td></tr>
-    <tr><td>4 · Jobs</td><td>Job types, creating, editing, the job timeline</td></tr>
-    <tr><td>5 · Calendars</td><td>Pickup calendar + delivery scheduling</td></tr>
-    <tr><td>6 · Storage</td><td>Rented units and own warehouses</td></tr>
-    <tr><td>7 · Billing</td><td>Monthly storage billing to the client</td></tr>
-    <tr><td>8 · Brokers</td><td>The companies we work for</td></tr>
-    <tr><td>9 · Settlements</td><td>Broker closing sheets and BOL money</td></tr>
-    <tr><td>10 · Extras &amp; Commissions</td><td>Extra charges and driver/rep splits</td></tr>
-    <tr><td>11 · Trips / Live Load</td><td>Trucks on the road: stops, splits, AI suggestions</td></tr>
-    <tr><td>12 · Payments</td><td>Every dollar: who holds it, what's deposited</td></tr>
-    <tr><td>13 · Drivers &amp; Trucks</td><td>The fleet and the people driving it</td></tr>
-    <tr><td>14 · BOL &amp; Documents</td><td>Bills of Lading, signatures, DocuSign</td></tr>
-    <tr><td>15 · Claims &amp; Incidents</td><td>Damage, missing items, complaints</td></tr>
-    <tr><td>16 · Chats</td><td>Internal team messaging</td></tr>
-    <tr><td>17 · Clients, Analytics &amp; Suggestions</td><td>Customers, dashboards, ideas box</td></tr>
-    <tr><td>18 · Users &amp; Settings</td><td>Accounts, roles and permissions</td></tr>
-    <tr><td>19 · Deleting a job</td><td>What gets removed</td></tr>
-    <tr><td>20 · Golden rules + Glossary</td><td>The daily routine and key terms</td></tr>
+    <tr><td>1 · Sign in &amp; the menu</td><td>Getting around</td></tr>
+    <tr><td>2 · Dispatching</td><td>Reading the daily board</td></tr>
+    <tr><td>3 · Creating a job</td><td>The "+ New job" form, field by field</td></tr>
+    <tr><td>4 · The job detail</td><td>Editing, timeline, marking delivered</td></tr>
+    <tr><td>5 · Calendars</td><td>Pickup calendar + scheduling deliveries</td></tr>
+    <tr><td>6 · Storage</td><td>Units, warehouses, WhatsApp import</td></tr>
+    <tr><td>7 · Storage Billing</td><td>Monthly charges to clients</td></tr>
+    <tr><td>8 · Brokers</td><td>Managing broker companies</td></tr>
+    <tr><td>9 · Settlements</td><td>Closing sheets &amp; BOL collections</td></tr>
+    <tr><td>10 · Extras &amp; Commissions</td><td>Adding extras, commission rules</td></tr>
+    <tr><td>11 · Trips / Live Load</td><td>Creating trips, drops, splits, AI, handoffs</td></tr>
+    <tr><td>12 · Payments</td><td>Recording payments, deposits, bank accounts</td></tr>
+    <tr><td>13 · Drivers &amp; Trucks</td><td>The fleet</td></tr>
+    <tr><td>14 · BOL &amp; Documents</td><td>Generating and signing Bills of Lading</td></tr>
+    <tr><td>15 · Claims &amp; Incidents</td><td>Reporting and resolving problems</td></tr>
+    <tr><td>16 · Chats</td><td>Team messaging</td></tr>
+    <tr><td>17 · Clients · Analytics · Suggestions</td><td>Customers, dashboards, ideas</td></tr>
+    <tr><td>18 · Users &amp; Settings</td><td>Inviting users, permissions, language</td></tr>
+    <tr><td>19 · Golden rules + Glossary</td><td>The daily routine and key terms</td></tr>
   </table>
 </div>
 
-<!-- ============ 1 ACCESS ============ -->
-<h1 class="sec"><span class="num">1</span>Access</h1>
-<p class="lead">Signing in.</p>
-<ul>
-  <li>Open the <b>system link</b> in your browser (Chrome on the computer or on your phone).</li>
-  <li>Sign in with your <b>email and password</b>. Accounts are created by invitation — no account yet? ask an admin (see section 18).</li>
-  <li>You land directly on <b>Dispatching</b>.</li>
-  <li>You can change your own password anytime in <b>Settings</b>.</li>
-</ul>
+<!-- ============ 1 SIGN IN + MENU ============ -->
+<h1 class="sec break"><span class="num">1</span>Sign in &amp; the menu</h1>
+<p class="lead">Where everything lives.</p>
 
-<!-- ============ 2 MENU ============ -->
-<h1 class="sec"><span class="num">2</span>The left-hand menu</h1>
-<p class="lead">Everything is navigated from the sidebar, split into four blocks: Operations, Finance, Fleet and Business.</p>
-
-<table class="g">
-  <tr><th>Section</th><th>What it's for</th></tr>
-  <tr><td colspan="2" style="background:#f1f5f9;font-weight:800;font-size:10px;letter-spacing:0.06em">OPERATIONS</td></tr>
-  <tr><td>🚚 Dispatching</td><td>The daily board: pickups, deliveries and the status of every job. <b>Your main screen.</b></td></tr>
-  <tr><td>📅 Pickup Calendar</td><td>Pickups and deliveries in a week/month view.</td></tr>
-  <tr><td>🗓️ Delivery Calendar</td><td>Scheduling deliveries: what's ready to go out and when it's booked.</td></tr>
-  <tr><td>🏬 Storage</td><td>Rented units and own warehouses (Indiana / New Jersey) with occupancy.</td></tr>
-  <tr><td>💼 Jobs</td><td>All jobs with full detail (active and delivered).</td></tr>
-  <tr><td>💬 Chats</td><td>Internal team chat: channels, direct messages and groups.</td></tr>
-  <tr><td colspan="2" style="background:#f1f5f9;font-weight:800;font-size:10px;letter-spacing:0.06em">FINANCE</td></tr>
-  <tr><td>🏦 Brokers</td><td>Brokers (Allied, Atlas, Mayflower…) and each one's pending balance.</td></tr>
-  <tr><td>🧾 Billing</td><td>Monthly storage billing to clients.</td></tr>
-  <tr><td>📑 Settlements</td><td>Closing sheets for broker deliveries.</td></tr>
-  <tr><td>➕ Extras</td><td>Per-job extras (shuttle, long carry, packing…) and driver/rep commissions.</td></tr>
-  <tr><td>💰 Payments</td><td>Every payment: who physically holds the money and what's been deposited.</td></tr>
-  <tr><td>👥 Clients</td><td>The customers and their jobs, phones, emails and balances.</td></tr>
-  <tr><td colspan="2" style="background:#f1f5f9;font-weight:800;font-size:10px;letter-spacing:0.06em">FLEET</td></tr>
-  <tr><td>🪪 Drivers</td><td>Drivers, their jobs and the money they hold.</td></tr>
-  <tr><td>🚛 Trucks</td><td>The truck fleet and each truck's capacity.</td></tr>
-  <tr><td>🛣️ Trips / Live Load</td><td>Live loading of each truck per trip, stop by stop.</td></tr>
-  <tr><td>🧰 Equipment</td><td>Equipment &amp; materials (pads, dollies…) loaded per truck/trip.</td></tr>
-  <tr><td colspan="2" style="background:#f1f5f9;font-weight:800;font-size:10px;letter-spacing:0.06em">BUSINESS</td></tr>
-  <tr><td>⚖️ Legal &amp; Compliance</td><td>Company legal / compliance documents.</td></tr>
-  <tr><td>🛡️ Claims &amp; Incidents</td><td>Damage, theft, missing items, complaints — tracked to resolution.</td></tr>
-  <tr><td>📊 Analytics</td><td>Interactive business dashboard + AI recommendations.</td></tr>
-  <tr><td>💡 Suggestions</td><td>Employee suggestion box with voting.</td></tr>
-  <tr><td>📄 BOL</td><td>Bills of Lading: generate, annotate, sign, send.</td></tr>
-  <tr><td>👤 Users</td><td>(Admins only) invite users and manage permissions.</td></tr>
-  <tr><td>⚙️ Settings</td><td>Your account: password, display language.</td></tr>
-</table>
-<div class="note"><b>Red badges:</b> if a section in the menu shows a <b style="color:#E24B4A">red number</b>, those are items needing attention today (e.g. overdue FADD in Dispatching, active trips in Trips, overdue billing).</div>
-
-<!-- ============ 3 DISPATCHING ============ -->
-<h1 class="sec break"><span class="num">3</span>Dispatching — the daily board</h1>
-<p class="lead">The most important screen. Top to bottom: metrics → alerts → tabs → table.</p>
+<h3 class="how"><span class="k">HOW TO</span> · Sign in</h3>
+<ol class="steps">
+  <li>Open the <b>system link</b> in your browser.</li>
+  <li>Enter your <b>email and password</b>. Accounts are created by invitation — if you don't have one, ask an admin (section 18).</li>
+  <li>You land on <b>Dispatching</b>. To leave, use <span class="kbd">Sign out</span> at the bottom of the sidebar.</li>
+</ol>
 
 <div class="shot">
-  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM — Dispatching</span></div>
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM</span></div>
   <div class="app">
     <div class="side">
       <div class="brand"><div class="t">No Borders Moving</div><div class="s">Operations CRM</div></div>
-      <div class="grp">
-        <div class="glabel">Operations</div>
+      <div class="grp"><div class="glabel">Operations</div>
         <div class="item on"><span class="ico">🚚</span>Dispatching<span class="badge">3</span></div>
         <div class="item"><span class="ico">📅</span>Pickup Calendar</div>
         <div class="item"><span class="ico">🗓️</span>Delivery Calendar</div>
         <div class="item"><span class="ico">🏬</span>Storage</div>
         <div class="item"><span class="ico">💼</span>Jobs</div>
-        <div class="item"><span class="ico">💬</span>Chats</div>
+        <div class="item"><span class="ico">💬</span>Chats<span class="badge">5</span></div>
       </div>
-      <div class="grp">
-        <div class="glabel">Finance</div>
+      <div class="grp"><div class="glabel">Finanzas</div>
+        <div class="item"><span class="ico">🏦</span>Brokers</div>
+        <div class="item"><span class="ico">🧾</span>Storage Billing<span class="badge">2</span></div>
+        <div class="item"><span class="ico">📑</span>Settlements</div>
+        <div class="item"><span class="ico">➕</span>Extras</div>
         <div class="item"><span class="ico">💰</span>Payments</div>
-        <div class="item"><span class="ico">🧾</span>Billing<span class="badge">2</span></div>
+        <div class="item"><span class="ico">👥</span>Clients</div>
       </div>
-      <div class="grp">
-        <div class="glabel">Fleet</div>
-        <div class="item"><span class="ico">🛣️</span>Trips<span class="badge">2</span></div>
+      <div class="grp"><div class="glabel">Fleet</div>
+        <div class="item"><span class="ico">🪪</span>Drivers</div>
+        <div class="item"><span class="ico">🚛</span>Trucks</div>
+        <div class="item"><span class="ico">🛣️</span>Trips / Live Load<span class="badge">2</span></div>
+        <div class="item"><span class="ico">🧰</span>Equipment</div>
+      </div>
+      <div class="grp"><div class="glabel">Business</div>
+        <div class="item"><span class="ico">⚖️</span>Legal &amp; Compliance</div>
+        <div class="item"><span class="ico">🛡️</span>Claims &amp; Incidents</div>
+        <div class="item"><span class="ico">📊</span>Analytics</div>
+        <div class="item"><span class="ico">💡</span>Suggestions</div>
+        <div class="item"><span class="ico">📄</span>BOL</div>
+        <div class="item"><span class="ico">👤</span>Users</div>
+        <div class="item"><span class="ico">⚙️</span>Settings</div>
       </div>
     </div>
-    <div class="main">
-      <div class="phead"><h2>Dispatching</h2><span class="live"><i></i>Live</span><span style="margin-left:auto" class="btn dark">+ New job</span></div>
+    <div class="main" style="padding-top:20px">
+      <div class="phead"><h2>Dispatching</h2><span class="live"><i></i>Live</span></div>
       <div class="psub">Pickup &amp; delivery dispatch</div>
-
-      <div class="metrics">
-        <div class="mc"><div class="l">Pickups today</div><div class="n" style="color:#185FA5">4</div></div>
-        <div class="mc"><div class="l">Deliveries today</div><div class="n" style="color:#3B6D11">2</div></div>
-        <div class="mc"><div class="l">FADD overdue</div><div class="n" style="color:#A32D2D">1</div></div>
-        <div class="mc"><div class="l">FADD this week</div><div class="n" style="color:#C2410C">3</div></div>
-        <div class="mc"><div class="l">In storage</div><div class="n" style="color:#7C3AED">12</div></div>
-        <div class="mc"><div class="l">Pickup balance pend.</div><div class="n" style="color:#1A8A4E">$1,200</div></div>
-        <div class="mc"><div class="l">Delivery balance pend.</div><div class="n" style="color:#1A8A4E">$3,400</div></div>
-        <div class="mc"><div class="l">Billing overdue</div><div class="n" style="color:#A32D2D">2</div></div>
-      </div>
-
-      <div class="alert"><b>⚠️ 2 job(s) need attention:</b>
-        <div><span class="achip"><b class="mono">A1826927</b> · Monique F Hall · FADD overdue</span><span class="achip"><b class="mono">FV8132056</b> · Imad Majeed · No driver for today</span></div>
-      </div>
-
-      <div class="subtabs"><span class="on">All</span><span>Pickups today</span><span>Deliveries today</span><span>In storage</span><span>On hold</span><span>No trip assigned</span><span>No FADD</span></div>
-
-      <table class="t">
-        <thead><tr><th>Status</th><th>Job #</th><th>Type</th><th>Broker</th><th>Customer</th><th>FADD</th><th>Pickup</th><th>Delivery</th><th>Trip</th><th>Actions</th></tr></thead>
-        <tbody>
-          <tr>
-            <td><span class="pill2 s-pic"><i></i>Picked up</span></td>
-            <td><span class="jobn">A1826927</span></td>
-            <td><span class="tag t-full">Full</span></td>
-            <td>Allied</td>
-            <td>Monique F Hall</td>
-            <td><span class="pill2 f-over"><i></i>Overdue</span></td>
-            <td>06-24 · Kansas City, MO</td>
-            <td>06-30 · Newark, NJ</td>
-            <td class="mono">TRIP-004</td>
-            <td><span class="act">🗺️ Route</span><br><span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ In storage</span></td>
-          </tr>
-          <tr>
-            <td><span class="pill2 s-sch"><i></i>Scheduled</span></td>
-            <td><span class="jobn">FV8132056</span></td>
-            <td><span class="tag t-bro">Broker</span></td>
-            <td>Mayflower</td>
-            <td>Imad Majeed</td>
-            <td><span class="pill2 f-7"><i></i>6 days</span></td>
-            <td>06-26 · Louisville, KY</td>
-            <td>07-02 · Columbus, OH</td>
-            <td class="muted">— Unassigned —</td>
-            <td><span class="act">🗺️ Route</span><br><span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ Picked up</span></td>
-          </tr>
-          <tr>
-            <td><span class="pill2 s-sto"><i></i>In storage</span></td>
-            <td><span class="jobn">H2474156</span></td>
-            <td><span class="tag t-dir">Direct</span></td>
-            <td class="muted">—</td>
-            <td>Dustin Newman</td>
-            <td><span class="pill2 f-ok"><i></i>14 days</span></td>
-            <td>06-18 · Sewickley, PA</td>
-            <td>07-08 · Akron, OH</td>
-            <td class="mono">TRIP-005</td>
-            <td><span class="act">🗺️ Route</span><br><span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ Out for delivery</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="muted" style="font-size:9px;padding-top:7px">3 jobs · (the real table also has Rep, CF, Sticker/Lot, Driver, balances and Storage → scroll right)</div>
+      <div class="muted" style="font-size:10px">← The full sidebar. Red numbers = things needing attention today.<br><br>The four blocks: <b>Operations</b> (the daily work), <b>Finanzas</b> <span class="es">(Finance)</span>, <b>Fleet</b> (trucks &amp; trips) and <b>Business</b> (claims, analytics, BOL, users).</div>
     </div>
   </div>
 </div>
-<div class="cap">The Dispatching screen: metrics on top, alert banner, sub-tabs, and the jobs table with its actions.</div>
+<div class="cap">The complete menu. Users only see the sections their permissions allow.</div>
 
-<h3 style="margin-top:16px">The columns, one by one</h3>
-<table class="g">
-  <tr><th>Column</th><th>What it shows</th></tr>
-  <tr><td>Status</td><td>Job stage (Scheduled → Picked up → In storage → Out for delivery → Delivered).</td></tr>
-  <tr><td>Job #</td><td>The job number. <b>Tap it to open the full detail.</b></td></tr>
-  <tr><td>Type</td><td>Full / Direct / Broker (see section 4).</td></tr>
-  <tr><td>Broker · Rep · Customer</td><td>The company the job is for, the internal rep, and the customer's name.</td></tr>
-  <tr><td>FADD</td><td>First Available Delivery Date, <b>color-coded</b> by urgency.</td></tr>
-  <tr><td>Pickup · Delivery</td><td>Date + city of where it's picked up and where it's delivered.</td></tr>
-  <tr><td>CF · Sticker · Lot</td><td>Volume (cubic feet), sticker color and lot number.</td></tr>
-  <tr><td>Driver</td><td>Assigned driver(s).</td></tr>
-  <tr><td>Trip</td><td>Which trip the job rides on, or "— Unassigned —" (see section 11).</td></tr>
-  <tr><td>Bal. pickup / delivery</td><td>Money to collect at each stage (includes pending extras).</td></tr>
-  <tr><td>Storage</td><td>Which unit / warehouse it's stored in.</td></tr>
-</table>
+<!-- ============ 2 DISPATCHING ============ -->
+<h1 class="sec break"><span class="num">2</span>Dispatching — reading the daily board</h1>
+<p class="lead">Your main screen. From top to bottom: metric cards → red alert → sub-tabs → search → the jobs table.</p>
 
-<h3 style="margin-top:16px">The little tags next to the Job #</h3>
-<table class="g">
-  <tr><th>Tag</th><th>Meaning</th></tr>
-  <tr><td>⚠️</td><td>The job is missing its sticker.</td></tr>
-  <tr><td>🟧 Collection pending</td><td>Broker delivery delivered with the BOL not collected yet.</td></tr>
-  <tr><td>🟪 Extras</td><td>The job has extras loaded on it.</td></tr>
-  <tr><td>🟧 Balance pending</td><td>There's still money to collect.</td></tr>
-  <tr><td>🟥 Not collected</td><td>The job is <b>delivered but not fully paid</b>. Top priority!</td></tr>
-</table>
+<div class="shot">
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM — Dispatching</span></div>
+  <div class="main" style="background:#fafafa">
+    <div class="phead"><h2>Dispatching</h2><span class="live"><i></i>Live</span><span style="margin-left:auto" class="btn dark">+ New job</span></div>
+    <div class="psub">Pickup &amp; delivery dispatch</div>
+    <div class="metrics">
+      <div class="mc"><div class="l">Pickups today</div><div class="n" style="color:#185FA5">4</div></div>
+      <div class="mc"><div class="l">Deliveries today</div><div class="n" style="color:#3B6D11">2</div></div>
+      <div class="mc"><div class="l">FADD overdue</div><div class="n" style="color:#A32D2D">1</div></div>
+      <div class="mc"><div class="l">FADD this week</div><div class="n" style="color:#C2410C">3</div></div>
+      <div class="mc"><div class="l">In storage</div><div class="n" style="color:#7C3AED">12</div></div>
+      <div class="mc"><div class="l">Balance pickup pend.</div><div class="n" style="color:#1A8A4E">$1,200</div></div>
+      <div class="mc"><div class="l">Balance delivery pend.</div><div class="n" style="color:#1A8A4E">$3,400</div></div>
+      <div class="mc"><div class="l">Billing overdue</div><div class="n" style="color:#A32D2D">2</div></div>
+    </div>
+    <div class="alert"><b>⚠️ 2 job(s) need attention:</b>
+      <div><span class="achip"><b class="mono">A1826927</b> · Monique F Hall · FADD overdue</span><span class="achip"><b class="mono">FV8132056</b> · Imad Majeed · no driver for today</span></div>
+    </div>
+    <div class="subtabs"><span class="on">All</span><span>Pickups today</span><span>Deliveries today</span><span>In storage</span><span>On hold</span><span>No trip assigned</span><span>No FADD</span><span>Sin delivery</span></div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <span class="fld" style="flex:1"><span class="fv ph" style="display:block">Search by job #, client, driver, pickup, delivery...</span></span>
+      <span class="btn">All drivers ▾</span>
+    </div>
+    <table class="t">
+      <thead><tr><th>Status</th><th>Job #</th><th>Type</th><th>Broker</th><th>Client</th><th>FADD</th><th>Pickup</th><th>Delivery</th><th>Driver</th><th>Trip</th><th>Actions</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="pill2 s-pic"><i></i>Picked up</span></td>
+          <td>⚠️ <span class="jobn">A1826927</span><br><span class="tag" style="background:#FCEBEB;color:#A32D2D">Not collected</span></td>
+          <td><span class="tag t-full">Full</span></td>
+          <td>Allied</td>
+          <td>Monique F Hall</td>
+          <td><span class="pill2 f-over"><i></i>Overdue</span></td>
+          <td>06-24 · Kansas City, MO</td>
+          <td>06-30 · Newark, NJ</td>
+          <td>Andres M.</td>
+          <td class="mono">TRIP-004</td>
+          <td><span class="act">🗺️ Ruta</span> <span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ In storage</span> <span class="act" style="color:#A32D2D">🗑 Delete</span></td>
+        </tr>
+        <tr>
+          <td><span class="pill2 s-sch"><i></i>Scheduled</span></td>
+          <td><span class="jobn">FV8132056</span><br><span class="tag" style="background:#EDE9FE;color:#6D28D9">Extras</span></td>
+          <td><span class="tag t-bro">Broker</span></td>
+          <td>Mayflower</td>
+          <td>Imad Majeed</td>
+          <td><span class="miniadv" style="border-style:dashed;color:#888">+ FADD</span></td>
+          <td>06-26 · Louisville, KY</td>
+          <td>07-02 · Columbus, OH</td>
+          <td class="muted">—</td>
+          <td class="muted">— Unassigned —</td>
+          <td><span class="act">🗺️ Ruta</span> <span class="act g">💬 WhatsApp</span><br><span class="miniadv">→ Picked up</span> <span class="act" style="color:#A32D2D">🗑 Delete</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="cap">The board. Note the tags under the Job # and the dashed "+ FADD" button when the date is missing.</div>
 
-<div class="two avoid" style="margin-top:16px">
+<div class="two avoid" style="margin-top:10px">
   <div class="card legend">
-    <h3>🎨 FADD colors</h3>
-    <p class="muted" style="font-size:10px;margin-bottom:8px">FADD = <b>First Available Delivery Date</b> (the earliest date it can be delivered). It drives priority.</p>
-    <div class="row"><span class="pill2 f-over"><i></i>Overdue</span> Already past due — top priority.</div>
+    <h3>🎨 FADD colors <span class="gloss">(First Available Delivery Date)</span></h3>
+    <div class="row"><span class="pill2 f-over"><i></i>Overdue</span> Past due — top priority.</div>
     <div class="row"><span class="pill2 f-3"><i></i>3 days</span> Due within 3 days.</div>
     <div class="row"><span class="pill2 f-7"><i></i>7 days</span> Due within 7 days.</div>
-    <div class="row"><span class="pill2 f-ok"><i></i>14 days</span> 8 days or more — relax.</div>
-    <div class="row"><span class="pill2 f-no">No FADD</span> Date not set — use the row's <b>"+ FADD"</b> button to add it.</div>
+    <div class="row"><span class="pill2 f-ok"><i></i>14 days</span> 8+ days — relax.</div>
+    <div class="row"><span class="pill2 f-no">No FADD</span> Missing — tap <span class="kbd">+ FADD</span> to set it.</div>
   </div>
-  <div class="card">
-    <h3>⚡ The 4 action buttons</h3>
-    <div class="row" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0;font-size:11px"><span class="act" style="min-width:62px">🗺️ Route</span> Opens Google Maps with the storage → customer route.</div>
-    <div class="row" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0;font-size:11px"><span class="act g" style="min-width:62px">💬 WhatsApp</span> Opens WhatsApp with the message <b>already filled in</b>: job, customer, broker, pickup, delivery, FADD, volume, sticker, storage and balances. If the job rides on a trip, it sends the <b>full trip manifest</b>.</div>
-    <div class="row" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0;font-size:11px"><span class="miniadv" style="min-width:62px">→ Advance</span> Moves the job to the next stage. The button tells you which.</div>
-    <div class="row" style="display:flex;gap:8px;align-items:flex-start;margin:7px 0;font-size:11px"><span class="act" style="min-width:62px;color:#A32D2D">🗑 Delete</span> Deletes the job (see section 19).</div>
-  </div>
-</div>
-
-<h3 style="margin-top:16px">The status flow</h3>
-<p class="muted" style="font-size:11px">Each time you tap <b>Advance</b>, the job moves to the next stage:</p>
-<div class="flow">
-  <div class="fbox" style="border-color:#378ADD;color:#185FA5">Scheduled</div><span class="farrow">→</span>
-  <div class="fbox" style="border-color:#EA580C;color:#C2410C">Picked up</div><span class="farrow">→</span>
-  <div class="fbox" style="border-color:#7C3AED;color:#6D28D9">In storage</div><span class="farrow">→</span>
-  <div class="fbox" style="border-color:#EAB308;color:#92760B">Out for delivery</div><span class="farrow">→</span>
-  <div class="fbox" style="border-color:#639922;color:#3B6D11">Delivered</div>
-</div>
-<div class="note"><b>Important:</b> only <b>Full</b> jobs go through <i>In storage</i> — <b>Direct</b> and <b>Broker</b> jobs skip it. When you mark a job <b>Delivered</b>, it leaves the active lists automatically. A job can also be set to <b>On hold</b>, <b>Redispatched</b> or <b>Cancelled</b> from its detail.</div>
-
-<!-- ============ 4 JOBS ============ -->
-<h1 class="sec break"><span class="num">4</span>Jobs — create, edit, and the job timeline</h1>
-<p class="lead">Tap <b>"+ New job"</b>, top right in Dispatching, Jobs or the Calendar.</p>
-
-<div class="three avoid">
-  <div class="card"><h3 style="color:#185FA5">Full</h3><p style="font-size:11px;margin:0">Pickup → <b>storage</b> → delivery. It's stored in between.</p></div>
-  <div class="card"><h3 style="color:#3B6D11">Direct</h3><p style="font-size:11px;margin:0">Pickup → delivery. Straight through, no storage.</p></div>
-  <div class="card"><h3 style="color:#C2410C">Broker delivery</h3><p style="font-size:11px;margin:0">Delivery only: the goods are already here, you just deliver them.</p></div>
-</div>
-<p class="muted" style="font-size:10.5px;margin-top:6px">The form adapts to the type — it only shows the fields that apply.</p>
-
-<h3 style="margin-top:14px">What you fill in</h3>
-<ul>
-  <li><b>Where it's stored</b> — tick one or more rented units and/or warehouses (a job can occupy several places).</li>
-  <li><b>Job data</b> — Job #, Customer (+ phone and email), Type, Status, Broker, Rep, Driver (one or several), FADD, Volume (CF), Lot #, Sticker color, Date in.</li>
-  <li><b>Pickup</b> — date (or a date range), address, city, state, zip and the <b>balance to collect at pickup</b>.</li>
-  <li><b>Delivery</b> — date, address, city, state, zip and the <b>balance to collect at delivery</b>.</li>
-  <li><b>Carrier / BOL</b> (broker deliveries only) — rate per CF, BOL balance, pads received/returned.</li>
-  <li><b>Storage billing</b> — whether the client pays monthly for storage (see section 7).</li>
-</ul>
-
-<div class="two avoid">
-  <div class="card"><h3>✏️ Edit later, inline</h3>
-    <p style="font-size:11px;margin:0">Tap the <b>Job #</b> to open the detail and <b>click almost any field to change it on the spot</b> (FADD, customer, driver, addresses, balances…). There's also an <b>Edit</b> button for the full form. Payments recorded in the job form flow straight into the Payments module.</p>
-  </div>
-  <div class="card"><h3>📏 Real CF vs. estimate</h3>
-    <p style="font-size:11px;margin:0">The broker sends an <b>estimated volume</b>; when the crew measures the real load, enter the <b>Real CF</b> on the job. Storage and truck occupancy calculations use the <b>real</b> figure once it exists.</p>
+  <div class="card legend">
+    <h3>🏷️ Tags next to the Job #</h3>
+    <div class="row">⚠️ — sticker not assigned yet.</div>
+    <div class="row"><span class="tag" style="background:#FDE3CF;color:#C2410C">Collection pending</span> BOL not collected (broker delivery).</div>
+    <div class="row"><span class="tag" style="background:#EDE9FE;color:#6D28D9">Extras</span> the job has extras loaded.</div>
+    <div class="row"><span class="tag" style="background:#FEF3C7;color:#92760B">Outstanding</span> money still to collect.</div>
+    <div class="row"><span class="tag" style="background:#FCEBEB;color:#A32D2D">Not collected</span> delivered but NOT fully paid. Chase it!</div>
   </div>
 </div>
 
-<h3 style="margin-top:14px">The job timeline (events)</h3>
-<p style="font-size:11px">Besides the main status, each job keeps a <b>timeline of events</b> you can log as things happen — they build the job's history and can suggest the matching status:</p>
-<p style="font-size:10.5px"><span class="miniadv">Picked up</span> <span class="miniadv">Loaded to truck</span> <span class="miniadv">Dropped at storage</span> <span class="miniadv">Loaded from storage</span> <span class="miniadv">Delivered</span> <span class="miniadv">On hold</span> <span class="miniadv">Attempted delivery — not home</span> <span class="miniadv">Redispatched</span> <span class="miniadv">Driver handoff</span> <span class="miniadv">Other</span></p>
+<h3 class="how"><span class="k">HOW TO</span> · Move a job to its next stage</h3>
+<ol class="steps">
+  <li>Find the job's row (use the search box or the sub-tabs).</li>
+  <li>In <b>Actions</b>, tap the advance button — it always names the next stage, e.g. <span class="kbd">→ In storage</span>.</li>
+  <li>The status flow is: <b>Scheduled → Picked up → In storage → Out for delivery → Delivered</b>. Only <b>Full</b> jobs pass through <i>In storage</i>; Direct and Broker jobs skip it. Marking <b>Delivered</b> removes the job from the active lists.</li>
+</ol>
+<div class="note"><b>Other row actions:</b> <span class="kbd">🗺️ Ruta</span> <span class="es">(Route)</span> opens Google Maps storage → customer · <span class="kbd">💬 WhatsApp</span> opens WhatsApp with the full job info pre-written (or the trip manifest if it rides on a trip) · <span class="kbd">🗑 Delete</span> deletes the job (section 19 warning applies).</div>
+
+<!-- ============ 3 CREATE JOB ============ -->
+<h1 class="sec break"><span class="num">3</span>Creating a job</h1>
+<p class="lead">The form adapts to the job type. Below: the modal as you'll see it, then every field explained.</p>
+
+<h3 class="how"><span class="k">HOW TO</span> · Create a new job</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">+ New job</span> (top right in Dispatching, Jobs or the calendars).</li>
+  <li>Fill <b>Basic info</b>: <b>Job #</b> (required — if it already exists you'll see a ⚠️ duplicate warning), <b>Job type</b> (Full / Direct / Broker), <b>Broker</b>, <b>Client</b> (required) + <b>Client phone</b> / <b>Client email</b>, <b>Rep</b>, <b>Status</b>, <b>Calendar status (color)</b> and tick one or more <b>Drivers</b>.</li>
+  <li>Fill the <b>Pick up</b> block (Full/Direct): date <b>from/to</b> (a range is allowed), address, city, state, zip. Full jobs also have <b>Extra stops</b>.</li>
+  <li>Fill the <b>Delivery</b> block: <b>FADD</b> (required!), delivery date, address, city, state, zip.</li>
+  <li>Fill <b>Load / Carga</b>: <b>Volumen (CF) — estimado broker</b> <span class="es">(broker's estimated volume)</span>, <b>Real CF (medido al cargar)</b> <span class="es">(real measured CF — leave empty to use the estimate)</span>, <b>Sticker color</b>, <b>Lot number</b>, notes.</li>
+  <li><b>Pads</b>: received from broker / returned — "missing" is computed automatically.</li>
+  <li>Fill <b>Financiero</b> <span class="es">(Financials)</span>: <b>Estimate</b>, <b>Deposit</b>, <b>Pickup balance</b>, <b>Delivery balance</b>, <b>Precio/CF</b>, <b>Fuel surcharge %</b>. Broker deliveries instead show: <b>BOL balance to collect from client</b>, <b>Carrier rate/CF</b>, auto <b>Carrier total</b>, <b>Closing sheet</b> link, <b>BOL collected</b>. Optional: tick <b>"🤝 El broker se queda con un % del balance"</b> <span class="es">(broker keeps a % of the balance)</span> and set the %.</li>
+  <li>Open <b>Storage (opcional)</b> and tick where it's stored: a <b>🏭 warehouse</b> (Indiana / New Jersey) and/or one or more <b>rented units</b>; set <b>Date in</b>.</li>
+  <li>(Full jobs) Open <b>Client storage billing</b> and tick <b>"Bill this client for storage (every 30 days)"</b> if they pay monthly — see section 7.</li>
+  <li>Tap <span class="kbd">Save job</span>. Done — the job appears on Dispatching instantly for everyone.</li>
+</ol>
+
+<div class="mm">
+  <div class="mh"><span class="ttl">New job</span><span class="x">✕</span></div>
+  <div class="mb">
+    <div class="fsec">Basic info</div>
+    <div class="fgrid">
+      <div class="fld"><div class="fl">Job # *</div><div class="fv ph">B8417142</div></div>
+      <div class="fld"><div class="fl">Job type *</div><div class="fv sel">Full (pickup → storage → delivery)</div></div>
+      <div class="fld"><div class="fl">Broker</div><div class="fv sel">Allied</div></div>
+      <div class="fld"><div class="fl">Client *</div><div class="fv">Monique F Hall</div></div>
+      <div class="fld"><div class="fl">Client phone</div><div class="fv ph">(555) 123-4567</div></div>
+      <div class="fld"><div class="fl">Client email</div><div class="fv ph">client@email.com</div></div>
+      <div class="fld"><div class="fl">Status</div><div class="fv sel">Scheduled</div></div>
+      <div class="fld"><div class="fl">Driver (2)</div><div class="fv"><span class="chk" style="margin:0"><span class="bx on"></span>🧑‍✈️ Andres M. · T-12</span><span class="chk" style="margin:2px 0 0"><span class="bx on"></span>🧑‍✈️ Wady P.</span></div></div>
+    </div>
+    <div class="fsec">Pick up</div>
+    <div class="fgrid">
+      <div class="fld"><div class="fl">Pick up from</div><div class="fv">06/24/2026</div></div>
+      <div class="fld"><div class="fl">Pick up to (opcional)</div><div class="fv ph">mm/dd/yyyy</div></div>
+      <div class="fld full"><div class="fl">Pickup address</div><div class="fv">4310 Main St, Kansas City</div></div>
+    </div>
+    <div class="fsec">Delivery</div>
+    <div class="fgrid">
+      <div class="fld"><div class="fl">FADD *</div><div class="fv">06/30/2026</div></div>
+      <div class="fld"><div class="fl">Delivery date</div><div class="fv ph">mm/dd/yyyy</div></div>
+    </div>
+    <div class="fsec">Load / Carga · Financiero · Storage (opcional) · Client storage billing (optional)</div>
+    <div class="muted" style="font-size:9.5px">…each section expands below — see the steps for every field…</div>
+  </div>
+  <div class="mf"><span class="btn">Cancel</span><span class="btn dark">Save job</span></div>
+</div>
+<div class="cap">The "New job" form (abridged). Sections appear/disappear depending on the job type you pick.</div>
+
+<div class="three avoid" style="margin-top:8px">
+  <div class="card"><h3 style="color:#185FA5">Full</h3><p style="font-size:10.5px;margin:0">Pickup → <b>storage</b> → delivery. Has Pick up, Delivery, Storage and Billing sections.</p></div>
+  <div class="card"><h3 style="color:#3B6D11">Direct</h3><p style="font-size:10.5px;margin:0">Pickup → delivery, same form combined in one "same day" section. No storage/billing.</p></div>
+  <div class="card"><h3 style="color:#C2410C">Broker delivery</h3><p style="font-size:10.5px;margin:0">Delivery only. Gets the <b>Carrier/BOL financials</b> (rate per CF, BOL balance, closing sheet).</p></div>
+</div>
+
+<!-- ============ 4 JOB DETAIL ============ -->
+<h1 class="sec break"><span class="num">4</span>The job detail — editing &amp; the timeline</h1>
+<p class="lead">Tap any <b>Job #</b> to open it. Almost everything is editable by clicking directly on the value.</p>
+
+<div class="mm" style="max-width:720px">
+  <div class="mh"><span class="ttl">Job A1826927</span><span class="x">✕</span></div>
+  <div class="mb">
+    <div style="background:#F1F7FD;border:1px solid #D6E6F5;border-radius:8px;padding:7px 10px;font-size:10px;margin-bottom:10px">📅 On calendar: 06-24 → 06-25 &nbsp; <span class="btn" style="font-size:9px;padding:3px 8px">Edit pickup date</span></div>
+    <div class="fsec">Job data <span style="text-transform:none;color:#9aa3ad;font-weight:500">· click to edit</span></div>
+    <table class="t">
+      <tr><td style="width:38%;color:#888">Client</td><td>Monique F Hall ✏️</td></tr>
+      <tr><td style="color:#888">Status</td><td><span class="pill2 s-pic"><i></i>Picked up</span> <span class="miniadv">→ In storage</span></td></tr>
+      <tr><td style="color:#888">FADD</td><td><span class="pill2 f-over"><i></i>Overdue</span> 06-30-2026 ✏️</td></tr>
+      <tr><td style="color:#888">Balance delivery ($)</td><td>$1,850 ✏️</td></tr>
+    </table>
+    <div class="fsec">Extras (2) &nbsp;·&nbsp; Payments (3) &nbsp;·&nbsp; Claims (0) &nbsp;·&nbsp; Timeline (5) &nbsp;·&nbsp; Where it's stored (1)</div>
+    <div style="font-size:9.5px;color:#888">Each section lists its items with <b>+ Add extra</b>, <b>+ Add pago</b>, <b>⚠️ Report claim</b>, <b>+ Add evento</b> buttons…</div>
+  </div>
+  <div class="mf" style="flex-wrap:wrap"><span class="btn">Edit</span><span class="btn blue">📄 Generate BOL</span><span class="btn red">🗑 Delete job</span><span class="btn green">💬 WhatsApp</span><span class="btn">→ In storage</span><span class="btn">Mark all delivered</span><span class="btn dark">Close</span></div>
+</div>
+<div class="cap">The job detail. The footer holds the big actions; the body is organized in sections.</div>
+
+<h3 class="how"><span class="k">HOW TO</span> · Edit a job field on the spot</h3>
+<ol class="steps">
+  <li>Open the job (tap its <b>Job #</b> anywhere).</li>
+  <li>In <b>Job data</b>, <b>click the value</b> you want to change (FADD, client, addresses, balances, sticker, Real CF…). It turns into an input.</li>
+  <li>Type the new value and press <span class="kbd">Enter</span> (dates save when you pick them). For the full form use the <span class="kbd">Edit</span> button.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Log an event in the job's timeline</h3>
+<ol class="steps">
+  <li>In the job detail, scroll to <b>Timeline</b> and tap <span class="kbd">+ Add evento</span> <span class="es">(add event)</span>.</li>
+  <li>Set the <b>Date</b> and pick the <b>Event type</b>: <i>Picked up · Loaded to truck · Dropped at storage · Loaded from storage to truck · Delivered · On hold · Attempted delivery — not home · Redispatched · Driver handoff · Other</i>.</li>
+  <li>Optionally pick the <b>Storage / warehouse</b> and <b>Trip #</b> it relates to, add <b>Notes</b>, and tap <span class="kbd">Save event</span>.</li>
+  <li>Trip actions (drops, deliveries) appear in the timeline <b>automatically</b> with an "auto" tag — you only log what the system can't see.</li>
+</ol>
+<div class="note"><b>Where it's stored:</b> the last section shows each storage location of the job with its gate code (one-tap copy), <span class="kbd">✂️ Split</span> <span class="es">(divide between two trucks)</span> and <span class="kbd">Mark delivered</span> per portion.</div>
 
 <!-- ============ 5 CALENDARS ============ -->
-<h1 class="sec"><span class="num">5</span>Calendars</h1>
-<p class="lead">Two calendars: one for the whole operation, one dedicated to scheduling deliveries.</p>
-<div class="two">
-  <div class="card"><h3>📅 Pickup Calendar</h3>
-    <p style="font-size:11px;margin:0">All <b>pickups and deliveries</b> in week or month view. Every event is colored by its status and opens the job when tapped. Great for seeing the week's workload at a glance.</p>
-  </div>
-  <div class="card"><h3>🗓️ Delivery Calendar</h3>
-    <p style="font-size:11px;margin:0">The <b>delivery scheduling flow</b>: jobs that are ready to be delivered (e.g. sitting in storage with a FADD) appear here so you can <b>book their delivery date</b>. The sidebar badge counts deliveries waiting to be scheduled.</p>
+<h1 class="sec break"><span class="num">5</span>Calendars — pickups &amp; scheduling deliveries</h1>
+<p class="lead">Two calendars in the menu: <b>Pickup Calendar</b> and <b>Delivery Calendar</b>. Same controls, different purpose.</p>
+
+<div class="shot">
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM — Delivery Calendar</span></div>
+  <div class="main" style="background:#fafafa">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">
+      <span class="btn">←</span><span class="btn">Today</span><span class="btn">→</span>
+      <b style="font-size:13px;margin-left:4px">July 2026</b>
+      <span style="margin-left:auto" class="btn">➕ Add existing job</span>
+      <span class="btn dark">Week</span><span class="btn">Month</span>
+    </div>
+    <div style="background:#fff;border:1px solid #F4DDB0;border-radius:9px;padding:8px 11px;margin-bottom:9px;font-size:10px">
+      <b>📋 Entregas por agendar (6)</b> <span class="tag" style="background:#FCEBEB;color:#A32D2D">3 con FADD ≤ 7 días</span> <span class="muted">▾ ocultar</span>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:7px;border-top:1px solid #f4f4f4;padding-top:7px">
+        <span class="jobn">H2474156</span> Dustin Newman <span class="pill2 f-3"><i></i>2 days</span> <span class="muted">🏬 Storage · Akron, OH</span>
+        <span class="fld" style="margin-left:auto"><span class="fv">07/08/2026</span></span><span class="btn dark">Agendar</span>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:8.5px">
+      <div class="muted" style="text-align:center">Mon</div><div class="muted" style="text-align:center">Tue</div><div class="muted" style="text-align:center">Wed</div><div class="muted" style="text-align:center">Thu</div><div class="muted" style="text-align:center">Fri</div><div class="muted" style="text-align:center">Sat</div><div class="muted" style="text-align:center">Sun</div>
+      <div style="background:#fff;border:1px solid #efefef;border-radius:7px;min-height:52px;padding:4px">6 <span class="muted">+</span></div>
+      <div style="background:#fff;border:1px solid #efefef;border-radius:7px;min-height:52px;padding:4px">7
+        <div style="background:#E6F1FB;border-radius:5px;padding:2px 5px;margin-top:3px"><b class="mono">FV8132056</b> KY to OH<br>🧑‍✈️ Carlos C.</div></div>
+      <div style="background:#fff;border:1px solid #efefef;border-radius:7px;min-height:52px;padding:4px">8
+        <div style="background:#EAF3DE;border-radius:5px;padding:2px 5px;margin-top:3px"><b class="mono">H2474156</b> PA to OH<br>🧑‍✈️ Wady P.</div></div>
+      <div style="background:#fff;border:1px solid #efefef;border-radius:7px;min-height:52px;padding:4px">9</div>
+      <div style="background:#fff;border:1px solid #efefef;border-radius:7px;min-height:52px;padding:4px">10</div>
+      <div style="background:#fff;border:1px solid #efefef;border-radius:7px;min-height:52px;padding:4px">11</div>
+      <div style="background:#fff;border:1px solid #efefef;border-radius:7px;min-height:52px;padding:4px">12</div>
+    </div>
   </div>
 </div>
+<div class="cap">The Delivery Calendar with the "Entregas por agendar" (deliveries to schedule) panel on top.</div>
+
+<h3 class="how"><span class="k">HOW TO</span> · Schedule a delivery</h3>
+<ol class="steps">
+  <li>Open <b>Delivery Calendar</b>. The <b>📋 Entregas por agendar</b> panel lists every job that's ready but has no delivery date; jobs with <b>FADD ≤ 7 days</b> are flagged in red.</li>
+  <li>On the job's row, pick the <b>date</b> and tap <span class="kbd">Agendar</span> <span class="es">(schedule)</span>. The job lands on the calendar.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Put a job on a specific day</h3>
+<ol class="steps">
+  <li>Click a <b>day header</b> (it shows a "+") → choose <span class="kbd">🆕 Create new job on this day</span> or <span class="kbd">📋 Add an existing job to this day</span>.</li>
+  <li>For an existing job: search by job # / client / driver — only jobs <b>without</b> a pickup (or delivery) date are listed — then tap <span class="kbd">Add</span>.</li>
+  <li>Toggle <span class="kbd">Week</span> / <span class="kbd">Month</span> and navigate with <span class="kbd">←</span> <span class="kbd">Today</span> <span class="kbd">→</span>. Event colors follow the legend: <b>Active · On hold/Redispatch · Cancelled · Long haul · Delivered</b>.</li>
+</ol>
 
 <!-- ============ 6 STORAGE ============ -->
-<h1 class="sec"><span class="num">6</span>Storage — units and warehouses</h1>
-<p class="lead">The Storage section has one tab per place: <b>Storage Units</b>, <b>🏭 Indiana</b> and <b>🏭 New Jersey</b>.</p>
+<h1 class="sec break"><span class="num">6</span>Storage — units &amp; warehouses</h1>
+<p class="lead">Tabs: <b>Storage Units</b> (rented lockers) · <b>🏭 Indiana</b> · <b>🏭 New Jersey</b> (own warehouses). Top buttons: <span class="kbd">Importar WhatsApp</span> · <span class="kbd">+ Unit</span> · <span class="kbd">+ Job a unidad</span> <span class="es">(add job to a unit)</span>.</p>
+
+<h3 class="how"><span class="k">HOW TO</span> · Add a rented storage unit</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">+ Unit</span>. Fill: <b>Company</b> (pick or type — CubeSmart…), <b>Status</b> (state, e.g. TN), <b>Zip</b>, <b>Address</b>, <b>Unit #</b> (duplicates are flagged ⚠️), <b>Tamaño</b> <span class="es">(size, e.g. 10x10)</span>, <b>Gate Code</b>, <b>Lock/Combo</b>, <b>Driver que abre la unit</b> <span class="es">(driver who opens it)</span>, <b>Email / Account # / Phone</b>, <b>Monthly cost</b>, card, <b>Open date</b>, <b>Payment due date</b>.</li>
+  <li>Tap <span class="kbd">Save</span>. In the list, set the CF <b>capacity</b> with <span class="kbd">Set capacity</span> so the occupancy bar works.</li>
+  <li>The <b>gate code copies with one click</b> from the table. <span class="kbd">Renew — add 30 days</span> (in the unit detail) extends the payment due date.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Import units from WhatsApp</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">Importar WhatsApp</span>. Choose <b>Pegar texto</b> <span class="es">(paste text)</span> or <b>Subir ZIP del chat</b> <span class="es">(upload the exported chat .zip)</span>.</li>
+  <li>Paste the group messages (or drop the .zip), tap <span class="kbd">Previsualizar</span> <span class="es">(preview)</span> — the system detects "{driver} · {company} · Unit {unit}" entries.</li>
+  <li>Untick any you don't want and tap <span class="kbd">Importar (n)</span>.</li>
+</ol>
 
 <div class="shot">
   <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM — Storage · New Jersey</span></div>
   <div class="main" style="background:#fafafa">
-    <div class="subtabs" style="margin-bottom:12px"><span>Storage Units</span><span>🏭 Indiana</span><span class="on">🏭 New Jersey</span></div>
-    <div class="card" style="background:#fff;margin-bottom:11px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:11px">
-        <div><div style="font-size:15px;font-weight:800">🏭 New Jersey</div><div class="muted" style="font-size:10px">Own warehouse · 3 active job(s)</div></div>
-        <div><span class="btn dark" style="margin-right:6px">+ Job to this warehouse</span><span class="btn">Edit capacity</span></div>
+    <div class="subtabs" style="margin-bottom:11px"><span>Storage Units</span><span>🏭 Indiana</span><span class="on">🏭 New Jersey</span></div>
+    <div class="card" style="background:#fff;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div><div style="font-size:14px;font-weight:800">🏭 New Jersey</div><div class="muted" style="font-size:9.5px">Own warehouse · 3 job(s) activo(s)</div></div>
+        <div><span class="btn dark" style="margin-right:6px">+ Job a este warehouse</span><span class="btn">Edit capacidad</span></div>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:10.5px;margin-bottom:6px"><b style="color:#EF9F27">78% occupied</b><span class="muted">7,800 used · 2,200 free · 10,000 CF total</span></div>
-      <div class="occ" style="height:14px"><div style="width:78%;height:14px;background:#EF9F27"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:6px"><b style="color:#EF9F27">78% occupied</b><span class="muted">7,800 used · 2,200 free · 10,000 CF total</span></div>
+      <div class="occ" style="height:13px"><div style="width:78%;height:13px;background:#EF9F27"></div></div>
     </div>
-    <div class="shot" style="margin:0;box-shadow:none">
-      <table class="t">
-        <thead><tr><th>Job #</th><th>Customer</th><th>Lot #</th><th>Sticker</th><th>Volume</th><th>Driver</th><th>FADD</th><th>Status</th></tr></thead>
-        <tbody>
-          <tr><td><span class="jobn">FV8127071</span></td><td>Robert Hillman</td><td class="mono">PV0701</td><td><span class="swatch" style="background:#185FA5"></span>Blue</td><td>800 CF</td><td>Carlos Chacon</td><td><span class="pill2 f-3"><i></i>2 days</span></td><td><span class="pill2 s-sto"><i></i>In storage</span></td></tr>
-          <tr><td><span class="jobn">A1824731</span></td><td>Anita M. Aloi</td><td class="mono">487611</td><td><span class="swatch" style="background:#3B6D11"></span>Green</td><td>1,051 CF</td><td>Lorenzo A.</td><td><span class="pill2 f-ok"><i></i>11 days</span></td><td><span class="pill2 s-sto"><i></i>In storage</span></td></tr>
-        </tbody>
-      </table>
-    </div>
+    <table class="t">
+      <thead><tr><th>Job #</th><th>Client</th><th>Lot #</th><th>Sticker</th><th>Volumen</th><th>Driver</th><th>FADD</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td><span class="jobn">FV8127071</span></td><td>Robert Hillman</td><td class="mono">PV0701</td><td><span class="swatch" style="background:#185FA5"></span>Blue</td><td>800 CF</td><td>Carlos Chacon</td><td><span class="pill2 f-3"><i></i>2 days</span></td><td><span class="pill2 s-sto"><i></i>In storage</span></td></tr>
+        <tr><td><span class="jobn">A1824731</span></td><td>Anita M. Aloi</td><td class="mono">487611</td><td><span class="swatch" style="background:#3B6D11"></span>Green</td><td>1,051 CF</td><td>Lorenzo A.</td><td><span class="pill2 f-ok"><i></i>11 days</span></td><td><span class="pill2 s-sto"><i></i>In storage</span></td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
-<div class="cap">Each warehouse shows its occupancy (green &lt;70%, amber 70-90%, red &gt;90%) and the table of jobs inside it.</div>
-
-<div class="two avoid" style="margin-top:14px">
-  <div class="card"><h3>Storage Units (rented)</h3>
-    <ul style="margin:0">
-      <li><b>Units</b> — the rented lockers: company, address, unit, <b>gate code</b> (copies with one click), rent due date, <b>assigned driver</b>, and an <b>occupancy bar</b> (CF used vs. capacity). Empty bar? Tap <b>"Set capacity"</b>.</li>
-      <li><b>Jobs in units</b> — what's stored in each unit.</li>
-    </ul>
-  </div>
-  <div class="card"><h3>Add / import</h3>
-    <p style="font-size:11px;margin:0"><b>"+ Unit"</b> for a new unit — you can also create one <b>on the fly</b> from the "drop at storage" dialog during a trip. And you can <b>import units from WhatsApp</b> by pasting the message or uploading the chat .zip.</p>
-  </div>
-</div>
-<div class="note"><b>Tidy views:</b> jobs that are <i>Out for delivery</i> are automatically hidden from the storage and warehouse views — you only see what's physically there.</div>
+<div class="cap">A warehouse tab: occupancy bar (green &lt;70%, amber 70–90%, red &gt;90%) + the jobs inside. Jobs that are Out for delivery are hidden automatically.</div>
 
 <!-- ============ 7 BILLING ============ -->
-<h1 class="sec break"><span class="num">7</span>Billing — charging storage to the client</h1>
-<p class="lead">Some clients pay a monthly fee to store their goods. The system handles the cycle automatically.</p>
+<h1 class="sec break"><span class="num">7</span>Storage Billing — monthly charges to clients</h1>
+<p class="lead">For clients who pay a monthly fee to keep their goods stored. The system generates each 30-day charge by itself.</p>
 
-<div class="two avoid">
-  <div class="card"><h3>Turn it on in the job</h3>
-    <p style="font-size:11px;margin:0">In the job form, <b>Storage billing</b> section: tick <b>"Charge this client for storage"</b>, enter the <b>monthly rate</b>, choose whether the <b>1st month is free</b> (the start date is computed automatically, but editable).</p>
-  </div>
-  <div class="card"><h3>The Billing page</h3>
-    <p style="font-size:11px;margin:0">Metrics (Total pending, Overdue, Due this week, Collected this month) and tabs (All / Pending / Overdue / Paid). The system <b>auto-generates</b> each 30-day cycle's charge and flips past-due items to <b>Overdue</b> on its own.</p>
-  </div>
-</div>
-<div class="two avoid" style="margin-top:12px">
-  <div class="card"><h3>Collect</h3><p style="font-size:11px;margin:0"><b>Mark as paid</b> records the date and amount.</p></div>
-  <div class="card"><h3>Remind</h3><p style="font-size:11px;margin:0"><b>💬 Reminder</b> opens WhatsApp with a payment reminder ready to send to the client (it deliberately never mentions where the goods are stored).</p></div>
-</div>
+<h3 class="how"><span class="k">HOW TO</span> · Activate billing for a client</h3>
+<ol class="steps">
+  <li>Either tick <b>"Bill this client for storage (every 30 days)"</b> inside the job form, or go to <b>Storage Billing</b> and tap <span class="kbd">+ Add billing</span>.</li>
+  <li>In the modal: search the <b>Job</b>, set the <b>Monthly rate ($)</b>, the <b>Billing start date</b>, tick <b>First month free</b> if agreed, add <b>Notes</b>, and tap <span class="kbd">Activate billing</span>.</li>
+  <li>From then on the system creates each period's charge automatically and flips late ones to <b>Overdue</b>.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Collect &amp; remind</h3>
+<ol class="steps">
+  <li>Open <b>Storage Billing</b>. Metrics on top: <b>Active storage clients · Outstanding this month · Overdue · Due this week · Collected this month</b>; tabs <b>All / Pending / Overdue / Paid</b>.</li>
+  <li>Each client card shows the rate, the <b>current period</b> and the <b>amount due</b>. Tap <span class="kbd">Mark as paid</span> when the money arrives.</li>
+  <li>Tap <span class="kbd">💬 Send reminder</span> to open WhatsApp with a polite payment reminder pre-written (it never reveals where the goods are stored). <span class="kbd">Edit rate</span> changes the monthly amount.</li>
+</ol>
 
 <!-- ============ 8 BROKERS ============ -->
 <h1 class="sec"><span class="num">8</span>Brokers</h1>
-<p class="lead">The companies we do jobs for.</p>
-<p style="font-size:11px">List of brokers (Allied, Atlas, Mayflower, United, North American, Wheaton, Arpin, Bekins… plus "Direct — no broker") with contact, phone and email. For each one you see <b>how many jobs</b> they have and the total <b>pending balance</b>. You can add, edit or delete brokers; when creating a job you pick the broker from this list.</p>
+<p style="font-size:10.5px">The list of companies we work for — Allied, Atlas, Mayflower, United, North American, Wheaton, Arpin, Bekins, plus "Direct (no broker)". Each row shows contact info, <b>how many jobs</b> and the <b>pending balance</b>. Add, edit or delete from here; job forms pick brokers from this list.</p>
 
 <!-- ============ 9 SETTLEMENTS ============ -->
 <h1 class="sec"><span class="num">9</span>Settlements — broker closing sheets</h1>
-<p class="lead">For <b>broker deliveries</b>: each closing sheet groups a broker's jobs and keeps score of the money.</p>
-<ul>
-  <li><b>Metrics + tabs:</b> Open / Settled / Disputed / All, plus totals like "Broker owes us", "We owe brokers", outstanding BOL and pads outstanding.</li>
-  <li>Each sheet shows the <b>jobs included</b>, CF, <b>carrier fee</b>, <b>BOL collected</b>, pads, costs and the <b>net settlement</b> (whether the broker owes you or you owe them).</li>
-  <li>In the detail you <b>record the BOL collection</b> (amount, method, date). That collection <b>syncs automatically with Payments</b> — money is never entered twice.</li>
-  <li>Jobs are <b>linked</b> to a closing sheet from the job detail — no double data entry.</li>
-  <li>Button to <b>export the closing sheet to PDF</b> (and a WhatsApp summary to send it).</li>
-</ul>
+<p class="lead">Where broker-delivery money gets reconciled. Metrics: <b>Open closing sheets · Broker owes us · We owe brokers · Outstanding BOL collections · Pads outstanding</b>. Tabs: <b>Open / Settled / Disputed / All</b>.</p>
+
+<h3 class="how"><span class="k">HOW TO</span> · Create a closing sheet and link jobs</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">+ Closing sheet</span>. Fill: <b>CS number</b> (e.g. CS-1024), <b>Load date</b>, <b>Broker</b>, <b>Driver</b>, <b>Status</b>. Optionally upload the <b>original document</b> (photo/PDF).</li>
+  <li>In <b>"Jobs en este closing sheet"</b> search jobs by # or client and tick them (jobs already on another sheet are flagged).</li>
+  <li>Set the <b>Missing pad charge ($)</b> (default 7) and the broker <b>deductions</b>: Trip cost, Labor, Other fees + description.</li>
+  <li>Tap <span class="kbd">Create</span>. You can also link from the <b>job detail</b> → "Carrier Settlement" → <b>+ Add to closing sheet…</b> or <b>➕ Create new</b>.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Record a BOL collection</h3>
+<ol class="steps">
+  <li>Open the sheet (tap <span class="kbd">Ver</span> <span class="es">(view)</span>) and find the job's row → tap <span class="kbd">Record payment</span>.</li>
+  <li>Enter <b>Amount collected ($)</b>, <b>Collection date</b>, <b>Payment method</b> and notes → <span class="kbd">Save collection</span>.</li>
+  <li>⚡ The collection <b>syncs automatically with Payments</b> — never enter it twice.</li>
+  <li>The detail shows the whole math: carrier fees − deductions − pads = <b>"Broker owes you $X"</b> (or "You owe the broker"). When settled, tap <span class="kbd">Mark settled</span>. Use <span class="kbd">📄 Export PDF</span> or <span class="kbd">💬 WhatsApp broker</span> to send it.</li>
+</ol>
 
 <!-- ============ 10 EXTRAS ============ -->
-<h1 class="sec"><span class="num">10</span>Extras &amp; Commissions</h1>
-<p class="lead">Charging the extras of each job and splitting the commission between drivers and reps.</p>
-<p style="font-size:11px">There are <b>7 extra types</b>: Extra CF, Shuttle, Long carry, Stairs, Packing, Flight charge and Other. The section has two tabs — <b>🧑‍✈️ Drivers</b> (grouped by driver) and <b>👤 Reps / Back office</b> (grouped by rep) — with monthly metrics on top: total extras, driver commission, rep commission and what's left for the company.</p>
+<h1 class="sec break"><span class="num">10</span>Extras &amp; Commissions</h1>
+<p class="lead">Extras are additional charges on a job. The system computes each driver's and rep's commission automatically.</p>
 
-<h3 style="margin-top:12px">Adding an extra</h3>
-<ul>
-  <li>In the Drivers view every job lists the 7 extra types as rows — <b>tick the box</b> to activate one and fill in the <b>amount</b>, the <b>driver</b> (pre-filled from the job), <b>generated by</b> (<i>Driver only</i>, <i>Driver + Rep</i> or <i>Rep only</i>), the <b>rep</b> if one was involved, and the <b>commission %</b> (pre-filled by the rules below, editable).</li>
-  <li>You can also add extras from the job detail → <b>Extras</b> section → <b>"+ Add extra"</b>.</li>
-</ul>
+<h3 class="how"><span class="k">HOW TO</span> · Add an extra to a job</h3>
+<ol class="steps">
+  <li>Open the job detail → <b>Extras</b> → <span class="kbd">+ Add extra</span> (or from the Extras page).</li>
+  <li>Pick the <b>Type</b>: <i>Extra CF · Shuttle · Long carry · Stairs · Packing · Flight charge · Other</i>.</li>
+  <li>Enter the <b>Amount ($)</b>. For <b>Extra CF</b> you instead enter <b>CF count × Rate per CF</b> (+ fuel surcharge %) and the total is computed.</li>
+  <li>Set <b>Generated by</b>: <i>Driver only / Driver + Rep / Rep only</i> (Long carry and Stairs are always driver-only), pick the <b>Driver</b> (pre-filled from the job) and the <b>Rep</b> if any.</li>
+  <li>The <b>Driver %</b> / <b>Rep %</b> pre-fill from the rules below — edit if needed. The summary shows each commission and the company's net. Tap <span class="kbd">Save extra</span>.</li>
+</ol>
 <table class="g">
   <tr><th>Extra type</th><th>Driver only</th><th>Driver + Rep</th><th>Rep only</th></tr>
   <tr><td>Extra CF / Packing / Flight / Other</td><td>Driver 10%</td><td>7% / 3%</td><td>Rep 10%</td></tr>
   <tr><td>Long carry / Stairs</td><td colspan="3">Always driver 50% (company keeps 50%)</td></tr>
   <tr><td>Shuttle</td><td>Driver 10%</td><td>7% / 3%</td><td>Rep 5%</td></tr>
 </table>
-<p style="font-size:11px;margin-top:8px">Under each driver there's a <b>TOTAL</b> row and a yellow <b>COMMISSION</b> row (Excel style), with <b>📋 Copy</b> and <b>🖨️ PDF</b> buttons to send each person their summary. The <b>"Reps / Employees"</b> button manages reps; tapping a rep's name opens their profile with commission per month and full extras history.</p>
+
+<h3 class="how" style="margin-top:14px"><span class="k">HOW TO</span> · Pay out commissions each month</h3>
+<ol class="steps">
+  <li>Open <b>Extras</b>. Metrics: <b>Extras (month) · Driver commissions · Rep commissions · For the company</b>. Filter by driver, rep, month or type.</li>
+  <li>Use the <b>🧑‍✈️ Drivers</b> tab (grouped by driver, collapsible by month) or <b>👤 Reps / Back office</b>. Each group ends in a <b>TOTAL</b> row and a highlighted <b>COMMISSION</b> row.</li>
+  <li>Tap <span class="kbd">📋 Copiar</span> <span class="es">(copy)</span> or <span class="kbd">🖨️ PDF</span> to send each person their summary.</li>
+  <li>Manage reps with <span class="kbd">Reps / Employees</span> (top bar): add name/role/phone/email; tap a rep's name for their profile with commission per month and full history.</li>
+</ol>
+<div class="warn"><b>⚠️ "Extras collected via payment with no commission assigned":</b> if a payment was recorded against an extra but nobody assigned the commission, a banner lists them — tap <span class="kbd">Assign commission</span> on each to fix the split.</div>
 
 <!-- ============ 11 TRIPS ============ -->
 <h1 class="sec break"><span class="num">11</span>Trips / Live Load — trucks on the road</h1>
-<p class="lead">A <b>trip</b> puts several jobs on one truck and tracks the load and the stops live.</p>
+<p class="lead">A trip = one truck + one driver + an ordered list of stops. View tabs: <b>🗺️ Live map · Active trips · Unassigned trips · All trips</b>. Statuses: <b>Loading → In transit → Completed</b> (or Cancelled).</p>
 
-<h3>Creating a trip</h3>
-<ul>
-  <li><b>"+ Trip"</b> → automatic number (TRIP-001…), pick the <b>truck</b>, the <b>driver</b>, the departure date, then <b>search and add jobs</b>. A <b>capacity bar</b> shows how much CF is left as you add. Reorder stops with ↑ / ↓ or by dragging.</li>
-  <li>You can also add <b>custom stops</b> that aren't jobs (fuel, hotel, warehouse visit…) — they merge into the same ordered stop sequence, have a category, and can be edited by clicking them.</li>
-  <li><b>🤖 AI trip suggestions:</b> the system can propose which jobs to combine on a trip, considering each job's <b>real load point</b> (storage vs. pickup) and explaining the reasoning per trip.</li>
-</ul>
+<h3 class="how"><span class="k">HOW TO</span> · Create a trip</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">+ Trip</span>. Set <b>Trip number</b> (TRIP-001…), <b>Departure date</b>, <b>Truck</b> (options show capacity: "Truck 1 · 1,600 CF"), <b>Driver</b>. New trips start as <b>Loading</b>.</li>
+  <li>In <b>"Stops — delivery order"</b>, search jobs by # / client / storage and tick to add. The <b>capacity bar</b> updates live ("{n} CF left").</li>
+  <li>Reorder stops with <b>↑ / ↓</b>. Toggle a stop between <span class="kbd">🚚 Delivery</span> and <span class="kbd">🔁 Relocation</span> <span class="es">(internal move, no delivery, no collection)</span>.</li>
+  <li>Tap <span class="kbd">Create trip</span>, then on the card <span class="kbd">💬 Send manifest to driver</span> (WhatsApp with the whole stop list) and <span class="kbd">Depart</span> when the truck leaves.</li>
+</ol>
 
-<h3>Active trips</h3>
-<ul>
-  <li>One card per active truck: truck + driver, <b>capacity bar</b> (green &lt;70%, amber 70-90%, red &gt;90%), and the ordered list of <b>stops</b> — each with job, customer, route, CF, sticker, FADD and <b>balance to collect</b> (pending extras included). Totals of CF and money at the bottom.</li>
-  <li>Per stop: <b>Mark delivered</b>, or <b>Dropped at storage</b> — the job stays on the trip faded out, marked "Dropped in storage", and you pick the unit/warehouse per job (you can even create a new unit right there).</li>
-  <li><b>Route</b> — a popup with the full journey; its stops can be re-ordered and <b>ticked off</b> as completed, and the state is saved per trip.</li>
-  <li><b>✂️ Split</b> — divide a job between <b>two trucks/trips</b> (part of the load goes on each); you pick the destination trip/truck.</li>
-  <li><b>🔁 Driver handoff</b> — hand jobs from one driver to another mid-trip, with a reason; the handoff is logged in the history.</li>
-  <li><b>💬 Send manifest to the driver</b> — WhatsApp with the trip's full stop list; there are also mid-trip update messages.</li>
-  <li><b>Depart</b> marks the trip in transit; when every job is delivered the trip <b>completes automatically</b> (any drops already made are respected, and stored jobs get their storage set per job).</li>
-  <li><b>Relocations:</b> internal moves between storages (no charge to the client) are supported as their own trip purpose.</li>
-  <li><b>🧰 Equipment tab:</b> track equipment &amp; materials (pads, dollies…) loaded/unloaded per truck and trip.</li>
-</ul>
-<div class="note"><b>Live map:</b> the Trips section includes a live truck map of the US showing where each active trip is along its route.</div>
+<div class="shot">
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM — Trips · Active trips</span></div>
+  <div class="main" style="background:#fafafa">
+    <div class="card" style="background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><b style="font-size:13px" class="mono">TRIP-004</b> <span class="pill2 s-ofd"><i></i>In transit</span><div class="muted" style="font-size:9.5px;margin-top:2px">🚛 Truck 1 · 🧑‍✈️ Andres M. · 07-06</div></div>
+        <div><span class="btn dark">Manage Loads</span> <span class="btn">Edit Trip</span> <span class="btn">➕ Add stop</span> <span class="btn">🗺️ View route</span></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9.5px;margin:8px 0 4px"><b style="color:#EF9F27">82% occupied</b><span class="muted">1,310/1,600 CF</span></div>
+      <div class="occ"><div style="width:82%;background:#EF9F27"></div></div>
+      <div style="font-size:9px;font-weight:700;color:#aaa;text-transform:uppercase;margin:9px 0 5px">Stops (3)</div>
+      <div style="border:1px solid #f0f0f0;border-radius:8px;padding:6px 9px;margin-bottom:5px;font-size:9.5px;display:flex;gap:8px;align-items:center">
+        <b>1</b> <span class="jobn">A1826927</span> Monique F Hall · 510 CF · <span class="swatch" style="background:#185FA5"></span>Blue
+        <span style="margin-left:auto"><span class="btn green" style="font-size:8.5px;padding:3px 8px">Mark delivered</span> <span class="btn" style="font-size:8.5px;padding:3px 8px">📦 Dropped at storage</span> <span class="btn" style="font-size:8.5px;padding:3px 8px">✂️ Split</span></span>
+      </div>
+      <div style="border:1px solid #f0f0f0;border-radius:8px;padding:6px 9px;margin-bottom:5px;font-size:9.5px;display:flex;gap:8px;align-items:center;opacity:.55">
+        <b>2</b> <span class="jobn">H2474156</span> Dustin Newman · 800 CF <span class="pill2 s-del"><i></i>Delivered</span>
+      </div>
+      <div style="border:1px solid #f0f0f0;border-radius:8px;padding:6px 9px;font-size:9.5px;display:flex;gap:8px;align-items:center">
+        <b>3</b> <span class="tag" style="background:#f1f1f1;color:#666">⛽ Fuel</span> <span class="muted">📍 Pilot, Columbus OH</span>
+        <span style="margin-left:auto"><span class="muted">✏️ ⬜ ✕</span></span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:8px"><b>Total: 1,310 CF</b><b style="color:#1A8A4E">To collect: $3,250</b></div>
+      <div style="margin-top:8px"><span class="btn green">💬 Send manifest to driver</span></div>
+    </div>
+  </div>
+</div>
+<div class="cap">An active trip card: capacity, ordered stops (job stops + a custom fuel stop), per-stop actions and totals. "To collect" includes pending extras.</div>
+
+<h3 class="how"><span class="k">HOW TO</span> · Drop a job at a storage mid-trip</h3>
+<ol class="steps">
+  <li>On the stop, tap <span class="kbd">📦 Dropped at storage</span>.</li>
+  <li>Choose the destination unit or 🏭 warehouse. Unit not listed? Tap <b>"+ Unit not on the list? Create it"</b>, fill Company / Unit # / State / size and <span class="kbd">Create &amp; select</span>.</li>
+  <li>Tap <span class="kbd">Confirm drop</span>. The job goes back to storage and stays on the trip faded out as <b>"📦 Dropped in storage"</b>.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Split a job between two trucks</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">✂️ Split</span> on the stop (or in the job detail's "Where it's stored").</li>
+  <li>Set how many CF go to each part and pick the <b>destination trip/truck</b> for the second part.</li>
+  <li>Both portions track separately; the job detail shows each portion and offers <span class="kbd">✂️ Merge portions</span> to undo.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Add a custom (non-job) stop</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">➕ Add stop</span> on the trip card.</li>
+  <li>Pick a <b>Category</b>: <i>🔧 Maintenance · 🛠️ Repair · 🔍 DOT inspection · ⚖️ Weigh station · ⛽ Fuel · 🛌 Rest (DOT hours) · 🅿️ Overnight/parking · 🚚 Equipment · 🏢 Office/terminal · 📋 Other</i>, plus optional address and note.</li>
+  <li>Custom stops live in the same ordered list — edit them with ✏️, tick them done with ✅.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Use the Route popup &amp; AI suggestions</h3>
+<ol class="steps">
+  <li><span class="kbd">🗺️ View route</span> opens a US map with numbered pins and the stop list: <b>tick</b> which stops to include, reorder with ▲▼ (saved per trip), then <span class="kbd">Open in Google Maps</span>.</li>
+  <li><span class="kbd">✨ Suggest trips (AI)</span> (top bar) analyzes pending jobs and trucks and proposes groupings — each card shows occupancy, the job order and <b>"💡 Why this trip"</b>. Tap <span class="kbd">Review &amp; create</span> to accept or <span class="kbd">Dismiss</span>.</li>
+  <li>Mid-trip, the trip detail also offers <span class="kbd">➕ Add job</span>, <span class="kbd">🔼 Load from storage</span>, <span class="kbd">🆕 Unplanned pickup</span> and <span class="kbd">🔄 Handoff</span> — hand the whole trip or single jobs to another driver, choosing the reason <span class="es">(better for this delivery / truck change / availability / other)</span>; everything is logged.</li>
+  <li>When every stop is done you'll see <b>"✅ All jobs delivered — mark trip as completed?"</b> → tap <span class="kbd">Mark completed</span>.</li>
+</ol>
+<div class="note"><b>Also in Fleet:</b> the <b>🗺️ Live map</b> tab shows each truck's last known position (moving / stopped) — update it via "Update location". The <b>Equipment</b> section tracks pads, dollies, straps etc. per location with <span class="kbd">🚚 Load on trip</span> / <span class="kbd">📤 Unload</span>.</div>
 
 <!-- ============ 12 PAYMENTS ============ -->
 <h1 class="sec break"><span class="num">12</span>Payments — every dollar, tracked 💰</h1>
-<p class="lead">The module that controls <b>all incoming money, who physically holds it, and what's been deposited</b>.</p>
+<p class="lead">Metrics: <b>Expected this month · Received this month · In circulation (not deposited) · Deposited this month · Pending collection · CC fees collected</b>. Tabs: <b>All / Pending / Received / In circulation / Deposited</b>.</p>
+
+<h3 class="how"><span class="k">HOW TO</span> · Record a payment</h3>
+<ol class="steps">
+  <li>Tap <span class="kbd">+ Payment</span> (top bar, or from the job detail's Payments section — there it comes pre-filled with the outstanding balance and the job's driver).</li>
+  <li><b>Job</b>: search by job # or client and pick it. Set the <b>Payment date</b> and the <b>Amount ($)</b>.</li>
+  <li><b>Concept</b>: <i>Job / Extra / CC Fee / Storage / Other</i>. Optional <b>Discount ($)</b> + reason. <b>Payment stage</b>: <i>At pick up / At delivery / Other</i>.</li>
+  <li><b>Method</b> (pill row): <i>Cash · Credit card · Zelle · Venmo · Check · Money order · PayPal · Cash App · Wire transfer · Apple Pay</i>.</li>
+  <li><b>Checks</b> ask for the type (<i>Cashier's / Personal / Official</i>) + serial number, bank, date, memo and a <b>check photo</b>. <b>Money orders</b> ask for the issuer (<i>USPS / Western Union / MoneyGram / Other</i>) + serial and details. <b>Credit card</b> can add a <b>CC fee charged to the client</b> (a separate CC-Fee payment is created).</li>
+  <li>Tick <b>Received</b> (+ by whom and when — automatic for digital payments). For cash/checks/money orders set <b>"Who has the money?"</b> (pre-filled with the job's driver) and, once banked, <b>Deposited</b> + date + <b>Bank account</b>. Digital methods are <b>auto-deposited</b>.</li>
+  <li>Tap <span class="kbd">Create payment</span>.</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Split a payment across charges (allocation)</h3>
+<ol class="steps">
+  <li>In the payment modal, tick <b>"✂️ Asignar a cargos (split)"</b> <span class="es">(allocate to charges)</span>.</li>
+  <li>The purple panel lists the job's charges (job balance, each pending extra) with its <b>Pendiente</b> <span class="es">(pending)</span> amount. Type how much of the payment goes to each — the <b>Restante</b> <span class="es">(remaining)</span> per charge updates live; overpays are flagged but allowed.</li>
+  <li>Anything you don't assign stays as <b>"A cuenta"</b> <span class="es">(on account)</span> — you can allocate it later with the row's <span class="kbd">Asignar</span> button.</li>
+</ol>
 
 <div class="shot">
-  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM — Payments</span></div>
+  <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">Operations CRM — Payments · In circulation</span></div>
   <div class="main" style="background:#fafafa">
-    <div class="phead"><h2>Payments</h2><span class="live"><i></i>Live</span><span style="margin-left:auto" class="btn dark">+ Payment</span></div>
-    <div class="psub">Collections, cash on hand and deposits</div>
-    <div class="metrics" style="grid-template-columns:repeat(6,1fr)">
-      <div class="mc"><div class="l">Expected (month)</div><div class="n" style="font-size:15px">$42,300</div></div>
-      <div class="mc"><div class="l">Received</div><div class="n" style="font-size:15px;color:#1A8A4E">$31,150</div></div>
-      <div class="mc"><div class="l">In circulation</div><div class="n" style="font-size:15px;color:#A32D2D">$6,400</div></div>
-      <div class="mc"><div class="l">Deposited</div><div class="n" style="font-size:15px;color:#185FA5">$24,750</div></div>
-      <div class="mc"><div class="l">Pending</div><div class="n" style="font-size:15px;color:#C2410C">$11,150</div></div>
-      <div class="mc"><div class="l">CC fees</div><div class="n" style="font-size:15px;color:#7C3AED">$820</div></div>
+    <div class="alert"><b>⚠️ Received, not deposited for 7+ days (2)</b>
+      <div><span class="achip"><b class="mono">A1826927</b> · $2,100 · Cash · Andres M. · <b>9 days</b></span><span class="achip"><b class="mono">H2474156</b> · $1,300 · Check · Wady P. · <b>12 days</b></span></div>
     </div>
-    <div class="alert"><b>⚠️ Cash held &gt; 7 days without deposit:</b>
-      <div><span class="achip"><b>Andres M.</b> · $2,100 cash · job A1826927 · 9 days</span><span class="achip"><b>Wady P.</b> · $1,300 check · job H2474156 · 12 days</span></div>
+    <div class="subtabs"><span>All</span><span>Pending</span><span>Received</span><span class="on">In circulation</span><span>Deposited</span></div>
+    <div class="card" style="background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b style="font-size:12px">👤 Andres M.</b>
+        <span style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:9px">Select all · Clear</span><b style="color:#A32D2D;font-size:14px">$3,400</b></span>
+      </div>
+      <div style="margin:6px 0;font-size:9px"><span class="tag" style="background:#EAF3DE;color:#3B6D11">Cash $2,100</span> <span class="tag" style="background:#E6F1FB;color:#185FA5">Checks $1,300</span></div>
+      <div style="font-size:9.5px;display:flex;gap:8px;align-items:center;border:1px solid #f0f0f0;border-radius:7px;padding:5px 8px;margin-bottom:4px"><span class="chk" style="margin:0"><span class="bx on"></span></span><span class="jobn">A1826927</span> Monique F Hall · Cash · $2,100 · <b>9d</b></div>
+      <div style="font-size:9.5px;display:flex;gap:8px;align-items:center;border:1px solid #f0f0f0;border-radius:7px;padding:5px 8px"><span class="chk" style="margin:0"><span class="bx on"></span></span><span class="jobn">H2474156</span> Dustin Newman · Check · $1,300 · <b>12d</b></div>
+      <div style="background:#EAF3DE;border-radius:8px;padding:7px 9px;margin-top:7px;font-size:9.5px;display:flex;gap:8px;align-items:center">
+        <span class="fld"><span class="fv sel" style="min-width:130px">Chase Operations</span></span>
+        <span class="fld"><span class="fv">07/14/2026</span></span>
+        <span class="btn green" style="margin-left:auto">✓ Deposit 2 · $3,400</span>
+      </div>
+      <div style="margin-top:7px"><span class="btn blue">💬 Request deposit</span></div>
     </div>
-    <div class="subtabs"><span class="on">All</span><span>Pending</span><span>Received</span><span>In circulation</span><span>Deposited</span></div>
   </div>
 </div>
-<div class="cap">Payments: month metrics, the red "deposit this!" alert, and the tabs.</div>
+<div class="cap">The "In circulation" view: money grouped by who holds it, with the batch-deposit bar and the WhatsApp "Request deposit" button.</div>
 
-<h3 style="margin-top:14px">Recording a payment ("+ Payment")</h3>
-<ul>
-  <li><b>Job</b> (search by number or customer — there's also a payment search by job number), date, <b>amount</b>, <b>concept</b> (Job / Extra / CC Fee / Storage / Other) and <b>method</b> (cash, check, Zelle, Venmo…).</li>
-  <li>Checks / money orders ask for the number/ID and type (personal / cashier / business). Optional <b>discount</b> + reason. <b>Payment stage</b>: At pickup / At delivery / Other.</li>
-  <li><b>Received by</b> whom and when. For <b>cash, checks and money orders</b>: <b>who holds the money</b> (pre-filled with the job's driver) and whether it's been <b>deposited</b> (date + bank account). <b>Digital</b> methods (Zelle, Venmo…) are marked deposited automatically.</li>
-  <li><b>Allocation per charge:</b> a payment is applied against the job's charges (pickup balance, delivery balance, extras…) and the system shows the <b>remaining amount per charge</b> — so partial payments always add up correctly and extras already invoiced aren't double-counted.</li>
-</ul>
-
-<div class="two avoid">
-  <div class="card"><h3>👛 "In circulation" view</h3>
-    <p style="font-size:11px;margin:0">Groups the money <b>by the person holding it</b>: total on hand, breakdown (cash / checks / money orders) and the per-job detail. <b>💬 Request deposit</b> opens WhatsApp asking them to deposit. From here you can also run a <b>batch deposit</b> — tick several payments and deposit them together into a bank account (bank accounts are managed in this module too).</p>
-  </div>
-  <div class="card"><h3>📈 Weekly cash flow</h3>
-    <p style="font-size:11px;margin:0">At the bottom: expected, received, in circulation and deposited for the week, plus a <b>projection</b> of the deposited total if everything in circulation gets deposited.</p>
-  </div>
-</div>
-<div class="note"><b>Auto-sync:</b> recording a BOL collection in <b>Settlements</b> creates/updates the payment in <b>Payments</b>, and vice-versa. Payments can also be added from the job detail (pre-filled with the outstanding balance and the job's driver). Money is never entered twice.</div>
+<h3 class="how"><span class="k">HOW TO</span> · Deposit money in batch</h3>
+<ol class="steps">
+  <li>Open the <b>In circulation</b> tab. Each person's card shows their total and each item.</li>
+  <li><b>Tick</b> the payments being deposited (or "Select all"), pick the <b>bank account</b> and date, and tap <span class="kbd">✓ Deposit N · $total</span>.</li>
+  <li>Manage accounts via <span class="kbd">🏦 Bank accounts</span> (top bar): <span class="kbd">+ Add account</span> with name, bank, type, last 4 digits.</li>
+  <li>To chase someone, tap <span class="kbd">💬 Request deposit</span> — WhatsApp opens with their full list and a polite "please deposit by end of week".</li>
+</ol>
+<div class="note"><b>Weekly cash flow</b> (bottom of the page): Expected · Received · In circulation · Deposited this week, plus a <b>projection</b> if everything in circulation were deposited. And remember the <b>red alert</b>: anything held 7+ days without deposit shows at the top.</div>
 
 <!-- ============ 13 DRIVERS & TRUCKS ============ -->
-<h1 class="sec"><span class="num">13</span>Drivers &amp; Trucks</h1>
+<h1 class="sec break"><span class="num">13</span>Drivers &amp; Trucks</h1>
 <div class="two">
-  <div class="card"><h3>🪪 Drivers</h3>
-    <p style="font-size:11px;margin:0">Drivers appear automatically as you assign them to jobs. Tap one to open their <b>profile</b>: how much money they hold <b>in circulation</b> (cash / checks / money orders not yet deposited), their <b>payment history</b> (what they received and when they deposited it) and their <b>job history</b>.</p>
+  <div class="card"><h3>🪪 Add / check a driver</h3>
+    <p style="font-size:10.5px;margin:0"><span class="kbd">+ Driver</span> → Name, Phone, Truck ID, <b>WhatsApp group link</b>, Notes, Status. Tap a driver's name for their <b>profile</b>: <b>In circulation</b> (money on hand, undeposited), full <b>payment history</b> (received / deposited dates) and <b>job history</b>.</p>
   </div>
-  <div class="card"><h3>🚛 Trucks</h3>
-    <p style="font-size:11px;margin:0">The fleet: name, plate and <b>capacity in CF</b>. Each truck shows its <b>current live occupancy</b> when it's out on a trip.</p>
+  <div class="card"><h3>🚛 Add a truck</h3>
+    <p style="font-size:10.5px;margin:0"><span class="kbd">+ Truck</span> → Name/number, <b>Patente</b> <span class="es">(plate)</span>, <b>Capacidad (CF)</b> <span class="es">(capacity)</span>, Status, Notes + Vehicle info (Year, Make, Model, VIN, License plate/state). The list shows each truck's <b>current load and occupancy</b> when it's on a trip.</p>
   </div>
 </div>
 
 <!-- ============ 14 BOL ============ -->
-<h1 class="sec break"><span class="num">14</span>BOL &amp; Documents — paperwork and signatures</h1>
-<p class="lead">The BOL module generates, annotates and gets the Bill of Lading signed — on the spot or remotely.</p>
-<ul>
-  <li><b>Generate the BOL</b> over the PDF template: configurable fields, checkboxes and free text stamped onto the document — <b>click on the PDF to place</b> each value where it belongs. Edited values cover the old ones cleanly.</li>
-  <li><b>Sign at pickup:</b> the customer signs on screen. A <b>new version created after a signed pickup inherits the signature</b> and goes straight to the delivery step.</li>
-  <li><b>Sign at delivery:</b> signed on the document itself, with the pickup signature still visible.</li>
-  <li><b>Remote signing:</b> send the BOL <b>by email</b> for the customer to sign (the back-office flow), or through the <b>DocuSign integration</b> (pickup + delivery) — the system gets notified when the envelope is completed.</li>
-  <li><b>Documents:</b> all generated paperwork is filed in <b>folders per broker</b>.</li>
-  <li><b>AI assist:</b> the system can read/parse BOL documents with AI to help fill in data.</li>
-</ul>
+<h1 class="sec"><span class="num">14</span>BOL &amp; Documents — paperwork and signatures</h1>
+<p class="lead">Generate the Bill of Lading over the company's PDF template, stamp values where they belong, and get it signed by email through DocuSign.</p>
+
+<h3 class="how"><span class="k">HOW TO</span> · Generate a BOL</h3>
+<ol class="steps">
+  <li>Open <b>BOL</b> → <span class="kbd">Generate BOL</span> (or from a job: <span class="kbd">📄 Generate BOL</span> in the job detail footer).</li>
+  <li>Pick the <b>Company template</b> and the <b>Job</b> (search by # or client) — the job's data loads and everything stays editable.</li>
+  <li>Review <b>Client &amp; route</b> (addresses, dates), tick the template's <b>Checkboxes</b>, and fill <b>Charges</b>: Base CF, Rate/CF, Fuel % — add lines with <span class="kbd">+ Extra CF</span>, <span class="kbd">+ Charge</span>, <span class="kbd">+ Discount</span>. The totals (<b>Grand total, Balance due, Due at pickup, Due at delivery</b>) update live in the preview.</li>
+  <li>Need text in a specific spot? Tap <span class="kbd">✎ Add text on PDF</span> → <span class="kbd">+ Add text</span> → <b>click on the PDF</b> where it goes; drag to move, drag the corner to resize, double-click to edit. Then <span class="kbd">✓ Done editing</span>.</li>
+  <li>Tap <span class="kbd">Save as final</span> — it's filed in <b>Documents</b>. (<span class="kbd">Save draft</span> keeps it editable; <span class="kbd">⬇ Download</span> for a copy.)</li>
+</ol>
+
+<h3 class="how"><span class="k">HOW TO</span> · Get it signed (pickup, then delivery)</h3>
+<ol class="steps">
+  <li>Open <b>Documents</b> (BOL section). Files are organized in <b>📁 folders per broker</b>; each row shows its signature status: <i>Generated → Pickup sent → Pickup signed → Delivery sent → Delivery signed → Completed ✓</i>.</li>
+  <li>Tap <span class="kbd">Firmar pickup</span> <span class="es">(sign pickup)</span>, enter the <b>customer's email</b> — they get a normal <b>DocuSign email</b> and sign from their phone. When they sign, the signed copy appears here by itself (badge <b>PU ✍</b>).</li>
+  <li>At delivery time, tap <span class="kbd">Firmar delivery</span> — same flow; the delivery is signed <b>on the same document with the pickup signature still visible</b> (badge <b>DEL ✍</b>).</li>
+  <li>Need to change a signed BOL? <span class="kbd">Reopen</span> it, edit, and save — it becomes a <b>new version that inherits the pickup signature</b>, ready to sign at delivery. Delivery signatures are never carried over.</li>
+</ol>
+<div class="note"><b>Templates (admins):</b> <span class="kbd">+ New template</span> → upload the company PDF, add fields with <span class="kbd">+ Add field</span> or let <span class="kbd">✨ Auto-detect (AI)</span> find them, map each to a job field / fixed text / checkbox / signature, then <span class="kbd">Save &amp; activate</span>.</div>
 
 <!-- ============ 15 CLAIMS ============ -->
-<h1 class="sec"><span class="num">15</span>Claims &amp; Incidents</h1>
-<p class="lead">When something goes wrong — damage, theft, missing items, an incomplete delivery or a complaint — it becomes a claim and gets tracked to resolution.</p>
-<ul>
-  <li><b>Open a claim</b> linked to a job and/or trip, with: incident type (<i>Damage, Theft, Missing items, Incomplete delivery, Complaint, Other</i>), client, <b>assigned staff member</b>, incident date, <b>claimed amount</b> and evidence <b>attachments</b> (photos, documents).</li>
-  <li><b>Status flow:</b></li>
-</ul>
-<div class="flow" style="margin-left:18px">
+<h1 class="sec break"><span class="num">15</span>Claims &amp; Incidents</h1>
+<p class="lead">Anything that goes wrong becomes a claim and is tracked to resolution. Jobs and trips with open claims show a <b>⚠ badge</b>.</p>
+
+<h3 class="how"><span class="k">HOW TO</span> · Report and follow up a claim</h3>
+<ol class="steps">
+  <li>Open <b>Claims &amp; Incidents</b> → <span class="kbd">+ New claim</span>.</li>
+  <li>Fill <b>Incident data</b>: link the <b>Job</b> (search) and <b>Trip</b> if any, <b>Client</b>, <b>Incident date</b>, <b>Incident type</b> (<i>💥 Damage · 🚨 Theft · 🔍 Missing items · 📭 Incomplete delivery · 😠 Complaint · 📝 Other</i>), <b>Assigned to</b> (who follows it up) and the <b>Description</b>.</li>
+  <li>Set <b>Status &amp; resolution</b>: <b>Claimed amount ($)</b>; the status starts <b>Open</b>. Tap <span class="kbd">Create claim</span>.</li>
+  <li>After saving, attach <b>Evidence</b> (photos/documents) and add <b>Follow-up</b> notes (<span class="kbd">+ Add note</span>) as things happen — status changes are logged automatically.</li>
+  <li>To close it, change Status to <b>Resolved</b> (or Denied), pick the <b>Resolution</b> — <i>Paid to client / Denied / Covered by insurance / Discount applied</i> — enter <b>Paid/settled ($)</b> and the <b>Closed date</b>, then <span class="kbd">Save changes</span>.</li>
+</ol>
+<div class="flow" style="margin-left:4px">
   <div class="fbox" style="border-color:#E24B4A;color:#A32D2D">Open</div><span class="farrow">→</span>
   <div class="fbox" style="border-color:#EAB308;color:#92760B">Investigating</div><span class="farrow">→</span>
   <div class="fbox" style="border-color:#639922;color:#3B6D11">Resolved</div><span class="farrow">/</span>
   <div class="fbox" style="border-color:#999;color:#666">Denied</div>
 </div>
-<ul>
-  <li><b>Resolution:</b> Paid to client (with the paid amount), Denied, Covered by insurance, or Discount applied — plus the closing date.</li>
-  <li><b>Follow-up notes:</b> every claim has a notes timeline; status changes are logged automatically.</li>
-  <li>Jobs and trips with active claims show a <b>⚠ badge</b> so nobody misses them.</li>
-</ul>
+<p class="muted" style="font-size:10px">The list view has metrics (Open claims, Investigating, Resolved this year, Total claimed, Total paid out, Avg days to close) and filters by type, resolution and date.</p>
 
 <!-- ============ 16 CHATS ============ -->
-<h1 class="sec"><span class="num">16</span>Chats — internal team messaging</h1>
-<p class="lead">A Messenger-style inbox built into the CRM, so operations talk happens next to the data.</p>
-<ul>
-  <li><b>Channels</b> for team topics, <b>direct messages</b>, and <b>private group chats</b> with hand-picked members (create with the <b>+</b> button).</li>
-  <li><b>Read receipts</b> (sent / delivered / seen), <b>online presence</b> and each person's <b>last connection</b>.</li>
-</ul>
+<h1 class="sec"><span class="num">16</span>Chats — team messaging</h1>
+<p class="lead">A Messenger-style inbox inside the CRM. The team channel <b>#general</b> exists for everyone; the rest you create.</p>
+
+<h3 class="how"><span class="k">HOW TO</span> · Start a chat or a group</h3>
+<ol class="steps">
+  <li>Open <b>Chats</b> and tap the round <span class="kbd">+</span> button ("New chat").</li>
+  <li>Search and pick people: <b>1 person = direct message</b> · <b>2+ = private group</b> (optionally name it). Tap <span class="kbd">Message {name}</span> or <span class="kbd">Create group · n</span>.</li>
+  <li>Type in the composer and press <span class="kbd">Enter</span> to send (Shift+Enter = new line).</li>
+  <li>Under your last message you'll see the receipt: <b>✓ Sent → ✓✓ Delivered → Seen {time}</b> (groups show "👁 Seen by …"). The header shows <b>Active now / Last seen …</b> for the other person; the inbox's <b>Active now</b> row shows who's online.</li>
+</ol>
 
 <!-- ============ 17 CLIENTS / ANALYTICS / SUGGESTIONS ============ -->
-<h1 class="sec"><span class="num">17</span>Clients, Analytics &amp; Suggestions</h1>
+<h1 class="sec"><span class="num">17</span>Clients · Analytics · Suggestions</h1>
 <div class="three">
   <div class="card"><h3>👥 Clients</h3>
-    <p style="font-size:11px;margin:0">Every customer with their <b>phone</b> (tap to call) and <b>email</b> (tap to write), active jobs, total jobs and <b>outstanding balance</b>. Tap a name to see all their jobs.</p>
+    <p style="font-size:10.5px;margin:0">Every customer with <b>Phone</b> (tap to call), <b>Email</b> (tap to write), active jobs, total jobs and <b>Outstanding balance</b>. Tap the name → all their jobs.</p>
   </div>
   <div class="card"><h3>📊 Analytics</h3>
-    <p style="font-size:11px;margin:0">An interactive business dashboard: revenue, jobs by status, volumes, plus <b>real storage spend and a P&amp;L per storage unit</b>. The <b>"Analyze with AI"</b> button produces written recommendations.</p>
+    <p style="font-size:10.5px;margin:0">Dashboard tabs: <i>Resumen · Rentabilidad Storage · Revenue &amp; Cashflow · Brokers &amp; Operación</i> — KPIs, alerts ("where you're losing money"), charts, storage P&amp;L per unit. Tap <span class="kbd">Analyze with AI</span> for written recommendations.</p>
   </div>
   <div class="card"><h3>💡 Suggestions</h3>
-    <p style="font-size:11px;margin:0">The employee <b>suggestion box</b>: anyone can post an idea, everyone can <b>vote</b>, and admins triage what gets done.</p>
+    <p style="font-size:10.5px;margin:0">Post an idea (optionally <b>anonymous</b>), vote with <span class="kbd">👍</span>, and management replies on the card. Statuses: <i>New · In review · Implemented · Rejected</i>.</p>
   </div>
 </div>
 
-<!-- ============ 18 USERS ============ -->
-<h1 class="sec"><span class="num">18</span>Users, roles &amp; settings</h1>
-<p class="lead">Who can see and do what.</p>
-<ul>
-  <li>Two roles: <b>Admin</b> (full access, including the Users section) and <b>Member</b>.</li>
-  <li>Members get <b>per-section permissions</b> with three levels: <b>View</b>, <b>Edit</b>, <b>Create</b>. Sections without View simply don't appear in that user's menu. (Suggestions is open to everyone; Users is admin-only.)</li>
-  <li>Admins <b>invite users by email</b> with a permissions grid, can <b>activate/deactivate</b> accounts, trigger <b>password resets</b> and see each user's last login.</li>
-  <li>In <b>Settings</b> every user can change their <b>own password</b> and the <b>display language</b> (English / Spanish).</li>
-</ul>
+<!-- ============ 18 USERS & SETTINGS ============ -->
+<h1 class="sec break"><span class="num">18</span>Users &amp; Settings</h1>
+<p class="lead">Admins manage accounts in <b>Users</b>; everyone manages their own account in <b>Settings</b>.</p>
 
-<!-- ============ 19 DELETE ============ -->
-<h1 class="sec"><span class="num">19</span>Deleting a job 🗑</h1>
-<p style="font-size:11px">You can delete a job from the <b>job detail</b> (red "Delete job" button), from the <b>Jobs</b> list, or from <b>Dispatching</b>. It always asks for <b>confirmation</b>. Deleting removes the job and <b>cleans up everything related</b> — extras, payments, and its link to the closing sheet.</p>
-<div class="warn"><b>⚠️ It cannot be undone.</b> If in doubt, use <i>Cancelled</i> or <i>On hold</i> instead of deleting.</div>
+<h3 class="how"><span class="k">HOW TO</span> · Invite a user with the right permissions (admins)</h3>
+<ol class="steps">
+  <li>Open <b>Users</b> → <span class="kbd">+ New user</span>.</li>
+  <li>Enter <b>Email</b>, <b>Full name</b>, and the <b>Role</b>: <i>Member</i> or <i>Admin (full access)</i>.</li>
+  <li>For Members, use the <b>Permissions per section</b> grid: one row per section, three checkboxes — <b>view / edit / create</b> (edit or create implies view). <span class="kbd">Select all</span> / <span class="kbd">Clear</span> speed it up.</li>
+  <li>Tap <span class="kbd">Send invitation</span> — they get an email to set their password.</li>
+  <li>From the list you can later <span class="kbd">Edit</span> permissions, <span class="kbd">Send reset</span> (password), <span class="kbd">Deactivate</span>/<span class="kbd">Activate</span>, and <span class="kbd">Delete</span> (only inactive users). The table shows each user's <b>Last login</b>.</li>
+</ol>
 
-<!-- ============ 20 TIPS + GLOSSARY ============ -->
-<h1 class="sec break"><span class="num">20</span>Golden rules &amp; glossary</h1>
+<div class="mm" style="max-width:560px">
+  <div class="mh"><span class="ttl">Invite new user</span><span class="x">✕</span></div>
+  <div class="mb">
+    <div class="fgrid">
+      <div class="fld"><div class="fl">Email</div><div class="fv ph">user@example.com</div></div>
+      <div class="fld"><div class="fl">Role</div><div class="fv sel">Member</div></div>
+    </div>
+    <div class="fsec">Permissions per section &nbsp;<span style="text-transform:none;font-weight:500;color:#9aa3ad">Select all · Clear</span></div>
+    <table class="t">
+      <thead><tr><th>Section</th><th style="text-align:center">view</th><th style="text-align:center">edit</th><th style="text-align:center">create</th></tr></thead>
+      <tbody>
+        <tr><td>🚚 Dispatching</td><td style="text-align:center"><span class="chk" style="justify-content:center;margin:0"><span class="bx on"></span></span></td><td style="text-align:center"><span class="chk" style="justify-content:center;margin:0"><span class="bx on"></span></span></td><td style="text-align:center"><span class="chk" style="justify-content:center;margin:0"><span class="bx on"></span></span></td></tr>
+        <tr><td>💰 Payments</td><td style="text-align:center"><span class="chk" style="justify-content:center;margin:0"><span class="bx on"></span></span></td><td style="text-align:center"><span class="chk" style="justify-content:center;margin:0"><span class="bx"></span></span></td><td style="text-align:center"><span class="chk" style="justify-content:center;margin:0"><span class="bx"></span></span></td></tr>
+        <tr><td>👤 Users</td><td colspan="3" class="muted" style="text-align:center;font-size:9px">admin only</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="mf"><span class="btn">Cancel</span><span class="btn dark">Send invitation</span></div>
+</div>
+<div class="cap">The invite modal with the per-section permissions grid.</div>
 
-<div class="card avoid" style="background:#0f172a;color:#fff;border:none;margin-bottom:16px">
+<div class="note"><b>Settings (everyone):</b> <b>My account</b> — your name and the <b>Display language</b> (🇺🇸 English / 🇪🇸 Español); <b>Change password</b> — current + new + confirm → <span class="kbd">Update password</span>; and <span class="kbd">Sign out</span>.</div>
+
+<!-- ============ 19 RULES + GLOSSARY ============ -->
+<h1 class="sec break"><span class="num">19</span>Golden rules &amp; glossary</h1>
+
+<div class="warn"><b>🗑 Deleting a job:</b> possible from the job detail, the Jobs list or Dispatching. It always asks for confirmation, and it removes the job <b>plus</b> its extras and payments and unlinks it from closing sheets. <b>It cannot be undone</b> — prefer <i>Cancelled</i> or <i>On hold</i> when in doubt.</div>
+
+<div class="card avoid" style="background:#0f172a;color:#fff;border:none;margin-bottom:14px">
   <h3 style="color:#fff;margin-bottom:8px">🎯 The 6 rules of the day</h3>
-  <div style="font-size:11.5px;line-height:1.7">
-    <div>1. Check <b style="color:#7FB2E6">Dispatching</b> and tackle the <b style="color:#ff9b9b">red/orange FADD first</b>.</div>
-    <div>2. Make sure <b>no pickup/delivery for today is left without a driver</b>, and chase the 🟥 <b style="color:#ff9b9b">Not collected</b> tags.</div>
-    <div>3. Always notify the driver with the <b style="color:#8fd08f">💬 WhatsApp</b> button (it already includes all the data, or the trip manifest).</div>
-    <div>4. <b>Advance the status</b> as soon as each stage happens, so the board reflects reality.</div>
-    <div>5. Check the <b style="color:#ff9b9b">red alert in Payments</b> (cash undeposited &gt;7 days) and the <b>In circulation</b> view.</div>
-    <div>6. Anything broken, missing or complained about → open a <b style="color:#7FB2E6">Claim</b> right away.</div>
+  <div style="font-size:11px;line-height:1.7">
+    <div>1. Check <b style="color:#7FB2E6">Dispatching</b> — tackle <b style="color:#ff9b9b">red/orange FADD first</b>.</div>
+    <div>2. No pickup/delivery today without a driver; chase every 🟥 <b style="color:#ff9b9b">Not collected</b> tag.</div>
+    <div>3. Notify drivers with <b style="color:#8fd08f">💬 WhatsApp</b> — the message/manifest is pre-written.</div>
+    <div>4. <b>Advance the status</b> the moment each stage happens — the board must reflect reality.</div>
+    <div>5. Watch the <b style="color:#ff9b9b">Payments red alert</b> (cash 7+ days undeposited) and the In circulation view.</div>
+    <div>6. Anything broken or missing → open a <b style="color:#7FB2E6">Claim</b> immediately.</div>
   </div>
 </div>
 
 <h3>Quick glossary</h3>
 <table class="g">
   <tr><th>Term</th><th>What it means</th></tr>
-  <tr><td>FADD</td><td>First Available Delivery Date — the earliest date the job can be delivered.</td></tr>
-  <tr><td>CF</td><td>Cubic Feet — volume in cubic feet. "Real CF" = measured, vs. the broker's estimate.</td></tr>
-  <tr><td>Lot #</td><td>Lot number from the sticker on the goods.</td></tr>
-  <tr><td>Sticker</td><td>Color / label that identifies the load.</td></tr>
+  <tr><td>FADD</td><td>First Available Delivery Date — earliest date the job can be delivered.</td></tr>
+  <tr><td>CF / Real CF</td><td>Cubic feet. "Real CF" is the measured volume; occupancy uses it once set.</td></tr>
   <tr><td>Full / Direct / Broker</td><td>Job types: with storage / straight through / delivery only.</td></tr>
-  <tr><td>Broker</td><td>The company the job is for (Allied, Atlas…).</td></tr>
-  <tr><td>Rep</td><td>Internal salesperson/employee involved in a job.</td></tr>
-  <tr><td>Balance</td><td>Money to collect (at pickup or at delivery).</td></tr>
-  <tr><td>Extra</td><td>Additional charge on a job (shuttle, long carry, packing…).</td></tr>
-  <tr><td>Commission</td><td>The driver's or rep's share of an extra.</td></tr>
-  <tr><td>BOL</td><td>Bill of Lading — the job's contract document; on broker deliveries, also the money collected on it.</td></tr>
-  <tr><td>Closing sheet / Settlement</td><td>A broker's running tally (what they owe you or you owe them).</td></tr>
-  <tr><td>Trip / Live Load</td><td>A truck's journey with several jobs and its live load.</td></tr>
-  <tr><td>Split</td><td>Dividing one job's load between two trucks/trips.</td></tr>
-  <tr><td>Handoff</td><td>Passing a job from one driver to another mid-trip, with a reason.</td></tr>
-  <tr><td>In circulation</td><td>Money collected that someone still holds and hasn't deposited.</td></tr>
-  <tr><td>Deposited / Banked</td><td>Money that has reached the bank.</td></tr>
-  <tr><td>Billing</td><td>Monthly fee charged to the client for storing their goods.</td></tr>
-  <tr><td>Gate code</td><td>Code to get into the storage unit.</td></tr>
-  <tr><td>Claim</td><td>A tracked customer issue: damage, theft, missing items, complaint…</td></tr>
+  <tr><td>Broker · Rep</td><td>The company the job is for · the internal salesperson on the job.</td></tr>
+  <tr><td>Sticker · Lot #</td><td>Color label and lot number identifying the load.</td></tr>
+  <tr><td>Balance</td><td>Money to collect (at pickup or delivery). Includes pending extras on trips.</td></tr>
+  <tr><td>Extra · Commission</td><td>Additional job charge · the driver's/rep's share of it.</td></tr>
+  <tr><td>BOL</td><td>Bill of Lading — the job's contract; on broker deliveries also the money collected on it.</td></tr>
+  <tr><td>Closing sheet</td><td>A broker's settlement tally — what they owe you or you owe them.</td></tr>
+  <tr><td>Trip · Split · Handoff</td><td>A truck's journey with stops · dividing a load between trucks · passing jobs between drivers.</td></tr>
+  <tr><td>Relocation</td><td>Internal storage-to-storage move, no charge to the client.</td></tr>
+  <tr><td>In circulation</td><td>Money collected that someone holds and hasn't deposited yet.</td></tr>
+  <tr><td>A cuenta</td><td>"On account" — payment money not yet allocated to a specific charge.</td></tr>
+  <tr><td>Billing</td><td>Monthly storage fee charged to the client.</td></tr>
+  <tr><td>Gate code</td><td>Code to enter a storage unit (one-click copy in the app).</td></tr>
+  <tr><td>Claim</td><td>A tracked incident: damage, theft, missing items, complaint…</td></tr>
 </table>
 
-<div style="margin-top:26px;text-align:center;color:#aaa;font-size:11px;border-top:1px solid #eee;padding-top:14px">
-  No Borders Moving &amp; Storage · Operations CRM · Internal user guide v2.0 · Questions? Ask your manager 🚚
+<div style="margin-top:24px;text-align:center;color:#aaa;font-size:10.5px;border-top:1px solid #eee;padding-top:13px">
+  No Borders Moving &amp; Storage · Operations CRM · Step-by-step manual v3.0 · Questions? Ask your manager 🚚
 </div>
 
 </body>
