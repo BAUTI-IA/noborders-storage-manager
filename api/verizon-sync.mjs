@@ -223,18 +223,26 @@ async function fetchFleetApiVehicles(token, debug, bodyExtra) {
 
 // Known shapes for "where is this vehicle now". Discovered once per cold start
 // against a sample vehicle; the winner is cached and reused for the whole run.
+// The fleet items carry an empty "metrics" array — telemetry (location, speed)
+// likely hangs off a metrics route or a sibling API product.
 const LOC_GET_TEMPLATES = [
+  "/fleetapi/v1/fleet-items/{id}/metrics",
+  "/fleetapi/v1/fleet-items/{id}/metrics/latest",
+  "/fleetapi/v1/fleet-items/{id}?metrics=LOCATION,SPEED",
+  "/fleetapi/v1/fleet-items/{id}?includeMetrics=true",
+  "/fleetapi/v1/fleet-items/{id}?expand=metrics",
   "/fleetapi/v1/fleet-items/{id}/location",
   "/fleetapi/v1/fleet-items/{id}/locations/latest",
   "/fleetapi/v1/fleet-items/{id}/locations",
   "/fleetapi/v1/fleet-items/{id}/last-known-location",
-  "/fleetapi/v1/fleet-items/{id}/last-location",
   "/fleetapi/v1/fleet-items/{id}/current-location",
   "/fleetapi/v1/fleet-items/{id}/position",
   "/fleetapi/v1/fleet-items/{id}/gps",
   "/fleetapi/v1/fleet-items/{id}/status",
-  "/fleetapi/v1/fleet-items/{id}/snapshot",
   "/fleetapi/v1/fleet-items/{id}",
+  "/telemetryapi/v1/fleet-items/{id}/location",
+  "/telemetryapi/v1/fleet-items/{id}/latest",
+  "/vehicledataapi/v1/fleet-items/{id}/location",
   "/locationapi/v1/fleet-items/{id}/location",
   "/gpsapi/v1/fleet-items/{id}/location",
 ];
@@ -242,6 +250,9 @@ const LOC_GET_TEMPLATES = [
 const LOC_BATCH_TEMPLATES = [
   { path: "/fleetapi/v1/fleet-items/locations/search", make: (ids) => ({ fleetItemIds: ids }) },
   { path: "/fleetapi/v1/locations/search", make: (ids) => ({ fleetItemIds: ids }) },
+  { path: "/fleetapi/v1/fleet-items/metrics/search", make: (ids) => ({ fleetItemIds: ids }) },
+  { path: "/fleetapi/v1/metrics/search", make: (ids) => ({ fleetItemIds: ids, metrics: ["LOCATION", "SPEED"] }) },
+  { path: "/telemetryapi/v1/locations/search", make: (ids) => ({ fleetItemIds: ids }) },
 ];
 // Body tweaks that may make /fleet-items/search embed the position directly.
 const SEARCH_BODY_VARIANTS = [
@@ -263,8 +274,14 @@ async function discoverLocTemplate(token, sampleId, attempts) {
   if (cachedLocTemplate) return cachedLocTemplate;
   for (const tpl of LOC_GET_TEMPLATES) {
     try {
-      const loc = await locByTemplate(tpl, token, sampleId);
-      attempts?.push({ path: tpl, result: loc ? "✔ ubicación encontrada" : "sin ubicación (404/vacío/otra data)" });
+      const raw = await vz(tpl.replace("{id}", encodeURIComponent(sampleId)), token);
+      const loc = extractLoc(raw) || extractLoc(asList(raw)[0]);
+      attempts?.push({
+        path: tpl,
+        result: loc ? "✔ ubicación encontrada"
+          : raw == null ? "404/vacío"
+          : `respondió sin posición · ${JSON.stringify(raw).slice(0, 160)}`,
+      });
       if (loc) { cachedLocTemplate = tpl; return tpl; }
     } catch (e) {
       attempts?.push({ path: tpl, result: e.message.slice(0, 180) });
