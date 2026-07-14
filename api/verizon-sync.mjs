@@ -104,20 +104,30 @@ export default async function handler(req, res) {
       .eq("active", true);
     if (tErr) throw tErr;
 
-    const byNumber = new Map(), byVin = new Map(), byName = new Map();
+    // Reveal names look like "BT001 - HINO Leon" or "BT002-ATW - 2013 HINO";
+    // the CRM uses the short code ("BT001"), so we also index by that prefix.
+    const prefix = (s) => norm(s).split(/[-·|]/)[0].trim();
+    const byNumber = new Map(), byVin = new Map(), byName = new Map(), byPrefix = new Map();
     for (const v of vehicles) {
-      if (v.VehicleNumber != null) byNumber.set(norm(v.VehicleNumber), v);
+      if (v.VehicleNumber != null) {
+        byNumber.set(norm(v.VehicleNumber), v);
+        if (!byPrefix.has(prefix(v.VehicleNumber))) byPrefix.set(prefix(v.VehicleNumber), v);
+      }
       if (v.VIN) byVin.set(norm(v.VIN), v);
-      if (v.Name) byName.set(norm(v.Name), v);
+      if (v.Name) {
+        byName.set(norm(v.Name), v);
+        if (!byPrefix.has(prefix(v.Name))) byPrefix.set(prefix(v.Name), v);
+      }
     }
 
     const matches = [], unmatched = [];
     for (const t of trucks || []) {
       const v =
-        (t.verizon_vehicle_id && byNumber.get(norm(t.verizon_vehicle_id))) ||
+        (t.verizon_vehicle_id && (byNumber.get(norm(t.verizon_vehicle_id)) || byName.get(norm(t.verizon_vehicle_id)))) ||
         (t.vin && byVin.get(norm(t.vin))) ||
         byName.get(norm(t.name)) ||
-        byNumber.get(norm(t.name));
+        byNumber.get(norm(t.name)) ||
+        byPrefix.get(prefix(t.name));
       if (v) matches.push({ truck: t, vehicle: v });
       else unmatched.push(t.name);
     }
