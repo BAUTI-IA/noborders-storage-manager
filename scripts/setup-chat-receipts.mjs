@@ -33,8 +33,8 @@ create policy "chat_members_select_mates" on public.chat_channel_members
     exists (select 1 from public.chat_channels c where c.id = channel_id and public.chat_can_see(c))
   );
 
-alter publication supabase_realtime add table public.chat_channel_members;
-alter publication supabase_realtime add table public.chat_presence;`;
+do $$ begin alter publication supabase_realtime add table public.chat_channel_members; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.chat_presence; exception when others then null; end $$;`;
 
 if (!TOKEN) {
   console.error("Missing SUPABASE_ACCESS_TOKEN. Run:\n  SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-chat-receipts.mjs");

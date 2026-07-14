@@ -613,6 +613,7 @@ const STORAGE_JOBS_SQL = `create table if not exists public.storage_jobs (
   created_at timestamptz default now()
 );
 alter table public.storage_jobs enable row level security;
+drop policy if exists "storage_jobs_auth_all" on public.storage_jobs;
 create policy "storage_jobs_auth_all" on public.storage_jobs
   for all to authenticated using (true) with check (true);
 do $$ begin alter publication supabase_realtime add table public.storage_jobs; exception when others then null; end $$;`;
@@ -1267,9 +1268,7 @@ alter table public.storage_jobs
   add column if not exists pickup_balance numeric,
   add column if not exists delivery_balance numeric;
 
-do $$ begin
-  do $$ begin alter publication supabase_realtime add table public.brokers; exception when others then null; end $$;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.brokers; exception when others then null; end $$;`;
 // Storage occupancy + client storage billing (CRM v3). Probed via storage_billing
 // table + storages.space_type + storage_jobs.billing_active.
 const BILLING_SQL = `alter table public.storages
@@ -1298,9 +1297,7 @@ alter table public.storage_billing enable row level security;
 drop policy if exists "storage_billing_all" on public.storage_billing;
 create policy "storage_billing_all" on public.storage_billing for all to anon, authenticated using (true) with check (true);
 
-do $$ begin
-  do $$ begin alter publication supabase_realtime add table public.storage_billing; exception when others then null; end $$;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.storage_billing; exception when others then null; end $$;`;
 
 // CRM v3: extra job fields (rep, financials, contacts, multi-driver) + drivers table.
 const CRM_V3_SQL = `alter table public.storage_jobs
@@ -1335,9 +1332,7 @@ alter table public.drivers enable row level security;
 drop policy if exists "drivers_all" on public.drivers;
 create policy "drivers_all" on public.drivers for all to anon, authenticated using (true) with check (true);
 
-do $$ begin
-  do $$ begin alter publication supabase_realtime add table public.drivers; exception when others then null; end $$;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.drivers; exception when others then null; end $$;`;
 
 // Carrier Settlements: closing sheets + BOL collection fields + a public docs bucket.
 const SETTLEMENTS_SQL = `create table if not exists public.closing_sheets (
@@ -1386,9 +1381,7 @@ create policy "csdocs_write" on storage.objects for insert to anon, authenticate
 drop policy if exists "csdocs_update" on storage.objects;
 create policy "csdocs_update" on storage.objects for update to anon, authenticated using (bucket_id = 'closing-sheet-docs');
 
-do $$ begin
-  do $$ begin alter publication supabase_realtime add table public.closing_sheets; exception when others then null; end $$;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.closing_sheets; exception when others then null; end $$;`;
 
 // Trips / Live Load: trucks + trips tables + trip link columns on storage_jobs.
 const TRIPS_SQL = `create table if not exists public.trucks (
