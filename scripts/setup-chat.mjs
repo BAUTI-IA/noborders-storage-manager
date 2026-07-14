@@ -95,8 +95,8 @@ insert into public.chat_channels (name, is_dm)
 select 'general', false
 where not exists (select 1 from public.chat_channels where name = 'general' and not is_dm);
 
-alter publication supabase_realtime add table public.chat_channels;
-alter publication supabase_realtime add table public.chat_messages;
+do $$ begin alter publication supabase_realtime add table public.chat_channels; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.chat_messages; exception when others then null; end $$;
 
 -- Read receipts + last connection (also available standalone in
 -- scripts/setup-chat-receipts.mjs for databases that ran the block above).
@@ -119,8 +119,8 @@ create policy "chat_members_select_mates" on public.chat_channel_members
   for select to authenticated using (
     exists (select 1 from public.chat_channels c where c.id = channel_id and public.chat_can_see(c))
   );
-alter publication supabase_realtime add table public.chat_channel_members;
-alter publication supabase_realtime add table public.chat_presence;
+do $$ begin alter publication supabase_realtime add table public.chat_channel_members; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.chat_presence; exception when others then null; end $$;
 
 -- Private group chats with hand-picked members (also standalone in
 -- scripts/setup-chat-groups.mjs). Redefines chat_can_see to add the
