@@ -3241,7 +3241,7 @@ export default function App() {
   const [tripBusy, setTripBusy] = useState(false);
   const [tripCompleteModal, setTripCompleteModal] = useState(null); // { trip } completion summary
   const [tripRouteModal, setTripRouteModal] = useState(null); // { title, waypoints, googleLink } route popup
-  const [completeDropTarget, setCompleteDropTarget] = useState("");
+  const [completeDropTarget, setCompleteDropTarget] = useState({}); // unit key -> dropTargets index (per-job storage choice)
   const [tripWaLink, setTripWaLink] = useState(null);         // { href, label } pending driver notification
   const [showTruckModal, setShowTruckModal] = useState(false);
   const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
@@ -6208,19 +6208,23 @@ export default function App() {
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
     showToast("Unplanned pickup added");
   }
-  // Complete a trip: optionally drop the still-on-truck jobs at a storage, then mark completed.
-  async function completeTrip(trip, undeliveredKeys, dropTarget) {
+  // Complete a trip: drop each still-on-truck job at its chosen storage, release the
+  // jobs already dropped mid-trip (they keep their storage), then mark completed.
+  async function completeTrip(trip, drops, storedKeys = []) {
     setTripBusy(true);
-    if (undeliveredKeys.length && dropTarget) {
-      const t = dropTarget.kind === "warehouse" ? { warehouse: dropTarget.name, storage_id: null } : { storage_id: dropTarget.id, warehouse: null };
-      for (const k of undeliveredKeys) {
-        const ids = jobRowIdsForUnit(k);
-        await supabase.from("storage_jobs").update({ ...t, trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-        await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: dropTarget.kind === "warehouse" ? null : dropTarget.id, notes: dropTarget.label });
-      }
+    for (const { key, target } of drops) {
+      if (!target) continue;
+      const ids = jobRowIdsForUnit(key);
+      const loc = target.kind === "warehouse" ? { warehouse: target.name, storage_id: null } : { storage_id: target.id, warehouse: null };
+      await supabase.from("storage_jobs").update({ ...loc, trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+      await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label });
+    }
+    for (const k of storedKeys) {
+      const ids = jobRowIdsForUnit(k);
+      await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     }
     await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id);
-    setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget("");
+    setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget({});
     loadTrips(); loadJobs();
     showToast(`Trip ${trip.trip_number || trip.id} completed`);
   }
@@ -11886,7 +11890,7 @@ export default function App() {
           <Modal title={`Trip ${t.trip_number || "#"+t.id}`} onClose={() => { setTripDetailId(null); setTripAction(null); setStorageDropJob(null); setTripWaLink(null); }}
             footer={<>
               {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart (in transit)</Btn>}
-              {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Complete trip…</Btn>}
+              {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget({}); setTripCompleteModal({ trip: t }); }}>Complete trip…</Btn>}
               {TRIP_ACTIVE(t.status) && <Btn danger onClick={() => setTripStatus(t, "cancelled")}>Cancel trip</Btn>}
               <Btn onClick={() => { setTripDetailId(null); setTripAction(null); }}>Close</Btn>
             </>}>
@@ -11922,7 +11926,7 @@ export default function App() {
             {c.allDelivered && TRIP_ACTIVE(t.status) && (
               <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"10px 12px", margin:"8px 0", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ All jobs delivered — mark trip as completed?</span>
-                <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Mark completed</Btn>
+                <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget({}); setTripCompleteModal({ trip: t }); }}>Mark completed</Btn>
               </div>
             )}
 
@@ -12191,6 +12195,9 @@ export default function App() {
         const t = tripCompleteModal.trip;
         const c = tripCalc(t);
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
+        // Jobs dropped at a storage mid-trip already have their location — don't ask again.
+        const alreadyStored = undelivered.filter(j => j.status === "in_storage" && (j.storage_id || j.warehouse));
+        const onTruck = undelivered.filter(j => !(j.status === "in_storage" && (j.storage_id || j.warehouse)));
         const deliveredJobs = c.jobsIn.filter(j => j.date_out || j.status === "delivered");
         const cfDelivered = deliveredJobs.reduce((s, j) => s + effCf(j), 0);
         const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
@@ -12204,7 +12211,7 @@ export default function App() {
           <Modal title={`Complete trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
             footer={<>
               <Btn onClick={() => setTripCompleteModal(null)}>Cancel</Btn>
-              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(tripUnitKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
+              <Btn primary disabled={tripBusy || onTruck.some(j => (completeDropTarget[tripUnitKey(j)] ?? "") === "")} onClick={() => completeTrip(t, onTruck.map(j => ({ key: tripUnitKey(j), target: dropTargets[Number(completeDropTarget[tripUnitKey(j)])] })), alreadyStored.map(tripUnitKey))}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
               {[
@@ -12220,14 +12227,35 @@ export default function App() {
                 </div>
               ))}
             </div>
-            {undelivered.length > 0 && (
+            {alreadyStored.length > 0 && (
+              <div style={{ background:"#F4F9EE", border:"1px solid #A8C686", borderRadius:9, padding:"11px 13px", marginBottom: onTruck.length > 0 ? 10 : 0 }}>
+                <div style={{ fontSize:12.5, color:"#3B6D11", fontWeight:600, marginBottom:6 }}>📦 {alreadyStored.length} job(s) already dropped at storage — they keep their location.</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                  {alreadyStored.map(j => (
+                    <div key={tripUnitKey(j)} style={{ fontSize:11.5, color:"#557A2B" }}>
+                      <b style={{ fontFamily:"monospace" }}>{j.job_number || j.customer || "job"}</b> · {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage unit")}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {onTruck.length > 0 && (
               <div style={{ background:"#FFF8F0", border:"1px solid #EF9F27", borderRadius:9, padding:"11px 13px" }}>
-                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {undelivered.length} job(s) not delivered on the truck. Send to storage?</div>
-                <div style={{ fontSize:11.5, color:"#888", marginBottom:8 }}>{undelivered.map(j => j.job_number || j.customer).filter(Boolean).join(", ")}</div>
-                <select style={inp} value={completeDropTarget} onChange={e => setCompleteDropTarget(e.target.value)}>
-                  <option value="">— Choose storage / warehouse for the undelivered —</option>
-                  {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
-                </select>
+                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:8 }}>⚠️ {onTruck.length} job(s) not delivered on the truck. Choose a storage / warehouse for each one:</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                  {onTruck.map(j => {
+                    const k = tripUnitKey(j);
+                    return (
+                      <div key={k} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ fontSize:12, fontFamily:"monospace", fontWeight:700, flexShrink:0, minWidth:70 }}>{j.job_number || j.customer || "—"}</span>
+                        <select style={{ ...inp, flex:1, minWidth:0 }} value={completeDropTarget[k] ?? ""} onChange={e => { const v = e.target.value; setCompleteDropTarget(m => ({ ...m, [k]: v })); }}>
+                          <option value="">— Choose storage / warehouse —</option>
+                          {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </Modal>
