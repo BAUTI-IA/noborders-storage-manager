@@ -1689,6 +1689,56 @@ create policy "compdocs_update" on storage.objects for update to anon, authentic
 do $$ begin alter publication supabase_realtime add table public.companies; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.compliance_documents; exception when others then null; end $$;`;
 
+// Claims & Incidents: customer claims per job (damage, theft, missing items…)
+// + a follow-up notes timeline + a public docs bucket for evidence photos/files.
+const CLAIMS_SQL = `create table if not exists public.claims (
+  id bigint generated always as identity primary key,
+  job_number text,
+  trip_id bigint,
+  client_name text,
+  incident_type text,
+  description text,
+  incident_date date,
+  status text default 'open',
+  assigned_to text,
+  claimed_amount numeric,
+  paid_amount numeric,
+  resolution_type text,
+  closed_date date,
+  attachments jsonb default '[]'::jsonb,
+  created_by text,
+  created_at timestamptz default now(),
+  updated_by text,
+  updated_at timestamptz
+);
+alter table public.claims enable row level security;
+drop policy if exists "claims_all" on public.claims;
+create policy "claims_all" on public.claims for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.claim_notes (
+  id bigint generated always as identity primary key,
+  claim_id bigint references public.claims(id) on delete cascade,
+  note text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.claim_notes enable row level security;
+drop policy if exists "claim_notes_all" on public.claim_notes;
+create policy "claim_notes_all" on public.claim_notes for all to anon, authenticated using (true) with check (true);
+
+insert into storage.buckets (id, name, public)
+  values ('claim-docs', 'claim-docs', true)
+  on conflict (id) do update set public = true;
+drop policy if exists "claimdocs_read" on storage.objects;
+create policy "claimdocs_read" on storage.objects for select to anon, authenticated using (bucket_id = 'claim-docs');
+drop policy if exists "claimdocs_write" on storage.objects;
+create policy "claimdocs_write" on storage.objects for insert to anon, authenticated with check (bucket_id = 'claim-docs');
+drop policy if exists "claimdocs_update" on storage.objects;
+create policy "claimdocs_update" on storage.objects for update to anon, authenticated using (bucket_id = 'claim-docs');
+
+do $$ begin alter publication supabase_realtime add table public.claims; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.claim_notes; exception when others then null; end $$;`;
+
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
 // Occupancy colors: green <70%, amber 70–90%, red >90%.
@@ -1959,6 +2009,58 @@ const JOB_EVENT_TYPES = [
   { v:"other", l:"Other", icon:"📝" },
 ];
 const jobEventMeta = (v) => JOB_EVENT_TYPES.find(t => t.v === v) || { l: v || "Evento", icon:"•" };
+
+// ── Claims & Incidents: incident types, status workflow and resolutions ──
+const CLAIM_TYPES = [
+  { v:"damage", l:"Damage", icon:"💥" },
+  { v:"theft", l:"Theft / Robo", icon:"🚨" },
+  { v:"missing_items", l:"Missing items", icon:"🔍" },
+  { v:"incomplete_delivery", l:"Incomplete delivery", icon:"📭" },
+  { v:"complaint", l:"Complaint", icon:"😠" },
+  { v:"other", l:"Other", icon:"📝" },
+];
+const claimTypeMeta = (v) => CLAIM_TYPES.find(t => t.v === v) || { l: v || "—", icon:"📝" };
+const CLAIM_STATUS = {
+  open:          { l:"Open", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+  investigating: { l:"Investigating", bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" },
+  resolved:      { l:"Resolved", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  denied:        { l:"Denied", bg:"#f1f1f1", text:"#666", dot:"#999" },
+};
+// A claim is "active" (still costs attention) while open or under investigation.
+const CLAIM_ACTIVE = (s) => s === "open" || s === "investigating";
+function ClaimBadge({ status }) {
+  const c = CLAIM_STATUS[status] || CLAIM_STATUS.open;
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
+}
+const CLAIM_RESOLUTIONS = [
+  ["paid", "Paid to client"],
+  ["denied", "Denied"],
+  ["insurance", "Covered by insurance"],
+  ["discount", "Discount applied"],
+];
+const claimResolutionLabel = (v) => CLAIM_RESOLUTIONS.find(r => r[0] === v)?.[1] || "—";
+const EMPTY_CLAIM = { job_number:"", trip_id:"", client_name:"", incident_type:"damage", description:"", incident_date:"", status:"open", assigned_to:"", claimed_amount:"", paid_amount:"", resolution_type:"", closed_date:"" };
+// Claim↔job matching must tolerate case/whitespace drift between rows of the
+// same job (same rule as jobKey in analyticsData.js).
+const normJobNumber = (s) => (s || "").trim().toLowerCase();
+// Small red "⚠ n" pill shown next to a job/trip identifier when it has active claims.
+function ClaimCountPill({ count }) {
+  if (!count) return null;
+  return <span title={`${count} open claim(s)`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"2px 7px", fontFamily:"system-ui, sans-serif" }}>⚠ {count}</span>;
+}
+// One-line claim summary (badge + type + open link + ellipsized description),
+// shared by the job and trip detail modals.
+function ClaimLine({ claim, onOpen, linkLabel }) {
+  const m = claimTypeMeta(claim.incident_type);
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, flexWrap:"wrap" }}>
+      <ClaimBadge status={claim.status} />
+      <span>{m.icon} {m.l}</span>
+      <button onClick={onOpen} style={{ border:"none", background:"none", padding:0, cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12.5, fontWeight:600 }}>{linkLabel}</button>
+      <span style={{ color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:270 }}>{claim.description}</span>
+    </div>
+  );
+}
 
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
@@ -2694,6 +2796,7 @@ const NAV = [
   ]},
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
+    { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"analytics", label:"Analytics", icon:"📊" },
     { id:"suggestions", label:"Suggestions", icon:"💡" },
     { id:"bol", label:"BOL", icon:"📄" },
@@ -2760,6 +2863,7 @@ const PAGE_META = {
   trucks:      { title:"Trucks", sub:"Truck fleet" },
   trips:       { title:"Trips / Live Load", sub:"Live load per truck" },
   compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
+  claims:      { title:"Claims & Incidents", sub:"Damage, theft and customer claims per job" },
   analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
   suggestions: { title:"Suggestions", sub:"Employee feedback and improvement ideas" },
   users:       { title:"Users", sub:"Team members, roles and permissions" },
@@ -3318,6 +3422,24 @@ export default function App() {
   const [docFilterEntity, setDocFilterEntity] = useState("");   // all-docs filters
   const [docFilterStatus, setDocFilterStatus] = useState("");
   const [docFilterDays, setDocFilterDays] = useState("");
+  // Claims & Incidents
+  const [claimsMissing, setClaimsMissing] = useState(false);
+  const [claims, setClaims] = useState([]);
+  const [claimNotes, setClaimNotes] = useState([]);       // notes of the claim currently open in the modal
+  const [claimTab, setClaimTab] = useState("all");        // all | open | investigating | resolved | denied
+  const [claimSearch, setClaimSearch] = useState("");     // job # / client / description / assigned
+  const [claimFilterType, setClaimFilterType] = useState("");
+  const [claimFilterRes, setClaimFilterRes] = useState("");
+  const [claimFilterFrom, setClaimFilterFrom] = useState("");  // incident-date range
+  const [claimFilterTo, setClaimFilterTo] = useState("");
+  const [claimsPage, setClaimsPage] = useState(0);
+  const [showClaimModal, setShowClaimModal] = useState(false);
+  const [claimForm, setClaimForm] = useState(EMPTY_CLAIM);
+  const [editingClaimId, setEditingClaimId] = useState(null);
+  const [claimSaving, setClaimSaving] = useState(false);
+  const [claimUploading, setClaimUploading] = useState(false);
+  const [claimNoteInput, setClaimNoteInput] = useState("");
+  const [claimJobSearch, setClaimJobSearch] = useState(""); // job search inside the claim form
   const [toast, setToast] = useState(null);               // brief success notification
   const fileRef = useRef();
   const autoGenRef = useRef(false);
@@ -3470,6 +3592,15 @@ export default function App() {
   const loadComplianceDocs = useCallback(async () => {
     const { data, error } = await supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true });
     if (!error) setComplianceDocs(data || []);
+  }, []);
+  const loadClaims = useCallback(async () => {
+    const { data, error } = await supabase.from("claims").select("*").order("created_at", { ascending: false });
+    if (!error) setClaims(data || []);
+  }, []);
+  const loadClaimNotes = useCallback(async (claimId) => {
+    if (!claimId) { setClaimNotes([]); return; }
+    const { data, error } = await supabase.from("claim_notes").select("*").eq("claim_id", claimId).order("created_at", { ascending: false });
+    if (!error) setClaimNotes(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -4004,6 +4135,39 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, complianceMissing, loadCompanies, loadComplianceDocs]);
+
+  // Probe the Claims & Incidents module (claims + claim_notes tables).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: cErr } = await supabase.from("claims").select("id").limit(1);
+      const { error: nErr } = await supabase.from("claim_notes").select("id").limit(1);
+      if (cancelled) return;
+      if (!cErr && !nErr) { loadClaims(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: CLAIMS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadClaims();
+      else setClaimsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadClaims]);
+
+  // Track the claim open in the modal so the realtime handler (stable channel,
+  // no re-subscribe per claim) can refresh the right notes timeline.
+  const editingClaimIdRef = useRef(null); editingClaimIdRef.current = editingClaimId;
+  useEffect(() => {
+    if (!session || claimsMissing) return;
+    const channel = supabase.channel("claims-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "claims" }, () => loadClaims())
+      .on("postgres_changes", { event: "*", schema: "public", table: "claim_notes" }, () => { if (editingClaimIdRef.current) loadClaimNotes(editingClaimIdRef.current); })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, claimsMissing, loadClaims, loadClaimNotes]);
 
   // Probe the payment_stage column (added after the initial Payments release).
   useEffect(() => {
@@ -4876,7 +5040,53 @@ export default function App() {
     return rows.sort((a, b) => (a.days ?? 0) - (b.days ?? 0));
   }, [complianceDocs, entityName]);
 
-  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0, messages: chatUnread || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length, chatUnread]);
+  // ── Claims derived data: active-claim counts per job / trip (for ⚠ badges) + page metrics ──
+  const claimsActive = useMemo(() => claims.filter(c => CLAIM_ACTIVE(c.status)), [claims]);
+  // Keys are normalized job numbers (normJobNumber) — job rows of one logical
+  // job can differ in case/whitespace, and claims must still match all of them.
+  const claimsByJob = useMemo(() => {
+    const m = {};
+    for (const c of claimsActive) { const k = normJobNumber(c.job_number); if (k) m[k] = (m[k] || 0) + 1; }
+    return m;
+  }, [claimsActive]);
+  const jobByNumber = useMemo(() => {
+    const m = {};
+    for (const j of jobs) { const k = normJobNumber(j.job_number); if (k && !m[k]) m[k] = j; }
+    return m;
+  }, [jobs]);
+  const claimsByTrip = useMemo(() => {
+    // A claim counts against a trip when linked directly (trip_id) or through any
+    // trip its job's rows sit on (split jobs can span several trips — count all).
+    const tripsByJobNumber = {};
+    for (const j of jobs) {
+      const k = normJobNumber(j.job_number);
+      if (k && j.trip_id) (tripsByJobNumber[k] = tripsByJobNumber[k] || new Set()).add(j.trip_id);
+    }
+    const m = {};
+    for (const c of claimsActive) {
+      const tids = new Set(tripsByJobNumber[normJobNumber(c.job_number)] || []);
+      if (c.trip_id) tids.add(c.trip_id);
+      for (const tid of tids) m[tid] = (m[tid] || 0) + 1;
+    }
+    return m;
+  }, [claimsActive, jobs]);
+  const claimMetrics = useMemo(() => {
+    const year = new Date().getFullYear();
+    let open = 0, investigating = 0, resolvedYtd = 0, claimed = 0, paid = 0, closeDays = 0, closed = 0;
+    for (const c of claims) {
+      if (c.status === "open") open++;
+      if (c.status === "investigating") investigating++;
+      if (c.status === "resolved" && (c.closed_date || "").startsWith(String(year))) resolvedYtd++;
+      claimed += numv(c.claimed_amount); paid += numv(c.paid_amount);
+      if (!CLAIM_ACTIVE(c.status) && c.closed_date && c.incident_date) {
+        const d = Math.round((new Date(c.closed_date) - new Date(c.incident_date)) / ONE_DAY);
+        if (d >= 0) { closeDays += d; closed++; }
+      }
+    }
+    return { open, investigating, resolvedYtd, claimed, paid, avgClose: closed ? Math.round(closeDays / closed) : null };
+  }, [claims]);
+
+  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0, claims: claimsActive.length || 0, messages: chatUnread || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length, claimsActive.length, chatUnread]);
 
   // Team-chat unread badge while the Messages section is closed. Realtime rows
   // respect RLS, so only channels visible to this user arrive here. When the
@@ -5772,6 +5982,114 @@ export default function App() {
     if (error) { window.alert(error.message); return; }
     if (data?.id) await uploadComplianceDoc(file, { id: data.id });
     loadComplianceDocs();
+  }
+
+  // ── Claims & Incidents handlers ──
+  function openAddClaim(prefill = {}) {
+    setEditingClaimId(null);
+    setClaimForm({ ...EMPTY_CLAIM, incident_date: today(), ...prefill, trip_id: prefill.trip_id ? String(prefill.trip_id) : "" });
+    setClaimNotes([]); setClaimNoteInput(""); setClaimJobSearch("");
+    setShowClaimModal(true);
+  }
+  function openEditClaim(c) {
+    setEditingClaimId(c.id);
+    setClaimForm({
+      job_number:c.job_number||"", trip_id:c.trip_id ? String(c.trip_id) : "", client_name:c.client_name||"",
+      incident_type:c.incident_type||"damage", description:c.description||"", incident_date:c.incident_date||"",
+      status:c.status||"open", assigned_to:c.assigned_to||"", claimed_amount:c.claimed_amount ?? "", paid_amount:c.paid_amount ?? "",
+      resolution_type:c.resolution_type||"", closed_date:c.closed_date||"",
+    });
+    setClaimNotes([]); setClaimNoteInput(""); setClaimJobSearch("");
+    loadClaimNotes(c.id);
+    setShowClaimModal(true);
+  }
+  async function saveClaim() {
+    const f = claimForm;
+    if (!f.incident_type || !f.description.trim()) { window.alert("Complete the incident type and description."); return; }
+    setClaimSaving(true);
+    const prev = editingClaimId ? claims.find(c => c.id === editingClaimId) : null;
+    // Closing statuses auto-stamp the closed date so "days to close" always
+    // computes; reopening clears it so metrics don't reuse a stale close.
+    const closedDate = !CLAIM_ACTIVE(f.status) ? (f.closed_date || today()) : null;
+    const payload = {
+      job_number: f.job_number || null, trip_id: f.trip_id ? Number(f.trip_id) : null, client_name: f.client_name || null,
+      incident_type: f.incident_type, description: f.description.trim(), incident_date: f.incident_date || null,
+      status: f.status, assigned_to: f.assigned_to || null,
+      claimed_amount: f.claimed_amount === "" ? null : Number(f.claimed_amount),
+      paid_amount: f.paid_amount === "" ? null : Number(f.paid_amount),
+      resolution_type: f.resolution_type || null, closed_date: closedDate,
+    };
+    let error = null, claimId = editingClaimId;
+    if (editingClaimId) ({ error } = await supabase.from("claims").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingClaimId));
+    else {
+      const { data, error: insErr } = await supabase.from("claims").insert([{ ...payload, created_by: userEmail }]).select("id").single();
+      error = insErr; claimId = data?.id;
+    }
+    if (!error && prev && prev.status !== f.status) {
+      const { error: nErr } = await supabase.from("claim_notes").insert([{ claim_id: claimId, note: `Status: ${CLAIM_STATUS[prev.status]?.l || prev.status} → ${CLAIM_STATUS[f.status]?.l || f.status}`, created_by: userEmail }]);
+      if (nErr) console.warn("claim status note not saved:", nErr.message);
+    }
+    setClaimSaving(false);
+    if (error) { window.alert(error.message); return; }
+    if (!CLAIM_ACTIVE(f.status)) setClaimForm(prev2 => ({ ...prev2, closed_date: closedDate }));
+    else setClaimForm(prev2 => ({ ...prev2, closed_date: "" }));
+    loadClaims();
+    if (!editingClaimId && claimId) {
+      // Stay open in edit mode so photos and notes can be attached right away
+      // (only promise that when the user actually has edit rights).
+      setEditingClaimId(claimId); loadClaimNotes(claimId);
+      showToast(can("claims","edit") ? "Claim created — you can attach files and notes now" : "Claim created");
+    } else {
+      loadClaimNotes(claimId);
+      showToast("Claim saved");
+    }
+  }
+  async function deleteClaim(c) {
+    if (!window.confirm(`Delete the claim for job ${c.job_number || "(sin #)"}? Its notes and links are removed too.`)) return;
+    const { error } = await supabase.from("claims").delete().eq("id", c.id);
+    if (error) { window.alert(error.message); return; }
+    setShowClaimModal(false); setEditingClaimId(null); loadClaims();
+  }
+  async function addClaimNote() {
+    const note = claimNoteInput.trim();
+    if (!note || !editingClaimId) return;
+    const { error } = await supabase.from("claim_notes").insert([{ claim_id: editingClaimId, note, created_by: userEmail }]);
+    if (error) { window.alert(error.message); return; }
+    setClaimNoteInput(""); loadClaimNotes(editingClaimId);
+  }
+  async function deleteClaimNote(n) {
+    const { error } = await supabase.from("claim_notes").delete().eq("id", n.id);
+    if (error) { window.alert(error.message); return; }
+    loadClaimNotes(editingClaimId);
+  }
+  // Read the claim's CURRENT attachments from the DB (not from possibly-stale
+  // React state) so two quick uploads/removals never overwrite each other.
+  async function mutateClaimAttachments(claimId, mutate) {
+    const { data, error } = await supabase.from("claims").select("attachments").eq("id", claimId).single();
+    if (error) { window.alert(error.message); return; }
+    const attachments = mutate(Array.isArray(data?.attachments) ? data.attachments : []);
+    const { error: uErr } = await supabase.from("claims").update({ attachments }).eq("id", claimId);
+    if (uErr) { window.alert(uErr.message); return; }
+    loadClaims();
+  }
+  // Upload evidence (photo/PDF) to the claim-docs bucket and append it to the claim's attachments.
+  async function uploadClaimFile(file) {
+    if (!file || !editingClaimId) return;
+    setClaimUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const path = `claim-${editingClaimId}/${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("claim-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) { window.alert("Upload error: " + error.message); setClaimUploading(false); return; }
+      const { data } = supabase.storage.from("claim-docs").getPublicUrl(path);
+      const url = data?.publicUrl || "";
+      await mutateClaimAttachments(editingClaimId, (cur) => [...cur, { url, name: file.name, uploaded_by: userEmail, uploaded_at: new Date().toISOString() }]);
+    } catch (e) { window.alert("Error: " + e.message); }
+    setClaimUploading(false);
+  }
+  async function removeClaimAttachment(att) {
+    if (!editingClaimId || !window.confirm(`Remove attachment "${att.name || "file"}"?`)) return;
+    await mutateClaimAttachments(editingClaimId, (cur) => cur.filter(a => a.url !== att.url));
   }
 
   // ── Trips CRUD ──
@@ -7298,6 +7616,7 @@ export default function App() {
           {page === "payments" && can("payments","create") && !paymentsMissing && !extrasMissing && <Btn onClick={openAddExtraFromPayments}>+ Extra</Btn>}
           {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
           {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
+          {page === "claims" && can("claims","create") && <Btn primary disabled={claimsMissing} onClick={() => openAddClaim()}>+ New claim</Btn>}
           {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario" || page === "calendario_entregas") && (can("jobs","create") || can("dispatching","create") || can("calendario","create") || can("calendario_entregas","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
@@ -8543,7 +8862,7 @@ export default function App() {
                     <tbody>
                       {shown.map(t => { const c = tripCalc(t); return (
                         <tr key={t.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700 }}><button onClick={() => setTripDetailId(t.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button></td>
+                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700, whiteSpace:"nowrap" }}><button onClick={() => setTripDetailId(t.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button>{!claimsMissing && can("claims","view") && <ClaimCountPill count={claimsByTrip[t.id]} />}</td>
                           <td style={{ padding:"12px" }}>{truckById[t.truck_id]?.name || "—"}</td>
                           <td style={{ padding:"12px" }}>{driverById[t.driver_id]?.name || "—"}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{t.departure_date || "—"}</td>
@@ -9297,6 +9616,128 @@ export default function App() {
         );
       })()}
 
+      {/* ───────────────────────── CLAIMS & INCIDENTS ───────────────────────── */}
+      {page === "claims" && (() => {
+        const m = claimMetrics;
+        const th = { padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" };
+        const td = { padding:"11px 12px", fontSize:12.5, verticalAlign:"middle" };
+        const q = claimSearch.trim().toLowerCase();
+        const rows = claims
+          .filter(c => claimTab === "all" || c.status === claimTab)
+          .filter(c => !claimFilterType || c.incident_type === claimFilterType)
+          .filter(c => !claimFilterRes || c.resolution_type === claimFilterRes)
+          .filter(c => !claimFilterFrom || (c.incident_date || "") >= claimFilterFrom)
+          .filter(c => !claimFilterTo || (c.incident_date || "9999") <= claimFilterTo)
+          .filter(c => !q || [c.job_number, c.client_name, c.description, c.assigned_to].join(" ").toLowerCase().includes(q));
+        // Clamp like Pager does, so deleting the last row of the last page never strands the view.
+        const pageCur = Math.min(claimsPage, Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1));
+        const pageRows = rows.slice(pageCur * PAGE_SIZE, (pageCur + 1) * PAGE_SIZE);
+        // Days a claim has been sitting open (or took to close).
+        const claimAge = (c) => {
+          const from = c.incident_date || (c.created_at || "").slice(0, 10);
+          if (!from) return null;
+          const to = !CLAIM_ACTIVE(c.status) && c.closed_date ? new Date(c.closed_date) : startOfToday();
+          return Math.max(0, Math.round((to - new Date(from)) / ONE_DAY));
+        };
+        const tabs = [["all","All"],["open","Open"],["investigating","Investigating"],["resolved","Resolved"],["denied","Denied"]];
+        return (
+          <>
+            {claimsMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>For Claims & Incidents (claims + follow-up notes), run the setup SQL once in Supabase.</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
+              {[
+                { label:"Open claims", value:m.open, color:"#E24B4A" },
+                { label:"Investigating", value:m.investigating, color:"#EF9F27" },
+                { label:"Resolved this year", value:m.resolvedYtd, color:"#1A8A4E" },
+                { label:"Total claimed", value:"$"+Math.round(m.claimed).toLocaleString(), color:"#111" },
+                { label:"Total paid out", value:"$"+Math.round(m.paid).toLocaleString(), color:"#7C3AED" },
+                { label:"Avg days to close", value:m.avgClose ?? "—", color:"#185FA5" },
+              ].map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:20, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
+              {tabs.map(([v,l]) => (
+                <button key={v} onClick={() => { setClaimTab(v); setClaimsPage(0); }} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: claimTab===v?"#fff":"none", color: claimTab===v?"#111":"#888", fontWeight: claimTab===v?600:400, boxShadow: claimTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>
+                  {l}{v === "open" && m.open > 0 ? ` (${m.open})` : ""}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
+              <input style={{ ...inp, width:"auto", minWidth:230, flex:1, maxWidth:340 }} value={claimSearch} onChange={e => { setClaimSearch(e.target.value); setClaimsPage(0); }} placeholder="🔎 Job #, client, description…" />
+              <select value={claimFilterType} onChange={e => { setClaimFilterType(e.target.value); setClaimsPage(0); }} style={{ ...inp, width:"auto", minWidth:150 }}>
+                <option value="">All types</option>
+                {CLAIM_TYPES.map(t => <option key={t.v} value={t.v}>{t.icon} {t.l}</option>)}
+              </select>
+              <select value={claimFilterRes} onChange={e => { setClaimFilterRes(e.target.value); setClaimsPage(0); }} style={{ ...inp, width:"auto", minWidth:150 }}>
+                <option value="">All resolutions</option>
+                {CLAIM_RESOLUTIONS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+              <input style={{ ...inp, width:"auto" }} type="date" value={claimFilterFrom} onChange={e => { setClaimFilterFrom(e.target.value); setClaimsPage(0); }} title="Incident date from" />
+              <span style={{ fontSize:12, color:"#bbb" }}>→</span>
+              <input style={{ ...inp, width:"auto" }} type="date" value={claimFilterTo} onChange={e => { setClaimFilterTo(e.target.value); setClaimsPage(0); }} title="Incident date to" />
+            </div>
+
+            {claimsMissing ? null : (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Job #","Client","Trip","Type","Incident","Status","Claimed","Paid","Assigned","Days",""].map((h,i) => <th key={i} style={th}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {pageRows.length === 0 ? (
+                        <tr><td colSpan={11} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No claims in this filter. Report one with “+ New claim”.</td></tr>
+                      ) : pageRows.map(c => {
+                        const tMeta = claimTypeMeta(c.incident_type);
+                        const trip = c.trip_id ? tripById[c.trip_id] : null;
+                        const age = claimAge(c);
+                        return (
+                          <tr key={c.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                            <td style={{ ...td, fontFamily:"monospace", fontWeight:700 }}>
+                              {c.job_number
+                                ? (() => { const j = jobByNumber[normJobNumber(c.job_number)]; return j
+                                    ? <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{c.job_number}</button>
+                                    : c.job_number; })()
+                                : "—"}
+                            </td>
+                            <td style={{ ...td, fontWeight:600 }}>{c.client_name || "—"}</td>
+                            <td style={{ ...td, fontFamily:"monospace", fontSize:12 }}>{trip ? (trip.trip_number || "#"+trip.id) : "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{tMeta.icon} {tMeta.l}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{c.incident_date || "—"}</td>
+                            <td style={td}><ClaimBadge status={c.status} /></td>
+                            <td style={{ ...td, whiteSpace:"nowrap", fontWeight:600 }}>{c.claimed_amount != null ? "$"+Math.round(numv(c.claimed_amount)).toLocaleString() : "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap", color:"#7C3AED", fontWeight:600 }}>{c.paid_amount != null ? "$"+Math.round(numv(c.paid_amount)).toLocaleString() : "—"}</td>
+                            <td style={td}>{c.assigned_to || "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap", color: CLAIM_ACTIVE(c.status) && age > 14 ? "#A32D2D" : "#888" }}>{age != null ? `${age}d` : "—"}{!CLAIM_ACTIVE(c.status) && c.closed_date ? " ✓" : ""}</td>
+                            <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap" }}>
+                              <Btn onClick={() => openEditClaim(c)} style={{ padding:"4px 10px", fontSize:12 }}>Open</Btn>
+                              {can("claims","edit") && <Btn danger onClick={() => deleteClaim(c)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
+                  <Pager page={pageCur} total={rows.length} onPage={setClaimsPage} unit="claim(s)" />
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+
       {/* ───────────────────────── SETTINGS ───────────────────────── */}
       {page === "settings" && (
         <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:560 }}>
@@ -9733,6 +10174,7 @@ export default function App() {
                         style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>
                         {g.job_number || "(ver)"}
                       </button>
+                      {!claimsMissing && can("claims","view") && <ClaimCountPill count={claimsByJob[normJobNumber(g.job_number)]} />}
                     </td>
                     <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
                     <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
@@ -10125,8 +10567,24 @@ export default function App() {
             items.sort((a, b) => a.sort.localeCompare(b.sort));
             const setJE = (fields) => setJobEventForm(f => ({ ...f, ...fields }));
             const meta = jobEventForm ? jobEventMeta(jobEventForm.event_type) : null;
+            const jobClaims = (!claimsMissing && can("claims","view") && jobDetail.job_number) ? claims.filter(cl => normJobNumber(cl.job_number) === normJobNumber(jobDetail.job_number)) : [];
             return (
               <>
+                {(jobClaims.length > 0 || (!claimsMissing && can("claims","create"))) && (
+                  <>
+                    <SectionLabel>Claims {jobClaims.length ? `(${jobClaims.length})` : ""}</SectionLabel>
+                    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                      {jobClaims.map(cl => (
+                        <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel="Ver claim →" />
+                      ))}
+                      {can("claims","create") && (
+                        <div>
+                          <Btn onClick={() => openAddClaim({ job_number: jobDetail.job_number || "", client_name: jobDetail.customer || "", trip_id: jobDetail.trip_id || "" })} style={{ padding:"4px 11px", fontSize:12 }}>⚠️ Report claim</Btn>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
                 <SectionLabel>Timeline {items.length ? `(${items.length})` : ""}</SectionLabel>
                 {jobEventsMissing && (
                   <div style={{ fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
@@ -10803,8 +11261,141 @@ export default function App() {
         </Modal>
       )}
 
+      {showClaimModal && (() => {
+        const f = claimForm;
+        const set = (fields) => setClaimForm(prev => ({ ...prev, ...fields }));
+        const canEdit = can("claims","edit") || (!editingClaimId && can("claims","create"));
+        const rec = editingClaimId ? claims.find(c => c.id === editingClaimId) : null;
+        const attachments = Array.isArray(rec?.attachments) ? rec.attachments : [];
+        // Unique jobs for the job picker (newest first), narrowed by the search box.
+        const seen = new Set(); const jobOpts = [];
+        for (const j of jobs) { const k = j.job_number || ""; if (!k || seen.has(k)) continue; seen.add(k); jobOpts.push(j); }
+        const jq = claimJobSearch.trim().toLowerCase();
+        const jobOptsF = (jq ? jobOpts.filter(j => [j.job_number, j.customer].join(" ").toLowerCase().includes(jq)) : jobOpts).slice(0, 60);
+        const pickJob = (jn) => {
+          // Re-derive client/trip from the newly picked job so switching jobs
+          // never keeps the previous job's autofill. Clearing the job keeps
+          // whatever the user typed.
+          const j = jobOpts.find(x => x.job_number === jn);
+          if (!jn) { set({ job_number: "" }); return; }
+          set({ job_number: jn, client_name: j?.customer || f.client_name || "", trip_id: j?.trip_id ? String(j.trip_id) : "" });
+        };
+        const tm = claimTypeMeta(f.incident_type);
+        return (
+          <Modal title={editingClaimId ? `${tm.icon} Claim · ${f.job_number || "no job"}` : "⚠️ Report claim / incident"}
+            onClose={() => { setShowClaimModal(false); setEditingClaimId(null); }}
+            footer={<>
+              {editingClaimId && rec && can("claims","edit") && <Btn danger onClick={() => deleteClaim(rec)}>🗑 Delete claim</Btn>}
+              <Btn onClick={() => { setShowClaimModal(false); setEditingClaimId(null); }}>Close</Btn>
+              {canEdit && <Btn primary disabled={claimSaving} onClick={saveClaim}>{claimSaving ? "Saving..." : editingClaimId ? "Save changes" : "Create claim"}</Btn>}
+            </>}>
+            {editingClaimId && (
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+                <ClaimBadge status={f.status} />
+                <span style={{ fontSize:12.5, color:"#888" }}>{tm.icon} {tm.l}{f.client_name ? ` · ${f.client_name}` : ""}{f.incident_date ? ` · ${f.incident_date}` : ""}</span>
+              </div>
+            )}
+            <SectionLabel>Incident data</SectionLabel>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <Field label="Job">
+                <input style={{ ...inp, marginBottom:6 }} value={claimJobSearch} onChange={e => setClaimJobSearch(e.target.value)} placeholder="🔎 Search job # / client" disabled={!canEdit} />
+                <select style={inp} value={f.job_number} onChange={e => pickJob(e.target.value)} disabled={!canEdit}>
+                  <option value="">— No job linked —</option>
+                  {f.job_number && !jobOptsF.some(j => j.job_number === f.job_number) && <option value={f.job_number}>{f.job_number}</option>}
+                  {jobOptsF.map(j => <option key={j.id} value={j.job_number}>{j.job_number} · {j.customer || "—"}</option>)}
+                </select>
+              </Field>
+              <Field label="Trip (opcional)">
+                <select style={inp} value={f.trip_id} onChange={e => set({ trip_id: e.target.value })} disabled={!canEdit}>
+                  <option value="">— No trip —</option>
+                  {trips.map(t => <option key={t.id} value={t.id}>{t.trip_number || "#"+t.id}{t.departure_date ? ` · ${t.departure_date}` : ""}</option>)}
+                </select>
+              </Field>
+              <Field label="Client"><input style={inp} value={f.client_name} onChange={e => set({ client_name:e.target.value })} placeholder="Client name" disabled={!canEdit} /></Field>
+              <Field label="Incident date *"><input style={inp} type="date" value={f.incident_date} onChange={e => set({ incident_date:e.target.value })} disabled={!canEdit} /></Field>
+              <Field label="Incident type *">
+                <select style={inp} value={f.incident_type} onChange={e => set({ incident_type:e.target.value })} disabled={!canEdit}>
+                  {CLAIM_TYPES.map(t => <option key={t.v} value={t.v}>{t.icon} {t.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Assigned to">
+                <input style={inp} value={f.assigned_to} onChange={e => set({ assigned_to:e.target.value })} placeholder="Who follows this up" list="claim-assignees" disabled={!canEdit} />
+                <datalist id="claim-assignees">{employees.map(e2 => <option key={e2.id} value={e2.name} />)}</datalist>
+              </Field>
+              <Field label="Description *" full>
+                <textarea style={{ ...inp, minHeight:70, resize:"vertical", fontFamily:"inherit" }} value={f.description} onChange={e => set({ description:e.target.value })} placeholder="What happened, which items, where…" disabled={!canEdit} />
+              </Field>
+            </div>
+            <SectionLabel>Status & resolution</SectionLabel>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <Field label="Status">
+                <select style={inp} value={f.status} onChange={e => set({ status:e.target.value })} disabled={!canEdit}>
+                  {Object.entries(CLAIM_STATUS).map(([v,c]) => <option key={v} value={v}>{c.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Resolution">
+                <select style={inp} value={f.resolution_type} onChange={e => set({ resolution_type:e.target.value })} disabled={!canEdit}>
+                  <option value="">— Sin resolución —</option>
+                  {CLAIM_RESOLUTIONS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </Field>
+              <Field label="Claimed amount ($)"><input style={inp} type="number" min="0" step="0.01" value={f.claimed_amount} onChange={e => set({ claimed_amount:e.target.value })} placeholder="0.00" disabled={!canEdit} /></Field>
+              <Field label="Paid / settled ($)"><input style={inp} type="number" min="0" step="0.01" value={f.paid_amount} onChange={e => set({ paid_amount:e.target.value })} placeholder="0.00" disabled={!canEdit} /></Field>
+              <Field label="Closed date"><input style={inp} type="date" value={f.closed_date} onChange={e => set({ closed_date:e.target.value })} disabled={!canEdit} /></Field>
+            </div>
+            {editingClaimId ? (
+              <>
+                <SectionLabel>Evidence {attachments.length ? `(${attachments.length})` : ""}</SectionLabel>
+                {attachments.length > 0 && (
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))", gap:8, marginBottom:4 }}>
+                    {attachments.map((a, i) => {
+                      const isPdf = (a.url || "").toLowerCase().includes(".pdf");
+                      return (
+                        <div key={i} style={{ border:"1px solid #efefef", borderRadius:10, padding:6, background:"#fafafa", position:"relative" }}>
+                          <a href={a.url} target="_blank" rel="noreferrer" style={{ textDecoration:"none", color:"#185FA5", display:"block", textAlign:"center" }}>
+                            {isPdf ? <span style={{ fontSize:30 }}>📄</span> : <img src={a.url} alt="" style={{ width:"100%", height:64, objectFit:"cover", borderRadius:6 }} />}
+                            <div style={{ fontSize:10.5, marginTop:4, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{a.name || "file"}</div>
+                          </a>
+                          {canEdit && <button onClick={() => removeClaimAttachment(a)} title="Remove" style={{ position:"absolute", top:2, right:4, border:"none", background:"none", cursor:"pointer", color:"#bbb", fontSize:14 }}>×</button>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {canEdit && <PayPhotoBox onFile={uploadClaimFile} uploading={claimUploading} label="Add photo / document" />}
+
+                <SectionLabel>Follow-up {claimNotes.length ? `(${claimNotes.length})` : ""}</SectionLabel>
+                {canEdit && (
+                  <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                    <input style={inp} value={claimNoteInput} onChange={e => setClaimNoteInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") addClaimNote(); }} placeholder="Ej: se contactó al cliente, el seguro respondió…" />
+                    <Btn primary disabled={!claimNoteInput.trim()} onClick={addClaimNote} style={{ whiteSpace:"nowrap" }}>+ Add note</Btn>
+                  </div>
+                )}
+                {claimNotes.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No notes yet.</div>
+                  : <div style={{ display:"flex", flexDirection:"column" }}>
+                      {claimNotes.map((n, i) => (
+                        <div key={n.id} style={{ display:"flex", gap:10, padding:"8px 0", borderBottom: i < claimNotes.length-1 ? "1px solid #f4f4f4" : "none" }}>
+                          <div style={{ fontSize:14 }}>💬</div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:13 }}>{n.note}</div>
+                            <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{fmtTs(n.created_at)}{n.created_by ? ` · ${n.created_by}` : ""}</div>
+                          </div>
+                          {canEdit && <button onClick={() => deleteClaimNote(n)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
+                        </div>
+                      ))}
+                    </div>}
+                <AuditInfo rec={rec} />
+              </>
+            ) : (
+              <div style={{ fontSize:12, color:"#999", marginTop:12 }}>💡 Save the claim first to attach photos/documents and follow-up notes.</div>
+            )}
+          </Modal>
+        );
+      })()}
+
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -11945,6 +12536,30 @@ export default function App() {
 
             {/* Read-only delivery progress indicator (never changes trip status) */}
             {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>📦 Delivered: <b style={{ color: c.allDelivered ? "#3B6D11" : "#111" }}>{c.delivered}/{c.count}</b>{c.delivered < c.count ? ` · ${c.count - c.delivered} pending` : ""}</div>}
+
+            {/* Claims on this trip (linked directly or through one of its jobs) */}
+            {!claimsMissing && can("claims","view") && (() => {
+              const tripJobNumbers = new Set(c.jobsIn.map(j => normJobNumber(j.job_number)).filter(Boolean));
+              const tripClaims = claims.filter(cl => cl.trip_id === t.id || tripJobNumbers.has(normJobNumber(cl.job_number)));
+              if (tripClaims.length === 0 && !can("claims","create")) return null;
+              const hasActive = tripClaims.some(cl => CLAIM_ACTIVE(cl.status));
+              return (
+                <div style={{ background: hasActive ? "#FCEBEB" : "#fafafa", border:`1px solid ${hasActive ? "#E24B4A" : "#efefef"}`, borderRadius:9, padding:"9px 12px", margin:"8px 0" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <b style={{ fontSize:12.5, color: hasActive ? "#A32D2D" : "#666" }}>⚠️ Claims{tripClaims.length ? ` (${tripClaims.length})` : ""}</b>
+                    <span style={{ flex:1 }} />
+                    {can("claims","create") && <Btn onClick={() => openAddClaim({ trip_id: t.id })} style={{ padding:"4px 10px", fontSize:11.5 }}>+ Report claim</Btn>}
+                  </div>
+                  {tripClaims.length > 0 && (
+                    <div style={{ display:"flex", flexDirection:"column", gap:4, marginTop:6 }}>
+                      {tripClaims.map(cl => (
+                        <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel={`${cl.job_number || "(sin job)"}${cl.client_name ? ` · ${cl.client_name}` : ""}`} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Non-blocking suggestion — trip stays as-is until the dispatcher acts */}
             {c.allDelivered && TRIP_ACTIVE(t.status) && (

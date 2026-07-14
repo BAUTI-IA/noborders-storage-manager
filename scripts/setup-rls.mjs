@@ -41,9 +41,12 @@ const MAP = {
   payment_accounts:     { view: ["payments"], owner: "payments" },
   companies:            { view: ["compliance"], owner: "compliance" },
   compliance_documents: { view: ["compliance"], owner: "compliance" },
+  claims:               { view: ["claims", "trips", "jobs"], owner: "claims" },
+  // Adding a follow-up note to an existing claim is an edit-level action, not a create-level one.
+  claim_notes:          { view: ["claims"], owner: "claims", insertLevel: "edit" },
 };
 
-function policiesFor(table, { view, owner }) {
+function policiesFor(table, { view, owner, insertLevel = "create" }) {
   const viewExpr = view.map((s) => `public.has_perm('${s}','view')`).join(" or ");
   return `
 -- ${table}
@@ -57,7 +60,7 @@ drop policy if exists ${table}_del on public.${table};
 create policy ${table}_sel on public.${table} for select to authenticated
   using ( ${viewExpr} );
 create policy ${table}_ins on public.${table} for insert to authenticated
-  with check ( public.has_perm('${owner}','create') );
+  with check ( public.has_perm('${owner}','${insertLevel}') );
 create policy ${table}_upd on public.${table} for update to authenticated
   using ( public.has_perm('${owner}','edit') ) with check ( public.has_perm('${owner}','edit') );
 create policy ${table}_del on public.${table} for delete to authenticated
