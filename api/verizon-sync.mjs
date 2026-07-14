@@ -94,7 +94,7 @@ export default async function handler(req, res) {
     // Full fleet as Reveal sees it.
     const vehicles = (await vzGet("/cmv/v1/vehicles", token)) || [];
     if (!Array.isArray(vehicles) || vehicles.length === 0) {
-      res.status(200).json({ ok: true, synced: 0, note: "Verizon no devolvió vehículos para esta cuenta." });
+      res.status(200).json({ ok: true, synced: 0, note: "Verizon no devolvió vehículos para esta cuenta (¿el usuario de API tiene acceso a los vehículos en Reveal?)." });
       return;
     }
 
@@ -122,7 +122,7 @@ export default async function handler(req, res) {
       else unmatched.push(t.name);
     }
 
-    let synced = 0;
+    let synced = 0, noGps = 0;
     const errors = [];
     for (const { truck, vehicle } of matches) {
       try {
@@ -131,7 +131,7 @@ export default async function handler(req, res) {
           vzGet(`/rad/v1/vehicles/${num}/location`, token),
           vzGet(`/rad/v1/vehicles/${num}/status`, token).catch(() => null),
         ]);
-        if (!loc || loc.Latitude == null || loc.Longitude == null) continue;
+        if (!loc || loc.Latitude == null || loc.Longitude == null) { noGps++; continue; }
         const payload = {
           last_lat: Number(loc.Latitude),
           last_lng: Number(loc.Longitude),
@@ -152,7 +152,10 @@ export default async function handler(req, res) {
       ok: true,
       synced,
       matched: matches.length,
+      noGps,
       vehiclesInVerizon: vehicles.length,
+      // Names/numbers as Reveal reports them, to help link trucks that didn't match.
+      verizonVehicles: vehicles.slice(0, 25).map(v => ({ number: v.VehicleNumber, name: v.Name, vin: v.VIN })),
       unmatched,
       errors: errors.length ? errors : undefined,
     });

@@ -6174,8 +6174,13 @@ export default function App() {
         setVzNote(silent ? null : "Verizon API sin configurar (faltan las credenciales en Vercel).");
       } else if (data?.ok) {
         vzLastSync.current = Date.now();
-        const extra = data.unmatched?.length ? ` · sin match: ${data.unmatched.join(", ")}` : "";
-        setVzNote(`Verizon: ${data.synced} camión(es) actualizados${extra}`);
+        const bits = [`Verizon: ${data.synced} camión(es) actualizados`];
+        if (data.note) bits.push(data.note);
+        if (data.vehiclesInVerizon != null) bits.push(`${data.vehiclesInVerizon} vehículos en Verizon`);
+        if (data.noGps) bits.push(`${data.noGps} sin GPS reportado`);
+        if (data.unmatched?.length) bits.push(`sin match: ${data.unmatched.join(", ")}`);
+        if (data.errors?.length) bits.push(data.errors[0]);
+        setVzNote(bits.join(" · "));
         if (data.synced > 0) loadTrucks();
         if (!silent) showToast(`Verizon: ${data.synced} ubicación(es) actualizadas`);
       } else {
