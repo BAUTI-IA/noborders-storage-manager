@@ -19,10 +19,13 @@
 // truck form's "Verizon vehicle" dropdown).
 import { createClient } from "@supabase/supabase-js";
 
-const BASE = (process.env.VERIZON_BASE_URL || "https://fim.api.us.fleetmatics.com").replace(/\/+$/, "");
-const APP_ID = process.env.VERIZON_APP_ID;
-const USER = process.env.VERIZON_USERNAME;
-const PASS = process.env.VERIZON_PASSWORD;
+// Values pasted into Vercel often arrive with stray whitespace, wrapping
+// quotes or a "mailto:" prefix (Gmail renders the REST username as a link).
+const clean = (s) => (s || "").trim().replace(/^["']+|["']+$/g, "").replace(/^mailto:/i, "").trim();
+const BASE = clean(process.env.VERIZON_BASE_URL || "https://fim.api.us.fleetmatics.com").replace(/\/+$/, "");
+const APP_ID = clean(process.env.VERIZON_APP_ID);
+const USER = clean(process.env.VERIZON_USERNAME);
+const PASS = clean(process.env.VERIZON_PASSWORD);
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -40,9 +43,10 @@ async function getToken() {
       Accept: "text/plain",
     },
   });
-  if (r.status === 401 || r.status === 403) throw new Error("Verizon rechazó las credenciales (usuario/contraseña de Reveal).");
-  if (!r.ok) throw new Error(`Verizon token: HTTP ${r.status}`);
-  const token = (await r.text()).trim();
+  const bodyText = await r.text().catch(() => "");
+  if (r.status === 401 || r.status === 403) throw new Error(`Verizon rechazó las credenciales (usuario/contraseña)${bodyText ? " · " + bodyText.slice(0, 160) : ""}`);
+  if (!r.ok) throw new Error(`Verizon token: HTTP ${r.status}${bodyText ? " · " + bodyText.slice(0, 160) : ""}`);
+  const token = bodyText.trim();
   if (!token) throw new Error("Verizon devolvió un token vacío.");
   return token;
 }
@@ -413,6 +417,16 @@ export default async function handler(req, res) {
   const wantDebug = req.query?.debug != null;
   const listOnly = req.query?.list != null;
   const debug = wantDebug ? {} : null;
+  if (debug) {
+    // Sanity check of the pasted credentials (never the secret itself).
+    debug.creds = {
+      user: USER ? `${USER.slice(0, 5)}…${USER.slice(-14)} (largo ${USER.length})` : "(vacío)",
+      userConEspacios: /\s/.test(USER),
+      passLargo: PASS.length,
+      passConEspacios: /\s/.test(PASS),
+      appIdLargo: APP_ID.length,
+    };
+  }
 
   try {
     const token = await getToken();
