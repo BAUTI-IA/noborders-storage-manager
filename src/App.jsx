@@ -3446,6 +3446,7 @@ export default function App() {
   const [locErr, setLocErr] = useState(null);
   // Verizon Connect sync: busy flag + last result note shown under the live map.
   const [vzBusy, setVzBusy] = useState(false);
+  const vzBusyRef = useRef(false); // in-flight guard: el setInterval del auto-sync captura closures viejas de vzBusy
   const [vzNote, setVzNote] = useState(null);
   const vzLastSync = useRef(0); // epoch ms of last auto-sync, to throttle
   const [vzVehList, setVzVehList] = useState(null); // Verizon fleet for the truck-form dropdown: null=loading not attempted, "none"=unavailable, array=ok
@@ -6101,9 +6102,10 @@ export default function App() {
   }
 
   // ── Trucks CRUD ──
-  function openAddTruck() { setEditingTruckId(null); setTruckForm(EMPTY_TRUCK); setShowTruckModal(true); }
+  function openAddTruck() { setEditingTruckId(null); setTruckForm(EMPTY_TRUCK); if (vzVehList === "none") setVzVehList(null); setShowTruckModal(true); }
   function openEditTruck(t) {
     setEditingTruckId(t.id);
+    if (vzVehList === "none") setVzVehList(null); // reintentar la carga de la flota Verizon si falló antes
     setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false,
       year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "", verizon_vehicle_id: t.verizon_vehicle_id || "" });
     setShowTruckModal(true);
@@ -6166,7 +6168,8 @@ export default function App() {
   }
   // Pull live GPS positions from Verizon Connect (serverless proxy holds the creds).
   async function syncVerizon({ silent = false } = {}) {
-    if (vzBusy) return;
+    if (vzBusyRef.current) return;
+    vzBusyRef.current = true;
     setVzBusy(true);
     try {
       const r = await fetch("/api/verizon-sync", { method: "POST" });
@@ -6190,16 +6193,17 @@ export default function App() {
     } catch {
       if (!silent) setVzNote("No se pudo conectar con /api/verizon-sync (¿estás en el deploy de Vercel?).");
     }
+    vzBusyRef.current = false;
     setVzBusy(false);
   }
   // Auto-refresh from Verizon while the live map is open (at most every 2 min).
   useEffect(() => {
-    if (!session || tripsMissing || page !== "trips" || tripsView !== "live") return;
+    if (!session || tripsMissing || truckLocMissing || page !== "trips" || tripsView !== "live") return;
     const tick = () => { if (Date.now() - vzLastSync.current > 115000) syncVerizon({ silent: true }); };
     tick();
     const id = setInterval(tick, 120000);
     return () => clearInterval(id);
-  }, [session, tripsMissing, page, tripsView]);
+  }, [session, tripsMissing, truckLocMissing, page, tripsView]);
   // Load the Verizon fleet once for the truck form's link dropdown.
   useEffect(() => {
     if (!showTruckModal || vzVehList !== null) return;
@@ -12019,14 +12023,19 @@ export default function App() {
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
             </Field>
             <Field label="Verizon vehicle" full>
-              {Array.isArray(vzVehList) ? (
+              {truckLocMissing ? (
+                <div style={{ fontSize:12, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"8px 11px", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                  <span>Para vincular con Verizon, corré primero el setup SQL (agrega las columnas de ubicación).</span>
+                  <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:6, padding:"3px 9px", cursor:"pointer", fontSize:11 }}>View SQL</button>
+                </div>
+              ) : Array.isArray(vzVehList) ? (
                 <select style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))}>
                   <option value="">— Auto (por nombre / VIN) —</option>
-                  {truckForm.verizon_vehicle_id && !vzVehList.some(v => (v.id || v.number || v.name) === truckForm.verizon_vehicle_id) && (
+                  {truckForm.verizon_vehicle_id && !vzVehList.some(v => String(v.id ?? v.number ?? v.name) === truckForm.verizon_vehicle_id) && (
                     <option value={truckForm.verizon_vehicle_id}>{truckForm.verizon_vehicle_id} (actual)</option>
                   )}
                   {vzVehList.map(v => {
-                    const val = v.id || v.number || v.name;
+                    const val = String(v.id ?? v.number ?? v.name);
                     return <option key={val} value={val}>{[v.name || v.number, v.vin].filter(Boolean).join(" · ")}</option>;
                   })}
                 </select>

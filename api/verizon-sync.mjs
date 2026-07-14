@@ -108,16 +108,20 @@ function extractLoc(o) {
   const cands = [o, o.location, o.lastKnownLocation, o.lastLocation, o.currentLocation, o.position, o.gps, o.Location, o.data, o.geolocation, o.coordinates, o.point];
   for (const c of cands) {
     if (!c || typeof c !== "object") continue;
-    const lat = Number(pick(c, ["latitude", "Latitude", "lat"]));
-    const lng = Number(pick(c, ["longitude", "Longitude", "lng", "lon"]));
-    if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
+    // Exigir AMBOS ejes presentes: pick() → null y Number(null) === 0, así que
+    // un payload con un solo eje fabricaría (lat, 0) en el meridiano de Greenwich.
+    const latRaw = pick(c, ["latitude", "Latitude", "lat"]);
+    const lngRaw = pick(c, ["longitude", "Longitude", "lng", "lon", "long"]);
+    if (latRaw == null || lngRaw == null) continue;
+    const lat = Number(latRaw), lng = Number(lngRaw);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) continue;
     const addr = c.address ?? c.Address ?? o.address;
     const address = typeof addr === "string" ? addr : addr && typeof addr === "object"
       ? [pickStr(addr, ["addressLine1", "AddressLine1", "street", "line1"]), pickStr(addr, ["locality", "Locality", "city"]), pickStr(addr, ["administrativeArea", "AdministrativeArea", "state", "region"])].filter(Boolean).join(", ") || null
       : null;
     return {
       lat, lng, address,
-      at: pickStr(c, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "time", "dateTime", "lastUpdated", "recordedAt", "deviceTimestamp", "eventDateTime"]) || pickStr(o, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "lastUpdated"]),
+      at: pick(c, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "time", "dateTime", "lastUpdated", "recordedAt", "deviceTimestamp", "eventDateTime"]) ?? pick(o, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "lastUpdated"]),
       speed: pick(c, ["speed", "Speed"]) ?? pick(o, ["speed", "Speed"]),
       state: pickStr(c, ["displayState", "DisplayState", "movementStatus", "state", "status"]) || pickStr(o, ["displayState", "DisplayState", "movementStatus", "state", "status"]),
     };
@@ -125,12 +129,21 @@ function extractLoc(o) {
   return null;
 }
 
-// Reveal timestamps come as UTC but often without the trailing "Z".
+// Reveal timestamps come as UTC but often without the trailing "Z"; telemetry
+// payloads may use epoch millis/seconds. Missing/unparseable → null, NEVER
+// "now": fabricating the timestamp re-stamps stale GPS fixes as fresh on every
+// auto-sync (the UI renders null as "not updated", which is honest).
 function toIso(u) {
-  if (!u) return new Date().toISOString();
+  if (u == null || u === "") return null;
+  if (typeof u === "number" || /^\d{9,13}$/.test(String(u).trim())) {
+    const n = Number(u);
+    const ms = n > 1e12 ? n : n > 1e9 ? n * 1000 : NaN;
+    const d = new Date(ms);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
   const s = u.toString();
   const d = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s + "Z");
-  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 // moving / stopped for the live map (idle counts as stopped, we only have 2 states).
@@ -160,31 +173,43 @@ async function updateTruck(truck, loc, backfillId) {
 
 // Match CRM trucks to Verizon vehicles: stored id/number, VIN, exact name,
 // prefix ("BT001" ↔ "BT001 - HINO Leon") and code ("BT013" ↔ "BT013LD-1750CF").
+// Prefix/code are fuzzy tiers: on key collisions (two vehicles sharing "BT003")
+// we refuse to guess, and fuzzy matches are never persisted as the permanent
+// link (a wrong backfill would survive renames and win every future lookup).
+const AMBIGUOUS = Symbol("ambiguous");
 function matchTrucks(trucks, vehicles) {
   const byId = new Map(), byNumber = new Map(), byVin = new Map(), byName = new Map(), byPrefix = new Map(), byCode = new Map();
+  const setUnique = (map, key, v) => {
+    if (!key) return;
+    if (!map.has(key)) map.set(key, v);
+    else if (map.get(key) !== v) map.set(key, AMBIGUOUS);
+  };
   for (const v of vehicles) {
     if (v.id != null) byId.set(norm(v.id), v);
     for (const k of [v.number, v.name]) {
       if (k == null) continue;
-      if (k === v.number && !byNumber.has(norm(k))) byNumber.set(norm(k), v);
-      if (!byPrefix.has(prefix(k))) byPrefix.set(prefix(k), v);
-      const c = codeOf(k);
-      if (c && !byCode.has(c)) byCode.set(c, v);
+      if (k === v.number) setUnique(byNumber, norm(k), v);
+      setUnique(byPrefix, prefix(k), v);
+      setUnique(byCode, codeOf(k), v);
     }
     if (v.vin) byVin.set(norm(v.vin), v);
     if (v.name) byName.set(norm(v.name), v);
   }
+  const get = (map, key) => { const v = map.get(key); return v === AMBIGUOUS ? null : v; };
   const matches = [], unmatched = [];
   for (const t of trucks) {
     const vid = t.verizon_vehicle_id;
-    const v =
-      (vid && (byId.get(norm(vid)) || byNumber.get(norm(vid)) || byName.get(norm(vid)))) ||
+    let fuzzy = false;
+    let v =
+      (vid && (byId.get(norm(vid)) || get(byNumber, norm(vid)) || byName.get(norm(vid)))) ||
       (t.vin && byVin.get(norm(t.vin))) ||
       byName.get(norm(t.name)) ||
-      byNumber.get(norm(t.name)) ||
-      byPrefix.get(prefix(t.name)) ||
-      (codeOf(t.name) ? byCode.get(codeOf(t.name)) : null);
-    if (v) matches.push({ truck: t, vehicle: v });
+      get(byNumber, norm(t.name));
+    if (!v) {
+      v = get(byPrefix, prefix(t.name)) || (codeOf(t.name) ? get(byCode, codeOf(t.name)) : null);
+      fuzzy = !!v;
+    }
+    if (v) matches.push({ truck: t, vehicle: v, fuzzy });
     else unmatched.push(t.name);
   }
   return { matches, unmatched };
@@ -322,23 +347,34 @@ async function locByTemplate(tpl, token, id) {
   return extractLoc(raw) || extractLoc(asList(raw)[0]);
 }
 
-// Try everything against one sample id; report attempts; return working template.
-async function discoverLocTemplate(token, sampleId, attempts) {
+// Try every template against up to 3 sample vehicles; return the working one.
+// Multiple samples matter: a single GPS-less first truck must not hide a valid
+// route from the rest of the fleet. Routes that 404 on one sample are dropped;
+// routes that answered (but without a fix for that vehicle) are retried.
+async function discoverLocTemplate(token, sampleIds, attempts) {
   if (cachedLocTemplate) return cachedLocTemplate;
-  for (const tpl of LOC_GET_TEMPLATES) {
-    try {
-      const raw = await vz(tpl.replace("{id}", encodeURIComponent(sampleId)), token);
-      const loc = extractLoc(raw) || extractLoc(asList(raw)[0]);
-      attempts?.push({
-        path: tpl,
-        result: loc ? "✔ ubicación encontrada"
-          : raw == null ? "404/vacío"
-          : `respondió sin posición · ${JSON.stringify(raw).slice(0, 160)}`,
-      });
-      if (loc) { cachedLocTemplate = tpl; return tpl; }
-    } catch (e) {
-      attempts?.push({ path: tpl, result: e.message.slice(0, 180) });
+  let candidates = [...LOC_GET_TEMPLATES];
+  for (const sampleId of sampleIds.slice(0, 3)) {
+    const alive = [];
+    for (const tpl of candidates) {
+      try {
+        const raw = await vz(tpl.replace("{id}", encodeURIComponent(sampleId)), token);
+        const loc = extractLoc(raw) || extractLoc(asList(raw)[0]);
+        attempts?.push({
+          path: tpl,
+          result: loc ? "✔ ubicación encontrada"
+            : raw == null ? "404/vacío"
+            : `respondió sin posición · ${JSON.stringify(raw).slice(0, 160)}`,
+        });
+        if (loc) { cachedLocTemplate = tpl; return tpl; }
+        if (raw != null) alive.push(tpl);
+      } catch (e) {
+        attempts?.push({ path: tpl, result: e.message.slice(0, 180) });
+        alive.push(tpl);
+      }
     }
+    if (!alive.length) break;
+    candidates = alive;
   }
   return null;
 }
@@ -446,10 +482,13 @@ export default async function handler(req, res) {
     }
 
     // Lightweight mode for the truck form's dropdown: just the fleet list.
+    // Ids go out as strings (the frontend compares them against a text column).
     if (listOnly) {
       res.status(200).json({
         ok: true, api,
-        vehicles: vehicles.map(v => ({ id: v.id, number: v.number, name: v.name, vin: v.vin })),
+        vehicles: vehicles.map(v => ({ id: v.id != null ? String(v.id) : null, number: v.number, name: v.name, vin: v.vin })),
+        errors: errors.length ? errors : undefined,
+        debug: debug || undefined,
       });
       return;
     }
@@ -458,7 +497,14 @@ export default async function handler(req, res) {
       .from("trucks")
       .select("id, name, vin, verizon_vehicle_id")
       .eq("active", true);
-    if (tErr) throw tErr;
+    if (tErr) {
+      // DB without the live-load migration: answer with the fix, not a raw 502.
+      if (/column .* does not exist/i.test(tErr.message || "")) {
+        res.status(200).json({ ok: false, error: "Faltan columnas en la tabla trucks — corré el setup SQL actualizado en Supabase (botón \"View SQL\" en la app).", debug: debug || undefined });
+        return;
+      }
+      throw tErr;
+    }
 
     let synced = 0, noGps = 0;
     let unmatched = [];
@@ -474,8 +520,8 @@ export default async function handler(req, res) {
         // Radar of existing API products (debug only, in parallel).
         if (debug) debug.productProbe = await Promise.all(PRODUCT_PROBES.map(p => probeStatus(token, p)));
 
-        // (a) direct per-item route, discovered on a sample vehicle
-        const tpl = ids.length ? await discoverLocTemplate(token, ids[0], attempts) : null;
+        // (a) direct per-item route, discovered against a few sample vehicles
+        const tpl = ids.length ? await discoverLocTemplate(token, ids, attempts) : null;
         // (b) batch route
         const batch = !tpl && ids.length ? await batchLocations(token, ids, attempts) : null;
         // (c) search body variant that embeds the position
@@ -492,7 +538,7 @@ export default async function handler(req, res) {
           }
         }
 
-        for (const { truck, vehicle } of m.matches) {
+        for (const { truck, vehicle, fuzzy } of m.matches) {
           try {
             let loc = extractLoc(vehicle.raw);
             if (!loc && vehicle.id != null) {
@@ -505,18 +551,18 @@ export default async function handler(req, res) {
               loc = await fetchLegacyLocation(token, code);
             }
             if (!loc) { noGps++; continue; }
-            await updateTruck(truck, loc, vehicle.id || vehicle.number);
+            await updateTruck(truck, loc, fuzzy ? null : (vehicle.id || vehicle.number));
             synced++;
           } catch (e) { errors.push(e?.message || String(e)); }
         }
       } else {
         // Legacy fleet list: locations live in /rad by vehicle number.
-        for (const { truck, vehicle } of m.matches) {
+        for (const { truck, vehicle, fuzzy } of m.matches) {
           try {
             let loc = extractLoc(vehicle.raw);
             if (!loc && vehicle.number != null) loc = await fetchLegacyLocation(token, vehicle.number);
             if (!loc) { noGps++; continue; }
-            await updateTruck(truck, loc, vehicle.number || vehicle.id);
+            await updateTruck(truck, loc, fuzzy ? null : (vehicle.number || vehicle.id));
             synced++;
           } catch (e) { errors.push(e?.message || String(e)); }
         }
