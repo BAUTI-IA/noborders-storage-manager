@@ -246,14 +246,63 @@ const LOC_GET_TEMPLATES = [
   "/locationapi/v1/fleet-items/{id}/location",
   "/gpsapi/v1/fleet-items/{id}/location",
 ];
-// Batch variants: one POST answering for many ids at once.
+// Batch variants: one POST answering for many ids at once. Sibling collections
+// of "fleet-items" ("fleet-item-locations", "fleet-item-metrics") follow the
+// same naming convention the Fleet API already uses.
 const LOC_BATCH_TEMPLATES = [
+  { path: "/fleetapi/v1/fleet-item-locations/search", make: (ids) => ({ fleetItemIds: ids }) },
+  { path: "/fleetapi/v1/fleet-item-locations/search", make: () => ({}) },
+  { path: "/fleetapi/v1/fleet-item-metrics/search", make: (ids) => ({ fleetItemIds: ids }) },
+  { path: "/fleetapi/v1/fleet-item-metrics/search", make: () => ({}) },
+  { path: "/fleetapi/v1/fleet-item-statuses/search", make: () => ({}) },
   { path: "/fleetapi/v1/fleet-items/locations/search", make: (ids) => ({ fleetItemIds: ids }) },
   { path: "/fleetapi/v1/locations/search", make: (ids) => ({ fleetItemIds: ids }) },
   { path: "/fleetapi/v1/fleet-items/metrics/search", make: (ids) => ({ fleetItemIds: ids }) },
   { path: "/fleetapi/v1/metrics/search", make: (ids) => ({ fleetItemIds: ids, metrics: ["LOCATION", "SPEED"] }) },
   { path: "/telemetryapi/v1/locations/search", make: (ids) => ({ fleetItemIds: ids }) },
 ];
+
+// Existence radar (debug only): hit plausible product routes in parallel and
+// record the HTTP status. 404 = route doesn't exist; 400/401/405/200 = it does.
+// Includes two controls (a known-good route and a known-bogus one).
+const PRODUCT_PROBES = [
+  { path: "/fleetapi/v1/fleet-items/search", method: "POST" },           // control: exists
+  { path: "/fleetapi/v1/zzz-no-existe/search", method: "POST" },         // control: doesn't
+  { path: "/driverapi/v1/drivers/search", method: "POST" },
+  { path: "/geofenceapi/v1/geofences/search", method: "POST" },
+  { path: "/fleetapi/v1/fleet-item-locations/search", method: "POST" },
+  { path: "/fleetapi/v1/fleet-item-metrics/search", method: "POST" },
+  { path: "/telemetryapi/v1/telemetry/search", method: "POST" },
+  { path: "/telemetryapi/v1/locations/search", method: "POST" },
+  { path: "/locationapi/v1/locations/search", method: "POST" },
+  { path: "/locationsapi/v1/locations/search", method: "POST" },
+  { path: "/metricsapi/v1/metrics/search", method: "POST" },
+  { path: "/vehicledataapi/v1/vehicle-data/search", method: "POST" },
+  { path: "/tripsapi/v1/trips/search", method: "POST" },
+  { path: "/segmentsapi/v1/segments/search", method: "POST" },
+  { path: "/placesapi/v1/places/search", method: "POST" },
+  { path: "/trackingapi/v1/tracking/search", method: "POST" },
+  { path: "/gpsapi/v1/gps/search", method: "POST" },
+  { path: "/historyapi/v1/history/search", method: "POST" },
+];
+
+async function probeStatus(token, { path, method }) {
+  try {
+    const r = await fetch(`${BASE}${path}`, {
+      method,
+      headers: {
+        Authorization: `Atmosphere atmosphere_app_id=${APP_ID}, Bearer ${token}`,
+        Accept: "application/json",
+        ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(method === "POST" ? { body: "{}" } : {}),
+    });
+    const text = await r.text();
+    return { path, status: r.status, body: text ? text.slice(0, 140) : undefined };
+  } catch (e) {
+    return { path, status: "error", body: String(e?.message || e).slice(0, 140) };
+  }
+}
 // Body tweaks that may make /fleet-items/search embed the position directly.
 const SEARCH_BODY_VARIANTS = [
   { expand: ["location"] },
@@ -405,6 +454,9 @@ export default async function handler(req, res) {
       if (m.matches.length > 0 && api === "fleetapi") {
         const attempts = debug ? (debug.locAttempts = []) : null;
         const ids = m.matches.map(({ vehicle }) => vehicle.id).filter(v => v != null);
+
+        // Radar of existing API products (debug only, in parallel).
+        if (debug) debug.productProbe = await Promise.all(PRODUCT_PROBES.map(p => probeStatus(token, p)));
 
         // (a) direct per-item route, discovered on a sample vehicle
         const tpl = ids.length ? await discoverLocTemplate(token, ids[0], attempts) : null;
