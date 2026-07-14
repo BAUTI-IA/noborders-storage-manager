@@ -636,7 +636,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
-const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
+const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
 const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[], purposes:{} };
@@ -3444,6 +3444,10 @@ export default function App() {
   const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
   const [locBusy, setLocBusy] = useState(false);
   const [locErr, setLocErr] = useState(null);
+  // Verizon Connect sync: busy flag + last result note shown under the live map.
+  const [vzBusy, setVzBusy] = useState(false);
+  const [vzNote, setVzNote] = useState(null);
+  const vzLastSync = useRef(0); // epoch ms of last auto-sync, to throttle
   const [showTripModal, setShowTripModal] = useState(false);
   const [tripForm, setTripForm] = useState(EMPTY_TRIP);
   const [editingTripId, setEditingTripId] = useState(null);
@@ -6100,7 +6104,7 @@ export default function App() {
   function openEditTruck(t) {
     setEditingTruckId(t.id);
     setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false,
-      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "" });
+      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "", verizon_vehicle_id: t.verizon_vehicle_id || "" });
     setShowTruckModal(true);
   }
   async function saveTruck() {
@@ -6115,6 +6119,7 @@ export default function App() {
       payload.license_plate = truckForm.license_plate || null;
       payload.license_state = truckForm.license_state || null;
     }
+    if (!truckLocMissing) payload.verizon_vehicle_id = truckForm.verizon_vehicle_id.trim() || null;
     let error = null;
     if (editingTruckId) ({ error } = await supabase.from("trucks").update(payload).eq("id", editingTruckId));
     else ({ error } = await supabase.from("trucks").insert([payload]));
@@ -6158,6 +6163,37 @@ export default function App() {
     showToast(`Location updated · ${locModal.name}`);
     loadTrucks();
   }
+  // Pull live GPS positions from Verizon Connect (serverless proxy holds the creds).
+  async function syncVerizon({ silent = false } = {}) {
+    if (vzBusy) return;
+    setVzBusy(true);
+    try {
+      const r = await fetch("/api/verizon-sync", { method: "POST" });
+      const data = await r.json().catch(() => null);
+      if (data?.notConfigured) {
+        setVzNote(silent ? null : "Verizon API sin configurar (faltan las credenciales en Vercel).");
+      } else if (data?.ok) {
+        vzLastSync.current = Date.now();
+        const extra = data.unmatched?.length ? ` · sin match: ${data.unmatched.join(", ")}` : "";
+        setVzNote(`Verizon: ${data.synced} camión(es) actualizados${extra}`);
+        if (data.synced > 0) loadTrucks();
+        if (!silent) showToast(`Verizon: ${data.synced} ubicación(es) actualizadas`);
+      } else {
+        setVzNote(`Verizon: ${data?.error || `error HTTP ${r.status}`}`);
+      }
+    } catch {
+      if (!silent) setVzNote("No se pudo conectar con /api/verizon-sync (¿estás en el deploy de Vercel?).");
+    }
+    setVzBusy(false);
+  }
+  // Auto-refresh from Verizon while the live map is open (at most every 2 min).
+  useEffect(() => {
+    if (!session || tripsMissing || page !== "trips" || tripsView !== "live") return;
+    const tick = () => { if (Date.now() - vzLastSync.current > 115000) syncVerizon({ silent: true }); };
+    tick();
+    const id = setInterval(tick, 120000);
+    return () => clearInterval(id);
+  }, [session, tripsMissing, page, tripsView]);
 
   // ── Legal & Compliance handlers ──
   function openAddCompany() { setEditingCompanyId(null); setCompanyForm(EMPTY_COMPANY); setShowCompanyModal(true); }
@@ -9163,10 +9199,14 @@ export default function App() {
                   <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 360px) 1fr", gap:14, alignItems:"start" }}>
                     {/* Verizon-style side list */}
                     <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", maxHeight:560, display:"flex", flexDirection:"column" }}>
-                      <div style={{ padding:"12px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, flexWrap:"wrap" }}>
+                      <div style={{ padding:"12px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
                         {[["all",`All (${located.length})`],["moving",`En movimiento (${moving})`],["stopped",`Detenidos (${stopped})`]].map(([v,l]) => (
                           <button key={v} onClick={() => setLiveStatusFilter(v)} style={{ fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: liveStatusFilter===v?"#111":"#e5e5e5", background: liveStatusFilter===v?"#111":"#fff", color: liveStatusFilter===v?"#fff":"#666", fontWeight: liveStatusFilter===v?600:500 }}>{l}</button>
                         ))}
+                        <button onClick={() => syncVerizon()} disabled={vzBusy} title="Traer las posiciones GPS desde Verizon Connect"
+                          style={{ marginLeft:"auto", fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor: vzBusy?"default":"pointer", border:"1px solid #C1272D", background:"#fff", color:"#C1272D", fontWeight:600, opacity: vzBusy?0.6:1 }}>
+                          {vzBusy ? "Syncing…" : "⟳ Verizon"}
+                        </button>
                       </div>
                       <div style={{ overflowY:"auto" }}>
                         {trucksList.length === 0 ? (
@@ -9214,7 +9254,7 @@ export default function App() {
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />En movimiento</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />Sin datos</span>
-                        <span style={{ marginLeft:"auto", color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
+                        <span style={{ marginLeft:"auto", color:"#aaa" }}>{vzNote || "Última ubicación conocida · sync Verizon cada 2 min"}</span>
                       </div>
                     </div>
                   </div>
@@ -11958,6 +11998,9 @@ export default function App() {
             <Field label="License state">
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
             </Field>
+            <Field label="Verizon vehicle #" full>
+              <input style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))} placeholder="Vehicle Number en Reveal (se completa solo si el nombre/VIN coincide)" />
+            </Field>
           </div>
         </Modal>
       )}
@@ -11969,7 +12012,7 @@ export default function App() {
             <Btn primary disabled={locBusy} onClick={saveLoc}>{locBusy ? "Saving..." : "Save location"}</Btn>
           </>}>
           <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
-            Set the truck's current location by address (we look it up on the map) or paste the coordinates. Once we connect the Verizon API, this will update automatically.
+            Set the truck's current location by address (we look it up on the map) or paste the coordinates. Trucks linked to Verizon update automatically with each sync — this manual entry is the fallback.
           </div>
           <Field label="Search by address / city">
             <div style={{ display:"flex", gap:8 }}>
