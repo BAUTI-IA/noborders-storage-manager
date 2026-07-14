@@ -289,7 +289,7 @@ export function SuggestionsSection({ supabase, session, profile, isAdmin = false
                   <div style={{ marginTop: 10 }}>
                     <textarea rows={2} value={noteDraft} onChange={e => setNoteDraft(e.target.value)} autoFocus
                       placeholder="Reply to the team about this suggestion…" style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} />
-                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 6 }}>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
                       <button style={btn(false)} onClick={() => { setNoteEditId(null); setNoteDraft(""); }}>Cancel</button>
                       <button style={btn(true)} onClick={() => saveNote(s)}>Save reply</button>
                     </div>
