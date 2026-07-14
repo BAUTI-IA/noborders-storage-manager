@@ -2037,6 +2037,27 @@ const CLAIM_RESOLUTIONS = [
 ];
 const claimResolutionLabel = (v) => CLAIM_RESOLUTIONS.find(r => r[0] === v)?.[1] || "—";
 const EMPTY_CLAIM = { job_number:"", trip_id:"", client_name:"", incident_type:"damage", description:"", incident_date:"", status:"open", assigned_to:"", claimed_amount:"", paid_amount:"", resolution_type:"", closed_date:"" };
+// Claim↔job matching must tolerate case/whitespace drift between rows of the
+// same job (same rule as jobKey in analyticsData.js).
+const normJobNumber = (s) => (s || "").trim().toLowerCase();
+// Small red "⚠ n" pill shown next to a job/trip identifier when it has active claims.
+function ClaimCountPill({ count }) {
+  if (!count) return null;
+  return <span title={`${count} open claim(s)`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"2px 7px", fontFamily:"system-ui, sans-serif" }}>⚠ {count}</span>;
+}
+// One-line claim summary (badge + type + open link + ellipsized description),
+// shared by the job and trip detail modals.
+function ClaimLine({ claim, onOpen, linkLabel }) {
+  const m = claimTypeMeta(claim.incident_type);
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, flexWrap:"wrap" }}>
+      <ClaimBadge status={claim.status} />
+      <span>{m.icon} {m.l}</span>
+      <button onClick={onOpen} style={{ border:"none", background:"none", padding:0, cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12.5, fontWeight:600 }}>{linkLabel}</button>
+      <span style={{ color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:270 }}>{claim.description}</span>
+    </div>
+  );
+}
 
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
@@ -4133,13 +4154,17 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session, loadClaims]);
 
+  // Track the claim open in the modal so the realtime handler (stable channel,
+  // no re-subscribe per claim) can refresh the right notes timeline.
+  const editingClaimIdRef = useRef(null); editingClaimIdRef.current = editingClaimId;
   useEffect(() => {
     if (!session || claimsMissing) return;
     const channel = supabase.channel("claims-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "claims" }, () => loadClaims())
+      .on("postgres_changes", { event: "*", schema: "public", table: "claim_notes" }, () => { if (editingClaimIdRef.current) loadClaimNotes(editingClaimIdRef.current); })
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [session, claimsMissing, loadClaims]);
+  }, [session, claimsMissing, loadClaims, loadClaimNotes]);
 
   // Probe the payment_stage column (added after the initial Payments release).
   useEffect(() => {
@@ -4999,19 +5024,31 @@ export default function App() {
 
   // ── Claims derived data: active-claim counts per job / trip (for ⚠ badges) + page metrics ──
   const claimsActive = useMemo(() => claims.filter(c => CLAIM_ACTIVE(c.status)), [claims]);
+  // Keys are normalized job numbers (normJobNumber) — job rows of one logical
+  // job can differ in case/whitespace, and claims must still match all of them.
   const claimsByJob = useMemo(() => {
     const m = {};
-    for (const c of claimsActive) if (c.job_number) m[c.job_number] = (m[c.job_number] || 0) + 1;
+    for (const c of claimsActive) { const k = normJobNumber(c.job_number); if (k) m[k] = (m[k] || 0) + 1; }
     return m;
   }, [claimsActive]);
+  const jobByNumber = useMemo(() => {
+    const m = {};
+    for (const j of jobs) { const k = normJobNumber(j.job_number); if (k && !m[k]) m[k] = j; }
+    return m;
+  }, [jobs]);
   const claimsByTrip = useMemo(() => {
-    // A claim counts against a trip when linked directly (trip_id) or through its job's trip.
-    const tripByJobNumber = {};
-    for (const j of jobs) if (j.job_number && j.trip_id) tripByJobNumber[j.job_number] = j.trip_id;
+    // A claim counts against a trip when linked directly (trip_id) or through any
+    // trip its job's rows sit on (split jobs can span several trips — count all).
+    const tripsByJobNumber = {};
+    for (const j of jobs) {
+      const k = normJobNumber(j.job_number);
+      if (k && j.trip_id) (tripsByJobNumber[k] = tripsByJobNumber[k] || new Set()).add(j.trip_id);
+    }
     const m = {};
     for (const c of claimsActive) {
-      const tid = c.trip_id || tripByJobNumber[c.job_number];
-      if (tid) m[tid] = (m[tid] || 0) + 1;
+      const tids = new Set(tripsByJobNumber[normJobNumber(c.job_number)] || []);
+      if (c.trip_id) tids.add(c.trip_id);
+      for (const tid of tids) m[tid] = (m[tid] || 0) + 1;
     }
     return m;
   }, [claimsActive, jobs]);
@@ -5940,7 +5977,7 @@ export default function App() {
       status:c.status||"open", assigned_to:c.assigned_to||"", claimed_amount:c.claimed_amount ?? "", paid_amount:c.paid_amount ?? "",
       resolution_type:c.resolution_type||"", closed_date:c.closed_date||"",
     });
-    setClaimNoteInput(""); setClaimJobSearch("");
+    setClaimNotes([]); setClaimNoteInput(""); setClaimJobSearch("");
     loadClaimNotes(c.id);
     setShowClaimModal(true);
   }
@@ -5949,8 +5986,9 @@ export default function App() {
     if (!f.incident_type || !f.description.trim()) { window.alert("Complete the incident type and description."); return; }
     setClaimSaving(true);
     const prev = editingClaimId ? claims.find(c => c.id === editingClaimId) : null;
-    // Closing statuses auto-stamp the closed date so "days to close" always computes.
-    const closedDate = !CLAIM_ACTIVE(f.status) ? (f.closed_date || today()) : (f.closed_date || null);
+    // Closing statuses auto-stamp the closed date so "days to close" always
+    // computes; reopening clears it so metrics don't reuse a stale close.
+    const closedDate = !CLAIM_ACTIVE(f.status) ? (f.closed_date || today()) : null;
     const payload = {
       job_number: f.job_number || null, trip_id: f.trip_id ? Number(f.trip_id) : null, client_name: f.client_name || null,
       incident_type: f.incident_type, description: f.description.trim(), incident_date: f.incident_date || null,
@@ -5958,24 +5996,27 @@ export default function App() {
       claimed_amount: f.claimed_amount === "" ? null : Number(f.claimed_amount),
       paid_amount: f.paid_amount === "" ? null : Number(f.paid_amount),
       resolution_type: f.resolution_type || null, closed_date: closedDate,
-      updated_by: userEmail, updated_at: new Date().toISOString(),
     };
     let error = null, claimId = editingClaimId;
-    if (editingClaimId) ({ error } = await supabase.from("claims").update(payload).eq("id", editingClaimId));
+    if (editingClaimId) ({ error } = await supabase.from("claims").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingClaimId));
     else {
-      const { data, error: insErr } = await supabase.from("claims").insert([{ ...payload, updated_by:null, updated_at:null, created_by: userEmail }]).select("id").single();
+      const { data, error: insErr } = await supabase.from("claims").insert([{ ...payload, created_by: userEmail }]).select("id").single();
       error = insErr; claimId = data?.id;
     }
     if (!error && prev && prev.status !== f.status) {
-      await supabase.from("claim_notes").insert([{ claim_id: claimId, note: `Status: ${CLAIM_STATUS[prev.status]?.l || prev.status} → ${CLAIM_STATUS[f.status]?.l || f.status}`, created_by: userEmail }]);
+      const { error: nErr } = await supabase.from("claim_notes").insert([{ claim_id: claimId, note: `Status: ${CLAIM_STATUS[prev.status]?.l || prev.status} → ${CLAIM_STATUS[f.status]?.l || f.status}`, created_by: userEmail }]);
+      if (nErr) console.warn("claim status note not saved:", nErr.message);
     }
     setClaimSaving(false);
     if (error) { window.alert(error.message); return; }
+    if (!CLAIM_ACTIVE(f.status)) setClaimForm(prev2 => ({ ...prev2, closed_date: closedDate }));
+    else setClaimForm(prev2 => ({ ...prev2, closed_date: "" }));
     loadClaims();
     if (!editingClaimId && claimId) {
-      // Stay open in edit mode so photos and notes can be attached right away.
+      // Stay open in edit mode so photos and notes can be attached right away
+      // (only promise that when the user actually has edit rights).
       setEditingClaimId(claimId); loadClaimNotes(claimId);
-      showToast("Claim created — you can attach files and notes now");
+      showToast(can("claims","edit") ? "Claim created — you can attach files and notes now" : "Claim created");
     } else {
       loadClaimNotes(claimId);
       showToast("Claim saved");
@@ -5983,8 +6024,9 @@ export default function App() {
   }
   async function deleteClaim(c) {
     if (!window.confirm(`Delete the claim for job ${c.job_number || "(sin #)"}? Its notes and links are removed too.`)) return;
-    await supabase.from("claims").delete().eq("id", c.id);
-    setShowClaimModal(false); loadClaims();
+    const { error } = await supabase.from("claims").delete().eq("id", c.id);
+    if (error) { window.alert(error.message); return; }
+    setShowClaimModal(false); setEditingClaimId(null); loadClaims();
   }
   async function addClaimNote() {
     const note = claimNoteInput.trim();
@@ -5994,8 +6036,19 @@ export default function App() {
     setClaimNoteInput(""); loadClaimNotes(editingClaimId);
   }
   async function deleteClaimNote(n) {
-    await supabase.from("claim_notes").delete().eq("id", n.id);
+    const { error } = await supabase.from("claim_notes").delete().eq("id", n.id);
+    if (error) { window.alert(error.message); return; }
     loadClaimNotes(editingClaimId);
+  }
+  // Read the claim's CURRENT attachments from the DB (not from possibly-stale
+  // React state) so two quick uploads/removals never overwrite each other.
+  async function mutateClaimAttachments(claimId, mutate) {
+    const { data, error } = await supabase.from("claims").select("attachments").eq("id", claimId).single();
+    if (error) { window.alert(error.message); return; }
+    const attachments = mutate(Array.isArray(data?.attachments) ? data.attachments : []);
+    const { error: uErr } = await supabase.from("claims").update({ attachments }).eq("id", claimId);
+    if (uErr) { window.alert(uErr.message); return; }
+    loadClaims();
   }
   // Upload evidence (photo/PDF) to the claim-docs bucket and append it to the claim's attachments.
   async function uploadClaimFile(file) {
@@ -6008,19 +6061,13 @@ export default function App() {
       if (error) { window.alert("Upload error: " + error.message); setClaimUploading(false); return; }
       const { data } = supabase.storage.from("claim-docs").getPublicUrl(path);
       const url = data?.publicUrl || "";
-      const cur = claims.find(c => c.id === editingClaimId);
-      const attachments = [...(Array.isArray(cur?.attachments) ? cur.attachments : []), { url, name: file.name, uploaded_by: userEmail, uploaded_at: new Date().toISOString() }];
-      await supabase.from("claims").update({ attachments }).eq("id", editingClaimId);
-      loadClaims();
+      await mutateClaimAttachments(editingClaimId, (cur) => [...cur, { url, name: file.name, uploaded_by: userEmail, uploaded_at: new Date().toISOString() }]);
     } catch (e) { window.alert("Error: " + e.message); }
     setClaimUploading(false);
   }
   async function removeClaimAttachment(att) {
     if (!editingClaimId || !window.confirm(`Remove attachment "${att.name || "file"}"?`)) return;
-    const cur = claims.find(c => c.id === editingClaimId);
-    const attachments = (Array.isArray(cur?.attachments) ? cur.attachments : []).filter(a => a.url !== att.url);
-    await supabase.from("claims").update({ attachments }).eq("id", editingClaimId);
-    loadClaims();
+    await mutateClaimAttachments(editingClaimId, (cur) => cur.filter(a => a.url !== att.url));
   }
 
   // ── Trips CRUD ──
@@ -8787,7 +8834,7 @@ export default function App() {
                     <tbody>
                       {shown.map(t => { const c = tripCalc(t); return (
                         <tr key={t.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700, whiteSpace:"nowrap" }}><button onClick={() => setTripDetailId(t.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button>{claimsByTrip[t.id] > 0 && <span title={`${claimsByTrip[t.id]} open claim(s) on this trip`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"2px 7px", fontFamily:"inherit" }}>⚠ {claimsByTrip[t.id]}</span>}</td>
+                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700, whiteSpace:"nowrap" }}><button onClick={() => setTripDetailId(t.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button>{!claimsMissing && can("claims","view") && <ClaimCountPill count={claimsByTrip[t.id]} />}</td>
                           <td style={{ padding:"12px" }}>{truckById[t.truck_id]?.name || "—"}</td>
                           <td style={{ padding:"12px" }}>{driverById[t.driver_id]?.name || "—"}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{t.departure_date || "—"}</td>
@@ -9554,7 +9601,9 @@ export default function App() {
           .filter(c => !claimFilterFrom || (c.incident_date || "") >= claimFilterFrom)
           .filter(c => !claimFilterTo || (c.incident_date || "9999") <= claimFilterTo)
           .filter(c => !q || [c.job_number, c.client_name, c.description, c.assigned_to].join(" ").toLowerCase().includes(q));
-        const pageRows = rows.slice(claimsPage * PAGE_SIZE, (claimsPage + 1) * PAGE_SIZE);
+        // Clamp like Pager does, so deleting the last row of the last page never strands the view.
+        const pageCur = Math.min(claimsPage, Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1));
+        const pageRows = rows.slice(pageCur * PAGE_SIZE, (pageCur + 1) * PAGE_SIZE);
         // Days a claim has been sitting open (or took to close).
         const claimAge = (c) => {
           const from = c.incident_date || (c.created_at || "").slice(0, 10);
@@ -9628,7 +9677,7 @@ export default function App() {
                           <tr key={c.id} style={{ borderBottom:"1px solid #fafafa" }}>
                             <td style={{ ...td, fontFamily:"monospace", fontWeight:700 }}>
                               {c.job_number
-                                ? (() => { const j = jobs.find(x => x.job_number === c.job_number); return j
+                                ? (() => { const j = jobByNumber[normJobNumber(c.job_number)]; return j
                                     ? <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{c.job_number}</button>
                                     : c.job_number; })()
                                 : "—"}
@@ -9653,7 +9702,7 @@ export default function App() {
                   </table>
                 </div>
                 <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
-                  <Pager page={claimsPage} total={rows.length} onPage={setClaimsPage} unit="claim(s)" />
+                  <Pager page={pageCur} total={rows.length} onPage={setClaimsPage} unit="claim(s)" />
                 </div>
               </div>
             )}
@@ -10097,7 +10146,7 @@ export default function App() {
                         style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>
                         {g.job_number || "(ver)"}
                       </button>
-                      {claimsByJob[g.job_number] > 0 && <span title={`${claimsByJob[g.job_number]} open claim(s)`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"2px 7px" }}>⚠ {claimsByJob[g.job_number]}</span>}
+                      {!claimsMissing && can("claims","view") && <ClaimCountPill count={claimsByJob[normJobNumber(g.job_number)]} />}
                     </td>
                     <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
                     <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
@@ -10490,7 +10539,7 @@ export default function App() {
             items.sort((a, b) => a.sort.localeCompare(b.sort));
             const setJE = (fields) => setJobEventForm(f => ({ ...f, ...fields }));
             const meta = jobEventForm ? jobEventMeta(jobEventForm.event_type) : null;
-            const jobClaims = (!claimsMissing && can("claims","view") && jobDetail.job_number) ? claims.filter(cl => cl.job_number === jobDetail.job_number) : [];
+            const jobClaims = (!claimsMissing && can("claims","view") && jobDetail.job_number) ? claims.filter(cl => normJobNumber(cl.job_number) === normJobNumber(jobDetail.job_number)) : [];
             return (
               <>
                 {(jobClaims.length > 0 || (!claimsMissing && can("claims","create"))) && (
@@ -10498,12 +10547,7 @@ export default function App() {
                     <SectionLabel>Claims {jobClaims.length ? `(${jobClaims.length})` : ""}</SectionLabel>
                     <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
                       {jobClaims.map(cl => (
-                        <div key={cl.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, flexWrap:"wrap" }}>
-                          <ClaimBadge status={cl.status} />
-                          <span>{claimTypeMeta(cl.incident_type).icon} {claimTypeMeta(cl.incident_type).l}</span>
-                          <button onClick={() => openEditClaim(cl)} style={{ border:"none", background:"none", padding:0, cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12.5 }}>Ver claim →</button>
-                          <span style={{ color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:280 }}>{cl.description}</span>
-                        </div>
+                        <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel="Ver claim →" />
                       ))}
                       {can("claims","create") && (
                         <div>
@@ -11201,8 +11245,12 @@ export default function App() {
         const jq = claimJobSearch.trim().toLowerCase();
         const jobOptsF = (jq ? jobOpts.filter(j => [j.job_number, j.customer].join(" ").toLowerCase().includes(jq)) : jobOpts).slice(0, 60);
         const pickJob = (jn) => {
+          // Re-derive client/trip from the newly picked job so switching jobs
+          // never keeps the previous job's autofill. Clearing the job keeps
+          // whatever the user typed.
           const j = jobOpts.find(x => x.job_number === jn);
-          set({ job_number: jn, client_name: f.client_name || j?.customer || "", trip_id: f.trip_id || (j?.trip_id ? String(j.trip_id) : "") });
+          if (!jn) { set({ job_number: "" }); return; }
+          set({ job_number: jn, client_name: j?.customer || f.client_name || "", trip_id: j?.trip_id ? String(j.trip_id) : "" });
         };
         const tm = claimTypeMeta(f.incident_type);
         return (
@@ -12463,25 +12511,21 @@ export default function App() {
 
             {/* Claims on this trip (linked directly or through one of its jobs) */}
             {!claimsMissing && can("claims","view") && (() => {
-              const tripJobNumbers = new Set(c.jobsIn.map(j => j.job_number).filter(Boolean));
-              const tripClaims = claims.filter(cl => cl.trip_id === t.id || tripJobNumbers.has(cl.job_number));
+              const tripJobNumbers = new Set(c.jobsIn.map(j => normJobNumber(j.job_number)).filter(Boolean));
+              const tripClaims = claims.filter(cl => cl.trip_id === t.id || tripJobNumbers.has(normJobNumber(cl.job_number)));
               if (tripClaims.length === 0 && !can("claims","create")) return null;
+              const hasActive = tripClaims.some(cl => CLAIM_ACTIVE(cl.status));
               return (
-                <div style={{ background: tripClaims.some(cl => CLAIM_ACTIVE(cl.status)) ? "#FCEBEB" : "#fafafa", border:`1px solid ${tripClaims.some(cl => CLAIM_ACTIVE(cl.status)) ? "#E24B4A" : "#efefef"}`, borderRadius:9, padding:"9px 12px", margin:"8px 0" }}>
+                <div style={{ background: hasActive ? "#FCEBEB" : "#fafafa", border:`1px solid ${hasActive ? "#E24B4A" : "#efefef"}`, borderRadius:9, padding:"9px 12px", margin:"8px 0" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                    <b style={{ fontSize:12.5, color: tripClaims.some(cl => CLAIM_ACTIVE(cl.status)) ? "#A32D2D" : "#666" }}>⚠️ Claims{tripClaims.length ? ` (${tripClaims.length})` : ""}</b>
+                    <b style={{ fontSize:12.5, color: hasActive ? "#A32D2D" : "#666" }}>⚠️ Claims{tripClaims.length ? ` (${tripClaims.length})` : ""}</b>
                     <span style={{ flex:1 }} />
                     {can("claims","create") && <Btn onClick={() => openAddClaim({ trip_id: t.id })} style={{ padding:"4px 10px", fontSize:11.5 }}>+ Report claim</Btn>}
                   </div>
                   {tripClaims.length > 0 && (
                     <div style={{ display:"flex", flexDirection:"column", gap:4, marginTop:6 }}>
                       {tripClaims.map(cl => (
-                        <div key={cl.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, flexWrap:"wrap" }}>
-                          <ClaimBadge status={cl.status} />
-                          <span>{claimTypeMeta(cl.incident_type).icon}</span>
-                          <button onClick={() => openEditClaim(cl)} style={{ border:"none", background:"none", padding:0, cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12, fontWeight:600 }}>{cl.job_number || "(sin job)"}{cl.client_name ? ` · ${cl.client_name}` : ""}</button>
-                          <span style={{ color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:260 }}>{cl.description}</span>
-                        </div>
+                        <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel={`${cl.job_number || "(sin job)"}${cl.client_name ? ` · ${cl.client_name}` : ""}`} />
                       ))}
                     </div>
                   )}
