@@ -9,11 +9,11 @@
 //   VERIZON_BASE_URL  — optional, defaults to https://fim.api.us.fleetmatics.com
 //   SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY — already used by other functions
 //
-// The account's Developer Portal app exposes the NEW api products (Fleet API →
-// POST /fleetapi/v1/fleet-items/search), so we try that first and normalize
-// defensively (field names differ between accounts/versions). If that yields
-// nothing we fall back to the legacy Reveal REST endpoints (/cmv, /rad), and
-// finally to probing /rad per truck code. GET ?debug=1 includes raw samples.
+// The account exposes the NEW api products (Fleet API → POST
+// /fleetapi/v1/fleet-items/search, cursor-paginated via pageToken; items carry
+// fleetItemId/name/vin but no position). Location is fetched per item trying
+// several known shapes, falling back to the legacy /rad endpoints. GET
+// ?debug=1 includes raw samples and every location attempt for the first item.
 import { createClient } from "@supabase/supabase-js";
 
 const BASE = (process.env.VERIZON_BASE_URL || "https://fim.api.us.fleetmatics.com").replace(/\/+$/, "");
@@ -67,6 +67,8 @@ async function vz(path, token, { method = "GET", body } = {}) {
 
 const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
 const prefix = (s) => norm(s).split(/[-·|]/)[0].trim();
+// "bt013ld-1750cf" → "bt013"; "bt003 - lees truck" → "bt003". Letters+digits code.
+const codeOf = (s) => { const m = norm(s).match(/[a-z]{1,6}\s?-?\d{1,6}/); return m ? m[0].replace(/[\s-]/g, "") : null; };
 const pick = (o, keys) => { for (const k of keys) { const v = o?.[k]; if (v != null && v !== "") return v; } return null; };
 const pickStr = (o, keys) => { const v = pick(o, keys); return typeof v === "string" ? v : null; };
 
@@ -77,6 +79,7 @@ const asList = (raw) =>
   : Array.isArray(raw?.Data) ? raw.Data
   : Array.isArray(raw?.results) ? raw.results
   : Array.isArray(raw?.fleetItems) ? raw.fleetItems
+  : Array.isArray(raw?.locations) ? raw.locations
   : Array.isArray(raw?.content) ? raw.content
   : Array.isArray(raw?.vehicles) ? raw.vehicles
   : [];
@@ -84,7 +87,7 @@ const asList = (raw) =>
 // A fleet item / vehicle, whatever generation of API it came from.
 function normVehicle(it) {
   return {
-    id: pick(it, ["id", "fleetItemId", "vehicleId", "Id", "uid"]),
+    id: pick(it, ["fleetItemId", "id", "vehicleId", "Id", "uid"]),
     number: pick(it, ["vehicleNumber", "VehicleNumber", "number", "code", "unitNumber", "assetNumber"]),
     name: pick(it, ["name", "Name", "label", "displayName", "description"]),
     vin: pick(it, ["vin", "VIN", "vehicleIdentificationNumber"]),
@@ -95,19 +98,19 @@ function normVehicle(it) {
 // Find lat/lng (+ address/time/speed/state) wherever the payload put them.
 function extractLoc(o) {
   if (!o || typeof o !== "object") return null;
-  const cands = [o, o.location, o.lastKnownLocation, o.lastLocation, o.currentLocation, o.position, o.gps, o.Location, o.data];
+  const cands = [o, o.location, o.lastKnownLocation, o.lastLocation, o.currentLocation, o.position, o.gps, o.Location, o.data, o.geolocation, o.coordinates];
   for (const c of cands) {
     if (!c || typeof c !== "object") continue;
     const lat = Number(pick(c, ["latitude", "Latitude", "lat"]));
     const lng = Number(pick(c, ["longitude", "Longitude", "lng", "lon"]));
     if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
-    const addr = c.address ?? c.Address;
+    const addr = c.address ?? c.Address ?? o.address;
     const address = typeof addr === "string" ? addr : addr && typeof addr === "object"
       ? [pickStr(addr, ["addressLine1", "AddressLine1", "street", "line1"]), pickStr(addr, ["locality", "Locality", "city"]), pickStr(addr, ["administrativeArea", "AdministrativeArea", "state", "region"])].filter(Boolean).join(", ") || null
       : null;
     return {
       lat, lng, address,
-      at: pickStr(c, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "time", "dateTime", "lastUpdated", "recordedAt"]) || pickStr(o, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "lastUpdated"]),
+      at: pickStr(c, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "time", "dateTime", "lastUpdated", "recordedAt", "deviceTimestamp"]) || pickStr(o, ["updateUtc", "UpdateUTC", "updatedAt", "timestamp", "lastUpdated"]),
       speed: pick(c, ["speed", "Speed"]) ?? pick(o, ["speed", "Speed"]),
       state: pickStr(c, ["displayState", "DisplayState", "movementStatus", "state", "status"]) || pickStr(o, ["displayState", "DisplayState", "movementStatus", "state", "status"]),
     };
@@ -135,7 +138,7 @@ function toStatus(displayState, speed) {
   return "unknown";
 }
 
-async function updateTruck(truck, loc, backfillNumber) {
+async function updateTruck(truck, loc, backfillId) {
   const payload = {
     last_lat: loc.lat,
     last_lng: loc.lng,
@@ -143,78 +146,116 @@ async function updateTruck(truck, loc, backfillNumber) {
     last_location_at: toIso(loc.at),
     last_status: toStatus(loc.state, loc.speed),
   };
-  if (!truck.verizon_vehicle_id && backfillNumber) payload.verizon_vehicle_id = backfillNumber.toString();
+  if (!truck.verizon_vehicle_id && backfillId) payload.verizon_vehicle_id = backfillId.toString();
   const { error } = await admin.from("trucks").update(payload).eq("id", truck.id);
   if (error) throw new Error(`${truck.name}: ${error.message}`);
 }
 
-// Match CRM trucks to Verizon vehicles: vehicle #, VIN, exact name, then the
-// "BT001" prefix of names like "BT001 - HINO Leon".
+// Match CRM trucks to Verizon vehicles: stored id/number, VIN, exact name,
+// prefix ("BT001" ↔ "BT001 - HINO Leon") and code ("BT013" ↔ "BT013LD-1750CF").
 function matchTrucks(trucks, vehicles) {
-  const byNumber = new Map(), byVin = new Map(), byName = new Map(), byPrefix = new Map();
+  const byId = new Map(), byNumber = new Map(), byVin = new Map(), byName = new Map(), byPrefix = new Map(), byCode = new Map();
   for (const v of vehicles) {
-    if (v.number != null) {
-      byNumber.set(norm(v.number), v);
-      if (!byPrefix.has(prefix(v.number))) byPrefix.set(prefix(v.number), v);
+    if (v.id != null) byId.set(norm(v.id), v);
+    for (const k of [v.number, v.name]) {
+      if (k == null) continue;
+      if (!byNumber.has(norm(k)) && k === v.number) byNumber.set(norm(k), v);
+      if (!byPrefix.has(prefix(k))) byPrefix.set(prefix(k), v);
+      const c = codeOf(k);
+      if (c && !byCode.has(c)) byCode.set(c, v);
     }
     if (v.vin) byVin.set(norm(v.vin), v);
-    if (v.name) {
-      byName.set(norm(v.name), v);
-      if (!byPrefix.has(prefix(v.name))) byPrefix.set(prefix(v.name), v);
-    }
+    if (v.name) byName.set(norm(v.name), v);
   }
   const matches = [], unmatched = [];
   for (const t of trucks) {
+    const vid = t.verizon_vehicle_id;
     const v =
-      (t.verizon_vehicle_id && (byNumber.get(norm(t.verizon_vehicle_id)) || byName.get(norm(t.verizon_vehicle_id)))) ||
+      (vid && (byId.get(norm(vid)) || byNumber.get(norm(vid)) || byName.get(norm(vid)))) ||
       (t.vin && byVin.get(norm(t.vin))) ||
       byName.get(norm(t.name)) ||
       byNumber.get(norm(t.name)) ||
-      byPrefix.get(prefix(t.name));
+      byPrefix.get(prefix(t.name)) ||
+      (codeOf(t.name) ? byCode.get(codeOf(t.name)) : null);
     if (v) matches.push({ truck: t, vehicle: v });
     else unmatched.push(t.name);
   }
   return { matches, unmatched };
 }
 
-// ── Strategies ───────────────────────────────────────────────────────────────
+// ── Fleet API (new generation) ───────────────────────────────────────────────
 
-// New-generation Fleet API: POST /fleetapi/v1/fleet-items/search.
+// POST /fleetapi/v1/fleet-items/search — cursor-paginated via pageToken.
 async function fetchFleetApiVehicles(token, debug) {
-  const attempts = [
-    { body: {} },
-    { body: { pagination: { pageSize: 200 } } },
-    { body: { page: 1, pageSize: 200 } },
-  ];
-  let lastErr = null;
-  for (const a of attempts) {
+  const seen = new Set();
+  const out = [];
+  let pageToken = null, error = null;
+  for (let page = 0; page < 20; page++) {
+    let raw = null;
     try {
-      const raw = await vz("/fleetapi/v1/fleet-items/search", token, { method: "POST", body: a.body });
-      const list = asList(raw);
-      if (debug) debug.fleetSearchSample = Array.isArray(raw) ? raw.slice(0, 1) : raw && { ...raw, items: asList(raw).slice(0, 1) };
-      if (list.length) return { list: list.map(normVehicle), error: null };
-      lastErr = null; // 200 but empty — remember that it worked
+      raw = await vz("/fleetapi/v1/fleet-items/search", token, { method: "POST", body: pageToken ? { pageToken } : {} });
     } catch (e) {
-      lastErr = `Fleet API: ${e.message}`;
-      if (!/HTTP 400/.test(e.message)) break; // only retry alternative bodies on validation errors
+      if (pageToken) {
+        // some deployments take the cursor as a query param instead
+        try { raw = await vz(`/fleetapi/v1/fleet-items/search?pageToken=${encodeURIComponent(pageToken)}`, token, { method: "POST", body: {} }); }
+        catch { error = `Fleet API (página ${page + 1}): ${e.message}`; break; }
+      } else { error = `Fleet API: ${e.message}`; break; }
     }
+    const list = asList(raw);
+    if (debug && page === 0) debug.fleetSearchSample = { keys: raw ? Object.keys(raw) : null, firstItem: list[0] || null };
+    let added = 0;
+    for (const it of list) {
+      const v = normVehicle(it);
+      const key = norm(v.id ?? v.name ?? JSON.stringify(it).slice(0, 80));
+      if (seen.has(key)) continue;
+      seen.add(key); out.push(v); added++;
+    }
+    const next = raw?.pageToken || raw?.nextPageToken || null;
+    if (!next || next === pageToken || added === 0) break;
+    pageToken = next;
   }
-  return { list: [], error: lastErr };
+  return { list: out, error };
 }
 
-// Location for a fleet item on the new API (embedded already handled by caller).
-async function fetchFleetApiLocation(token, id) {
-  for (const p of [`/fleetapi/v1/fleet-items/${encodeURIComponent(id)}/location`, `/fleetapi/v1/fleet-items/${encodeURIComponent(id)}/locations/latest`]) {
+// Location for a fleet item — try the shapes we know of; log attempts in debug.
+async function fetchFleetApiLocation(token, id, attempts) {
+  const enc = encodeURIComponent(id);
+  const gets = [
+    `/fleetapi/v1/fleet-items/${enc}/location`,
+    `/fleetapi/v1/fleet-items/${enc}/locations/latest`,
+    `/fleetapi/v1/fleet-items/${enc}/last-known-location`,
+    `/fleetapi/v1/fleet-items/${enc}/status`,
+    `/fleetapi/v1/fleet-items/${enc}`,
+  ];
+  for (const p of gets) {
     try {
       const raw = await vz(p, token);
+      attempts?.push({ path: p.replace(enc, "{id}"), result: raw ? `keys: ${Object.keys(raw).slice(0, 12).join(",")}` : "404/vacío" });
       const loc = extractLoc(raw) || extractLoc(asList(raw)[0]);
       if (loc) return loc;
-    } catch { /* try next shape */ }
+    } catch (e) {
+      attempts?.push({ path: p.replace(enc, "{id}"), result: e.message.slice(0, 140) });
+    }
+  }
+  const posts = [
+    { path: "/fleetapi/v1/fleet-items/locations/search", body: { fleetItemIds: [id] } },
+    { path: "/fleetapi/v1/locations/search", body: { fleetItemIds: [id] } },
+  ];
+  for (const { path, body } of posts) {
+    try {
+      const raw = await vz(path, token, { method: "POST", body });
+      attempts?.push({ path, result: raw ? `keys: ${Object.keys(raw).slice(0, 12).join(",")}` : "404/vacío" });
+      const loc = extractLoc(asList(raw)[0]) || extractLoc(raw);
+      if (loc) return loc;
+    } catch (e) {
+      attempts?.push({ path, result: e.message.slice(0, 140) });
+    }
   }
   return null;
 }
 
-// Legacy Reveal REST: /cmv/v1/vehicles + /rad/v1/vehicles/{n}/location|status.
+// ── Legacy Reveal REST (/cmv + /rad) ─────────────────────────────────────────
+
 async function fetchLegacyVehicles(token) {
   try {
     const raw = await vz("/cmv/v1/vehicles", token);
@@ -281,14 +322,16 @@ export default async function handler(req, res) {
         try {
           // Many list payloads embed the last known position — use it if present.
           let loc = extractLoc(vehicle.raw);
+          if (!loc && api === "fleetapi" && vehicle.id != null) {
+            const attempts = debug && !debug.locAttempts ? (debug.locAttempts = []) : null;
+            loc = await fetchFleetApiLocation(token, vehicle.id, attempts);
+          }
           if (!loc) {
-            loc = api === "fleetapi"
-              ? (vehicle.id != null ? await fetchFleetApiLocation(token, vehicle.id) : null) ||
-                (vehicle.number != null ? await fetchLegacyLocation(token, vehicle.number) : null)
-              : (vehicle.number != null ? await fetchLegacyLocation(token, vehicle.number) : null);
+            const code = vehicle.number || codeOf(truck.name)?.toUpperCase() || truck.name;
+            loc = await fetchLegacyLocation(token, code);
           }
           if (!loc) { noGps++; continue; }
-          await updateTruck(truck, loc, vehicle.number || vehicle.name);
+          await updateTruck(truck, loc, vehicle.id || vehicle.number);
           synced++;
         } catch (e) { errors.push(e?.message || String(e)); }
       }
@@ -314,7 +357,7 @@ export default async function handler(req, res) {
       synced,
       noGps: noGps || undefined,
       vehiclesInVerizon: vehicles.length,
-      verizonVehicles: vehicles.slice(0, 25).map(v => ({ id: v.id, number: v.number, name: v.name, vin: v.vin })),
+      verizonVehicles: vehicles.slice(0, 30).map(v => ({ id: v.id, number: v.number, name: v.name, vin: v.vin })),
       unmatched: unmatched.length ? unmatched : undefined,
       note: vehicles.length === 0
         ? "Ninguna API devolvió vehículos — falta que Verizon termine de habilitar el acceso de la app a los datos de la cuenta."
