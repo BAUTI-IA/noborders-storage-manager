@@ -638,7 +638,7 @@ const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", n
 const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
-const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[] };
+const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[], purposes:{} };
 const TRIP_STATUS = {
   loading:    { l:"Loading", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
   in_transit: { l:"In transit", bg:"#EDE9FE", text:"#6D28D9", dot:"#7C3AED" },
@@ -1024,8 +1024,13 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
 const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", real_cf:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
 
 // A job physically occupies its storage/warehouse only while it's actually there:
-// not delivered (date_out) and not already loaded onto a truck (out_for_delivery).
-const jobInStorageNow = (j) => !j.date_out && j.status !== "out_for_delivery";
+// not delivered (date_out) and not already loaded onto a truck (out_for_delivery,
+// or picked_up while riding a trip — the relocation leg between two locations).
+const jobInStorageNow = (j) => !j.date_out && j.status !== "out_for_delivery" && !(j.trip_id && j.status === "picked_up");
+
+// Purpose of a job's current trip assignment: 'relocation' = internal move between
+// locations (no delivery, balances NOT collected on this trip); null/'delivery' = normal.
+const isRelocation = (j) => j?.trip_purpose === "relocation";
 
 // Trip-layer identity. Everything OUTSIDE trips groups a job by jobKey (job_number),
 // so a job stays ONE job in billing/analytics/client view. But a split job has
@@ -1431,7 +1436,8 @@ create policy "trips_all" on public.trips for all to anon, authenticated using (
 alter table public.storage_jobs
   add column if not exists trip_id bigint references public.trips(id),
   add column if not exists trip_stop_order integer,
-  add column if not exists split_group text;
+  add column if not exists split_group text,
+  add column if not exists trip_purpose text;
 
 -- Audit trail of dynamic changes while a trip is in transit.
 create table if not exists public.trip_events (
@@ -1469,6 +1475,28 @@ alter table public.trip_stops enable row level security;
 drop policy if exists "trip_stops_all" on public.trip_stops;
 create policy "trip_stops_all" on public.trip_stops for all to anon, authenticated using (true) with check (true);
 do $$ begin alter publication supabase_realtime add table public.trip_stops; exception when others then null; end $$;`;
+
+// Internal equipment / materials (pads, dollies, pallets, tools…): company cargo
+// that lives at a storage unit or warehouse and can ride a trip between locations.
+// Not customer jobs — no balances, no delivery semantics.
+const EQUIPMENT_SQL = `create table if not exists public.equipment_items (
+  id bigint generated always as identity primary key,
+  name text,
+  category text,
+  quantity numeric default 1,
+  storage_id bigint references public.storages(id),
+  warehouse text,
+  trip_id bigint references public.trips(id),
+  status text default 'available',
+  notes text,
+  created_by text,
+  created_at timestamptz default now(),
+  updated_at timestamptz
+);
+alter table public.equipment_items enable row level security;
+drop policy if exists "equipment_items_all" on public.equipment_items;
+create policy "equipment_items_all" on public.equipment_items for all to anon, authenticated using (true) with check (true);
+do $$ begin alter publication supabase_realtime add table public.equipment_items; exception when others then null; end $$;`;
 
 // Manual per-job timeline events (logged directly on a job, no formal trip needed).
 const JOB_EVENTS_SQL = `create table if not exists public.job_events (
@@ -1725,6 +1753,19 @@ const TRIP_STOP_CATEGORIES = [
 ];
 const tripStopCat = (k) => TRIP_STOP_CATEGORIES.find(c => c.key === k) || TRIP_STOP_CATEGORIES[TRIP_STOP_CATEGORIES.length - 1];
 
+// Internal equipment / materials categories (Equipment tab — company cargo, not jobs).
+const EQUIPMENT_CATEGORIES = [
+  { key:"pads",     label:"Pads / blankets", es:"Pads / mantas",     icon:"🧺", color:"#185FA5" },
+  { key:"dollies",  label:"Dollies",         es:"Dollies",           icon:"🛒", color:"#7C3AED" },
+  { key:"straps",   label:"Straps",          es:"Correas",           icon:"🪢", color:"#B4690E" },
+  { key:"pallets",  label:"Pallets",         es:"Pallets",           icon:"🪵", color:"#3B6D11" },
+  { key:"boxes",    label:"Boxes / packing", es:"Cajas / embalaje",  icon:"📦", color:"#1A8A4E" },
+  { key:"tools",    label:"Tools",           es:"Herramientas",      icon:"🛠️", color:"#A32D2D" },
+  { key:"other",    label:"Other",           es:"Otro",              icon:"🧰", color:"#888888" },
+];
+const equipmentCat = (k) => EQUIPMENT_CATEGORIES.find(c => c.key === k) || EQUIPMENT_CATEGORIES[EQUIPMENT_CATEGORIES.length - 1];
+const EMPTY_EQUIPMENT = { name:"", category:"pads", quantity:"1", location:"", notes:"" };
+
 // ── Live-load map: truck GPS status colors + relative-time helper ──
 const LIVE_STATUS = {
   moving:  { l:"Moving", dot:"#1A8A4E", bg:"#EAF3DE", text:"#3B6D11" },
@@ -1829,10 +1870,16 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
     `STOPS:`,
   ];
   jobsIn.forEach((j, i) => {
-    lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}${j.split_group ? " (split load — partial)" : ""}`);
-    lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
-    lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
-    lines.push(`   Balance to collect: $${Math.round(jobToCollect(j)).toLocaleString()}`);
+    lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}${j.split_group ? " (split load — partial)" : ""}${isRelocation(j) ? " (RELOCATION)" : ""}`);
+    if (isRelocation(j)) {
+      lines.push(`   Move to: storage/warehouse (relocation)`);
+      lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
+      lines.push(`   RELOCATION — move to storage. DO NOT COLLECT.`);
+    } else {
+      lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
+      lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
+      lines.push(`   Balance to collect: $${Math.round(jobToCollect(j)).toLocaleString()}`);
+    }
     lines.push("");
   });
   return lines.join("\n");
@@ -1912,10 +1959,10 @@ function tripUpdateWaText(trip, g, totalCf) {
   return [
     `🔄 TRIP #${trip.trip_number || trip.id} UPDATE`,
     `New job added to your trip:`,
-    `Job: ${g.job_number || "-"} — ${g.customer || "-"}`,
+    `Job: ${g.job_number || "-"} — ${g.customer || "-"}${isRelocation(g) ? " (RELOCATION)" : ""}`,
     `Pickup/delivery: ${dest || pick || "-"}`,
     `CF: ${Math.round(effCf(g))} | Sticker: ${g.sticker_color || "-"} Lot ${g.lot_number || "-"}`,
-    `Balance to collect: $${numv(g.bol_balance).toLocaleString()}`,
+    isRelocation(g) ? `RELOCATION — move to storage. DO NOT COLLECT.` : `Balance to collect: $${numv(g.bol_balance).toLocaleString()}`,
     `Updated total load: ${Math.round(totalCf || 0)} CF`,
   ].join("\n");
 }
@@ -1929,6 +1976,8 @@ const TRIP_EVENT_META = {
   unplanned_pickup:   { l:"Unplanned pickup", icon:"🆕" },
   delivery_completed: { l:"Delivered", icon:"✅" },
   driver_handoff:     { l:"Handoff de driver", icon:"🔄" },
+  equipment_loaded:   { l:"Equipment loaded", icon:"🧰" },
+  equipment_unloaded: { l:"Equipment unloaded", icon:"📤" },
 };
 const tripEventLabel = (v) => TRIP_EVENT_META[v]?.l || v;
 // Why a driver handed a job (or the whole trip) to another driver.
@@ -2688,6 +2737,7 @@ const NAV = [
     { id:"drivers", label:"Drivers", icon:"🪪" },
     { id:"trucks", label:"Trucks", icon:"🚛" },
     { id:"trips", label:"Trips / Live Load", icon:"🛣️" },
+    { id:"equipment", label:"Equipment", icon:"🧰" },
   ]},
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
@@ -2756,6 +2806,7 @@ const PAGE_META = {
   drivers:     { title:"Drivers", sub:"Operation drivers" },
   trucks:      { title:"Trucks", sub:"Truck fleet" },
   trips:       { title:"Trips / Live Load", sub:"Live load per truck" },
+  equipment:   { title:"Equipment", sub:"Internal equipment & materials per location" },
   compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
   analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
   suggestions: { title:"Suggestions", sub:"Employee feedback and improvement ideas" },
@@ -3203,6 +3254,16 @@ export default function App() {
   // Custom (non-job) stops on a trip: maintenance, DOT inspection, fuel, etc.
   const [tripStops, setTripStops] = useState([]);
   const [tripStopsMissing, setTripStopsMissing] = useState(false); // trip_stops table not yet in DB
+  // Equipment / materials tab (internal cargo, not customer jobs)
+  const [equipmentItems, setEquipmentItems] = useState([]);
+  const [equipmentMissing, setEquipmentMissing] = useState(false); // equipment_items table not yet in DB
+  const [equipmentSearch, setEquipmentSearch] = useState("");
+  const [showEquipmentModal, setShowEquipmentModal] = useState(false);
+  const [equipmentForm, setEquipmentForm] = useState(EMPTY_EQUIPMENT);
+  const [editingEquipmentId, setEditingEquipmentId] = useState(null);
+  const [equipmentSaving, setEquipmentSaving] = useState(false);
+  const [equipLoadItem, setEquipLoadItem] = useState(null);   // item being loaded onto a trip
+  const [equipUnloadItem, setEquipUnloadItem] = useState(null); // {item, tripId} being unloaded at a destination
   const [addStopModal, setAddStopModal] = useState(null); // { trip } — the "add stop" popup
   const [stopForm, setStopForm] = useState({ category:"maintenance", address:"", note:"" });
   const [stopSaving, setStopSaving] = useState(false);
@@ -3275,6 +3336,7 @@ export default function App() {
   const [allocMissing, setAllocMissing] = useState(false);       // payments.job_extra_id (charge allocation)
   const [realCfMissing, setRealCfMissing] = useState(false);     // storage_jobs.real_cf (measured cubic feet)
   const [jobSplitColMissing, setJobSplitColMissing] = useState(false); // storage_jobs.split_group (job split across trips)
+  const [tripPurposeColMissing, setTripPurposeColMissing] = useState(false); // storage_jobs.trip_purpose (delivery vs relocation)
   const [expandedSplits, setExpandedSplits] = useState(() => new Set());
   const [commAssign, setCommAssign] = useState(null);            // pending commission assignment for a payment-split extra
   const [payDocUploading, setPayDocUploading] = useState(false);
@@ -3439,6 +3501,10 @@ export default function App() {
   const loadTripStops = useCallback(async () => {
     const { data, error } = await supabase.from("trip_stops").select("*").order("stop_order", { ascending: true });
     if (!error) setTripStops(data || []);
+  }, []);
+  const loadEquipment = useCallback(async () => {
+    const { data, error } = await supabase.from("equipment_items").select("*").order("created_at", { ascending: false });
+    if (!error) setEquipmentItems(data || []);
   }, []);
   const loadJobEvents = useCallback(async () => {
     const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
@@ -3777,6 +3843,34 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session, tripStopsMissing, loadTripStops]);
 
+  // Probe / auto-migrate the equipment_items table (Equipment tab — internal cargo).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("equipment_items").select("id").limit(1);
+      if (cancelled) return;
+      if (!error) { setEquipmentMissing(false); loadEquipment(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: EQUIPMENT_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { setEquipmentMissing(false); loadEquipment(); }
+      else setEquipmentMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadEquipment]);
+
+  useEffect(() => {
+    if (!session || equipmentMissing) return;
+    const channel = supabase.channel("equipment-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "equipment_items" }, () => loadEquipment())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, equipmentMissing, loadEquipment]);
+
   // Probe the job_events table (manual per-job timeline; needs storage_jobs).
   useEffect(() => {
     if (!session || !dbReady) return;
@@ -4107,6 +4201,25 @@ export default function App() {
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled && !created) setJobSplitColMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  // Probe storage_jobs.trip_purpose ('delivery' | 'relocation'; null = delivery).
+  // Marks WHY a job rides its current trip: relocation legs move it between
+  // locations without delivery semantics and without collecting its balances.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("trip_purpose").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storage_jobs add column if not exists trip_purpose text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setTripPurposeColMissing(true);
     })();
     return () => { cancelled = true; };
   }, [session]);
@@ -4712,17 +4825,33 @@ export default function App() {
     // the truck right now — delivered jobs and jobs sitting in storage (dropped
     // mid-trip or not picked up yet) don't take up space. Occupancy uses loadedCf
     // so the bar matches the stops' "Delivered" / "Dropped in storage" badges.
-    let totalCf = 0, loadedCf = 0, totalCollect = 0, delivered = 0;
+    let totalCf = 0, loadedCf = 0, totalCollect = 0, delivered = 0, deliveryCount = 0, relocCount = 0, relocDone = 0;
+    // storage_drop events log the unit's min row id; a row is covered when any
+    // row of its unit (same job_number, non-split) appears in the set.
+    const dropIds = new Set();
+    for (const e of tripEvents) { if (e.trip_id === trip.id && e.event_type === "storage_drop" && e.job_id != null) dropIds.add(e.job_id); }
+    const unitDropped = (j) => dropIds.has(j.id) || (!j.split_group && !!j.job_number && jobsIn.some(x => x.id !== j.id && x.job_number === j.job_number && dropIds.has(x.id)));
     for (const j of jobsIn) {
       const cf = effCf(j);
-      totalCf += cf; totalCollect += jobToCollect(j);
-      if (j.date_out || j.status === "delivered") delivered++;
-      else if (j.status !== "in_storage") loadedCf += cf;
+      totalCf += cf;
+      // Relocation legs never collect on this trip: they move the job between
+      // locations, so their balances stay off the manifest / dashboard money.
+      // A relocation is done only once its storage_drop event exists — in_storage
+      // alone also matches a job still waiting at its origin location.
+      if (isRelocation(j)) {
+        relocCount++;
+        if (j.status === "in_storage" && unitDropped(j)) relocDone++;
+      } else {
+        deliveryCount++; totalCollect += jobToCollect(j);
+        if (j.date_out || j.status === "delivered") delivered++;
+      }
+      if (!(j.date_out || j.status === "delivered") && j.status !== "in_storage") loadedCf += cf;
     }
     const cap = numv(truckById[trip.truck_id]?.capacity_cf);
     const occPct = cap > 0 ? Math.round((loadedCf / cap) * 100) : null;
-    return { jobsIn, totalCf, loadedCf, totalCollect, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
-  }, [jobsByTrip, truckById]);
+    return { jobsIn, totalCf, loadedCf, totalCollect, delivered, deliveryCount, relocCount, relocDone, count: jobsIn.length, cap, occPct,
+      allDelivered: jobsIn.length > 0 && delivered === deliveryCount && relocDone === relocCount };
+  }, [jobsByTrip, truckById, tripEvents]);
   const tripMetrics = useMemo(() => {
     const td = today();
     let activeCount = 0, cfTransit = 0, collectTransit = 0, deliveredToday = 0;
@@ -5765,8 +5894,11 @@ export default function App() {
   }
   function openEditTrip(t) {
     setEditingTripId(t.id);
-    const assigned = (jobsByTrip[t.id] || []).map(tripUnitKey);
-    setTripForm({ trip_number:t.trip_number||"", truck_id:t.truck_id||"", driver_id:t.driver_id||"", departure_date:t.departure_date||"", status:t.status||"loading", notes:t.notes||"", job_keys: assigned });
+    const assignedJobs = jobsByTrip[t.id] || [];
+    const assigned = assignedJobs.map(tripUnitKey);
+    const purposes = {};
+    for (const j of assignedJobs) { if (isRelocation(j)) purposes[tripUnitKey(j)] = "relocation"; }
+    setTripForm({ trip_number:t.trip_number||"", truck_id:t.truck_id||"", driver_id:t.driver_id||"", departure_date:t.departure_date||"", status:t.status||"loading", notes:t.notes||"", job_keys: assigned, purposes });
     setTripJobSearch(""); setShowTripModal(true);
   }
   // ── AI trip suggestions ──────────────────────────────────────────────
@@ -5835,10 +5967,13 @@ export default function App() {
       const t = trips.find(x => x.id === s.trip_id);
       if (!t || t.status !== "loading") { window.alert(trAI("That trip is no longer in Loading status.", "Ese trip ya no está en estado Loading.")); return; }
       setEditingTripId(t.id);
+      const tripPurposes = {};
+      for (const j of (jobsByTrip[t.id] || [])) { if (isRelocation(j)) tripPurposes[tripUnitKey(j)] = "relocation"; }
       setTripForm({
         trip_number: t.trip_number || "", truck_id: t.truck_id || "", driver_id: t.driver_id || "",
         departure_date: t.departure_date || "", status: t.status || "loading", notes: t.notes || "",
         job_keys: [...(jobsByTrip[t.id] || []).map(tripUnitKey), ...valid.filter(k => !(jobsByTrip[t.id] || []).some(j => tripUnitKey(j) === k))],
+        purposes: tripPurposes,
       });
     } else {
       setEditingTripId(null);
@@ -5882,11 +6017,12 @@ export default function App() {
       // Keys are trip-unit keys: "row:<id>" for a split portion, jobKey otherwise.
       for (let i = 0; i < wanted.length; i++) {
         const ids = jobRowIdsForUnit(wanted[i]);
-        if (ids.length) await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+        const purpose = tripPurposeColMissing ? {} : { trip_purpose: tripForm.purposes?.[wanted[i]] === "relocation" ? "relocation" : "delivery" };
+        if (ids.length) await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, ...purpose, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
       }
       const wantedSet = new Set(wanted);
       const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(tripUnitKey(j))).map(j => j.id);
-      if (toClear.length) await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
+      if (toClear.length) await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
     }
     setTripSaving(false);
     if (error) { window.alert(error.message); return; }
@@ -5909,7 +6045,7 @@ export default function App() {
   }
   async function deleteTrip(t) {
     if (!window.confirm(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`)) return;
-    await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null }).eq("trip_id", t.id);
+    await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }) }).eq("trip_id", t.id);
     await supabase.from("trips").delete().eq("id", t.id);
     loadTrips(); loadJobs();
   }
@@ -6143,19 +6279,23 @@ export default function App() {
     showToast(`Trip pasado a ${toNm}`);
   }
   // Add an existing (non-trip) job to a trip in transit, log it, queue a driver WA update.
-  async function tripAddExistingJob(trip, k) {
+  // purpose: 'relocation' rides the truck as an internal move (picked_up, no collection);
+  // anything else is the normal delivery flow (out_for_delivery).
+  async function tripAddExistingJob(trip, k, purpose) {
     const ids = jobRowIdsForUnit(k);
     const rows = jobs.filter(j => ids.includes(j.id));
     if (!rows.length) return;
+    const reloc = purpose === "relocation" && !tripPurposeColMissing;
     setTripBusy(true);
     const order = (jobsByTrip[trip.id] || []).length + 1;
-    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: rows[0].date_out ? rows[0].status : "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-    await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: rows[0].job_number || "" });
+    const status = rows[0].date_out ? rows[0].status : (reloc ? "picked_up" : "out_for_delivery");
+    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status, ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: (rows[0].job_number || "") + (reloc ? " · relocation" : "") });
     const newTotal = tripCalc(trip).loadedCf + effCf(rows[0]);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
-    setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} added` });
-    showToast(`Job added to the trip`);
+    setTripWaLink({ href: tripUpdateWaLink(trip, { ...rows[0], trip_purpose: reloc ? "relocation" : "delivery" }, newTotal), label: `Job ${rows[0].job_number || ""} added` });
+    showToast(reloc ? `Job loaded for relocation — no collection` : `Job added to the trip`);
   }
   // Drop a job at a storage unit / warehouse: unlink from trip, set location, status in_storage.
   async function tripDropAtStorage(trip, k, target) {
@@ -6168,23 +6308,39 @@ export default function App() {
     if (target.kind === "warehouse") { patch.warehouse = target.name; patch.storage_id = null; }
     else { patch.storage_id = target.id; patch.warehouse = null; }
     await supabase.from("storage_jobs").update(patch).in("id", ids);
-    await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label });
+    const relocDrop = jobs.some(j => ids.includes(j.id) && isRelocation(j));
+    await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label + (relocDrop ? " · relocation" : "") });
     await loadJobs();
     setTripBusy(false); setStorageDropJob(null);
     const hasDelivery = jobs.some(j => ids.includes(j.id) && j.delivery_date);
-    showToast(`Job dropped at ${target.label}${hasDelivery ? "" : " — pendiente agendar delivery"}`);
+    showToast(relocDrop ? `Job relocated to ${target.label}` : `Job dropped at ${target.label}${hasDelivery ? "" : " — pendiente agendar delivery"}`);
   }
-  // Pick a job up from storage onto the trip: link to trip, status out_for_delivery.
-  async function tripPickupFromStorage(trip, k) {
+  // Pick a job up from storage onto the trip. purpose 'relocation' = internal move
+  // between locations: picked_up (never out_for_delivery), balances not collected.
+  async function tripPickupFromStorage(trip, k, purpose) {
     const ids = jobRowIdsForUnit(k);
     if (!ids.length) return;
+    const reloc = purpose === "relocation" && !tripPurposeColMissing;
     setTripBusy(true);
     const order = (jobsByTrip[trip.id] || []).length + 1;
-    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: jobs.find(j => ids.includes(j.id))?.job_number || "" });
+    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: reloc ? "picked_up" : "out_for_delivery", ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: (jobs.find(j => ids.includes(j.id))?.job_number || "") + (reloc ? " · relocation" : "") });
     await loadJobs();
     setTripBusy(false); setTripAction(null);
-    showToast(`Job loaded onto the trip`);
+    showToast(reloc ? `Job loaded for relocation — no collection` : `Job loaded onto the trip`);
+  }
+  // Load an already-assigned relocation stop onto the truck (status → picked_up),
+  // keeping its stop order. Origin location fields stay on the row until the drop,
+  // matching the delivery flow's convention.
+  async function tripRelocLoad(trip, j) {
+    const ids = jobRowIdsForUnit(tripUnitKey(j));
+    if (!ids.length) return;
+    setTripBusy(true);
+    await supabase.from("storage_jobs").update({ status: "picked_up", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), storage_id: j.storage_id || null, notes: (j.job_number || "") + " · relocation" });
+    await loadJobs();
+    setTripBusy(false);
+    showToast(`Job loaded for relocation — no collection`);
   }
   // Create an unplanned new job and immediately add it to the trip.
   async function saveUnplannedPickup(trip) {
@@ -6208,21 +6364,78 @@ export default function App() {
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
     showToast("Unplanned pickup added");
   }
-  // Complete a trip: optionally drop the still-on-truck jobs at a storage, then mark completed.
-  async function completeTrip(trip, undeliveredKeys, dropTarget) {
+  // Complete a trip: drop the still-on-truck jobs at a storage, release the ones
+  // already dropped mid-trip (they keep their location), then mark completed.
+  async function completeTrip(trip, onTruckKeys, droppedKeys, dropTarget) {
+    const equipAboard = equipmentItems.filter(i => i.trip_id === trip.id);
+    if (equipAboard.length && !window.confirm(trAI(
+      `${equipAboard.length} equipment item(s) still on this trip — they will stay marked as in transit. Complete anyway?`,
+      `${equipAboard.length} item(s) de equipo siguen en este trip — van a quedar marcados en tránsito. ¿Completar igual?`))) return;
     setTripBusy(true);
-    if (undeliveredKeys.length && dropTarget) {
+    const purposeClear = tripPurposeColMissing ? {} : { trip_purpose: null };
+    if (onTruckKeys.length && dropTarget) {
       const t = dropTarget.kind === "warehouse" ? { warehouse: dropTarget.name, storage_id: null } : { storage_id: dropTarget.id, warehouse: null };
-      for (const k of undeliveredKeys) {
+      for (const k of onTruckKeys) {
         const ids = jobRowIdsForUnit(k);
-        await supabase.from("storage_jobs").update({ ...t, trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+        await supabase.from("storage_jobs").update({ ...t, trip_id: null, trip_stop_order: null, ...purposeClear, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
         await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: dropTarget.kind === "warehouse" ? null : dropTarget.id, notes: dropTarget.label });
       }
+    }
+    for (const k of (droppedKeys || [])) {
+      const ids = jobRowIdsForUnit(k);
+      await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...purposeClear, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     }
     await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id);
     setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget("");
     loadTrips(); loadJobs();
     showToast(`Trip ${trip.trip_number || trip.id} completed`);
+  }
+
+  // ── Equipment / materials (internal cargo — Equipment tab) ──
+  async function saveEquipmentItem() {
+    setEquipmentSaving(true);
+    const f = equipmentForm;
+    const loc = f.location || "";
+    const payload = {
+      name: f.name.trim() || null,
+      category: f.category || "other",
+      quantity: f.quantity === "" ? 1 : Number(f.quantity),
+      storage_id: loc.startsWith("u:") ? Number(loc.slice(2)) : null,
+      warehouse: loc.startsWith("w:") ? loc.slice(2) : null,
+      notes: f.notes.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+    let error;
+    if (editingEquipmentId) ({ error } = await supabase.from("equipment_items").update(payload).eq("id", editingEquipmentId));
+    else ({ error } = await supabase.from("equipment_items").insert([{ ...payload, created_by: userEmail }]));
+    setEquipmentSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowEquipmentModal(false); loadEquipment();
+  }
+  async function deleteEquipmentItem(item) {
+    if (!window.confirm(trAI(`Delete "${item.name || "this item"}"?`, `¿Eliminar "${item.name || "este item"}"?`))) return;
+    await supabase.from("equipment_items").delete().eq("id", item.id);
+    loadEquipment();
+  }
+  // Load an equipment item onto an active trip (rides as internal cargo, no money).
+  async function equipmentLoadOnTrip(item, tripId) {
+    const { error } = await supabase.from("equipment_items").update({ trip_id: tripId, status: "in_transit", updated_at: new Date().toISOString() }).eq("id", item.id);
+    if (error) { window.alert(error.message); return; }
+    await logTripEvent(tripId, "equipment_loaded", { notes: `${item.name || "equipment"} ×${numv(item.quantity) || 1}`, created_by: userEmail });
+    setEquipLoadItem(null); loadEquipment();
+    showToast(trAI("Equipment loaded onto the trip", "Equipo cargado al trip"));
+  }
+  // Unload an equipment item at a storage unit / warehouse and free it from the trip.
+  async function equipmentUnload(item, target) {
+    if (!target) return;
+    const patch = { trip_id: null, status: "available", updated_at: new Date().toISOString() };
+    if (target.kind === "warehouse") { patch.warehouse = target.name; patch.storage_id = null; }
+    else { patch.storage_id = target.id; patch.warehouse = null; }
+    const { error } = await supabase.from("equipment_items").update(patch).eq("id", item.id);
+    if (error) { window.alert(error.message); return; }
+    if (item.trip_id) await logTripEvent(item.trip_id, "equipment_unloaded", { storage_id: target.kind === "warehouse" ? null : target.id, notes: `${item.name || "equipment"} → ${target.label}`, created_by: userEmail });
+    setEquipUnloadItem(null); loadEquipment();
+    showToast(trAI(`Equipment unloaded at ${target.label}`, `Equipo descargado en ${target.label}`));
   }
 
   // ── Manual job timeline events ──
@@ -7267,6 +7480,7 @@ export default function App() {
           {page === "trips" && can("trips","create") && <Btn disabled={tripsMissing || tripAILoading} onClick={requestTripSuggestions}>✨ Suggest trips (AI)</Btn>}
           {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
+          {page === "equipment" && can("equipment","create") && <Btn primary disabled={equipmentMissing} onClick={() => { setEditingEquipmentId(null); setEquipmentForm(EMPTY_EQUIPMENT); setShowEquipmentModal(true); }}>+ Item</Btn>}
           {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
           {page === "payments" && can("payments","create") && <Btn disabled={paymentsMissing} onClick={() => setShowAccountsModal(true)}>🏦 Bank accounts</Btn>}
           {page === "payments" && can("payments","create") && !paymentsMissing && !extrasMissing && <Btn onClick={openAddExtraFromPayments}>+ Extra</Btn>}
@@ -8255,6 +8469,79 @@ export default function App() {
         </div>
       )}
 
+      {/* ───────────────────────── EQUIPMENT / MATERIALS ───────────────────────── */}
+      {page === "equipment" && (() => {
+        const locLabel = (i) => i.warehouse ? `🏭 ${i.warehouse}` : (i.storage_id ? ([storageById[i.storage_id]?.brand, storageById[i.storage_id]?.unit && "U" + storageById[i.storage_id]?.unit].filter(Boolean).join(" ") || `Unit #${i.storage_id}`) : "—");
+        const q = equipmentSearch.trim().toLowerCase();
+        const shownItems = q ? equipmentItems.filter(i => [i.name, i.category, i.notes, i.warehouse].join(" ").toLowerCase().includes(q)) : equipmentItems;
+        const inTransit = equipmentItems.filter(i => i.status === "in_transit").length;
+        const activeTrips = trips.filter(t => TRIP_ACTIVE(t.status));
+        return (
+          <>
+            {equipmentMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>{trAI("For the Equipment tab, run the setup SQL once in Supabase.", "Para la pestaña de Equipment, corré el SQL de setup una vez en Supabase.")}</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
+              {[
+                { label:trAI("Items", "Items"), value:equipmentItems.length, color:"#111" },
+                { label:trAI("Available", "Disponibles"), value:equipmentItems.length - inTransit, color:"#1A8A4E" },
+                { label:trAI("In transit", "En tránsito"), value:inTransit, color:"#7C3AED" },
+              ].map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:20, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+            <input style={{ ...inp, maxWidth:340, marginBottom:12 }} value={equipmentSearch} onChange={e => setEquipmentSearch(e.target.value)} placeholder={trAI("Search by name / category / location…", "Buscar por nombre / categoría / location…")} />
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {[trAI("Item", "Item"), trAI("Category", "Categoría"), trAI("Qty", "Cant."), trAI("Location", "Location"), "Status", ""].map((h,i) => (
+                        <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shownItems.length === 0 ? (
+                      <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{equipmentMissing ? trAI("Run the setup SQL to enable equipment.", "Corré el SQL de setup para habilitar equipment.") : trAI("No equipment items. Add one with “+ Item”.", "Sin items de equipo. Agregá uno con “+ Item”.")}</td></tr>
+                    ) : shownItems.map(item => {
+                      const cat = equipmentCat(item.category);
+                      const onTrip = item.trip_id ? tripById[item.trip_id] : null;
+                      return (
+                        <tr key={item.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                          <td style={{ padding:"12px" }}>
+                            <div style={{ fontWeight:600 }}>{item.name || "—"}</div>
+                            {item.notes && <div style={{ fontSize:11, color:"#888", marginTop:2 }}>{item.notes}</div>}
+                          </td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}><span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px" }}>{cat.icon} {trAI(cat.label, cat.es)}</span></td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{numv(item.quantity) || 1}</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{item.status === "in_transit" && onTrip ? `🚚 ${onTrip.trip_number || "#" + onTrip.id}` : locLabel(item)}</td>
+                          <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: item.status === "in_transit" ? "#EDE9FE" : "#EAF3DE", color: item.status === "in_transit" ? "#6D28D9" : "#3B6D11", whiteSpace:"nowrap" }}>{item.status === "in_transit" ? trAI("In transit", "En tránsito") : trAI("Available", "Disponible")}</span></td>
+                          <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                            {item.status === "in_transit"
+                              ? <Btn onClick={() => setEquipUnloadItem(item)} style={{ padding:"4px 10px", fontSize:12 }}>📤 {trAI("Unload", "Descargar")}</Btn>
+                              : <Btn disabled={!activeTrips.length} title={!activeTrips.length ? trAI("No active trips", "No hay trips activos") : ""} onClick={() => setEquipLoadItem(item)} style={{ padding:"4px 10px", fontSize:12 }}>🚚 {trAI("Load on trip", "Cargar a trip")}</Btn>}
+                            <Btn onClick={() => { setEditingEquipmentId(item.id); setEquipmentForm({ name:item.name || "", category:item.category || "other", quantity:String(numv(item.quantity) || 1), location: item.storage_id ? `u:${item.storage_id}` : (item.warehouse ? `w:${item.warehouse}` : ""), notes:item.notes || "" }); setShowEquipmentModal(true); }} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Edit</Btn>
+                            <Btn danger onClick={() => deleteEquipmentItem(item)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{shownItems.length} item(s)</div>
+            </div>
+          </>
+        );
+      })()}
+
       {/* ───────────────────────── TRIPS / LIVE LOAD ───────────────────────── */}
       {page === "trips" && (() => {
         // One row in a trip's unified stop sequence — a job or a custom stop.
@@ -8304,9 +8591,14 @@ export default function App() {
             );
           }
           const j = item.j;
+          const reloc = isRelocation(j);
           const delivered = !!j.date_out || j.status === "delivered";
           // Dropped at storage during the trip: still on the trip, but sitting in storage.
-          const dropped = !delivered && j.status === "in_storage";
+          // A relocation stop only counts as dropped once its storage_drop event exists —
+          // in_storage without it means it's still waiting at the origin location.
+          const relocDropped = reloc && (tripEventsByTrip[trip.id] || []).some(e => e.event_type === "storage_drop" && e.job_id && jobRowIdsForUnit(tripUnitKey(j)).includes(e.job_id));
+          const dropped = !delivered && j.status === "in_storage" && (!reloc || relocDropped);
+          const relocAtOrigin = reloc && !delivered && j.status === "in_storage" && !relocDropped;
           const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
           const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
           return (
@@ -8318,6 +8610,7 @@ export default function App() {
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                   <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
                   {j.split_group && <span style={{ color:"#7C3AED", fontWeight:700, fontSize:10.5 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
+                  {reloc && <span title={trAI("Internal move between locations — no delivery, no collection", "Movimiento interno entre locations — sin delivery, sin cobro")} style={{ color:"#185FA5", background:"#E6F1FB", fontWeight:700, fontSize:10, borderRadius:20, padding:"1px 7px", whiteSpace:"nowrap" }}>🔁 Relocation</span>}
                   <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                   {fromTo && <span style={{ color:"#888" }}>· {fromTo}</span>}
                 </div>
@@ -8326,17 +8619,19 @@ export default function App() {
                   {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                   {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                   <FaddBadge fadd={j.fadd} />
-                  {jobToCollect(j) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
+                  {!reloc && jobToCollect(j) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                 </div>
               </div>
               {delivered
                 ? <span style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 8px" }}>Delivered</span>
                 : dropped
-                ? <span title={dropLoc} style={{ fontSize:10, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>
+                ? <span title={dropLoc} style={{ fontSize:10, fontWeight:700, color: reloc ? "#3B6D11" : "#185FA5", background: reloc ? "#EAF3DE" : "#E7EFF8", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>{reloc ? "✅ Relocated" : "📦 Dropped in storage"}</span>
                 : <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
-                    <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>
-                    <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
-                    {!jobSplitColMissing && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
+                    {!reloc && <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>}
+                    {relocAtOrigin
+                      ? <Btn onClick={() => tripRelocLoad(trip, j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>🔼 {trAI("Load onto truck", "Cargar al camión")}</Btn>
+                      : <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 {reloc ? trAI("Drop at destination", "Dejar en destino") : "Dropped at storage"}</Btn>}
+                    {!jobSplitColMissing && !reloc && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
                   </div>}
             </div>
           );
@@ -10776,7 +11071,7 @@ export default function App() {
       )}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -11916,12 +12211,16 @@ export default function App() {
             {over > 0 && <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:8, padding:"8px 11px", fontSize:12.5, fontWeight:700, color:"#A32D2D", margin:"8px 0" }}>⚠️ Over capacity by {over.toLocaleString()} CF</div>}
 
             {/* Read-only delivery progress indicator (never changes trip status) */}
-            {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>📦 Delivered: <b style={{ color: c.allDelivered ? "#3B6D11" : "#111" }}>{c.delivered}/{c.count}</b>{c.delivered < c.count ? ` · ${c.count - c.delivered} pending` : ""}</div>}
+            {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>
+              {c.deliveryCount > 0 && <>📦 Delivered: <b style={{ color: c.delivered === c.deliveryCount ? "#3B6D11" : "#111" }}>{c.delivered}/{c.deliveryCount}</b></>}
+              {c.relocCount > 0 && <>{c.deliveryCount > 0 ? " · " : ""}🔁 Relocated: <b style={{ color: c.relocDone === c.relocCount ? "#3B6D11" : "#111" }}>{c.relocDone}/{c.relocCount}</b></>}
+              {!c.allDelivered ? ` · ${(c.deliveryCount - c.delivered) + (c.relocCount - c.relocDone)} pending` : ""}
+            </div>}
 
             {/* Non-blocking suggestion — trip stays as-is until the dispatcher acts */}
             {c.allDelivered && TRIP_ACTIVE(t.status) && (
               <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"10px 12px", margin:"8px 0", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ All jobs delivered — mark trip as completed?</span>
+                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ {c.relocCount > 0 ? "All stops done (deliveries + relocations)" : "All jobs delivered"} — mark trip as completed?</span>
                 <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Mark completed</Btn>
               </div>
             )}
@@ -12001,6 +12300,7 @@ export default function App() {
                           </div>
                         </div>
                         <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, tripUnitKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Add</Btn>
+                        {!tripPurposeColMissing && <Btn disabled={tripBusy} onClick={() => tripAddExistingJob(t, tripUnitKey(j), "relocation")} title={trAI("Add as internal relocation — no delivery, no collection", "Agregar como reubicación interna — sin delivery, sin cobro")} style={{ padding:"4px 10px", fontSize:11 }}>🔁 {trAI("Relocate", "Reubicar")}</Btn>}
                       </div>
                     ))}
                 </div>
@@ -12020,6 +12320,7 @@ export default function App() {
                           <div style={{ color:"#888", marginTop:2 }}>{Math.round(effCf(j))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</div>
                         </div>
                         <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, tripUnitKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Load</Btn>
+                        {!tripPurposeColMissing && <Btn disabled={tripBusy} onClick={() => tripPickupFromStorage(t, tripUnitKey(j), "relocation")} title={trAI("Load to relocate to another location — no delivery, no collection", "Cargar para reubicar en otra location — sin delivery, sin cobro")} style={{ padding:"4px 10px", fontSize:11 }}>🔁 {trAI("Relocate", "Reubicar")}</Btn>}
                       </div>
                     ))}
                 </div>
@@ -12106,8 +12407,14 @@ export default function App() {
                         );
                       }
                       const j = item.j;
+                      const reloc = isRelocation(j);
                       const delivered = !!j.date_out || j.status === "delivered";
-                      const dropped = !delivered && j.status === "in_storage";
+                      // A relocation stop is only "done" once it was actually dropped at the
+                      // destination (storage_drop event); in_storage without that event means
+                      // it's still waiting at its origin location.
+                      const relocDropped = reloc && events.some(e => e.event_type === "storage_drop" && e.job_id && jobRowIdsForUnit(tripUnitKey(j)).includes(e.job_id));
+                      const dropped = !delivered && j.status === "in_storage" && (!reloc || relocDropped);
+                      const relocAtOrigin = reloc && !delivered && j.status === "in_storage" && !relocDropped;
                       const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
                       const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
                       return (
@@ -12117,10 +12424,12 @@ export default function App() {
                             {numBadge("#111", i + 1)}
                             <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
                             {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
+                            {reloc && <span title={trAI("Internal move between locations — no delivery, no collection", "Movimiento interno entre locations — sin delivery, sin cobro")} style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>🔁 Relocation</span>}
                             <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
                             {fromTo && <span style={{ fontSize:11, color:"#888" }}>· {fromTo}</span>}
                             {delivered && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 9px" }}>Delivered</span>}
-                            {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>}
+                            {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color: reloc ? "#3B6D11" : "#185FA5", background: reloc ? "#EAF3DE" : "#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{reloc ? `✅ Relocated · ${dropLoc}` : "📦 Dropped in storage"}</span>}
+                            {relocAtOrigin && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#854F0B", background:"#FEF3C7", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 At origin · {dropLoc}</span>}
                           </div>
                           <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
                             <span title={hasRealCf(j) ? `Real (est. ${Math.round(parseCf(j.volume))} CF)` : "Estimado del broker"}>
@@ -12130,7 +12439,8 @@ export default function App() {
                             {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                             {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                             <FaddBadge fadd={j.fadd} />
-                            {jobToCollect(j) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
+                            {!reloc && jobToCollect(j) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
+                            {reloc && jobToCollect(j) > 0 && <span title={trAI("Outstanding balance — NOT collected on this trip (relocation)", "Balance pendiente — NO se cobra en este trip (reubicación)")} style={{ color:"#999", textDecoration:"line-through" }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                             {(() => {
                               // A stop owned by a different driver than the trip's → show who.
                               const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
@@ -12141,10 +12451,11 @@ export default function App() {
                           </div>
                           {!delivered && !dropped && (
                             <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                              <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
-                              {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
+                              {!reloc && <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>}
+                              {relocAtOrigin && <Btn primary disabled={tripBusy} onClick={() => tripRelocLoad(t, j)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>🔼 {trAI("Load onto truck", "Cargar al camión")}</Btn>}
+                              {inTransit && !relocAtOrigin && <Btn primary={reloc} disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 {reloc ? trAI("Drop at destination", "Dejar en destino") : "Drop at storage"}</Btn>}
                               <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: tripUnitKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
-                              {!jobSplitColMissing && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
+                              {!jobSplitColMissing && !reloc && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
                             </div>
                           )}
                         </div>
@@ -12152,6 +12463,29 @@ export default function App() {
                     })}
                 </div>
               </>);
+            })()}
+
+            {/* internal equipment / materials riding this trip */}
+            {!equipmentMissing && (() => {
+              const cargo = equipmentItems.filter(i => i.trip_id === t.id);
+              if (!cargo.length) return null;
+              return (
+                <div style={{ marginTop:12 }}>
+                  <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>{trAI("Cargo / Equipment", "Carga / Equipo")} ({cargo.length})</span>
+                  <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:6 }}>
+                    {cargo.map(item => {
+                      const cat = equipmentCat(item.category);
+                      return (
+                        <div key={item.id} style={{ display:"flex", alignItems:"center", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"8px 11px", fontSize:12.5 }}>
+                          <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>{cat.icon} {trAI(cat.label, cat.es)}</span>
+                          <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><b>{item.name || "—"}</b>{numv(item.quantity) > 1 ? ` ×${numv(item.quantity)}` : ""}</span>
+                          <Btn disabled={tripBusy} onClick={() => setEquipUnloadItem(item)} style={{ padding:"3px 9px", fontSize:11 }}>📤 {trAI("Unload", "Descargar")}</Btn>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
             })()}
 
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
@@ -12191,10 +12525,15 @@ export default function App() {
         const t = tripCompleteModal.trip;
         const c = tripCalc(t);
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
+        // Jobs still physically on the truck need a drop target; jobs already sitting
+        // in storage (dropped mid-trip, or relocations at destination) keep their
+        // location and are only released from the trip.
+        const onTruck = undelivered.filter(j => j.status !== "in_storage");
+        const droppedMidTrip = undelivered.filter(j => j.status === "in_storage");
         const deliveredJobs = c.jobsIn.filter(j => j.date_out || j.status === "delivered");
         const cfDelivered = deliveredJobs.reduce((s, j) => s + effCf(j), 0);
         const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
-        const bolPending = c.jobsIn.reduce((s, j) => s + Math.max(0, numv(j.bol_balance) - numv(j.bol_collected)), 0);
+        const bolPending = c.jobsIn.filter(j => !isRelocation(j)).reduce((s, j) => s + Math.max(0, numv(j.bol_balance) - numv(j.bol_collected)), 0);
         const dropTargets = [
           ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
           ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
@@ -12204,11 +12543,12 @@ export default function App() {
           <Modal title={`Complete trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
             footer={<>
               <Btn onClick={() => setTripCompleteModal(null)}>Cancel</Btn>
-              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(tripUnitKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
+              <Btn primary disabled={tripBusy || (onTruck.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, onTruck.map(tripUnitKey), droppedMidTrip.map(tripUnitKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
               {[
-                { l:"Delivered jobs", v:`${deliveredJobs.length} / ${c.count}` },
+                { l:"Delivered jobs", v:`${deliveredJobs.length} / ${c.deliveryCount}` },
+                ...(c.relocCount > 0 ? [{ l:"Relocations", v:`${c.relocDone} / ${c.relocCount}` }] : []),
                 { l:"CF delivered", v:`${Math.round(cfDelivered).toLocaleString()} CF` },
                 { l:"BOL collected", v:`$${Math.round(bolCollected).toLocaleString()}` },
                 { l:"Outstanding balance", v:`$${Math.round(bolPending).toLocaleString()}` },
@@ -12220,16 +12560,89 @@ export default function App() {
                 </div>
               ))}
             </div>
-            {undelivered.length > 0 && (
+            {onTruck.length > 0 && (
               <div style={{ background:"#FFF8F0", border:"1px solid #EF9F27", borderRadius:9, padding:"11px 13px" }}>
-                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {undelivered.length} job(s) not delivered on the truck. Send to storage?</div>
-                <div style={{ fontSize:11.5, color:"#888", marginBottom:8 }}>{undelivered.map(j => j.job_number || j.customer).filter(Boolean).join(", ")}</div>
+                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {onTruck.length} job(s) still on the truck. Send to storage?</div>
+                <div style={{ fontSize:11.5, color:"#888", marginBottom:8 }}>{onTruck.map(j => j.job_number || j.customer).filter(Boolean).join(", ")}</div>
                 <select style={inp} value={completeDropTarget} onChange={e => setCompleteDropTarget(e.target.value)}>
                   <option value="">— Choose storage / warehouse for the undelivered —</option>
                   {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
                 </select>
               </div>
             )}
+            {droppedMidTrip.length > 0 && (
+              <div style={{ background:"#F4F8FD", border:"1px solid #B9D7F2", borderRadius:9, padding:"11px 13px", marginTop:8 }}>
+                <div style={{ fontSize:12.5, color:"#185FA5", fontWeight:600 }}>📦 {droppedMidTrip.length} job(s) already dropped at a storage/warehouse — they keep their location and are released from the trip.</div>
+                <div style={{ fontSize:11.5, color:"#888", marginTop:4 }}>{droppedMidTrip.map(j => `${j.job_number || j.customer || ""}${isRelocation(j) ? " (relocation)" : ""}`).filter(Boolean).join(", ")}</div>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
+
+      {/* Equipment: create / edit item */}
+      {showEquipmentModal && (
+        <Modal title={editingEquipmentId ? trAI("Edit item", "Editar item") : trAI("New equipment item", "Nuevo item de equipo")} onClose={() => setShowEquipmentModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowEquipmentModal(false)}>{trAI("Cancel", "Cancelar")}</Btn>
+            <Btn primary disabled={equipmentSaving || !equipmentForm.name.trim()} onClick={saveEquipmentItem}>{equipmentSaving ? trAI("Saving…", "Guardando…") : trAI("Save", "Guardar")}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label={trAI("Name", "Nombre")} full><input style={inp} value={equipmentForm.name} onChange={e => setEquipmentForm(f => ({ ...f, name: e.target.value }))} placeholder={trAI("e.g. Moving pads", "ej: Pads de mudanza")} /></Field>
+            <Field label={trAI("Category", "Categoría")}>
+              <select style={inp} value={equipmentForm.category} onChange={e => setEquipmentForm(f => ({ ...f, category: e.target.value }))}>
+                {EQUIPMENT_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.icon} {trAI(c.label, c.es)}</option>)}
+              </select>
+            </Field>
+            <Field label={trAI("Quantity", "Cantidad")}><input style={inp} type="number" min="1" value={equipmentForm.quantity} onChange={e => setEquipmentForm(f => ({ ...f, quantity: e.target.value }))} /></Field>
+            <Field label="Location" full>
+              <select style={inp} value={equipmentForm.location} onChange={e => setEquipmentForm(f => ({ ...f, location: e.target.value }))}>
+                <option value="">{trAI("— Choose storage / warehouse —", "— Elegí storage / warehouse —")}</option>
+                {WAREHOUSES.map(w => <option key={"w:"+w} value={"w:"+w}>🏭 {w}</option>)}
+                {records.filter(r => r.space_type !== "warehouse").map(r => <option key={"u:"+r.id} value={"u:"+r.id}>{[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}`}</option>)}
+              </select>
+            </Field>
+            <Field label={trAI("Notes", "Notas")} full><input style={inp} value={equipmentForm.notes} onChange={e => setEquipmentForm(f => ({ ...f, notes: e.target.value }))} placeholder={trAI("Optional notes", "Notas opcionales")} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Equipment: pick an active trip to load the item onto */}
+      {equipLoadItem && (
+        <Modal title={`🚚 ${trAI("Load on trip", "Cargar a trip")} · ${equipLoadItem.name || ""}`} onClose={() => setEquipLoadItem(null)}
+          footer={<Btn onClick={() => setEquipLoadItem(null)}>{trAI("Cancel", "Cancelar")}</Btn>}>
+          <div style={{ fontSize:13, color:"#555", marginBottom:10 }}>{trAI("Choose an active trip — the item rides as internal cargo (no money, no delivery).", "Elegí un trip activo — el item viaja como carga interna (sin plata, sin delivery).")}</div>
+          <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:280, overflowY:"auto" }}>
+            {trips.filter(t => TRIP_ACTIVE(t.status)).map(t => (
+              <div key={t.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 12px", borderBottom:"1px solid #f6f6f6", fontSize:13 }}>
+                <TripBadge status={t.status} />
+                <b style={{ fontFamily:"monospace" }}>{t.trip_number || "#"+t.id}</b>
+                <span style={{ flex:1, color:"#666", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{[truckById[t.truck_id]?.name, driverById[t.driver_id]?.name].filter(Boolean).join(" · ")}</span>
+                <Btn primary onClick={() => equipmentLoadOnTrip(equipLoadItem, t.id)} style={{ padding:"4px 12px", fontSize:12 }}>{trAI("Load", "Cargar")}</Btn>
+              </div>
+            ))}
+            {!trips.some(t => TRIP_ACTIVE(t.status)) && <div style={{ padding:"14px", fontSize:12, color:"#bbb" }}>{trAI("No active trips.", "No hay trips activos.")}</div>}
+          </div>
+        </Modal>
+      )}
+
+      {/* Equipment: choose destination to unload the item */}
+      {equipUnloadItem && (() => {
+        const targets = [
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
+          ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
+        ];
+        return (
+          <Modal title={`📤 ${trAI("Unload", "Descargar")} · ${equipUnloadItem.name || ""}`} onClose={() => setEquipUnloadItem(null)}
+            footer={<Btn onClick={() => setEquipUnloadItem(null)}>{trAI("Cancel", "Cancelar")}</Btn>}>
+            <div style={{ fontSize:13, color:"#555", marginBottom:10 }}>{trAI("Choose where the item was unloaded — it becomes available at that location.", "Elegí dónde se descargó el item — queda disponible en esa location.")}</div>
+            <select id="equip-unload-sel" style={inp} defaultValue="">
+              <option value="">{trAI("— Choose storage / warehouse —", "— Elegí storage / warehouse —")}</option>
+              {targets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+            </select>
+            <div style={{ marginTop:12, textAlign:"right" }}>
+              <Btn primary onClick={() => { const sel = document.getElementById("equip-unload-sel"); const idx = sel?.value; if (idx === "" || idx == null) { window.alert(trAI("Choose a destination.", "Elegí un destino.")); return; } equipmentUnload(equipUnloadItem, targets[Number(idx)]); }}>{trAI("Confirm unload", "Confirmar descarga")}</Btn>
+            </div>
           </Modal>
         );
       })()}
@@ -12472,6 +12885,17 @@ export default function App() {
                   <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
                   {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                   <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+                  {!tripPurposeColMissing && (() => {
+                    const isReloc = tripForm.purposes?.[k] === "relocation";
+                    return (
+                      <button onClick={() => setTripForm(f => ({ ...f, purposes: { ...f.purposes, [k]: isReloc ? "delivery" : "relocation" } }))}
+                        title={trAI("Toggle: delivery vs internal relocation (no delivery, no collection)", "Alternar: delivery vs reubicación interna (sin delivery, sin cobro)")}
+                        style={{ border:"none", cursor:"pointer", fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap",
+                          background: isReloc ? "#E6F1FB" : "#EDE9FE", color: isReloc ? "#185FA5" : "#6D28D9" }}>
+                        {isReloc ? "🔁 Relocation" : "🚚 Delivery"}
+                      </button>
+                    );
+                  })()}
                   <span style={{ color:"#888" }}>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                   <FaddBadge fadd={j.fadd} />
                   <button onClick={() => tripMoveJob(i, -1)} disabled={i===0} style={{ border:"none", background:"none", cursor: i===0?"default":"pointer", color: i===0?"#ddd":"#888", fontSize:14 }}>↑</button>
