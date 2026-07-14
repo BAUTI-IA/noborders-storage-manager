@@ -553,6 +553,6 @@ export default async function handler(req, res) {
       debug: debug || undefined,
     });
   } catch (e) {
-    res.status(502).json({ ok: false, error: e?.message || "Error al sincronizar con Verizon." });
+    res.status(502).json({ ok: false, error: e?.message || "Error al sincronizar con Verizon.", debug: debug || undefined });
   }
 }
