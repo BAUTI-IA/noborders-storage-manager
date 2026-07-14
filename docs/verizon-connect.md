@@ -9,8 +9,8 @@ credenciales viven en Vercel, nunca en el navegador ni en el código).
 | Variable | Qué es | Dónde se consigue |
 |---|---|---|
 | `VERIZON_APP_ID` | App ID de la app creada en el Developer Portal | developer.verizonconnect.com → My Apps → tu app → Security → App ID |
-| `VERIZON_USERNAME` | Usuario de login de Reveal | El email/usuario con el que entrás a Reveal |
-| `VERIZON_PASSWORD` | Contraseña de ese usuario | La misma del login de Reveal |
+| `VERIZON_USERNAME` | Usuario **REST de integración** de Reveal | Reveal → Marketplace/Admin → "API and webhook integrations" (o pedirlo a soporte). ⚠️ No es el login web: el login web autentica pero no devuelve datos. |
+| `VERIZON_PASSWORD` | Contraseña de ese usuario REST | Ídem |
 | `VERIZON_BASE_URL` | (Opcional) URL base regional | Por defecto `https://fim.api.us.fleetmatics.com` (EE.UU.) |
 
 ## Configuración (una sola vez)

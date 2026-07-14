@@ -418,15 +418,17 @@ export default async function handler(req, res) {
     const token = await getToken();
     const errors = [];
 
-    // 1) New Fleet API, 2) legacy fleet list.
-    let api = "fleetapi";
-    let { list: vehicles, error: fErr } = await fetchFleetApiVehicles(token, debug);
-    if (fErr) errors.push(fErr);
+    // 1) Legacy Reveal REST first — it's the one that carries GPS (/rad), and
+    // responds once the account has REST integration credentials. 2) The new
+    // Fleet API as fallback (lists the fleet but doesn't expose positions yet).
+    let api = "legacy";
+    let { list: vehicles, error: lErr } = await fetchLegacyVehicles(token);
+    if (lErr) errors.push(lErr);
     if (vehicles.length === 0) {
-      api = "legacy";
-      const legacy = await fetchLegacyVehicles(token);
-      if (legacy.error) errors.push(legacy.error);
-      vehicles = legacy.list;
+      api = "fleetapi";
+      const f = await fetchFleetApiVehicles(token, debug);
+      if (f.error) errors.push(f.error);
+      vehicles = f.list;
     }
 
     // Lightweight mode for the truck form's dropdown: just the fleet list.
