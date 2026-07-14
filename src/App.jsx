@@ -2927,6 +2927,7 @@ const NAV = [
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
+    { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"clientes", label:"Clients", icon:"👥" },
   ]},
   { section:"Fleet", items:[
@@ -2937,7 +2938,6 @@ const NAV = [
   ]},
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
-    { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"analytics", label:"Analytics", icon:"📊" },
     { id:"suggestions", label:"Suggestions", icon:"💡" },
     { id:"bol", label:"BOL", icon:"📄" },
