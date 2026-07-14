@@ -26,17 +26,30 @@ credenciales viven en Vercel, nunca en el navegador ni en el código).
 
 ## Cómo se vinculan los camiones
 
-El sync matchea cada camión activo del CRM con un vehículo de Reveal en este
+El sync matchea cada camión activo del CRM con un vehículo de Verizon en este
 orden:
 
-1. **Verizon vehicle #** (`trucks.verizon_vehicle_id`) contra el *Vehicle
-   Number* de Reveal — editable en Trucks → Edit → "Verizon vehicle #".
+1. **Verizon vehicle** (`trucks.verizon_vehicle_id`) — en Trucks → Edit hay un
+   dropdown que lista la flota real de Verizon para elegir el vehículo.
 2. **VIN** (si está cargado en ambos lados).
-3. **Nombre** del camión contra el *Name* o *Vehicle Number* de Reveal.
+3. **Nombre**: exacto, por prefijo (`BT001` ↔ `BT001 - HINO Leon`) o por código
+   (`BT013` ↔ `BT013LD-1750CF`).
 
-Cuando un camión matchea por VIN o nombre, el "Verizon vehicle #" se guarda
-solo para la próxima vez. Los camiones sin match aparecen listados en la nota
-debajo del mapa — ahí conviene cargarles el número a mano.
+Cuando un camión matchea por VIN o nombre, el vínculo se guarda solo (con el
+`fleetItemId`, estable ante renombres). Los camiones sin match aparecen en la
+nota debajo del mapa; para esos, elegí el vehículo en el dropdown del camión, o
+renombrá el vehículo en Reveal para que empiece con el código (`BT004 - ...`).
+Los vehículos que en Reveal se llaman `253700853_2025...` (número de serie del
+equipo) no se pueden matchear automáticamente hasta renombrarlos o vincularlos
+a mano.
+
+## Diagnóstico
+
+- `https://<deploy>/api/verizon-sync?debug=1` — corre el sync y devuelve el
+  detalle técnico (vehículos que ve Verizon, rutas de ubicación probadas,
+  errores crudos de la API).
+- `https://<deploy>/api/verizon-sync?list=1` — solo la lista de vehículos
+  (la usa el dropdown del formulario de camiones).
 
 ## Cómo funciona en la app
 
@@ -50,9 +63,13 @@ debajo del mapa — ahí conviene cargarles el número a mano.
 ## Endpoints de Verizon que se usan
 
 - `GET /token` — token de sesión (Basic auth con usuario/contraseña, dura ~20 min).
-- `GET /cmv/v1/vehicles` — lista de vehículos de la cuenta.
-- `GET /rad/v1/vehicles/{n}/location` — última posición GPS (lat/lng, dirección).
-- `GET /rad/v1/vehicles/{n}/status` — estado (Moving / Idle / Stopped).
+- `POST /fleetapi/v1/fleet-items/search` — flota (API nueva; paginada con
+  `pageToken`, items con `fleetItemId`, `name`, `vin`, `esn`).
+- Ubicación GPS: la ruta exacta de la Fleet API se auto-descubre probando las
+  variantes conocidas (`/fleet-items/{id}/location`, `/locations/latest`,
+  `/status`, batch `locations/search`, etc.) y se cachea la que responda. Como
+  respaldo se intenta la API clásica (`GET /cmv/v1/vehicles`,
+  `GET /rad/v1/vehicles/{n}/location|status`).
 
 Todas las llamadas de datos llevan el header
 `Authorization: Atmosphere atmosphere_app_id=<APP_ID>, Bearer <token>`.

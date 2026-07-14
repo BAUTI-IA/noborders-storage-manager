@@ -3448,6 +3448,7 @@ export default function App() {
   const [vzBusy, setVzBusy] = useState(false);
   const [vzNote, setVzNote] = useState(null);
   const vzLastSync = useRef(0); // epoch ms of last auto-sync, to throttle
+  const [vzVehList, setVzVehList] = useState(null); // Verizon fleet for the truck-form dropdown: null=loading not attempted, "none"=unavailable, array=ok
   const [showTripModal, setShowTripModal] = useState(false);
   const [tripForm, setTripForm] = useState(EMPTY_TRIP);
   const [editingTripId, setEditingTripId] = useState(null);
@@ -6199,6 +6200,20 @@ export default function App() {
     const id = setInterval(tick, 120000);
     return () => clearInterval(id);
   }, [session, tripsMissing, page, tripsView]);
+  // Load the Verizon fleet once for the truck form's link dropdown.
+  useEffect(() => {
+    if (!showTruckModal || vzVehList !== null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/verizon-sync?list=1");
+        const d = await r.json().catch(() => null);
+        if (cancelled) return;
+        setVzVehList(d?.ok && Array.isArray(d.vehicles) && d.vehicles.length ? d.vehicles : "none");
+      } catch { if (!cancelled) setVzVehList("none"); }
+    })();
+    return () => { cancelled = true; };
+  }, [showTruckModal, vzVehList]);
 
   // ── Legal & Compliance handlers ──
   function openAddCompany() { setEditingCompanyId(null); setCompanyForm(EMPTY_COMPANY); setShowCompanyModal(true); }
@@ -12003,8 +12018,22 @@ export default function App() {
             <Field label="License state">
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
             </Field>
-            <Field label="Verizon vehicle #" full>
-              <input style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))} placeholder="Vehicle Number en Reveal (se completa solo si el nombre/VIN coincide)" />
+            <Field label="Verizon vehicle" full>
+              {Array.isArray(vzVehList) ? (
+                <select style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))}>
+                  <option value="">— Auto (por nombre / VIN) —</option>
+                  {truckForm.verizon_vehicle_id && !vzVehList.some(v => (v.id || v.number || v.name) === truckForm.verizon_vehicle_id) && (
+                    <option value={truckForm.verizon_vehicle_id}>{truckForm.verizon_vehicle_id} (actual)</option>
+                  )}
+                  {vzVehList.map(v => {
+                    const val = v.id || v.number || v.name;
+                    return <option key={val} value={val}>{[v.name || v.number, v.vin].filter(Boolean).join(" · ")}</option>;
+                  })}
+                </select>
+              ) : (
+                <input style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))}
+                  placeholder={vzVehList === "none" ? "ID del vehículo en Verizon (la lista no está disponible)" : "Cargando flota de Verizon…"} />
+              )}
             </Field>
           </div>
         </Modal>
