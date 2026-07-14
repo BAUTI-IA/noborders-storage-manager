@@ -4874,20 +4874,39 @@ export default function App() {
     return m;
   }, [jobs]);
   const jobKeyByRowId = useMemo(() => { const m = {}; for (const j of jobs) m[j.id] = jobKey(j); return m; }, [jobs]);
-  // Job-balance money already collected per jobKey: received "job"-concept
-  // payments (Payments module). Take the MAX against the job's bol_collected
-  // mirror rather than the sum — the two are two-way synced, so summing would
+  const extrasByJobKey = useMemo(() => {
+    const m = {};
+    for (const e of jobExtras) { const k = jobKeyByRowId[e.job_id]; if (!k) continue; (m[k] = m[k] || []).push(e); }
+    return m;
+  }, [jobExtras, jobKeyByRowId]);
+  // Money already collected per jobKey, split by charge (job balance vs extras,
+  // tracked independently — same math as the job-detail Payments panel).
+  // For the job balance, take the MAX against the job's bol_collected mirror
+  // rather than the sum — the two are two-way synced, so summing would
   // double-count, and legacy data may carry only one of them.
   const jobPaidByKey = useMemo(() => {
     const m = {};
-    for (const p of payments) { if (!p.received || p.concept !== "job") continue; const k = jobKeyByRowId[p.job_id]; if (!k) continue; m[k] = (m[k] || 0) + paymentNet(p); }
+    for (const p of payments) {
+      if (!p.received || (p.concept !== "job" && p.concept !== "extra")) continue;
+      const k = jobKeyByRowId[p.job_id]; if (!k) continue;
+      const e = (m[k] = m[k] || { job: 0, extra: 0 });
+      e[p.concept] += paymentNet(p);
+    }
     return m;
   }, [payments, jobKeyByRowId]);
-  const jobCollectedFor = useCallback((j, key) => Math.max(numv(j.bol_collected), jobPaidByKey[key || jobKey(j)] || 0), [jobPaidByKey]);
-  // Outstanding (remaining) balance of a job = total to collect − already
-  // collected. Dispatch and Trips surface THIS number, so a move that was
-  // partially paid never shows its full balance again.
-  const jobOutstanding = useCallback((j, key) => Math.max(0, jobToCollect(j) - jobCollectedFor(j, key)), [jobCollectedFor]);
+  const jobCollectedFor = useCallback((j, key) => Math.max(numv(j.bol_collected), jobPaidByKey[key || jobKey(j)]?.job || 0), [jobPaidByKey]);
+  // Extras still owed for a job: billed active extras − extra-concept payments
+  // received (aggregate, so legacy unassigned extra payments still count).
+  const extrasOwedFor = useCallback((key) => (extrasByJobKey[key] || []).reduce((s, e) => s + (e.active === false ? 0 : numv(e.amount)), 0), [extrasByJobKey]);
+  const extrasOutstandingFor = useCallback((key) => Math.max(0, extrasOwedFor(key) - (jobPaidByKey[key]?.extra || 0)), [extrasOwedFor, jobPaidByKey]);
+  // Outstanding (remaining) balance of a job = (job balance − collected) +
+  // pending extras. Dispatch and Trips surface THIS number, so a move that was
+  // partially paid — or that accumulated extras — always shows what's actually
+  // left to collect, never the original balance.
+  const jobOutstanding = useCallback((j, key) => {
+    const k = key || jobKey(j);
+    return Math.max(0, jobToCollect(j) - jobCollectedFor(j, k)) + extrasOutstandingFor(k);
+  }, [jobCollectedFor, extrasOutstandingFor]);
   const tripCalc = useCallback((trip) => {
     const jobsIn = jobsByTrip[trip.id] || [];
     // totalCf = everything assigned to the trip; loadedCf = what is physically on
@@ -4895,16 +4914,22 @@ export default function App() {
     // mid-trip or not picked up yet) don't take up space. Occupancy uses loadedCf
     // so the bar matches the stops' "Delivered" / "Dropped in storage" badges.
     let totalCf = 0, loadedCf = 0, totalCollect = 0, totalOutstanding = 0, delivered = 0;
+    // Extras live at the job level: count them ONCE per jobKey even when a
+    // split job has two portions riding this same trip.
+    const seenKeys = new Set();
     for (const j of jobsIn) {
-      const cf = effCf(j);
-      totalCf += cf; totalCollect += jobToCollect(j); totalOutstanding += jobOutstanding(j);
+      const cf = effCf(j); const k = jobKey(j);
+      totalCf += cf;
+      totalCollect += jobToCollect(j);
+      totalOutstanding += Math.max(0, jobToCollect(j) - jobCollectedFor(j, k));
+      if (!seenKeys.has(k)) { seenKeys.add(k); totalCollect += extrasOwedFor(k); totalOutstanding += extrasOutstandingFor(k); }
       if (j.date_out || j.status === "delivered") delivered++;
       else if (j.status !== "in_storage") loadedCf += cf;
     }
     const cap = numv(truckById[trip.truck_id]?.capacity_cf);
     const occPct = cap > 0 ? Math.round((loadedCf / cap) * 100) : null;
     return { jobsIn, totalCf, loadedCf, totalCollect, totalOutstanding, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
-  }, [jobsByTrip, truckById, jobOutstanding]);
+  }, [jobsByTrip, truckById, jobCollectedFor, extrasOwedFor, extrasOutstandingFor]);
   const tripMetrics = useMemo(() => {
     const td = today();
     let activeCount = 0, cfTransit = 0, collectTransit = 0, deliveredToday = 0;
@@ -5150,11 +5175,6 @@ export default function App() {
   // Expected to be collected for a job = pickup + delivery balances (+ broker BOL balance).
   const jobExpected = useCallback((g) => g ? jobToCollect(g) : 0, []);
   const groupMonth = useCallback((g) => (g.date_in || g.created_at || "").slice(0, 7), []);
-  const extrasByJobKey = useMemo(() => {
-    const m = {};
-    for (const e of jobExtras) { const k = jobKeyByRowId[e.job_id]; if (!k) continue; (m[k] = m[k] || []).push(e); }
-    return m;
-  }, [jobExtras, jobKeyByRowId]);
   const jobKeysWithExtras = useMemo(() => {
     const s = new Set();
     for (const e of jobExtras) { if (e.active === false) continue; const k = jobKeyByRowId[e.job_id]; if (k) s.add(k); }
@@ -8671,9 +8691,13 @@ export default function App() {
                   {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                   {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                   <FaddBadge fadd={j.fadd} />
-                  {jobToCollect(j) > 0 && (jobOutstanding(j) > 0
-                    ? <span title={`Balance pendiente (total $${Math.round(jobToCollect(j)).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobOutstanding(j)).toLocaleString()}</span>
-                    : <span title="Balance cobrado por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>)}
+                  {(() => {
+                    const out = jobOutstanding(j); const tot = jobToCollect(j) + extrasOwedFor(jobKey(j));
+                    if (tot <= 0) return null;
+                    return out > 0
+                      ? <span title={`Pendiente de cobrar (balance + extras · total $${Math.round(tot).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(out).toLocaleString()}</span>
+                      : <span title="Balance y extras cobrados por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
+                  })()}
                 </div>
               </div>
               {delivered
@@ -8842,7 +8866,7 @@ export default function App() {
                       </>); })()}
                       <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:10 }}>
                         <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-                        <span style={{ color:"#666" }} title={`Total del balance: $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
+                        <span style={{ color:"#666" }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
                         <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
@@ -8868,7 +8892,7 @@ export default function App() {
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{t.departure_date || "—"}</td>
                           <td style={{ padding:"12px" }}>{c.count}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{Math.round(c.totalCf).toLocaleString()} CF</td>
-                          <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }} title={`Total del balance: $${Math.round(c.totalCollect).toLocaleString()}`}>${Math.round(c.totalOutstanding).toLocaleString()}</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()}`}>${Math.round(c.totalOutstanding).toLocaleString()}</td>
                           <td style={{ padding:"12px" }}><TripBadge status={t.status} /></td>
                           <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                             <Btn onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 10px", fontSize:12 }}>Open</Btn>
@@ -12773,9 +12797,13 @@ export default function App() {
                             {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                             {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                             <FaddBadge fadd={j.fadd} />
-                            {jobToCollect(j) > 0 && (jobOutstanding(j) > 0
-                              ? <span title={`Balance pendiente (total $${Math.round(jobToCollect(j)).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(jobOutstanding(j)).toLocaleString()}</span>
-                              : <span title="Balance cobrado por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>)}
+                            {(() => {
+                              const out = jobOutstanding(j); const tot = jobToCollect(j) + extrasOwedFor(jobKey(j));
+                              if (tot <= 0) return null;
+                              return out > 0
+                                ? <span title={`Pendiente de cobrar (balance + extras · total $${Math.round(tot).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(out).toLocaleString()}</span>
+                                : <span title="Balance y extras cobrados por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
+                            })()}
                             {(() => {
                               // A stop owned by a different driver than the trip's → show who.
                               const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
@@ -12801,7 +12829,7 @@ export default function App() {
 
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-              <span style={{ color:"#666" }} title={`Total del balance: $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
+              <span style={{ color:"#666" }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
             </div>
             <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
 
@@ -12842,7 +12870,7 @@ export default function App() {
         const deliveredJobs = c.jobsIn.filter(j => j.date_out || j.status === "delivered");
         const cfDelivered = deliveredJobs.reduce((s, j) => s + effCf(j), 0);
         const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
-        const bolPending = c.jobsIn.reduce((s, j) => s + jobOutstanding(j), 0);
+        const bolPending = c.totalOutstanding;
         const dropTargets = [
           ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
           ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
