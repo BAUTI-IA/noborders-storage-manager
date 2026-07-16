@@ -246,7 +246,7 @@ ${lang === "es" ? "Answer in Spanish." : "Answer in English."}`;
 export function AnalyticsPage({
   records, jobs, brokers, driversList, payments, jobExtras,
   sit, urgentPayments, faddStats, brokerShareMissing, paymentsMissing, lang,
-  expenses = [], workDays = [], materialItems = [], materialMovements = [], expensesMissing = false,
+  expenses = [], workDays = [], adjustments = [], materialItems = [], materialMovements = [], expensesMissing = false,
 }) {
   const [todayISO] = useState(() => new Date().toISOString().slice(0, 10));
   const [preset, setPreset] = useState("6m");
@@ -511,7 +511,7 @@ export function AnalyticsPage({
       {/* ═══════════ TAB DRIVER P&L ═══════════ */}
       {tab === "drivers" && (
         <DriversTab ctx={ctx} range={range} driversList={driversList} expenses={expenses}
-          workDays={workDays} materialItems={materialItems} materialMovements={materialMovements}
+          workDays={workDays} adjustments={adjustments} materialItems={materialItems} materialMovements={materialMovements}
           expensesMissing={expensesMissing} />
       )}
     </div>
@@ -522,10 +522,10 @@ export function AnalyticsPage({
 // Cuánto trae vs cuánto cuesta cada driver: revenue atribuido (jobs compartidos
 // se dividen en partes iguales) contra días trabajados × rate + gastos aprobados
 // + comisiones de extras. Señales anti-robo: outliers de fuel y materiales en mano.
-function DriversTab({ ctx, range, driversList, expenses, workDays, materialItems, materialMovements, expensesMissing }) {
+function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, materialItems, materialMovements, expensesMissing }) {
   const pnl = useMemo(
-    () => computeDriverPnl({ driversList, groups: ctx.groups, jobExtras: ctx.extras, expenses, workDays, range }),
-    [driversList, ctx, expenses, workDays, range]
+    () => computeDriverPnl({ driversList, groups: ctx.groups, jobExtras: ctx.extras, expenses, workDays, adjustments, range }),
+    [driversList, ctx, expenses, workDays, adjustments, range]
   );
   const fuel = useMemo(() => {
     const inR = (e) => { const m = (e.expense_date || "").slice(0, 7); return !!m && (!range.fromMonth || (m >= range.fromMonth && m <= range.toMonth)); };
@@ -563,7 +563,7 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, materialItems
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                 <thead><tr style={{ borderBottom: "1px solid #efefef" }}>
-                  {["Driver", "Jobs", "Revenue", "Días", "Días × rate", "Gastos", "Comisiones", "Neto", "Margen"].map((h, i) => (
+                  {["Driver", "Jobs", "Revenue", "Días", "Días × rate", "Gastos", "Comisiones", "Ajustes", "Neto", "Margen"].map((h, i) => (
                     <th key={i} style={{ padding: "8px 8px", textAlign: i === 0 ? "left" : "right", fontWeight: 600, fontSize: 10.5, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr></thead>
@@ -577,6 +577,7 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, materialItems
                       <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.laborCost)}</td>
                       <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.expensesTotal)}</td>
                       <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.commissions)}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: r.adjustmentsNet > 0 ? C.rojo : r.adjustmentsNet < 0 ? C.verde : "#888" }} title="bonos − descuentos por fuck-ups">{r.adjustmentsNet !== 0 ? fmtM(r.adjustmentsNet) : "—"}</td>
                       <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: r.net >= 0 ? C.verde : C.rojo }}>{fmtM(r.net)}</td>
                       <td style={{ padding: "8px", textAlign: "right", color: "#888" }}>{r.margin == null ? "—" : Math.round(r.margin * 100) + "%"}</td>
                     </tr>
@@ -589,6 +590,7 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, materialItems
                     <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(totals.laborCost)}</td>
                     <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(totals.expensesTotal)}</td>
                     <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(totals.commissions)}</td>
+                    <td style={{ padding: "8px", textAlign: "right" }}>{totals.adjustmentsNet !== 0 ? fmtM(totals.adjustmentsNet) : "—"}</td>
                     <td style={{ padding: "8px", textAlign: "right", color: totals.net >= 0 ? C.verde : C.rojo }}>{fmtM(totals.net)}</td>
                     <td />
                   </tr>

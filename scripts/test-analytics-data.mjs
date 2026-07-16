@@ -6,6 +6,7 @@ import {
   effCf, hasRealCf,
   attributeRevenueToDrivers, computeDriverPnl, driverCashReconciliation,
   materialShortages, fuelOutliers,
+  payWeekStart, payWeekDays, addDaysISO, workDayPay,
 } from "../src/analyticsData.js";
 
 let failed = 0;
@@ -280,6 +281,49 @@ eq("hasRealCf", [hasRealCf({ real_cf: 620 }), hasRealCf({ volume: "550" }), hasR
   eq("fuel mediana", fo.medianPpg, 4.1);
   eq("fuel outlier >1.5×", fo.outliers.map(o => o.id), [3]);
   eq("fuel $/milla por delta de odómetro", fo.costPerMile.map(c => ({ miles: c.miles, perMile: +(c.perMile).toFixed(2) })), [{ miles: 500, perMile: 0.82 }]);
+}
+
+// ── Semana de pago (miércoles → martes) ──
+{
+  eq("payWeekStart miércoles queda igual", payWeekStart("2026-07-15"), "2026-07-15");        // mié
+  eq("payWeekStart jueves → mié anterior", payWeekStart("2026-07-16"), "2026-07-15");        // jue
+  eq("payWeekStart martes → mié de la semana pasada", payWeekStart("2026-07-14"), "2026-07-08"); // mar
+  eq("payWeekDays 7 días mié..mar", payWeekDays("2026-07-15"), ["2026-07-15", "2026-07-16", "2026-07-17", "2026-07-18", "2026-07-19", "2026-07-20", "2026-07-21"]);
+  eq("addDaysISO cruza el mes", addDaysISO("2026-07-30", 7), "2026-08-06");
+}
+
+// ── Pago por día: completo, medio, por hora, fallbacks ──
+{
+  const d = { daily_rate: 200, hourly_rate: 25 };
+  eq("workDayPay full con snapshot", workDayPay({ day_type: "full", rate: 180 }, d), 180);
+  eq("workDayPay full fallback a daily_rate", workDayPay({ day_type: "full", rate: null }, d), 200);
+  eq("workDayPay legacy sin day_type = full", workDayPay({ rate: 180 }, d), 180);
+  eq("workDayPay half = mitad", workDayPay({ day_type: "half", rate: 180 }, d), 90);
+  eq("workDayPay hourly = horas × rate snapshot", workDayPay({ day_type: "hourly", hours: 6, rate: 30 }, d), 180);
+  eq("workDayPay hourly fallback a hourly_rate", workDayPay({ day_type: "hourly", hours: 4, rate: null }, d), 100);
+}
+
+// ── Ajustes en el P&L: descuento baja el costo, bono lo sube ──
+{
+  const drivers = [{ id: 1, name: "Juan", daily_rate: 200, active: true }];
+  const g = [...dedupeJobs([{ id: 51, job_number: "A1", driver_ids: [1], bol_collected: "2000", date_in: "2026-07-01" }]).values()];
+  const range = { fromMonth: "2026-07", toMonth: "2026-07" };
+  const wd = [
+    { id: 1, driver_id: 1, work_date: "2026-07-01", day_type: "full", rate: 200 },
+    { id: 2, driver_id: 1, work_date: "2026-07-02", day_type: "half", rate: 200 },
+    { id: 3, driver_id: 1, work_date: "2026-07-03", day_type: "hourly", hours: 5, rate: 20 },
+  ];
+  const adj = [
+    { id: 1, driver_id: 1, adj_date: "2026-07-04", kind: "deduction", amount: "50" },  // fuck-up
+    { id: 2, driver_id: 1, adj_date: "2026-07-05", kind: "bonus", amount: "120" },     // compensación
+    { id: 3, driver_id: 1, adj_date: "2026-06-30", kind: "bonus", amount: "999" },     // fuera de rango
+  ];
+  const dp = computeDriverPnl({ driversList: drivers, groups: g, jobExtras: [], expenses: [], workDays: wd, adjustments: adj, range });
+  const r = dp.rows[0];
+  eq("pnl labor mixto full+half+hourly", r.laborCost, 200 + 100 + 100);
+  eq("pnl bonuses/deductions en rango", [r.bonuses, r.deductions], [120, 50]);
+  eq("pnl adjustmentsNet", r.adjustmentsNet, 70);
+  eq("pnl net con ajustes", Math.round(r.net), 2000 - (400 + 70));
 }
 
 if (failed) { console.error(`\n${failed} test(s) FAILED`); process.exit(1); }
