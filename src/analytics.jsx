@@ -14,6 +14,7 @@ import {
   arAging, occupancySeries, lengthOfStayStats, brokerProfitability, marginByState,
   cfMovedSeries, dollarsPerCfSeries, faddCompliance, statusFunnel, jobsFlowSeries,
   topN, monthLabel, monthsBetween, shiftMonth,
+  computeDriverPnl, fuelOutliers, materialShortages,
 } from "./analyticsData.js";
 
 // ── Formato ──────────────────────────────────────────────────────────────────
@@ -245,6 +246,7 @@ ${lang === "es" ? "Answer in Spanish." : "Answer in English."}`;
 export function AnalyticsPage({
   records, jobs, brokers, driversList, payments, jobExtras,
   sit, urgentPayments, faddStats, brokerShareMissing, paymentsMissing, lang,
+  expenses = [], workDays = [], materialItems = [], materialMovements = [], expensesMissing = false,
 }) {
   const [todayISO] = useState(() => new Date().toISOString().slice(0, 10));
   const [preset, setPreset] = useState("6m");
@@ -369,7 +371,7 @@ export function AnalyticsPage({
   const grid2 = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 14, marginBottom: 14 };
 
   const PRESETS = [["mes", "Este mes"], ["3m", "3M"], ["6m", "6M"], ["12m", "12M"], ["ytd", "YTD"], ["todo", "Todo"]];
-  const TABS = [["resumen", "Resumen"], ["storage", "Rentabilidad Storage"], ["revenue", "Revenue & Cashflow"], ["operacion", "Brokers & Operación"]];
+  const TABS = [["resumen", "Resumen"], ["storage", "Rentabilidad Storage"], ["revenue", "Revenue & Cashflow"], ["operacion", "Brokers & Operación"], ["drivers", "Driver P&L"]];
 
   return (
     <div>
@@ -505,9 +507,164 @@ export function AnalyticsPage({
         <OperacionTab brokerRank={brokerRank} brokerF={brokerF} setBrokerF={setBrokerF}
           fadd={fadd} cfSeries={cfSeries} topDrivers={topDrivers} funnel={funnel} brokerShareMissing={brokerShareMissing} />
       )}
+
+      {/* ═══════════ TAB DRIVER P&L ═══════════ */}
+      {tab === "drivers" && (
+        <DriversTab ctx={ctx} range={range} driversList={driversList} expenses={expenses}
+          workDays={workDays} materialItems={materialItems} materialMovements={materialMovements}
+          expensesMissing={expensesMissing} />
+      )}
     </div>
   );
 }
+
+// ── Tab 5: Driver P&L ─────────────────────────────────────────────────────────
+// Cuánto trae vs cuánto cuesta cada driver: revenue atribuido (jobs compartidos
+// se dividen en partes iguales) contra días trabajados × rate + gastos aprobados
+// + comisiones de extras. Señales anti-robo: outliers de fuel y materiales en mano.
+function DriversTab({ ctx, range, driversList, expenses, workDays, materialItems, materialMovements, expensesMissing }) {
+  const pnl = useMemo(
+    () => computeDriverPnl({ driversList, groups: ctx.groups, jobExtras: ctx.extras, expenses, workDays, range }),
+    [driversList, ctx, expenses, workDays, range]
+  );
+  const fuel = useMemo(() => {
+    const inR = (e) => { const m = (e.expense_date || "").slice(0, 7); return !!m && (!range.fromMonth || (m >= range.fromMonth && m <= range.toMonth)); };
+    return fuelOutliers({ expenses: expenses.filter(inR) });
+  }, [expenses, range]);
+  const shortages = useMemo(
+    () => materialShortages({ items: materialItems, movements: materialMovements }).filter(s => s.onHand > 0),
+    [materialItems, materialMovements]
+  );
+  const driverName = (id) => driversList.find(d => d.id === id)?.name || (id ? `#${id}` : "—");
+  const { rows, totals } = pnl;
+  const chartData = rows.map(r => ({
+    label: r.name.split(" ")[0],
+    Revenue: Math.round(r.revenue),
+    "Días × rate": Math.round(r.laborCost),
+    Gastos: Math.round(r.expensesTotal),
+    Comisiones: Math.round(r.commissions),
+  }));
+
+  if (expensesMissing) return <Empty>Falta correr el setup de Expenses (SQL) para ver el P&L por driver.</Empty>;
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 14 }}>
+        <KpiTile label="Revenue atribuido a drivers" value={fmtK(totals.revenue)} />
+        <KpiTile label="Costo total (días + gastos + comisiones)" value={fmtK(totals.totalCost)} />
+        <KpiTile label="Neto" value={fmtK(totals.net)} />
+        <KpiTile label="Cash de drivers en gastos sin rendir" value={fmtK(expenses.filter(e => e.paid_from === "driver_cash" && e.status === "approved" && !e.settled).reduce((s, e) => s + (Number(e.amount) || 0), 0))} chip="hoy" />
+      </div>
+
+      <div style={grid2Static}>
+        <div style={card}>
+          <Title>P&L por driver</Title>
+          <div style={sub}>Revenue de jobs compartidos dividido en partes iguales entre drivers — aproximado. Solo gastos aprobados.</div>
+          {rows.length === 0 ? <Empty>Sin actividad de drivers en el período.</Empty> : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead><tr style={{ borderBottom: "1px solid #efefef" }}>
+                  {["Driver", "Jobs", "Revenue", "Días", "Días × rate", "Gastos", "Comisiones", "Neto", "Margen"].map((h, i) => (
+                    <th key={i} style={{ padding: "8px 8px", textAlign: i === 0 ? "left" : "right", fontWeight: 600, fontSize: 10.5, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {rows.map(r => (
+                    <tr key={r.driverId} style={{ borderBottom: "1px solid #fafafa" }}>
+                      <td style={{ padding: "8px", fontWeight: 600 }}>{r.name}{r.pendingTotal > 0 && <span title="gastos pendientes de aprobar" style={{ fontSize: 10, color: "#C2410C", marginLeft: 5 }}>+{fmtK(r.pendingTotal)} pend.</span>}</td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>{r.jobsCount}</td>
+                      <td style={{ padding: "8px", textAlign: "right", fontWeight: 600 }}>{fmtM(r.revenue)}</td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>{r.workedDays}</td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.laborCost)}</td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.expensesTotal)}</td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.commissions)}</td>
+                      <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: r.net >= 0 ? C.verde : C.rojo }}>{fmtM(r.net)}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: "#888" }}>{r.margin == null ? "—" : Math.round(r.margin * 100) + "%"}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: "2px solid #eee", fontWeight: 700 }}>
+                    <td style={{ padding: "8px" }}>Total</td>
+                    <td />
+                    <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(totals.revenue)}</td>
+                    <td />
+                    <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(totals.laborCost)}</td>
+                    <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(totals.expensesTotal)}</td>
+                    <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(totals.commissions)}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: totals.net >= 0 ? C.verde : C.rojo }}>{fmtM(totals.net)}</td>
+                    <td />
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div style={card}>
+          <Title>Revenue vs costo por driver</Title>
+          <div style={sub}>El costo se apila: días × rate + gastos + comisiones</div>
+          <LegendRow items={[["Revenue", C.verde], ["Días × rate", C.azul], ["Gastos", C.naranja], ["Comisiones", C.violeta]]} />
+          <div style={{ height: 250 }}>
+            <ResponsiveContainer>
+              <BarChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                {GRID}
+                <XAxis dataKey="label" {...AXIS} />
+                <YAxis {...AXIS} tickFormatter={fmtK} width={52} />
+                <Tooltip content={<CardTooltip />} cursor={{ fill: "rgba(0,0,0,0.03)" }} />
+                <Bar dataKey="Revenue" fill={C.verde} maxBarSize={22} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Días × rate" stackId="c" fill={C.azul} maxBarSize={22} stroke="#fff" strokeWidth={1} />
+                <Bar dataKey="Gastos" stackId="c" fill={C.naranja} maxBarSize={22} stroke="#fff" strokeWidth={1} />
+                <Bar dataKey="Comisiones" stackId="c" fill={C.violeta} maxBarSize={22} stroke="#fff" strokeWidth={1} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div style={grid2Static}>
+        <div style={card}>
+          <Title chip={fuel.medianPpg ? `mediana $${fuel.medianPpg.toFixed(2)}/gal` : null}>Señales de fuel</Title>
+          <div style={sub}>Cargas con precio/galón fuera de rango (&gt;1.5× o &lt;0.5× la mediana) — posible robo o carga mal registrada</div>
+          {fuel.fillsWithGallons === 0 ? <Empty>Cargá galones en los gastos de fuel para activar esta señal.</Empty>
+            : fuel.outliers.length === 0 ? <Empty>Sin outliers de precio/galón ✓</Empty>
+            : fuel.outliers.map(o => (
+              <div key={o.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, background: "#FCEBEB", marginBottom: 6, fontSize: 12.5 }}>
+                <span>⛽</span>
+                <span style={{ flex: 1 }}>{o.expense_date || "—"} · {driverName(o.driver_id)}</span>
+                <b style={{ color: C.rojo }}>${o.ppg.toFixed(2)}/gal</b>
+                <span style={{ color: "#888" }}>({fmtM(o.amount)} / {o.gallons} gal)</span>
+              </div>
+            ))}
+          {fuel.costPerMile.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.06em", margin: "12px 0 6px" }}>$/milla entre cargas (odómetro)</div>
+              {fuel.costPerMile.slice(0, 6).map((c, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "#555", padding: "3px 0" }}>
+                  <span style={{ flex: 1 }}>Truck #{c.truckId} · {c.from || "?"} → {c.to || "?"}</span>
+                  <b>${c.perMile.toFixed(2)}/mi</b>
+                  <span style={{ color: "#999" }}>({Math.round(c.miles)} mi)</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+
+        <div style={card}>
+          <Title>Materiales sin devolver</Title>
+          <div style={sub}>Entregado − devuelto − consumido por driver: lo que falta rendir (valor al costo)</div>
+          {shortages.length === 0 ? <Empty>Nadie debe materiales ✓</Empty> : shortages.map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: "#fafafa", marginBottom: 5, fontSize: 12.5 }}>
+              <span>📦</span>
+              <span style={{ fontWeight: 600 }}>{driverName(s.driverId)}</span>
+              <span style={{ flex: 1, color: "#666" }}>{s.itemName}</span>
+              <b style={{ color: C.rojo }}>{s.onHand} {s.unit}</b>
+              <span style={{ color: "#888" }}>{fmtM(s.value)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+const grid2Static = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 14, marginBottom: 14 };
 
 // ── Tab 2: Rentabilidad Storage ──────────────────────────────────────────────
 function StorageTab({ pnl, byState, metrics, stateF, setStateF, occup }) {

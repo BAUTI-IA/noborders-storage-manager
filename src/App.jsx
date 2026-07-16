@@ -5,7 +5,8 @@ import { BolSection } from "./bol.jsx";
 import { MessagesSection } from "./messages.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
-import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta } from "./analyticsData.js";
+import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, materialShortages, computeDriverPnl } from "./analyticsData.js";
+import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 
@@ -635,7 +636,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
+const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", notes:"", active:true };
 const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
@@ -651,6 +652,8 @@ function TripBadge({ status }) {
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
 }
 const TRIP_ACTIVE = (s) => s === "loading" || s === "in_transit";
+// Expense form constants (EMPTY_EXPENSE, categories, statuses, material forms)
+// live in expenses.jsx — one copy shared by the page UI and App.jsx state.
 
 // ── Extras & Commissions ──
 const EXTRA_TYPES = [
@@ -921,9 +924,7 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
   );
 }
 // Cash, check and money order are physically held; everything else is digital.
-const PHYSICAL_METHODS = ["cash", "check", "money_order"];
-const isPhysical = (m) => PHYSICAL_METHODS.includes(m);
-const isDigitalMethod = (m) => !!m && !PHYSICAL_METHODS.includes(m);
+// (PHYSICAL_METHODS/isPhysical/isDigitalMethod live in analyticsData.js — one copy.)
 const paymentNet = (p) => numv(p.amount) - numv(p.discount);
 // Whether a payment counts as banked/deposited. Digital methods are auto-banked
 // (legacy rows may still have banked = null), so they always count as banked;
@@ -1491,6 +1492,107 @@ alter table public.equipment_items enable row level security;
 drop policy if exists "equipment_items_all" on public.equipment_items;
 create policy "equipment_items_all" on public.equipment_items for all to anon, authenticated using (true) with check (true);
 do $$ begin alter publication supabase_realtime add table public.equipment_items; exception when others then null; end $$;`;
+
+// Per-driver expense tracking: every cost (fuel, hotels, materials, tolls…) linked
+// to driver/truck/trip/job, with bank-vs-driver-cash source so cash taken from
+// customer collections reconciles against the "in circulation" money. Also the
+// per-day driver pay log and the materials issue/return ledger (theft control).
+// job_number (not just job_id) so aggregation dedupes by jobKey like everything else.
+const EXPENSES_SQL = `create table if not exists public.expenses (
+  id bigint generated always as identity primary key,
+  expense_date date,
+  category text,
+  amount numeric,
+  vendor text,
+  driver_id bigint references public.drivers(id),
+  truck_id bigint references public.trucks(id),
+  trip_id bigint references public.trips(id),
+  job_id bigint references public.storage_jobs(id) on delete set null,
+  job_number text,
+  paid_from text default 'bank',
+  bank_account text,
+  status text default 'pending',
+  receipt_url text,
+  gallons numeric,
+  odometer numeric,
+  fuel_state text,
+  settled boolean default false,
+  settled_date date,
+  notes text,
+  created_by text,
+  created_at timestamptz default now(),
+  updated_by text,
+  updated_at timestamptz
+);
+alter table public.expenses enable row level security;
+drop policy if exists "expenses_all" on public.expenses;
+create policy "expenses_all" on public.expenses for all to anon, authenticated using (true) with check (true);
+
+alter table public.drivers add column if not exists daily_rate numeric;
+
+create table if not exists public.driver_work_days (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  work_date date,
+  rate numeric,
+  trip_id bigint references public.trips(id),
+  notes text,
+  created_by text,
+  created_at timestamptz default now(),
+  unique (driver_id, work_date)
+);
+alter table public.driver_work_days enable row level security;
+drop policy if exists "driver_work_days_all" on public.driver_work_days;
+create policy "driver_work_days_all" on public.driver_work_days for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.material_items (
+  id bigint generated always as identity primary key,
+  name text,
+  category text,
+  unit text default 'unit',
+  unit_cost numeric,
+  active boolean default true,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.material_items enable row level security;
+drop policy if exists "material_items_all" on public.material_items;
+create policy "material_items_all" on public.material_items for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.material_movements (
+  id bigint generated always as identity primary key,
+  item_id bigint references public.material_items(id) on delete cascade,
+  movement_type text,
+  quantity numeric,
+  unit_cost numeric,
+  driver_id bigint references public.drivers(id),
+  trip_id bigint references public.trips(id),
+  job_id bigint references public.storage_jobs(id) on delete set null,
+  job_number text,
+  expense_id bigint references public.expenses(id) on delete set null,
+  movement_date date,
+  notes text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.material_movements enable row level security;
+drop policy if exists "material_movements_all" on public.material_movements;
+create policy "material_movements_all" on public.material_movements for all to anon, authenticated using (true) with check (true);
+
+insert into storage.buckets (id, name, public)
+  values ('expense-receipts', 'expense-receipts', true)
+  on conflict (id) do update set public = true;
+drop policy if exists "expensereceipts_read" on storage.objects;
+create policy "expensereceipts_read" on storage.objects for select to anon, authenticated using (bucket_id = 'expense-receipts');
+drop policy if exists "expensereceipts_write" on storage.objects;
+create policy "expensereceipts_write" on storage.objects for insert to anon, authenticated with check (bucket_id = 'expense-receipts');
+drop policy if exists "expensereceipts_update" on storage.objects;
+create policy "expensereceipts_update" on storage.objects for update to anon, authenticated using (bucket_id = 'expense-receipts');
+
+do $$ begin alter publication supabase_realtime add table public.expenses; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.driver_work_days; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.material_items; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.material_movements; exception when others then null; end $$;`;
 
 // Manual per-job timeline events (logged directly on a job, no formal trip needed).
 const JOB_EVENTS_SQL = `create table if not exists public.job_events (
@@ -2927,6 +3029,7 @@ const NAV = [
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
+    { id:"expenses", label:"Expenses", icon:"💸" },
     { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"clientes", label:"Clients", icon:"👥" },
   ]},
@@ -2999,6 +3102,7 @@ const PAGE_META = {
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
+  expenses:    { title:"Expenses", sub:"Gastos por driver, truck y trip · días trabajados · materiales" },
   clientes:    { title:"Clients", sub:"Clients and their jobs" },
   drivers:     { title:"Drivers", sub:"Operation drivers" },
   trucks:      { title:"Trucks", sub:"Truck fleet" },
@@ -3462,6 +3566,23 @@ export default function App() {
   const [equipmentSaving, setEquipmentSaving] = useState(false);
   const [equipLoadItem, setEquipLoadItem] = useState(null);   // item being loaded onto a trip
   const [equipUnloadItem, setEquipUnloadItem] = useState(null); // {item, tripId} being unloaded at a destination
+  // Expenses (per-driver cost tracking) + work days + materials ledger
+  const [expensesMissing, setExpensesMissing] = useState(false); // expenses tables not yet in DB
+  const [expenses, setExpenses] = useState([]);
+  const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [expenseForm, setExpenseForm] = useState(EMPTY_EXPENSE);
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [expenseSaving, setExpenseSaving] = useState(false);
+  const [expenseUploading, setExpenseUploading] = useState(false);
+  const [workDays, setWorkDays] = useState([]);
+  const [materialItems, setMaterialItems] = useState([]);
+  const [materialMovements, setMaterialMovements] = useState([]);
+  const [showMaterialItemModal, setShowMaterialItemModal] = useState(false);
+  const [materialItemForm, setMaterialItemForm] = useState(EMPTY_MATERIAL_ITEM);
+  const [editingMaterialItemId, setEditingMaterialItemId] = useState(null);
+  const [showMaterialMoveModal, setShowMaterialMoveModal] = useState(false);
+  const [materialMoveForm, setMaterialMoveForm] = useState(EMPTY_MATERIAL_MOVE);
+  const [materialSaving, setMaterialSaving] = useState(false);
   const [addStopModal, setAddStopModal] = useState(null); // { trip } — the "add stop" popup
   const [stopForm, setStopForm] = useState({ category:"maintenance", address:"", note:"" });
   const [stopSaving, setStopSaving] = useState(false);
@@ -3722,6 +3843,22 @@ export default function App() {
   const loadEquipment = useCallback(async () => {
     const { data, error } = await supabase.from("equipment_items").select("*").order("created_at", { ascending: false });
     if (!error) setEquipmentItems(data || []);
+  }, []);
+  const loadExpenses = useCallback(async () => {
+    const { data, error } = await supabase.from("expenses").select("*").order("expense_date", { ascending: false });
+    if (!error) setExpenses(data || []);
+  }, []);
+  const loadWorkDays = useCallback(async () => {
+    const { data, error } = await supabase.from("driver_work_days").select("*").order("work_date", { ascending: false });
+    if (!error) setWorkDays(data || []);
+  }, []);
+  const loadMaterialItems = useCallback(async () => {
+    const { data, error } = await supabase.from("material_items").select("*").order("name", { ascending: true });
+    if (!error) setMaterialItems(data || []);
+  }, []);
+  const loadMaterialMovements = useCallback(async () => {
+    const { data, error } = await supabase.from("material_movements").select("*").order("created_at", { ascending: false });
+    if (!error) setMaterialMovements(data || []);
   }, []);
   const loadJobEvents = useCallback(async () => {
     const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
@@ -4371,6 +4508,40 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, claimsMissing, loadClaims, loadClaimNotes]);
+
+  // Probe the Expenses module (expenses + driver_work_days + material tables).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    const loadAll = () => { loadExpenses(); loadWorkDays(); loadMaterialItems(); loadMaterialMovements(); };
+    (async () => {
+      const { error: eErr } = await supabase.from("expenses").select("id").limit(1);
+      const { error: wErr } = await supabase.from("driver_work_days").select("id").limit(1);
+      const { error: mErr } = await supabase.from("material_movements").select("id").limit(1);
+      if (cancelled) return;
+      if (!eErr && !wErr && !mErr) { loadAll(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: EXPENSES_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadAll();
+      else setExpensesMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadExpenses, loadWorkDays, loadMaterialItems, loadMaterialMovements]);
+
+  useEffect(() => {
+    if (!session || expensesMissing) return;
+    const channel = supabase.channel("expenses-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => loadExpenses())
+      .on("postgres_changes", { event: "*", schema: "public", table: "driver_work_days" }, () => loadWorkDays())
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_items" }, () => loadMaterialItems())
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_movements" }, () => loadMaterialMovements())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, expensesMissing, loadExpenses, loadWorkDays, loadMaterialItems, loadMaterialMovements]);
 
   // Probe the payment_stage column (added after the initial Payments release).
   useEffect(() => {
@@ -5994,13 +6165,13 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", notes:d.notes||"", active: d.active !== false });
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", notes:d.notes||"", active: d.active !== false });
     setShowDriverModal(true);
   }
   async function saveDriver() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
-    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, notes:driverForm.notes||null, active: !!driverForm.active };
+    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), notes:driverForm.notes||null, active: !!driverForm.active };
     if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
     else await supabase.from("drivers").insert([payload]);
     setDriverSaving(false); setShowDriverModal(false);
@@ -6013,6 +6184,151 @@ export default function App() {
   }
   function toggleJobDriver(id) {
     setJobForm(f => { const cur = Array.isArray(f.driver_ids) ? f.driver_ids : []; return { ...f, driver_ids: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id] }; });
+  }
+
+  // ── Expenses CRUD ──
+  function openAddExpense(prefill = {}) {
+    setEditingExpenseId(null);
+    setExpenseForm({ ...EMPTY_EXPENSE, expense_date: today(), ...prefill });
+    setShowExpenseModal(true);
+  }
+  function openEditExpense(e) {
+    setEditingExpenseId(e.id);
+    setExpenseForm({
+      expense_date: e.expense_date || "", category: e.category || "other", amount: e.amount ?? "",
+      vendor: e.vendor || "", driver_id: e.driver_id || "", truck_id: e.truck_id || "", trip_id: e.trip_id || "",
+      job_number: e.job_number || "", paid_from: e.paid_from || "bank", bank_account: e.bank_account || "",
+      status: e.status || "pending", gallons: e.gallons ?? "", odometer: e.odometer ?? "",
+      fuel_state: e.fuel_state || "", receipt_url: e.receipt_url || "", notes: e.notes || "",
+    });
+    setShowExpenseModal(true);
+  }
+  async function saveExpense() {
+    const f = expenseForm;
+    if (f.amount === "" || isNaN(Number(f.amount))) { window.alert("Ingresá el monto del gasto."); return; }
+    if (f.paid_from === "driver_cash" && !f.driver_id) { window.alert("Un gasto pagado con cash del driver necesita el driver."); return; }
+    setExpenseSaving(true);
+    const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
+    const jobNumber = (f.job_number || "").trim();
+    // Keep job_id in sync with job_number so job-level rollups can join either way.
+    const jobRow = jobNumber ? jobs.find(j => normJobNumber(j.job_number) === normJobNumber(jobNumber)) : null;
+    const payload = {
+      expense_date: f.expense_date || null, category: f.category || "other", amount: num(f.amount),
+      vendor: f.vendor || null, driver_id: num(f.driver_id), truck_id: num(f.truck_id), trip_id: num(f.trip_id),
+      job_id: jobRow?.id ?? null, job_number: jobNumber || null,
+      paid_from: f.paid_from || "bank", bank_account: f.paid_from === "bank" ? (f.bank_account || null) : null,
+      status: f.status || "pending", gallons: num(f.gallons), odometer: num(f.odometer),
+      fuel_state: f.category === "fuel" ? (f.fuel_state || null) : null,
+      receipt_url: f.receipt_url || null, notes: f.notes || null,
+    };
+    let error;
+    if (editingExpenseId) ({ error } = await supabase.from("expenses").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingExpenseId));
+    else ({ error } = await supabase.from("expenses").insert([{ ...payload, created_by: userEmail }]));
+    setExpenseSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowExpenseModal(false); setEditingExpenseId(null);
+    loadExpenses();
+  }
+  async function deleteExpense(e) {
+    if (!window.confirm(`Delete ${e.category || "expense"} de $${Math.round(numv(e.amount)).toLocaleString()}?`)) return;
+    const { error } = await supabase.from("expenses").delete().eq("id", e.id);
+    if (error) { window.alert(error.message); return; }
+    loadExpenses();
+  }
+  async function setExpenseStatus(e, status) {
+    const { error } = await supabase.from("expenses").update({ status, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", e.id);
+    if (error) { window.alert(error.message); return; }
+    loadExpenses();
+  }
+  // Mark a driver-cash expense as squared up (the driver handed in the remainder).
+  async function settleExpense(e, settled = true) {
+    const { error } = await supabase.from("expenses").update({ settled, settled_date: settled ? today() : null, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", e.id);
+    if (error) { window.alert(error.message); return; }
+    loadExpenses();
+  }
+  async function uploadExpenseReceipt(file) {
+    if (!file) return;
+    setExpenseUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const path = `receipt-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("expense-receipts").upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) { window.alert("Upload error: " + error.message); setExpenseUploading(false); return; }
+      const { data } = supabase.storage.from("expense-receipts").getPublicUrl(path);
+      setExpenseForm(f => ({ ...f, receipt_url: data?.publicUrl || "" }));
+    } catch (err) { window.alert("Error: " + err.message); }
+    setExpenseUploading(false);
+  }
+  // Click a day in the work-day grid: insert (rate snapshotted from the driver's
+  // daily_rate) or remove the row. unique(driver_id, work_date) keeps it idempotent.
+  async function toggleWorkDay(driver, dateISO) {
+    const existing = workDays.find(w => w.driver_id === driver.id && w.work_date === dateISO);
+    if (existing) {
+      const { error } = await supabase.from("driver_work_days").delete().eq("id", existing.id);
+      if (error) { window.alert(error.message); return; }
+    } else {
+      const rate = driver.daily_rate == null || driver.daily_rate === "" ? null : Number(driver.daily_rate);
+      const { error } = await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, rate, created_by: userEmail }]);
+      if (error) { window.alert(error.message); return; }
+    }
+    loadWorkDays();
+  }
+
+  // ── Materials catalog + movements ──
+  function openAddMaterialItem() { setEditingMaterialItemId(null); setMaterialItemForm(EMPTY_MATERIAL_ITEM); setShowMaterialItemModal(true); }
+  function openEditMaterialItem(it) {
+    setEditingMaterialItemId(it.id);
+    setMaterialItemForm({ name: it.name || "", category: it.category || "", unit: it.unit || "unit", unit_cost: it.unit_cost ?? "", active: it.active !== false, notes: it.notes || "" });
+    setShowMaterialItemModal(true);
+  }
+  async function saveMaterialItem() {
+    if (!materialItemForm.name.trim()) return;
+    setMaterialSaving(true);
+    const payload = { name: materialItemForm.name.trim(), category: materialItemForm.category || null, unit: materialItemForm.unit || "unit", unit_cost: materialItemForm.unit_cost === "" ? null : Number(materialItemForm.unit_cost), active: !!materialItemForm.active, notes: materialItemForm.notes || null };
+    let error;
+    if (editingMaterialItemId) ({ error } = await supabase.from("material_items").update(payload).eq("id", editingMaterialItemId));
+    else ({ error } = await supabase.from("material_items").insert([payload]));
+    setMaterialSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowMaterialItemModal(false); loadMaterialItems();
+  }
+  async function deleteMaterialItem(it) {
+    if (!window.confirm(`Delete material "${it.name}"? Sus movimientos también se borran.`)) return;
+    const { error } = await supabase.from("material_items").delete().eq("id", it.id);
+    if (error) { window.alert(error.message); return; }
+    loadMaterialItems(); loadMaterialMovements();
+  }
+  function openAddMaterialMove(prefill = {}) {
+    setMaterialMoveForm({ ...EMPTY_MATERIAL_MOVE, movement_date: today(), ...prefill });
+    setShowMaterialMoveModal(true);
+  }
+  async function saveMaterialMove() {
+    const f = materialMoveForm;
+    if (!f.item_id) { window.alert("Elegí el material."); return; }
+    if (f.quantity === "" || isNaN(Number(f.quantity)) || Number(f.quantity) === 0) { window.alert("Ingresá la cantidad."); return; }
+    if (["issue", "return", "consume"].includes(f.movement_type) && !f.driver_id) { window.alert("Este movimiento necesita el driver."); return; }
+    setMaterialSaving(true);
+    const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
+    const item = materialItems.find(i => i.id === Number(f.item_id));
+    const jobNumber = (f.job_number || "").trim();
+    const jobRow = jobNumber ? jobs.find(j => normJobNumber(j.job_number) === normJobNumber(jobNumber)) : null;
+    const payload = {
+      item_id: Number(f.item_id), movement_type: f.movement_type, quantity: Number(f.quantity),
+      unit_cost: num(f.unit_cost) ?? (item?.unit_cost ?? null),
+      driver_id: num(f.driver_id), trip_id: num(f.trip_id),
+      job_id: jobRow?.id ?? null, job_number: jobNumber || null,
+      movement_date: f.movement_date || null, notes: f.notes || null, created_by: userEmail,
+    };
+    const { error } = await supabase.from("material_movements").insert([payload]);
+    setMaterialSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowMaterialMoveModal(false); loadMaterialMovements();
+  }
+  async function deleteMaterialMove(mv) {
+    if (!window.confirm("Delete este movimiento de material?")) return;
+    const { error } = await supabase.from("material_movements").delete().eq("id", mv.id);
+    if (error) { window.alert(error.message); return; }
+    loadMaterialMovements();
   }
 
   // ── Carrier settlements handlers ──
@@ -7954,6 +8270,7 @@ export default function App() {
           {page === "payments" && can("payments","create") && !paymentsMissing && !extrasMissing && <Btn onClick={openAddExtraFromPayments}>+ Extra</Btn>}
           {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
           {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
+          {page === "expenses" && can("expenses","create") && <Btn primary disabled={expensesMissing} onClick={() => openAddExpense()}>+ Expense</Btn>}
           {page === "claims" && can("claims","create") && <Btn primary disabled={claimsMissing} onClick={() => openAddClaim()}>+ New claim</Btn>}
           {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario" || page === "calendario_entregas") && (can("jobs","create") || can("dispatching","create") || can("calendario","create") || can("calendario_entregas","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
@@ -10293,6 +10610,32 @@ export default function App() {
         );
       })()}
 
+      {/* ───────────────────────── EXPENSES ───────────────────────── */}
+      {page === "expenses" && (
+        <ExpensesPage
+          missing={expensesMissing} onShowSetup={() => setShowSetup(true)}
+          expenses={expenses} driversList={driversList} trucksList={trucksList} trips={trips} jobs={jobs}
+          payAccounts={payAccounts} payments={payments} paymentsMissing={paymentsMissing}
+          workDays={workDays} materialItems={materialItems} materialMovements={materialMovements}
+          can={can} today={today}
+          form={expenseForm} setForm={setExpenseForm} showModal={showExpenseModal} setShowModal={setShowExpenseModal}
+          editingId={editingExpenseId} saving={expenseSaving} uploading={expenseUploading}
+          onAdd={openAddExpense} onEdit={openEditExpense} onSave={saveExpense} onDelete={deleteExpense}
+          onSetStatus={setExpenseStatus} onSettle={settleExpense} onUploadReceipt={uploadExpenseReceipt}
+          onToggleWorkDay={toggleWorkDay}
+          materialItemForm={materialItemForm} setMaterialItemForm={setMaterialItemForm}
+          showMaterialItemModal={showMaterialItemModal} setShowMaterialItemModal={setShowMaterialItemModal}
+          editingMaterialItemId={editingMaterialItemId} materialSaving={materialSaving}
+          onAddMaterialItem={openAddMaterialItem} onEditMaterialItem={openEditMaterialItem}
+          onSaveMaterialItem={saveMaterialItem} onDeleteMaterialItem={deleteMaterialItem}
+          materialMoveForm={materialMoveForm} setMaterialMoveForm={setMaterialMoveForm}
+          showMaterialMoveModal={showMaterialMoveModal} setShowMaterialMoveModal={setShowMaterialMoveModal}
+          onAddMaterialMove={openAddMaterialMove} onSaveMaterialMove={saveMaterialMove} onDeleteMaterialMove={deleteMaterialMove}
+          setPayPhotoView={setPayPhotoView}
+          Btn={Btn} Modal={Modal}
+        />
+      )}
+
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
       {page === "analytics" && (
         <AnalyticsPage
@@ -10300,6 +10643,8 @@ export default function App() {
           payments={payments} jobExtras={jobExtras} sit={sit}
           urgentPayments={urgentPayments} faddStats={faddStats}
           brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
+          expenses={expenses} workDays={workDays} materialItems={materialItems}
+          materialMovements={materialMovements} expensesMissing={expensesMissing}
           lang={lang}
         />
       )}
@@ -11819,7 +12164,7 @@ export default function App() {
       })()}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -11864,6 +12209,7 @@ export default function App() {
             <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="ej: T-12" /></Field>
+            <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="ej: 250" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
             <Field label="Status">
@@ -13966,13 +14312,35 @@ export default function App() {
                   const holding = mine.filter(p => isPhysical(p.method) && p.received && !p.banked);
                   const heldTotal = holding.reduce((s, p) => s + p._net, 0);
                   const history = mine.filter(p => p.received).sort((a, b) => (b.received_date || b.payment_date || "").localeCompare(a.received_date || a.payment_date || ""));
+                  // Approved cash expenses not yet settled explain why less cash comes back;
+                  // the payments ledger itself is untouched (see driverCashReconciliation).
+                  const cashExp = expensesMissing ? [] : expenses.filter(e => e.driver_id === driverD.id && e.paid_from === "driver_cash" && e.status === "approved" && !e.settled);
+                  const cashExpTotal = cashExp.reduce((s, e) => s + numv(e.amount), 0);
+                  const expectedOnHand = heldTotal - cashExpTotal;
                   return (
                     <>
                       <SectionLabel>In circulation</SectionLabel>
-                      <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6, flexWrap:"wrap" }}>
                         <span>Tiene en mano: <b style={{ color: heldTotal > 0 ? "#E24B4A" : "#1A8A4E", fontSize:15 }}>${Math.round(heldTotal).toLocaleString()}</b></span>
                         {heldTotal > 0 && <span style={{ fontSize:11, color:"#888" }}>({holding.length} pago{holding.length !== 1 ? "s" : ""} sin depositar)</span>}
                       </div>
+                      {cashExpTotal > 0 && (
+                        <div style={{ background:"#fafafa", borderRadius:10, padding:"8px 12px", fontSize:12.5, marginBottom:8 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>Tiene en mano (pagos)</span><b>${Math.round(heldTotal).toLocaleString()}</b></div>
+                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>− gastos cash aprobados sin rendir</span><b style={{ color:"#C2410C" }}>−${Math.round(cashExpTotal).toLocaleString()}</b></div>
+                          <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #eee", marginTop:4, paddingTop:4 }}><span style={{ fontWeight:600 }}>= Debería entregar</span><b style={{ color: expectedOnHand < 0 ? "#E24B4A" : "#1A8A4E", fontSize:14 }}>${Math.round(expectedOnHand).toLocaleString()}</b></div>
+                          {cashExp.map(e => (
+                            <div key={e.id} style={{ display:"flex", alignItems:"center", gap:6, fontSize:11.5, color:"#666", padding:"3px 0" }}>
+                              <span>{e.expense_date || ""}</span>
+                              <ExpenseCatChip category={e.category} />
+                              <span>{e.vendor || ""}</span>
+                              <span style={{ flex:1 }} />
+                              <b>${Math.round(numv(e.amount)).toLocaleString()}</b>
+                              {can("expenses", "edit") && <button onClick={() => settleExpense(e)} title="Marcar rendido" style={{ background:"none", border:"none", cursor:"pointer", fontSize:12 }}>🤝</button>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <SectionLabel>Historial de pagos recibidos</SectionLabel>
                       {history.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos recibidos.</div>
                         : <div style={{ maxHeight:200, overflowY:"auto" }}>{history.map(p => (
@@ -13985,6 +14353,71 @@ export default function App() {
                               {p.banked ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5" }}>depositado {p.banked_date || ""}</span> : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C" }}>sin depositar</span>}
                             </div>
                           ))}</div>}
+                    </>
+                  );
+                })()}
+                {!expensesMissing && can("expenses", "view") && (() => {
+                  // Mini P&L for the current month: attributed revenue vs day pay + approved
+                  // expenses + extras commissions. Same math as the Analytics Driver P&L tab.
+                  const curMonth = monthOf(today());
+                  const range = { fromMonth: curMonth, toMonth: curMonth };
+                  const allGroups = [...dedupeJobs(jobs).values()];
+                  const monthGroups = allGroups.filter(g => monthOf(g.rep.pickup_date || g.dateIn || g.rep.created_at) === curMonth);
+                  const monthExtras = jobExtras.filter(e => e.driver_id === driverD.id && monthOf(e.created_at) === curMonth);
+                  const pnl = computeDriverPnl({ driversList: [driverD], groups: monthGroups, jobExtras: monthExtras, expenses, workDays, range });
+                  const row = pnl.rows[0];
+                  const myExpenses = expenses.filter(e => e.driver_id === driverD.id && e.status !== "rejected")
+                    .sort((a, b) => (b.expense_date || "").localeCompare(a.expense_date || ""));
+                  const myOnHand = materialShortages({ items: materialItems, movements: materialMovements })
+                    .filter(s => s.driverId === driverD.id && s.onHand !== 0);
+                  return (
+                    <>
+                      <SectionLabel>P&L del mes (aprox.)</SectionLabel>
+                      {!row ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>Sin actividad este mes.</div> : (
+                        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(105px,1fr))", gap:8, marginBottom:8 }}>
+                          {[
+                            ["Revenue (atribuido)", row.revenue, "#185FA5"],
+                            ["Días × rate", -row.laborCost, "#C2410C"],
+                            ["Gastos aprobados", -row.expensesTotal, "#C2410C"],
+                            ["Comisiones", -row.commissions, "#C2410C"],
+                            ["Neto", row.net, row.net >= 0 ? "#1A8A4E" : "#E24B4A"],
+                          ].map(([l, v, c]) => (
+                            <div key={l} style={{ background:"#fafafa", borderRadius:8, padding:"7px 9px" }}>
+                              <div style={{ fontSize:9.5, color:"#999", fontWeight:600 }}>{l}</div>
+                              <div style={{ fontSize:14, fontWeight:800, color:c }}>{(v < 0 ? "−$" : "$") + Math.abs(Math.round(v)).toLocaleString()}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {row && row.jobsCount > 1 && <div style={{ fontSize:10.5, color:"#bbb", marginBottom:6 }}>Revenue de jobs compartidos se divide en partes iguales entre drivers.</div>}
+                      {myOnHand.length > 0 && (
+                        <>
+                          <SectionLabel>Materiales en mano</SectionLabel>
+                          {myOnHand.map((s, i) => (
+                            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, padding:"4px 0", borderBottom:"1px solid #f4f4f4" }}>
+                              <span style={{ fontWeight:600 }}>{s.itemName}</span>
+                              <span style={{ flex:1 }} />
+                              <b style={{ color: s.onHand > 0 ? "#E24B4A" : "#185FA5" }}>{s.onHand} {s.unit}</b>
+                              <span style={{ fontSize:11, color:"#888" }}>(${Math.round(s.value).toLocaleString()})</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      <SectionLabel>Últimos gastos</SectionLabel>
+                      {myExpenses.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>Sin gastos registrados.</div> : (
+                        <div style={{ maxHeight:170, overflowY:"auto", marginBottom:4 }}>
+                          {myExpenses.slice(0, 25).map(e => (
+                            <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", borderBottom:"1px solid #f4f4f4", fontSize:12, flexWrap:"wrap" }}>
+                              <span style={{ color:"#888", whiteSpace:"nowrap" }}>{e.expense_date || (e.created_at || "").slice(0, 10)}</span>
+                              <ExpenseCatChip category={e.category} />
+                              <span style={{ color:"#666" }}>{e.vendor || ""}</span>
+                              <span style={{ flex:1 }} />
+                              <ExpenseStatusBadge status={e.status || "pending"} />
+                              <b>${Math.round(numv(e.amount)).toLocaleString()}</b>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </>
                   );
                 })()}
