@@ -191,6 +191,7 @@ export function ExpensesPage(props) {
 
   return (
     <>
+      <datalist id="expense-jobs-list">{jobNumbers.map(n => <option key={n} value={n} />)}</datalist>
       {missing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span>Para Expenses (gastos + días trabajados + materiales), corré el SQL de setup una vez en Supabase.</span>
@@ -470,7 +471,6 @@ export function ExpensesPage(props) {
             </Field>
             <Field label="Job #">
               <input style={inp} list="expense-jobs-list" value={form.job_number} onChange={e => setF({ job_number: e.target.value })} placeholder="(opcional)" />
-              <datalist id="expense-jobs-list">{jobNumbers.map(n => <option key={n} value={n} />)}</datalist>
             </Field>
             <Field label="Pagado con">
               <select style={inp} value={form.paid_from} onChange={e => setF({ paid_from: e.target.value })}>
