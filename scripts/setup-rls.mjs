@@ -44,6 +44,12 @@ const MAP = {
   claims:               { view: ["claims", "trips", "jobs"], owner: "claims" },
   // Adding a follow-up note to an existing claim is an edit-level action, not a create-level one.
   claim_notes:          { view: ["claims"], owner: "claims", insertLevel: "edit" },
+  // Expenses module (run scripts/setup-expenses.mjs first, then re-run this script).
+  expenses:             { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
+  driver_work_days:     { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
+  material_items:       { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
+  // Logging a movement against the ledger is an edit-level action, not a create-level one.
+  material_movements:   { view: ["expenses", "drivers", "analytics"], owner: "expenses", insertLevel: "edit" },
 };
 
 function policiesFor(table, { view, owner, insertLevel = "create" }) {
