@@ -6661,7 +6661,21 @@ export default function App() {
   }
   async function saveClaim() {
     const f = claimForm;
-    if (!f.incident_type || !f.description.trim()) { window.alert("Complete the incident type and description."); return; }
+    // Validate everything at once so the user gets the full fix-list in a single alert.
+    const errs = [];
+    if (!f.incident_type) errs.push("• Incident type is required.");
+    if (!f.description.trim()) errs.push("• Description is required.");
+    if (!f.incident_date) errs.push("• Incident date is required.");
+    else if (f.incident_date > today()) errs.push("• Incident date can't be in the future.");
+    if (f.claimed_amount !== "" && !(Number(f.claimed_amount) >= 0)) errs.push("• Claimed amount must be a number ≥ 0.");
+    if (f.paid_amount !== "" && !(Number(f.paid_amount) >= 0)) errs.push("• Paid / settled must be a number ≥ 0.");
+    if (!CLAIM_ACTIVE(f.status)) {
+      if (!f.resolution_type) errs.push(`• Pick a resolution before marking the claim as ${CLAIM_STATUS[f.status]?.l || f.status}.`);
+      if (f.closed_date && f.incident_date && f.closed_date < f.incident_date) errs.push("• Closed date can't be before the incident date.");
+    }
+    if (errs.length) { window.alert("Please review:\n" + errs.join("\n")); return; }
+    if (f.claimed_amount !== "" && f.paid_amount !== "" && Number(f.paid_amount) > Number(f.claimed_amount)
+        && !window.confirm("Paid / settled is higher than the claimed amount. Save anyway?")) return;
     setClaimSaving(true);
     const prev = editingClaimId ? claims.find(c => c.id === editingClaimId) : null;
     // Closing statuses auto-stamp the closed date so "days to close" always
@@ -6673,7 +6687,8 @@ export default function App() {
       status: f.status, assigned_to: f.assigned_to || null,
       claimed_amount: f.claimed_amount === "" ? null : Number(f.claimed_amount),
       paid_amount: f.paid_amount === "" ? null : Number(f.paid_amount),
-      resolution_type: f.resolution_type || null, closed_date: closedDate,
+      // Like closed_date, a resolution only makes sense on a closed claim.
+      resolution_type: CLAIM_ACTIVE(f.status) ? null : (f.resolution_type || null), closed_date: closedDate,
     };
     let error = null, claimId = editingClaimId;
     if (editingClaimId) ({ error } = await supabase.from("claims").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingClaimId));
@@ -6688,7 +6703,7 @@ export default function App() {
     setClaimSaving(false);
     if (error) { window.alert(error.message); return; }
     if (!CLAIM_ACTIVE(f.status)) setClaimForm(prev2 => ({ ...prev2, closed_date: closedDate }));
-    else setClaimForm(prev2 => ({ ...prev2, closed_date: "" }));
+    else setClaimForm(prev2 => ({ ...prev2, closed_date: "", resolution_type: "" }));
     loadClaims();
     if (!editingClaimId && claimId) {
       // Stay open in edit mode so photos and notes can be attached right away
@@ -12134,6 +12149,8 @@ export default function App() {
           set({ job_number: jn, client_name: j?.customer || f.client_name || "", trip_id: j?.trip_id ? String(j.trip_id) : "" });
         };
         const tm = claimTypeMeta(f.incident_type);
+        // On create, warn when the picked job already has active claims — likely a duplicate.
+        const dupCount = !editingClaimId ? (claimsByJob[normJobNumber(f.job_number)] || 0) : 0;
         return (
           <Modal title={editingClaimId ? `${tm.icon} Claim · ${f.job_number || "no job"}` : "⚠️ Report claim / incident"}
             onClose={() => { setShowClaimModal(false); setEditingClaimId(null); }}
@@ -12157,6 +12174,7 @@ export default function App() {
                   {f.job_number && !jobOptsF.some(j => j.job_number === f.job_number) && <option value={f.job_number}>{f.job_number}</option>}
                   {jobOptsF.map(j => <option key={j.id} value={j.job_number}>{j.job_number} · {j.customer || "—"}</option>)}
                 </select>
+                {dupCount > 0 && <div style={{ fontSize:11.5, color:"#A32D2D", marginTop:4 }}>⚠ Este job ya tiene {dupCount} claim{dupCount > 1 ? "s" : ""} activo{dupCount > 1 ? "s" : ""} — revisá que no sea un duplicado.</div>}
               </Field>
               <Field label="Trip (opcional)">
                 <select style={inp} value={f.trip_id} onChange={e => set({ trip_id: e.target.value })} disabled={!canEdit}>
@@ -12182,19 +12200,29 @@ export default function App() {
             <SectionLabel>Status & resolution</SectionLabel>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               <Field label="Status">
-                <select style={inp} value={f.status} onChange={e => set({ status:e.target.value })} disabled={!canEdit}>
+                <select style={inp} value={f.status} onChange={e => {
+                  // Keep resolution/closed_date coherent with the status: reopening
+                  // clears them (save discards them anyway), closing prefills the
+                  // close date and — for Denied — the matching resolution.
+                  const v = e.target.value;
+                  if (CLAIM_ACTIVE(v)) set({ status:v, resolution_type:"", closed_date:"" });
+                  else set({ status:v, closed_date: f.closed_date || today(), resolution_type: f.resolution_type || (v === "denied" ? "denied" : "") });
+                }} disabled={!canEdit}>
                   {Object.entries(CLAIM_STATUS).map(([v,c]) => <option key={v} value={v}>{c.l}</option>)}
                 </select>
               </Field>
               <Field label="Resolution">
-                <select style={inp} value={f.resolution_type} onChange={e => set({ resolution_type:e.target.value })} disabled={!canEdit}>
-                  <option value="">— Sin resolución —</option>
+                <select style={inp} value={f.resolution_type} onChange={e => set({ resolution_type:e.target.value })} disabled={!canEdit || CLAIM_ACTIVE(f.status)}
+                  title={CLAIM_ACTIVE(f.status) ? "Se define al cerrar el claim (Resolved / Denied)" : undefined}>
+                  <option value="">{CLAIM_ACTIVE(f.status) ? "— Se define al cerrar —" : "— Sin resolución —"}</option>
                   {CLAIM_RESOLUTIONS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </Field>
               <Field label="Claimed amount ($)"><input style={inp} type="number" min="0" step="0.01" value={f.claimed_amount} onChange={e => set({ claimed_amount:e.target.value })} placeholder="0.00" disabled={!canEdit} /></Field>
               <Field label="Paid / settled ($)"><input style={inp} type="number" min="0" step="0.01" value={f.paid_amount} onChange={e => set({ paid_amount:e.target.value })} placeholder="0.00" disabled={!canEdit} /></Field>
-              <Field label="Closed date"><input style={inp} type="date" value={f.closed_date} onChange={e => set({ closed_date:e.target.value })} disabled={!canEdit} /></Field>
+              {/* Editable only on closing statuses — while active, save discards it anyway. */}
+              <Field label="Closed date"><input style={inp} type="date" value={f.closed_date} onChange={e => set({ closed_date:e.target.value })} disabled={!canEdit || CLAIM_ACTIVE(f.status)}
+                title={CLAIM_ACTIVE(f.status) ? "Se completa al pasar el claim a Resolved / Denied" : undefined} /></Field>
             </div>
             {editingClaimId ? (
               <>
