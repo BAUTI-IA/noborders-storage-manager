@@ -507,16 +507,52 @@ export function attributeRevenueToDrivers(groups, driversList, { strategy = "eve
   return byId;
 }
 
+// ── Pay weeks (Wednesday → Tuesday; the company pays every Wednesday) ─────────
+const pad2 = (n) => String(n).padStart(2, "0");
+const dateToISO = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+export function addDaysISO(dateISO, days) {
+  const d = new Date(dateISO + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return dateToISO(d);
+}
+// The Wednesday that starts the pay week containing dateISO (getDay(): Wed = 3).
+export function payWeekStart(dateISO) {
+  const d = new Date(dateISO + "T00:00:00");
+  d.setDate(d.getDate() - ((d.getDay() - 3 + 7) % 7));
+  return dateToISO(d);
+}
+// The 7 ISO dates of a pay week (Wed..Tue) given its starting Wednesday.
+export const payWeekDays = (startISO) => Array.from({ length: 7 }, (_, i) => addDaysISO(startISO, i));
+
+// What one work-day row pays. day_type: full (rate), half (rate/2), hourly
+// (hours × rate). `rate` is the snapshot taken when the day was logged (daily
+// or hourly depending on day_type); rows without it fall back to the driver's
+// current daily_rate/hourly_rate.
+export function workDayPay(w, driver) {
+  const t = w.day_type || "full";
+  if (t === "hourly") {
+    const r = w.rate != null && w.rate !== "" ? numv(w.rate) : numv(driver?.hourly_rate);
+    return numv(w.hours) * r;
+  }
+  const r = w.rate != null && w.rate !== "" ? numv(w.rate) : numv(driver?.daily_rate);
+  return t === "half" ? r / 2 : r;
+}
+
 // Full per-driver P&L: attributed revenue vs labor (work days × rate) + approved
-// expenses + extras commissions. `groups` and `jobExtras` come pre-filtered from
-// the analytics ctx; expenses/workDays are filtered here by their own dates.
-export function computeDriverPnl({ driversList, groups, jobExtras, expenses, workDays, range }) {
+// expenses + extras commissions ± pay adjustments (bonus adds cost, deduction —
+// a fuck-up charged to the driver — reduces it). `groups` and `jobExtras` come
+// pre-filtered from the analytics ctx; expenses/workDays/adjustments are
+// filtered here by their own dates.
+export function computeDriverPnl({ driversList, groups, jobExtras, expenses, workDays, adjustments = [], range }) {
   const inRange = (d) => { const m = monthOf(d); return !!m && (!range || !range.fromMonth || (m >= range.fromMonth && m <= range.toMonth)); };
   const revById = attributeRevenueToDrivers(groups, driversList);
   const rows = driversList.map(d => {
     const rev = revById.get(d.id) || { revenue: 0, jobs: 0 };
     const days = workDays.filter(w => w.driver_id === d.id && inRange(w.work_date));
-    const laborCost = days.reduce((s, w) => s + (w.rate != null && w.rate !== "" ? numv(w.rate) : numv(d.daily_rate)), 0);
+    const laborCost = days.reduce((s, w) => s + workDayPay(w, d), 0);
+    const myAdj = adjustments.filter(a => a.driver_id === d.id && inRange(a.adj_date || (a.created_at || "").slice(0, 10)));
+    const bonuses = myAdj.filter(a => a.kind === "bonus").reduce((s, a) => s + numv(a.amount), 0);
+    const deductions = myAdj.filter(a => a.kind !== "bonus").reduce((s, a) => s + numv(a.amount), 0);
     const mine = expenses.filter(e => e.driver_id === d.id && inRange(e.expense_date || (e.created_at || "").slice(0, 10)));
     const expensesByCategory = {};
     let expensesTotal = 0, pendingTotal = 0;
@@ -531,23 +567,26 @@ export function computeDriverPnl({ driversList, groups, jobExtras, expenses, wor
     const commissions = jobExtras
       .filter(e => e.driver_id === d.id && e.active !== false)
       .reduce((s, e) => s + numv(e.driver_commission_amount), 0);
-    const totalCost = laborCost + expensesTotal + commissions;
+    const adjustmentsNet = bonuses - deductions;
+    const totalCost = laborCost + expensesTotal + commissions + adjustmentsNet;
     const net = rev.revenue - totalCost;
     return {
       driverId: d.id, name: d.name || `Driver #${d.id}`, active: d.active !== false,
       revenue: rev.revenue, jobsCount: rev.jobs,
       workedDays: days.length, laborCost,
       expensesByCategory, expensesTotal, pendingTotal, commissions,
+      bonuses, deductions, adjustmentsNet,
       totalCost, net,
       margin: rev.revenue > 0 ? net / rev.revenue : null,
     };
-  }).filter(r => r.revenue || r.totalCost || r.pendingTotal || r.workedDays)
+  }).filter(r => r.revenue || r.totalCost || r.pendingTotal || r.workedDays || r.adjustmentsNet)
     .sort((a, b) => b.net - a.net);
   const totals = rows.reduce((t, r) => ({
     revenue: t.revenue + r.revenue, laborCost: t.laborCost + r.laborCost,
     expensesTotal: t.expensesTotal + r.expensesTotal, commissions: t.commissions + r.commissions,
+    adjustmentsNet: t.adjustmentsNet + r.adjustmentsNet,
     totalCost: t.totalCost + r.totalCost, net: t.net + r.net,
-  }), { revenue: 0, laborCost: 0, expensesTotal: 0, commissions: 0, totalCost: 0, net: 0 });
+  }), { revenue: 0, laborCost: 0, expensesTotal: 0, commissions: 0, adjustmentsNet: 0, totalCost: 0, net: 0 });
   return { rows, totals };
 }
 

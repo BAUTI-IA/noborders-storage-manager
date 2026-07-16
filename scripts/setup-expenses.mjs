@@ -50,6 +50,7 @@ drop policy if exists "expenses_all" on public.expenses;
 create policy "expenses_all" on public.expenses for all to anon, authenticated using (true) with check (true);
 
 alter table public.drivers add column if not exists daily_rate numeric;
+alter table public.drivers add column if not exists hourly_rate numeric;
 
 create table if not exists public.driver_work_days (
   id bigint generated always as identity primary key,
@@ -62,9 +63,26 @@ create table if not exists public.driver_work_days (
   created_at timestamptz default now(),
   unique (driver_id, work_date)
 );
+alter table public.driver_work_days add column if not exists day_type text default 'full';
+alter table public.driver_work_days add column if not exists hours numeric;
 alter table public.driver_work_days enable row level security;
 drop policy if exists "driver_work_days_all" on public.driver_work_days;
 create policy "driver_work_days_all" on public.driver_work_days for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.driver_adjustments (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  adj_date date,
+  kind text default 'deduction',
+  amount numeric,
+  reason text,
+  job_number text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.driver_adjustments enable row level security;
+drop policy if exists "driver_adjustments_all" on public.driver_adjustments;
+create policy "driver_adjustments_all" on public.driver_adjustments for all to anon, authenticated using (true) with check (true);
 
 create table if not exists public.material_items (
   id bigint generated always as identity primary key,
@@ -112,6 +130,7 @@ create policy "expensereceipts_update" on storage.objects for update to anon, au
 
 do $$ begin alter publication supabase_realtime add table public.expenses; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.driver_work_days; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.driver_adjustments; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.material_items; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.material_movements; exception when others then null; end $$;`;
 

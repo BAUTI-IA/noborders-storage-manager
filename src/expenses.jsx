@@ -2,7 +2,7 @@
 // UI only: state, Supabase calls and handlers live in App.jsx (same split as analytics.jsx).
 // Shared Btn/Modal components arrive as props to avoid a circular import with App.jsx.
 import { useMemo, useState } from "react";
-import { numv, monthOf, shiftMonth, monthLabel, driverCashReconciliation, materialShortages } from "./analyticsData.js";
+import { numv, monthOf, driverCashReconciliation, materialShortages, payWeekStart, payWeekDays, addDaysISO, workDayPay } from "./analyticsData.js";
 
 // Form/constant definitions live here (exported) so App.jsx state and this UI share one copy.
 export const EMPTY_EXPENSE = {
@@ -30,6 +30,11 @@ export const EXPENSE_STATUS = {
   approved: { l:"Approved", bg:"#EAF3DE", text:"#3B6D11" },
   rejected: { l:"Rejected", bg:"#FCEBEB", text:"#A32D2D" },
 };
+export const EMPTY_ADJUSTMENT = { driver_id:"", adj_date:"", kind:"deduction", amount:"", reason:"", job_number:"" };
+export const ADJUSTMENT_KINDS = [
+  { v:"deduction", l:"Descuento (fuck-up, daño, faltante…)", icon:"🔻" },
+  { v:"bonus", l:"Compensación / bono", icon:"💚" },
+];
 export const EMPTY_MATERIAL_ITEM = { name:"", category:"", unit:"unit", unit_cost:"", active:true, notes:"" };
 export const EMPTY_MATERIAL_MOVE = { item_id:"", movement_type:"issue", quantity:"", unit_cost:"", driver_id:"", trip_id:"", job_number:"", movement_date:"", notes:"" };
 export const MATERIAL_MOVE_TYPES = [
@@ -97,11 +102,13 @@ function ReceiptBox({ url, onFile, uploading, onView }) {
 export function ExpensesPage(props) {
   const {
     missing, onShowSetup, expenses, driversList, trucksList, trips, jobs,
-    payAccounts, payments, paymentsMissing, workDays, materialItems, materialMovements,
+    payAccounts, payments, paymentsMissing, workDays, adjustments, materialItems, materialMovements,
     can, today,
     form, setForm, showModal, setShowModal, editingId, saving, uploading,
     onEdit, onSave, onDelete, onSetStatus, onSettle, onUploadReceipt,
-    onToggleWorkDay,
+    onCycleWorkDay,
+    adjForm, setAdjForm, showAdjModal, setShowAdjModal, adjSaving,
+    onAddAdjustment, onSaveAdjustment, onDeleteAdjustment,
     materialItemForm, setMaterialItemForm, showMaterialItemModal, setShowMaterialItemModal,
     editingMaterialItemId, materialSaving,
     onAddMaterialItem, onEditMaterialItem, onSaveMaterialItem, onDeleteMaterialItem,
@@ -118,7 +125,7 @@ export function ExpensesPage(props) {
   const [fFrom, setFFrom] = useState("");
   const [fTo, setFTo] = useState("");
   const [fSearch, setFSearch] = useState("");
-  const [wdMonth, setWdMonth] = useState(monthOf(today()));
+  const [weekStart, setWeekStart] = useState(() => payWeekStart(today())); // Wednesday that opens the pay week
 
   const canEdit = can("expenses", "edit");
   const canCreate = can("expenses", "create");
@@ -175,17 +182,21 @@ export function ExpensesPage(props) {
 
   const shortages = useMemo(() => materialShortages({ items: materialItems, movements: materialMovements }), [materialItems, materialMovements]);
 
-  // ── Work-day grid data ──
-  const wdDays = useMemo(() => {
-    const [y, m] = wdMonth.split("-").map(Number);
-    const n = new Date(y, m, 0).getDate();
-    return Array.from({ length: n }, (_, i) => `${wdMonth}-${String(i + 1).padStart(2, "0")}`);
-  }, [wdMonth]);
+  // ── Pay-week (Wed→Tue) grid data ──
+  const wdDays = useMemo(() => payWeekDays(weekStart), [weekStart]);
+  const weekEnd = wdDays[6];
   const wdByDriverDate = useMemo(() => {
     const m = {};
     for (const w of workDays) m[w.driver_id + "|" + w.work_date] = w;
     return m;
   }, [workDays]);
+  const weekAdjustments = useMemo(
+    () => adjustments.filter(a => { const d = a.adj_date || (a.created_at || "").slice(0, 10); return d >= weekStart && d <= weekEnd; }),
+    [adjustments, weekStart, weekEnd]
+  );
+  const DOW_ES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+  const dayHeader = (iso) => `${DOW_ES[new Date(iso + "T00:00:00").getDay()]} ${Number(iso.slice(8))}`;
+  const fmtShort = (iso) => iso ? `${Number(iso.slice(8))}/${Number(iso.slice(5, 7))}` : "";
 
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
 
@@ -297,57 +308,109 @@ export function ExpensesPage(props) {
         </>
       )}
 
-      {/* ── Tab: Días trabajados ── */}
+      {/* ── Tab: Semana de pago (miércoles → martes) ── */}
       {tab === "dias" && !missing && (
         <>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-            <Btn onClick={() => setWdMonth(shiftMonth(wdMonth, -1))}>←</Btn>
-            <span style={{ fontWeight:700, fontSize:14, minWidth:80, textAlign:"center" }}>{monthLabel(wdMonth)}</span>
-            <Btn onClick={() => setWdMonth(shiftMonth(wdMonth, 1))}>→</Btn>
-            <span style={{ fontSize:12, color:"#999" }}>Click en un día para marcar/desmarcar. La tarifa se congela al marcar (cambiar el daily rate no reescribe historia).</span>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, flexWrap:"wrap" }}>
+            <Btn onClick={() => setWeekStart(addDaysISO(weekStart, -7))}>←</Btn>
+            <span style={{ fontWeight:700, fontSize:14, textAlign:"center" }}>Mié {fmtShort(weekStart)} → Mar {fmtShort(weekEnd)}</span>
+            <Btn onClick={() => setWeekStart(addDaysISO(weekStart, 7))}>→</Btn>
+            {weekStart !== payWeekStart(today()) && <Btn onClick={() => setWeekStart(payWeekStart(today()))}>Hoy</Btn>}
+            <span style={{ fontSize:11, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"3px 10px" }}>se paga mié {fmtShort(addDaysISO(weekStart, 7))}</span>
+            {canCreate && <Btn onClick={() => onAddAdjustment()} style={{ marginLeft:"auto" }}>+ Ajuste (fuck-up / bono)</Btn>}
           </div>
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+          <div style={{ fontSize:11.5, color:"#999", marginBottom:10 }}>
+            Click en un día cicla: vacío → día completo (✓) → medio día (½) → por hora (pide horas) → vacío. La tarifa se congela al marcar — cambiar el rate del driver no reescribe semanas ya cargadas.
+          </div>
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", marginBottom:14 }}>
             <div style={{ overflowX:"auto" }}>
-              <table style={{ borderCollapse:"collapse", fontSize:12 }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                 <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
                   <th style={{ ...th, position:"sticky", left:0, background:"#fafafa", zIndex:1 }}>Driver</th>
-                  {wdDays.map(d => <th key={d} style={{ ...th, padding:"9px 4px", textAlign:"center" }}>{Number(d.slice(8))}</th>)}
+                  {wdDays.map(d => <th key={d} style={{ ...th, padding:"9px 6px", textAlign:"center" }}>{dayHeader(d)}</th>)}
                   <th style={{ ...th, textAlign:"right" }}>Días</th>
-                  <th style={{ ...th, textAlign:"right" }}>Costo</th>
+                  <th style={{ ...th, textAlign:"right" }}>Pago</th>
+                  <th style={{ ...th, textAlign:"right" }}>Ajustes</th>
+                  <th style={{ ...th, textAlign:"right" }}>Total semana</th>
                 </tr></thead>
                 <tbody>
                   {activeDrivers.length === 0 ? (
-                    <tr><td colSpan={wdDays.length + 3} style={{ padding:"30px", textAlign:"center", color:"#bbb" }}>No hay drivers activos.</td></tr>
+                    <tr><td colSpan={wdDays.length + 5} style={{ padding:"30px", textAlign:"center", color:"#bbb" }}>No hay drivers activos.</td></tr>
                   ) : activeDrivers.map(d => {
                     const rows = wdDays.map(day => wdByDriverDate[d.id + "|" + day]);
                     const worked = rows.filter(Boolean);
-                    const cost = worked.reduce((s, w) => s + (w.rate != null ? numv(w.rate) : numv(d.daily_rate)), 0);
+                    const pay = worked.reduce((s, w) => s + workDayPay(w, d), 0);
+                    const fullN = worked.filter(w => (w.day_type || "full") === "full").length;
+                    const halfN = worked.filter(w => w.day_type === "half").length;
+                    const hoursN = worked.filter(w => w.day_type === "hourly").reduce((s, w) => s + numv(w.hours), 0);
+                    const myAdj = weekAdjustments.filter(a => a.driver_id === d.id);
+                    const adjNet = myAdj.reduce((s, a) => s + (a.kind === "bonus" ? numv(a.amount) : -numv(a.amount)), 0);
+                    const rateLabel = [d.daily_rate && `$${Number(d.daily_rate).toLocaleString()}/día`, d.hourly_rate && `$${Number(d.hourly_rate).toLocaleString()}/h`].filter(Boolean).join(" · ");
                     return (
                       <tr key={d.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ ...td, fontWeight:600, whiteSpace:"nowrap", position:"sticky", left:0, background:"#fff", zIndex:1 }}>
                           {d.name}
-                          <div style={{ fontSize:10, color: d.daily_rate ? "#999" : "#E24B4A", fontWeight:500 }}>{d.daily_rate ? `$${Number(d.daily_rate).toLocaleString()}/día` : "sin daily rate"}</div>
+                          <div style={{ fontSize:10, color: rateLabel ? "#999" : "#E24B4A", fontWeight:500 }}>{rateLabel || "sin rate cargado"}</div>
                         </td>
                         {wdDays.map((day, i) => {
                           const w = rows[i];
+                          const t = w ? (w.day_type || "full") : null;
+                          const label = t === "half" ? "½" : t === "hourly" ? `${numv(w.hours)}h` : t === "full" ? "✓" : "";
                           return (
-                            <td key={day} style={{ padding:2, textAlign:"center" }}>
-                              <button onClick={() => canEdit && onToggleWorkDay(d, day)} disabled={!canEdit}
-                                title={w ? `Trabajó · $${numv(w.rate != null ? w.rate : d.daily_rate).toLocaleString()}` : "No trabajó"}
-                                style={{ width:22, height:22, borderRadius:5, border:"1px solid " + (w ? "#639922" : "#eee"), background: w ? "#EAF3DE" : "#fff", cursor: canEdit ? "pointer" : "default", fontSize:10, color: w ? "#3B6D11" : "#ddd", fontWeight:700 }}>
-                                {w ? "✓" : ""}
+                            <td key={day} style={{ padding:3, textAlign:"center" }}>
+                              <button onClick={() => canEdit && onCycleWorkDay(d, day)} disabled={!canEdit}
+                                title={w ? `${t === "full" ? "Día completo" : t === "half" ? "Medio día" : `${numv(w.hours)} horas`} · ${fmt$(workDayPay(w, d))}` : "No trabajó (click para marcar)"}
+                                style={{ minWidth:30, height:26, borderRadius:6, border:"1px solid " + (w ? (t === "hourly" ? "#7C3AED" : "#639922") : "#eee"), background: w ? (t === "hourly" ? "#EDE9FE" : t === "half" ? "#FEF9C3" : "#EAF3DE") : "#fff", cursor: canEdit ? "pointer" : "default", fontSize:11, color: w ? (t === "hourly" ? "#6D28D9" : "#3B6D11") : "#ddd", fontWeight:700, padding:"0 5px" }}>
+                                {label}
                               </button>
                             </td>
                           );
                         })}
-                        <td style={{ ...td, textAlign:"right", fontWeight:700 }}>{worked.length}</td>
-                        <td style={{ ...td, textAlign:"right", fontWeight:700, whiteSpace:"nowrap" }}>{fmt$(cost)}</td>
+                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap" }}>
+                          {fullN > 0 && <b>{fullN}</b>}{halfN > 0 && <span> +{halfN}½</span>}{hoursN > 0 && <span> +{hoursN}h</span>}{worked.length === 0 && <span style={{ color:"#ddd" }}>—</span>}
+                        </td>
+                        <td style={{ ...td, textAlign:"right", fontWeight:700, whiteSpace:"nowrap" }}>{fmt$(pay)}</td>
+                        <td style={{ ...td, textAlign:"right", fontWeight:600, whiteSpace:"nowrap", color: adjNet < 0 ? "#E24B4A" : adjNet > 0 ? "#1A8A4E" : "#ccc" }}>{adjNet !== 0 ? fmt$(adjNet) : "—"}</td>
+                        <td style={{ ...td, textAlign:"right", fontWeight:800, whiteSpace:"nowrap" }}>{fmt$(pay + adjNet)}</td>
                       </tr>
                     );
                   })}
+                  {activeDrivers.length > 0 && (() => {
+                    const totPay = activeDrivers.reduce((s, d) => s + wdDays.reduce((ss, day) => { const w = wdByDriverDate[d.id + "|" + day]; return ss + (w ? workDayPay(w, d) : 0); }, 0), 0);
+                    const totAdj = weekAdjustments.reduce((s, a) => s + (a.kind === "bonus" ? numv(a.amount) : -numv(a.amount)), 0);
+                    return (
+                      <tr style={{ borderTop:"2px solid #eee", fontWeight:800, background:"#fafafa" }}>
+                        <td style={{ ...td, position:"sticky", left:0, background:"#fafafa" }}>Total a pagar el mié {fmtShort(addDaysISO(weekStart, 7))}</td>
+                        <td colSpan={wdDays.length + 1} />
+                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap" }}>{fmt$(totPay)}</td>
+                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap", color: totAdj < 0 ? "#E24B4A" : "#1A8A4E" }}>{totAdj !== 0 ? fmt$(totAdj) : "—"}</td>
+                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap", fontSize:14 }}>{fmt$(totPay + totAdj)}</td>
+                      </tr>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* Ajustes de la semana */}
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16 }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Ajustes de la semana (descuentos por fuck-ups / compensaciones)</div>
+            {weekAdjustments.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>Sin ajustes esta semana.</div> : weekAdjustments.map(a => {
+              const k = ADJUSTMENT_KINDS.find(x => x.v === a.kind) || ADJUSTMENT_KINDS[0];
+              return (
+                <div key={a.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f4f4f4", fontSize:12.5, flexWrap:"wrap" }}>
+                  <span>{k.icon}</span>
+                  <span style={{ color:"#888", whiteSpace:"nowrap" }}>{a.adj_date || (a.created_at || "").slice(0, 10)}</span>
+                  <b>{driverById[a.driver_id]?.name || `#${a.driver_id}`}</b>
+                  <span style={{ color:"#666" }}>{a.reason || k.l}</span>
+                  {a.job_number && <span style={{ fontFamily:"monospace", color:"#666" }}>{a.job_number}</span>}
+                  <span style={{ flex:1 }} />
+                  <b style={{ color: a.kind === "bonus" ? "#1A8A4E" : "#E24B4A" }}>{a.kind === "bonus" ? "+" : "−"}{fmt$(numv(a.amount))}</b>
+                  {canEdit && <button onClick={() => onDeleteAdjustment(a)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:12 }}>🗑️</button>}
+                </div>
+              );
+            })}
           </div>
         </>
       )}
@@ -520,6 +583,35 @@ export function ExpensesPage(props) {
 
           <div style={{ marginTop:10 }}>
             <Field label="Notas"><textarea style={{ ...inp, minHeight:52, resize:"vertical" }} value={form.notes} onChange={e => setF({ notes: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal: ajuste de pago (fuck-up / compensación) ── */}
+      {showAdjModal && (
+        <Modal title="Ajuste de pago del driver" onClose={() => setShowAdjModal(false)}
+          footer={<><Btn onClick={() => setShowAdjModal(false)}>Cancel</Btn><Btn primary disabled={adjSaving} onClick={onSaveAdjustment}>{adjSaving ? "Saving…" : "Save"}</Btn></>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 14px" }}>
+            <Field label="Driver">
+              <select style={inp} value={adjForm.driver_id} onChange={e => setAdjForm(f => ({ ...f, driver_id: e.target.value }))}>
+                <option value="">(elegir)</option>
+                {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Fecha"><input type="date" style={inp} value={adjForm.adj_date} onChange={e => setAdjForm(f => ({ ...f, adj_date: e.target.value }))} /></Field>
+            <Field label="Tipo">
+              <select style={inp} value={adjForm.kind} onChange={e => setAdjForm(f => ({ ...f, kind: e.target.value }))}>
+                {ADJUSTMENT_KINDS.map(k => <option key={k.v} value={k.v}>{k.icon} {k.l}</option>)}
+              </select>
+            </Field>
+            <Field label="Monto ($, positivo)"><input type="number" min="0" step="0.01" style={inp} value={adjForm.amount} onChange={e => setAdjForm(f => ({ ...f, amount: e.target.value }))} /></Field>
+            <Field label="Job # (opcional)">
+              <input style={inp} list="expense-jobs-list" value={adjForm.job_number} onChange={e => setAdjForm(f => ({ ...f, job_number: e.target.value }))} />
+            </Field>
+          </div>
+          <Field label="Motivo"><input style={inp} value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))} placeholder="Rompió un espejo del cliente, llegó tarde al pickup, bonus por trip largo…" /></Field>
+          <div style={{ background:"#fafafa", borderRadius:10, padding:"8px 12px", fontSize:11.5, color:"#888" }}>
+            El descuento le baja el pago de la semana (y el costo del driver en el P&L); la compensación se lo sube.
           </div>
         </Modal>
       )}

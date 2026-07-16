@@ -6,7 +6,7 @@ import { MessagesSection } from "./messages.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, materialShortages, computeDriverPnl } from "./analyticsData.js";
-import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
+import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 
@@ -636,7 +636,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", notes:"", active:true };
+const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true };
 const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
@@ -1529,6 +1529,7 @@ drop policy if exists "expenses_all" on public.expenses;
 create policy "expenses_all" on public.expenses for all to anon, authenticated using (true) with check (true);
 
 alter table public.drivers add column if not exists daily_rate numeric;
+alter table public.drivers add column if not exists hourly_rate numeric;
 
 create table if not exists public.driver_work_days (
   id bigint generated always as identity primary key,
@@ -1541,9 +1542,26 @@ create table if not exists public.driver_work_days (
   created_at timestamptz default now(),
   unique (driver_id, work_date)
 );
+alter table public.driver_work_days add column if not exists day_type text default 'full';
+alter table public.driver_work_days add column if not exists hours numeric;
 alter table public.driver_work_days enable row level security;
 drop policy if exists "driver_work_days_all" on public.driver_work_days;
 create policy "driver_work_days_all" on public.driver_work_days for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.driver_adjustments (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  adj_date date,
+  kind text default 'deduction',
+  amount numeric,
+  reason text,
+  job_number text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.driver_adjustments enable row level security;
+drop policy if exists "driver_adjustments_all" on public.driver_adjustments;
+create policy "driver_adjustments_all" on public.driver_adjustments for all to anon, authenticated using (true) with check (true);
 
 create table if not exists public.material_items (
   id bigint generated always as identity primary key,
@@ -1591,6 +1609,7 @@ create policy "expensereceipts_update" on storage.objects for update to anon, au
 
 do $$ begin alter publication supabase_realtime add table public.expenses; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.driver_work_days; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.driver_adjustments; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.material_items; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.material_movements; exception when others then null; end $$;`;
 
@@ -3575,6 +3594,10 @@ export default function App() {
   const [expenseSaving, setExpenseSaving] = useState(false);
   const [expenseUploading, setExpenseUploading] = useState(false);
   const [workDays, setWorkDays] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);   // driver pay bonuses/deductions
+  const [showAdjModal, setShowAdjModal] = useState(false);
+  const [adjForm, setAdjForm] = useState(EMPTY_ADJUSTMENT);
+  const [adjSaving, setAdjSaving] = useState(false);
   const [materialItems, setMaterialItems] = useState([]);
   const [materialMovements, setMaterialMovements] = useState([]);
   const [showMaterialItemModal, setShowMaterialItemModal] = useState(false);
@@ -3851,6 +3874,10 @@ export default function App() {
   const loadWorkDays = useCallback(async () => {
     const { data, error } = await supabase.from("driver_work_days").select("*").order("work_date", { ascending: false });
     if (!error) setWorkDays(data || []);
+  }, []);
+  const loadAdjustments = useCallback(async () => {
+    const { data, error } = await supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false });
+    if (!error) setAdjustments(data || []);
   }, []);
   const loadMaterialItems = useCallback(async () => {
     const { data, error } = await supabase.from("material_items").select("*").order("name", { ascending: true });
@@ -4513,13 +4540,14 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    const loadAll = () => { loadExpenses(); loadWorkDays(); loadMaterialItems(); loadMaterialMovements(); };
+    const loadAll = () => { loadExpenses(); loadWorkDays(); loadAdjustments(); loadMaterialItems(); loadMaterialMovements(); };
     (async () => {
       const { error: eErr } = await supabase.from("expenses").select("id").limit(1);
-      const { error: wErr } = await supabase.from("driver_work_days").select("id").limit(1);
+      const { error: wErr } = await supabase.from("driver_work_days").select("day_type").limit(1);
+      const { error: aErr } = await supabase.from("driver_adjustments").select("id").limit(1);
       const { error: mErr } = await supabase.from("material_movements").select("id").limit(1);
       if (cancelled) return;
-      if (!eErr && !wErr && !mErr) { loadAll(); return; }
+      if (!eErr && !wErr && !aErr && !mErr) { loadAll(); return; }
       let created = false;
       for (const fn of ["exec_sql", "exec", "execute_sql"]) {
         const { error: rpcErr } = await supabase.rpc(fn, { sql: EXPENSES_SQL });
@@ -4530,18 +4558,19 @@ export default function App() {
       else setExpensesMissing(true);
     })();
     return () => { cancelled = true; };
-  }, [session, loadExpenses, loadWorkDays, loadMaterialItems, loadMaterialMovements]);
+  }, [session, loadExpenses, loadWorkDays, loadAdjustments, loadMaterialItems, loadMaterialMovements]);
 
   useEffect(() => {
     if (!session || expensesMissing) return;
     const channel = supabase.channel("expenses-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => loadExpenses())
       .on("postgres_changes", { event: "*", schema: "public", table: "driver_work_days" }, () => loadWorkDays())
+      .on("postgres_changes", { event: "*", schema: "public", table: "driver_adjustments" }, () => loadAdjustments())
       .on("postgres_changes", { event: "*", schema: "public", table: "material_items" }, () => loadMaterialItems())
       .on("postgres_changes", { event: "*", schema: "public", table: "material_movements" }, () => loadMaterialMovements())
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [session, expensesMissing, loadExpenses, loadWorkDays, loadMaterialItems, loadMaterialMovements]);
+  }, [session, expensesMissing, loadExpenses, loadWorkDays, loadAdjustments, loadMaterialItems, loadMaterialMovements]);
 
   // Probe the payment_stage column (added after the initial Payments release).
   useEffect(() => {
@@ -6165,13 +6194,13 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", notes:d.notes||"", active: d.active !== false });
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false });
     setShowDriverModal(true);
   }
   async function saveDriver() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
-    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), notes:driverForm.notes||null, active: !!driverForm.active };
+    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active };
     if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
     else await supabase.from("drivers").insert([payload]);
     setDriverSaving(false); setShowDriverModal(false);
@@ -6259,19 +6288,72 @@ export default function App() {
     } catch (err) { window.alert("Error: " + err.message); }
     setExpenseUploading(false);
   }
-  // Click a day in the work-day grid: insert (rate snapshotted from the driver's
-  // daily_rate) or remove the row. unique(driver_id, work_date) keeps it idempotent.
-  async function toggleWorkDay(driver, dateISO) {
+  // Click a day in the work-day grid: cycle empty → full → half → hourly → empty.
+  // The applicable rate is snapshotted per row (daily for full/half, hourly for
+  // hourly) so changing the driver's rates never rewrites history. Drivers with
+  // ONLY an hourly rate start the cycle at hourly. unique(driver_id, work_date)
+  // keeps it idempotent.
+  async function cycleWorkDay(driver, dateISO) {
     const existing = workDays.find(w => w.driver_id === driver.id && w.work_date === dateISO);
-    if (existing) {
-      const { error } = await supabase.from("driver_work_days").delete().eq("id", existing.id);
-      if (error) { window.alert(error.message); return; }
+    const hasDaily = driver.daily_rate != null && driver.daily_rate !== "";
+    const hasHourly = driver.hourly_rate != null && driver.hourly_rate !== "";
+    const cur = existing ? (existing.day_type || "full") : null;
+    let next;
+    if (cur === null) next = (!hasDaily && hasHourly) ? "hourly" : "full";
+    else if (cur === "full") next = "half";
+    else if (cur === "half") next = hasHourly ? "hourly" : null;
+    else next = null; // hourly → empty
+    if (next === "hourly") {
+      const hrs = window.prompt(trAI("Hours worked that day:", "Horas trabajadas ese día:"), existing?.hours || "8");
+      if (hrs === null || isNaN(Number(hrs)) || Number(hrs) <= 0) next = null;
+      else {
+        const payload = { day_type: "hourly", hours: Number(hrs), rate: hasHourly ? Number(driver.hourly_rate) : null };
+        const { error } = existing
+          ? await supabase.from("driver_work_days").update(payload).eq("id", existing.id)
+          : await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, created_by: userEmail, ...payload }]);
+        if (error) { window.alert(error.message); return; }
+        loadWorkDays(); return;
+      }
+    }
+    if (next === null) {
+      if (existing) {
+        const { error } = await supabase.from("driver_work_days").delete().eq("id", existing.id);
+        if (error) { window.alert(error.message); return; }
+      }
     } else {
-      const rate = driver.daily_rate == null || driver.daily_rate === "" ? null : Number(driver.daily_rate);
-      const { error } = await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, rate, created_by: userEmail }]);
+      const payload = { day_type: next, hours: null, rate: hasDaily ? Number(driver.daily_rate) : null };
+      const { error } = existing
+        ? await supabase.from("driver_work_days").update(payload).eq("id", existing.id)
+        : await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, created_by: userEmail, ...payload }]);
       if (error) { window.alert(error.message); return; }
     }
     loadWorkDays();
+  }
+
+  // ── Driver pay adjustments (fuck-ups charged to the driver / bonuses) ──
+  function openAddAdjustment(prefill = {}) {
+    setAdjForm({ ...EMPTY_ADJUSTMENT, adj_date: today(), ...prefill });
+    setShowAdjModal(true);
+  }
+  async function saveAdjustment() {
+    const f = adjForm;
+    if (!f.driver_id) { window.alert("Elegí el driver."); return; }
+    if (f.amount === "" || isNaN(Number(f.amount)) || Number(f.amount) <= 0) { window.alert("Ingresá el monto (positivo)."); return; }
+    setAdjSaving(true);
+    const { error } = await supabase.from("driver_adjustments").insert([{
+      driver_id: Number(f.driver_id), adj_date: f.adj_date || null, kind: f.kind || "deduction",
+      amount: Number(f.amount), reason: f.reason || null, job_number: (f.job_number || "").trim() || null,
+      created_by: userEmail,
+    }]);
+    setAdjSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowAdjModal(false); loadAdjustments();
+  }
+  async function deleteAdjustment(a) {
+    if (!window.confirm(`Delete ${a.kind === "bonus" ? "compensación" : "descuento"} de $${Math.round(numv(a.amount)).toLocaleString()}?`)) return;
+    const { error } = await supabase.from("driver_adjustments").delete().eq("id", a.id);
+    if (error) { window.alert(error.message); return; }
+    loadAdjustments();
   }
 
   // ── Materials catalog + movements ──
@@ -10616,13 +10698,15 @@ export default function App() {
           missing={expensesMissing} onShowSetup={() => setShowSetup(true)}
           expenses={expenses} driversList={driversList} trucksList={trucksList} trips={trips} jobs={jobs}
           payAccounts={payAccounts} payments={payments} paymentsMissing={paymentsMissing}
-          workDays={workDays} materialItems={materialItems} materialMovements={materialMovements}
+          workDays={workDays} adjustments={adjustments} materialItems={materialItems} materialMovements={materialMovements}
           can={can} today={today}
           form={expenseForm} setForm={setExpenseForm} showModal={showExpenseModal} setShowModal={setShowExpenseModal}
           editingId={editingExpenseId} saving={expenseSaving} uploading={expenseUploading}
           onAdd={openAddExpense} onEdit={openEditExpense} onSave={saveExpense} onDelete={deleteExpense}
           onSetStatus={setExpenseStatus} onSettle={settleExpense} onUploadReceipt={uploadExpenseReceipt}
-          onToggleWorkDay={toggleWorkDay}
+          onCycleWorkDay={cycleWorkDay}
+          adjForm={adjForm} setAdjForm={setAdjForm} showAdjModal={showAdjModal} setShowAdjModal={setShowAdjModal}
+          adjSaving={adjSaving} onAddAdjustment={openAddAdjustment} onSaveAdjustment={saveAdjustment} onDeleteAdjustment={deleteAdjustment}
           materialItemForm={materialItemForm} setMaterialItemForm={setMaterialItemForm}
           showMaterialItemModal={showMaterialItemModal} setShowMaterialItemModal={setShowMaterialItemModal}
           editingMaterialItemId={editingMaterialItemId} materialSaving={materialSaving}
@@ -10643,7 +10727,7 @@ export default function App() {
           payments={payments} jobExtras={jobExtras} sit={sit}
           urgentPayments={urgentPayments} faddStats={faddStats}
           brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
-          expenses={expenses} workDays={workDays} materialItems={materialItems}
+          expenses={expenses} workDays={workDays} adjustments={adjustments} materialItems={materialItems}
           materialMovements={materialMovements} expensesMissing={expensesMissing}
           lang={lang}
         />
@@ -12210,6 +12294,7 @@ export default function App() {
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="ej: T-12" /></Field>
             <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="ej: 250" /></Field>
+            <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="ej: 25 (opcional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
             <Field label="Status">
@@ -14364,7 +14449,7 @@ export default function App() {
                   const allGroups = [...dedupeJobs(jobs).values()];
                   const monthGroups = allGroups.filter(g => monthOf(g.rep.pickup_date || g.dateIn || g.rep.created_at) === curMonth);
                   const monthExtras = jobExtras.filter(e => e.driver_id === driverD.id && monthOf(e.created_at) === curMonth);
-                  const pnl = computeDriverPnl({ driversList: [driverD], groups: monthGroups, jobExtras: monthExtras, expenses, workDays, range });
+                  const pnl = computeDriverPnl({ driversList: [driverD], groups: monthGroups, jobExtras: monthExtras, expenses, workDays, adjustments, range });
                   const row = pnl.rows[0];
                   const myExpenses = expenses.filter(e => e.driver_id === driverD.id && e.status !== "rejected")
                     .sort((a, b) => (b.expense_date || "").localeCompare(a.expense_date || ""));
@@ -14380,6 +14465,7 @@ export default function App() {
                             ["Días × rate", -row.laborCost, "#C2410C"],
                             ["Gastos aprobados", -row.expensesTotal, "#C2410C"],
                             ["Comisiones", -row.commissions, "#C2410C"],
+                            ["Ajustes (bonos−desc.)", -row.adjustmentsNet, row.adjustmentsNet > 0 ? "#C2410C" : "#1A8A4E"],
                             ["Neto", row.net, row.net >= 0 ? "#1A8A4E" : "#E24B4A"],
                           ].map(([l, v, c]) => (
                             <div key={l} style={{ background:"#fafafa", borderRadius:8, padding:"7px 9px" }}>
