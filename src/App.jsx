@@ -548,7 +548,10 @@ const I18N_ES = {
   "Current period:": "Período actual:",
   "Amount due this period:": "Monto de este período:",
   "Search by job # or client name…": "Buscar por job # o cliente…",
-  "Billing records for each 30-day period are generated automatically.": "Los registros de cada período de 30 días se generan automáticamente."
+  "Billing records for each 30-day period are generated automatically.": "Los registros de cada período de 30 días se generan automáticamente.",
+  "Reassign commission": "Reasignar comisión",
+  "Open job": "Abrir job",
+  "Current:": "Actual:"
 };
 const i18nCache = new WeakMap();   // text node -> original English value
 function i18nApply() {
@@ -6945,9 +6948,14 @@ export default function App() {
   // and commissions are computed on the chosen base (with/without fuel surcharge).
   function extraPayload(o) {
     const isCf = o.extra_type === "extra_cf";
-    const cf = isCf ? extraCfCalc(o) : null;
+    // Payment-split extra_cf rows carry an amount but no CF breakdown; recomputing
+    // from empty count/rate would zero the amount, so keep the stored amount instead.
+    const cfEmpty = isCf && (o.extra_cf_count === "" || o.extra_cf_count == null)
+                         && (o.extra_cf_rate === "" || o.extra_cf_rate == null);
+    const hasCf = isCf && !cfEmpty;
+    const cf = hasCf ? extraCfCalc(o) : null;
     // The "amount" stored = total charged to the client (= CF total w/ fuel for extra_cf).
-    const a = isCf ? cf.total : numv(o.amount);
+    const a = hasCf ? cf.total : numv(o.amount);
     // Broker share: % the broker keeps from this extra.
     const bsPct = (o.broker_share_pct === "" || o.broker_share_pct == null) ? 0 : numv(o.broker_share_pct);
     const brokerShareAmount = a * bsPct / 100;
@@ -6955,14 +6963,14 @@ export default function App() {
     // Commission base: extra_cf keeps the fuel choice (with/without fuel); everything
     // else uses gross (full amount) or net (after broker share).
     let commissionBaseVal, commBase;
-    if (isCf) { commissionBaseVal = cf.commissionBase; commBase = cf.base; }
+    if (hasCf) { commissionBaseVal = cf.commissionBase; commBase = cf.base; }
     else { commissionBaseVal = (o.commission_base === "net") ? "net" : "gross"; commBase = (commissionBaseVal === "net") ? netAmount : a; }
     const dPct = (o.driver_commission_pct === "" || o.driver_commission_pct == null) ? null : numv(o.driver_commission_pct);
     const rPct = (o.rep_commission_pct === "" || o.rep_commission_pct == null) ? null : numv(o.rep_commission_pct);
     const dc = commBase * numv(dPct) / 100, rc = commBase * numv(rPct) / 100;
     const payload = {
       extra_type: o.extra_type, description: o.description || null,
-      amount: isCf ? a : ((o.amount === "" || o.amount == null) ? null : a),
+      amount: hasCf ? a : ((o.amount === "" || o.amount == null) ? null : a),
       generated_by: o.generated_by || "driver_only",
       driver_id: o.driver_id || null,
       rep_id: (o.generated_by === "driver_only") ? null : (o.rep_id || null),
@@ -6972,12 +6980,12 @@ export default function App() {
       notes: o.notes || null,
     };
     if (!extrasColsMissing) {
-      payload.extra_cf_count = isCf ? ((o.extra_cf_count === "" || o.extra_cf_count == null) ? null : cf.cfCount) : null;
-      payload.extra_cf_rate = isCf ? ((o.extra_cf_rate === "" || o.extra_cf_rate == null) ? null : cf.cfRate) : null;
-      payload.extra_cf_subtotal = isCf ? cf.cfSub : null;
-      payload.fuel_surcharge_pct = isCf ? cf.fuelPct : null;
-      payload.fuel_surcharge_amount = isCf ? cf.fuelAmt : null;
-      payload.extra_total_with_fuel = isCf ? cf.total : null;
+      payload.extra_cf_count = hasCf ? ((o.extra_cf_count === "" || o.extra_cf_count == null) ? null : cf.cfCount) : null;
+      payload.extra_cf_rate = hasCf ? ((o.extra_cf_rate === "" || o.extra_cf_rate == null) ? null : cf.cfRate) : null;
+      payload.extra_cf_subtotal = hasCf ? cf.cfSub : null;
+      payload.fuel_surcharge_pct = hasCf ? cf.fuelPct : null;
+      payload.fuel_surcharge_amount = hasCf ? cf.fuelAmt : null;
+      payload.extra_total_with_fuel = hasCf ? cf.total : null;
       payload.commission_base = commissionBaseVal;
       payload.commission_base_amount = commBase;
     }
@@ -6989,7 +6997,7 @@ export default function App() {
     return payload;
   }
   // The amount the commission % applies to (stored base if present, else amount).
-  const extraCommBase = (e) => e.commission_base_amount != null ? numv(e.commission_base_amount) : (e.extra_type === "extra_cf" ? numv(e.commission_base_amount) : numv(e.amount));
+  const extraCommBase = (e) => e.commission_base_amount != null ? numv(e.commission_base_amount) : numv(e.amount);
   // Broker share kept from an extra (live fallback if not yet stored).
   const extraBrokerShare = (e) => e.broker_share_amount != null ? numv(e.broker_share_amount) : (numv(e.amount) * numv(e.broker_share_pct) / 100);
   const extraNet = (e) => e.net_amount != null ? numv(e.net_amount) : (numv(e.amount) - extraBrokerShare(e));
@@ -7281,9 +7289,14 @@ export default function App() {
   }
   // Build the commission-assignment modal state for a payment-split extra (defaults from rules).
   function commAssignInit(extra, queue) {
-    const gen = "driver_only";
+    // Reassignment: prefill from the extra's current split so opening the modal
+    // never silently resets an already-assigned commission.
+    const assigned = !!(extra.driver_id || extra.rep_id);
+    const gen = assigned ? (extra.generated_by || "driver_only") : "driver_only";
     const d = commissionDefaults(extra.extra_type, gen);
-    return { extra, queue: queue || [], generated_by: gen, driver_id: extra.driver_id || "", rep_id: extra.rep_id || "", driver_pct: String(d.driver), rep_pct: String(d.rep) };
+    return { extra, queue: queue || [], generated_by: gen, driver_id: extra.driver_id || "", rep_id: extra.rep_id || "",
+      driver_pct: assigned && extra.driver_commission_pct != null ? String(extra.driver_commission_pct) : String(d.driver),
+      rep_pct: assigned && extra.rep_commission_pct != null ? String(extra.rep_commission_pct) : String(d.rep) };
   }
   function openCommAssign(extra) { setCommAssign(commAssignInit(extra, [])); }
   function advanceCommQueue() {
@@ -7291,7 +7304,7 @@ export default function App() {
   }
   async function saveCommAssign() {
     const ca = commAssign; if (!ca) return;
-    const base = numv(ca.extra.amount);
+    const base = extraCommBase(ca.extra);
     const gen = ca.generated_by;
     const dPct = ca.driver_pct === "" ? null : numv(ca.driver_pct);
     const rPct = ca.rep_pct === "" ? null : numv(ca.rep_pct);
@@ -7301,7 +7314,7 @@ export default function App() {
       rep_id: gen === "driver_only" ? null : (ca.rep_id || null),
       driver_commission_pct: dPct, rep_commission_pct: rPct,
       driver_commission_amount: dc, rep_commission_amount: rc,
-      company_amount: base - dc - rc,
+      company_amount: extraNet(ca.extra) - dc - rc,
     }).eq("id", ca.extra.id);
     loadExtras();
     advanceCommQueue();
@@ -9465,7 +9478,7 @@ export default function App() {
                               <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
                                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
                                   <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                    {["Type", "Amount", "Generated by", "Driver", "Rep %", "Com. rep"].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                    {["Type", "Amount", "Generated by", "Driver", "Rep %", "Com. rep", ""].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
                                   </tr></thead>
                                   <tbody>
                                     {jf.extras.map(e => (
@@ -9476,6 +9489,10 @@ export default function App() {
                                         <td style={{ padding:"6px 6px", fontSize:12 }}>{driverById[e.driver_id]?.name || "—"}</td>
                                         <td style={{ padding:"6px 6px", fontSize:12 }}>{numv(e.rep_commission_pct)}%</td>
                                         <td style={{ padding:"6px 6px", fontSize:12, color:"#185FA5", fontWeight:700, whiteSpace:"nowrap" }}>{money(e.rep_commission_amount) || "$0"}</td>
+                                        <td style={{ padding:"6px 6px", whiteSpace:"nowrap" }}>
+                                          <button onClick={() => openCommAssign(e)} title="Reassign commission" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:14, lineHeight:1 }}>↺</button>
+                                          <button onClick={() => openEditExtra(e)} title="Edit extra" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13, lineHeight:1 }}>✎</button>
+                                        </td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -9543,12 +9560,17 @@ export default function App() {
                                       <div key={j.g.key} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", borderTop:"1px solid #f6f6f6", flexWrap:"wrap" }}>
                                         <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:12.5, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(ver)"}</button>
                                         <span style={{ fontSize:12.5, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.g.customer || "—"}</span>
-                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Edit extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>)}</span>
+                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => (
+                                          <span key={e.id} style={{ display:"inline-flex", alignItems:"center", gap:2 }}>
+                                            <span onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Edit extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>
+                                            <button onClick={() => openCommAssign(e)} title="Reassign commission" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12, lineHeight:1, padding:0 }}>↺</button>
+                                          </span>
+                                        ))}</span>
                                         <span style={{ flex:1 }} />
                                         <span style={{ fontSize:12.5, color:"#666" }} title="Total collected">${Math.round(j.amt).toLocaleString()}</span>
                                         <span style={{ fontSize:12.5, fontWeight:700, color:"#1A8A4E" }} title="Driver commission">${Math.round(j.comm).toLocaleString()}</span>
                                         <span title={j.pending ? "Commission pending" : "Commission assigned"}>{j.pending ? "⚠️" : "✅"}</span>
-                                        <button onClick={() => setJobDetailKey(j.g.key)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+                                        <button onClick={() => setJobDetailKey(j.g.key)} title="Open job" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
                                       </div>
                                     ))}
                                     <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 11px", borderTop:"2px solid #eee", fontSize:12.5, fontWeight:700, background:"#FEF9C3" }}>
@@ -10849,6 +10871,8 @@ export default function App() {
                         <span style={{ flex:1 }} />
                         <span style={{ fontSize:12, color:"#1A8A4E", fontWeight:600 }}>D {money(e.driver_commission_amount) || "$0"}</span>
                         <span style={{ fontSize:12, color:"#185FA5", fontWeight:600 }}>R {money(e.rep_commission_amount) || "$0"}</span>
+                        <button onClick={() => openCommAssign(e)} title="Reassign commission" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:14, lineHeight:1 }}>↺</button>
+                        <button onClick={() => openEditExtra(e)} title="Edit extra" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13, lineHeight:1 }}>✎</button>
                         <button onClick={() => deleteExtra(e)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
                       </div>
                     ))}
@@ -12755,22 +12779,24 @@ export default function App() {
         const k = jobKeyByRowId[ex.job_id];
         const g = k ? extraJobGroups.get(k) : null;
         const locked = EXTRA_LOCKED_DRIVER(ex.extra_type);
-        const base = numv(ex.amount);
+        const isReassign = !extraPending(ex);
+        const base = extraCommBase(ex);
         const dPct = numv(ca.driver_pct), rPct = numv(ca.rep_pct);
         const dc = base * dPct / 100, rc = base * rPct / 100;
         const setCA = (fields) => setCommAssign(c => ({ ...c, ...fields }));
         const onGen = (v) => { const d = commissionDefaults(ex.extra_type, v); setCA({ generated_by: v, driver_pct: String(d.driver), rep_pct: String(d.rep), rep_id: v === "driver_only" ? "" : ca.rep_id }); };
         const remaining = ca.queue.length;
         return (
-          <Modal title="Assign commission" onClose={() => setCommAssign(null)}
+          <Modal title={isReassign ? "Reassign commission" : "Assign commission"} onClose={() => setCommAssign(null)}
             footer={<>
-              <Btn onClick={advanceCommQueue}>Skip{remaining ? ` (${remaining} more)` : ""}</Btn>
+              <Btn onClick={advanceCommQueue}>{remaining ? `Skip (${remaining} more)` : "Cancel"}</Btn>
               <Btn primary onClick={saveCommAssign}>Save commission</Btn>
             </>}>
             <div style={{ background:"#EDE9FE", border:"1px solid #C4B5FD", borderRadius:9, padding:"9px 12px", marginBottom:12, fontSize:13 }}>
               <b>{extraTypeLabel(ex.extra_type)}</b> · <b style={{ color:"#6D28D9" }}>{money(ex.amount) || "$0"}</b>
-              <span style={{ fontSize:10.5, fontWeight:700, color:"#6D28D9", background:"#fff", borderRadius:20, padding:"1px 8px", marginLeft:8 }}>Collected via payment</span>
+              {ex.source === "payment_split" && <span style={{ fontSize:10.5, fontWeight:700, color:"#6D28D9", background:"#fff", borderRadius:20, padding:"1px 8px", marginLeft:8 }}>Collected via payment</span>}
               {g && <div style={{ fontSize:11, color:"#6D28D9", marginTop:3 }}>Job {g.job_number || "—"} · {g.customer || ""}</div>}
+              {isReassign && <div style={{ fontSize:11, color:"#6D28D9", marginTop:3 }}>Current: {`🧑‍✈️ ${driverById[ex.driver_id]?.name || "—"} · 👤 ${empById[ex.rep_id]?.name || "—"}`}</div>}
             </div>
             <Field label="Generated by">
               <select style={inp} value={ca.generated_by} disabled={locked} onChange={e => onGen(e.target.value)}>
