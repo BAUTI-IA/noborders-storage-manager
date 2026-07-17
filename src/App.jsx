@@ -1842,6 +1842,7 @@ const CLAIMS_SQL = `create table if not exists public.claims (
   incident_type text,
   description text,
   incident_date date,
+  reported_date date,
   status text default 'open',
   assigned_to text,
   claimed_amount numeric,
@@ -1854,6 +1855,7 @@ const CLAIMS_SQL = `create table if not exists public.claims (
   updated_by text,
   updated_at timestamptz
 );
+alter table public.claims add column if not exists reported_date date;
 alter table public.claims enable row level security;
 drop policy if exists "claims_all" on public.claims;
 create policy "claims_all" on public.claims for all to anon, authenticated using (true) with check (true);
@@ -2232,7 +2234,7 @@ const CLAIM_RESOLUTIONS = [
   ["discount", "Discount applied"],
 ];
 const claimResolutionLabel = (v) => CLAIM_RESOLUTIONS.find(r => r[0] === v)?.[1] || "—";
-const EMPTY_CLAIM = { job_number:"", trip_id:"", client_name:"", incident_type:"damage", description:"", incident_date:"", status:"open", assigned_to:"", claimed_amount:"", paid_amount:"", resolution_type:"", closed_date:"" };
+const EMPTY_CLAIM = { job_number:"", trip_id:"", client_name:"", incident_type:"damage", description:"", incident_date:"", reported_date:"", status:"open", assigned_to:"", claimed_amount:"", paid_amount:"", resolution_type:"", closed_date:"" };
 // Claim↔job matching must tolerate case/whitespace drift between rows of the
 // same job (same rule as jobKey in analyticsData.js).
 const normJobNumber = (s) => (s || "").trim().toLowerCase();
@@ -4508,7 +4510,9 @@ export default function App() {
     if (!session) return;
     let cancelled = false;
     (async () => {
-      const { error: cErr } = await supabase.from("claims").select("id").limit(1);
+      // Probing reported_date (newest column) also catches installs whose claims
+      // table predates it, so the CLAIMS_SQL alter gets a chance to run.
+      const { error: cErr } = await supabase.from("claims").select("reported_date").limit(1);
       const { error: nErr } = await supabase.from("claim_notes").select("id").limit(1);
       if (cancelled) return;
       if (!cErr && !nErr) { loadClaims(); return; }
@@ -5541,8 +5545,11 @@ export default function App() {
       if (c.status === "investigating") investigating++;
       if (c.status === "resolved" && (c.closed_date || "").startsWith(String(year))) resolvedYtd++;
       claimed += numv(c.claimed_amount); paid += numv(c.paid_amount);
-      if (!CLAIM_ACTIVE(c.status) && c.closed_date && c.incident_date) {
-        const d = Math.round((new Date(c.closed_date) - new Date(c.incident_date)) / ONE_DAY);
+      // Days-to-close counts from when the claim arrived (reported_date), not
+      // from the incident itself; legacy rows fall back to incident_date.
+      const from = c.reported_date || c.incident_date;
+      if (!CLAIM_ACTIVE(c.status) && c.closed_date && from) {
+        const d = Math.round((new Date(c.closed_date) - new Date(from)) / ONE_DAY);
         if (d >= 0) { closeDays += d; closed++; }
       }
     }
@@ -6643,7 +6650,9 @@ export default function App() {
   // ── Claims & Incidents handlers ──
   function openAddClaim(prefill = {}) {
     setEditingClaimId(null);
-    setClaimForm({ ...EMPTY_CLAIM, incident_date: today(), ...prefill, trip_id: prefill.trip_id ? String(prefill.trip_id) : "" });
+    // reported_date defaults to today (when the claim is being logged) but stays
+    // editable — when backfilling, set it to the date of the client's email.
+    setClaimForm({ ...EMPTY_CLAIM, incident_date: today(), reported_date: today(), ...prefill, trip_id: prefill.trip_id ? String(prefill.trip_id) : "" });
     setClaimNotes([]); setClaimNoteInput(""); setClaimJobSearch("");
     setShowClaimModal(true);
   }
@@ -6651,7 +6660,7 @@ export default function App() {
     setEditingClaimId(c.id);
     setClaimForm({
       job_number:c.job_number||"", trip_id:c.trip_id ? String(c.trip_id) : "", client_name:c.client_name||"",
-      incident_type:c.incident_type||"damage", description:c.description||"", incident_date:c.incident_date||"",
+      incident_type:c.incident_type||"damage", description:c.description||"", incident_date:c.incident_date||"", reported_date:c.reported_date||"",
       status:c.status||"open", assigned_to:c.assigned_to||"", claimed_amount:c.claimed_amount ?? "", paid_amount:c.paid_amount ?? "",
       resolution_type:c.resolution_type||"", closed_date:c.closed_date||"",
     });
@@ -6667,11 +6676,15 @@ export default function App() {
     if (!f.description.trim()) errs.push("• Description is required.");
     if (!f.incident_date) errs.push("• Incident date is required.");
     else if (f.incident_date > today()) errs.push("• Incident date can't be in the future.");
+    if (!f.reported_date) errs.push("• Reported date is required (día que llegó el reclamo — fecha del mail).");
+    else if (f.reported_date > today()) errs.push("• Reported date can't be in the future.");
+    if (f.reported_date && f.incident_date && f.reported_date < f.incident_date) errs.push("• Reported date can't be before the incident date.");
     if (f.claimed_amount !== "" && !(Number(f.claimed_amount) >= 0)) errs.push("• Claimed amount must be a number ≥ 0.");
     if (f.paid_amount !== "" && !(Number(f.paid_amount) >= 0)) errs.push("• Paid / settled must be a number ≥ 0.");
     if (!CLAIM_ACTIVE(f.status)) {
       if (!f.resolution_type) errs.push(`• Pick a resolution before marking the claim as ${CLAIM_STATUS[f.status]?.l || f.status}.`);
       if (f.closed_date && f.incident_date && f.closed_date < f.incident_date) errs.push("• Closed date can't be before the incident date.");
+      if (f.closed_date && f.reported_date && f.closed_date < f.reported_date) errs.push("• Closed date can't be before the reported date.");
     }
     if (errs.length) { window.alert("Please review:\n" + errs.join("\n")); return; }
     if (f.claimed_amount !== "" && f.paid_amount !== "" && Number(f.paid_amount) > Number(f.claimed_amount)
@@ -6684,6 +6697,7 @@ export default function App() {
     const payload = {
       job_number: f.job_number || null, trip_id: f.trip_id ? Number(f.trip_id) : null, client_name: f.client_name || null,
       incident_type: f.incident_type, description: f.description.trim(), incident_date: f.incident_date || null,
+      reported_date: f.reported_date || null,
       status: f.status, assigned_to: f.assigned_to || null,
       claimed_amount: f.claimed_amount === "" ? null : Number(f.claimed_amount),
       paid_amount: f.paid_amount === "" ? null : Number(f.paid_amount),
@@ -10470,9 +10484,10 @@ export default function App() {
         // Clamp like Pager does, so deleting the last row of the last page never strands the view.
         const pageCur = Math.min(claimsPage, Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1));
         const pageRows = rows.slice(pageCur * PAGE_SIZE, (pageCur + 1) * PAGE_SIZE);
-        // Days a claim has been sitting open (or took to close).
+        // Days a claim has been sitting open (or took to close), counted from the
+        // day it arrived (reported_date); legacy rows fall back to incident date.
         const claimAge = (c) => {
-          const from = c.incident_date || (c.created_at || "").slice(0, 10);
+          const from = c.reported_date || c.incident_date || (c.created_at || "").slice(0, 10);
           if (!from) return null;
           const to = !CLAIM_ACTIVE(c.status) && c.closed_date ? new Date(c.closed_date) : startOfToday();
           return Math.max(0, Math.round((to - new Date(from)) / ONE_DAY));
@@ -10530,11 +10545,11 @@ export default function App() {
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                     <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Client","Trip","Type","Incident","Status","Claimed","Paid","Assigned","Days",""].map((h,i) => <th key={i} style={th}>{h}</th>)}
+                      {["Job #","Client","Trip","Type","Incident","Reported","Status","Claimed","Paid","Assigned","Days",""].map((h,i) => <th key={i} style={th}>{h}</th>)}
                     </tr></thead>
                     <tbody>
                       {pageRows.length === 0 ? (
-                        <tr><td colSpan={11} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No claims in this filter. Report one with “+ New claim”.</td></tr>
+                        <tr><td colSpan={12} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No claims in this filter. Report one with “+ New claim”.</td></tr>
                       ) : pageRows.map(c => {
                         const tMeta = claimTypeMeta(c.incident_type);
                         const trip = c.trip_id ? tripById[c.trip_id] : null;
@@ -10552,6 +10567,7 @@ export default function App() {
                             <td style={{ ...td, fontFamily:"monospace", fontSize:12 }}>{trip ? (trip.trip_number || "#"+trip.id) : "—"}</td>
                             <td style={{ ...td, whiteSpace:"nowrap" }}>{tMeta.icon} {tMeta.l}</td>
                             <td style={{ ...td, whiteSpace:"nowrap" }}>{c.incident_date || "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{c.reported_date || "—"}</td>
                             <td style={td}><ClaimBadge status={c.status} /></td>
                             <td style={{ ...td, whiteSpace:"nowrap", fontWeight:600 }}>{c.claimed_amount != null ? "$"+Math.round(numv(c.claimed_amount)).toLocaleString() : "—"}</td>
                             <td style={{ ...td, whiteSpace:"nowrap", color:"#7C3AED", fontWeight:600 }}>{c.paid_amount != null ? "$"+Math.round(numv(c.paid_amount)).toLocaleString() : "—"}</td>
@@ -12183,7 +12199,11 @@ export default function App() {
                 </select>
               </Field>
               <Field label="Client"><input style={inp} value={f.client_name} onChange={e => set({ client_name:e.target.value })} placeholder="Client name" disabled={!canEdit} /></Field>
-              <Field label="Incident date *"><input style={inp} type="date" value={f.incident_date} onChange={e => set({ incident_date:e.target.value })} disabled={!canEdit} /></Field>
+              <Field label="Incident date *"><input style={inp} type="date" value={f.incident_date} onChange={e => set({ incident_date:e.target.value })} disabled={!canEdit} title="Día en que ocurrió el incidente" /></Field>
+              <Field label="Reported date *">
+                <input style={inp} type="date" value={f.reported_date} onChange={e => set({ reported_date:e.target.value })} disabled={!canEdit} title="Día que llegó el reclamo — usá la fecha del mail del cliente" />
+                <div style={{ fontSize:11, color:"#999", marginTop:3 }}>Día que llegó el reclamo (fecha del mail del cliente).</div>
+              </Field>
               <Field label="Incident type *">
                 <select style={inp} value={f.incident_type} onChange={e => set({ incident_type:e.target.value })} disabled={!canEdit}>
                   {CLAIM_TYPES.map(t => <option key={t.v} value={t.v}>{t.icon} {t.l}</option>)}

@@ -25,6 +25,7 @@ const SQL = `create table if not exists public.claims (
   incident_type text,
   description text,
   incident_date date,
+  reported_date date,
   status text default 'open',
   assigned_to text,
   claimed_amount numeric,
@@ -37,6 +38,7 @@ const SQL = `create table if not exists public.claims (
   updated_by text,
   updated_at timestamptz
 );
+alter table public.claims add column if not exists reported_date date;
 alter table public.claims enable row level security;
 drop policy if exists "claims_all" on public.claims;
 create policy "claims_all" on public.claims for all to anon, authenticated using (true) with check (true);
