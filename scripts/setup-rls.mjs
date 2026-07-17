@@ -51,6 +51,11 @@ const MAP = {
   material_items:       { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
   // Logging a movement against the ledger is an edit-level action, not a create-level one.
   material_movements:   { view: ["expenses", "drivers", "analytics"], owner: "expenses", insertLevel: "edit" },
+  // Bancos module (run scripts/setup-bank.mjs first, then re-run this script).
+  bank_accounts:        { view: ["bancos", "payments"], owner: "bancos" },
+  bank_categories:      { view: ["bancos"], owner: "bancos" },
+  bank_import_batches:  { view: ["bancos"], owner: "bancos" },
+  bank_transactions:    { view: ["bancos", "analytics"], owner: "bancos" },
 };
 
 function policiesFor(table, { view, owner, insertLevel = "create" }) {
