@@ -9,7 +9,7 @@
 // src/bankData.js so it's unit-testable with node.
 import { useState, useMemo, useEffect, useCallback } from "react";
 import {
-  SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName,
+  SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
   parseCsv, mapBankCsv, reconcileBank, bankPnl,
 } from "./bankData.js";
@@ -195,6 +195,7 @@ function InboxTab(props) {
   const [fTo, setFTo] = useState("");
   const [fSearch, setFSearch] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [manualTxn, setManualTxn] = useState(null); // null = closed; {} = new; row = edit
 
   const accName = (id) => accounts.find(a => a.id === id)?.name || "—";
   const filtered = useMemo(() => txns.filter(t => {
@@ -239,6 +240,7 @@ function InboxTab(props) {
         <input type="date" value={fTo} onChange={e => setFTo(e.target.value)} style={{ ...inp, width:"auto" }} />
         <input placeholder="Buscar descripción…" value={fSearch} onChange={e => setFSearch(e.target.value)} style={{ ...inp, width:180 }} />
         {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Importar movimientos</Btn>}
+        {canCreate && <Btn onClick={() => setManualTxn({})}>＋ Movimiento manual</Btn>}
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
@@ -280,6 +282,7 @@ function InboxTab(props) {
                         {t.status === "ignored" ? "↩" : "🚫"}
                       </button>
                     )}
+                    {canEdit && <button onClick={() => setManualTxn(t)} title="Editar" style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:13, marginLeft:2 }}>✏️</button>}
                     {canEdit && <button onClick={() => removeTxn(t)} title="Borrar" style={{ border:"none", background:"transparent", cursor:"pointer", color:"#ccc", fontSize:13, marginLeft:2 }}>🗑</button>}
                   </td>
                 </tr>
@@ -294,7 +297,108 @@ function InboxTab(props) {
           onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); onReload(); }}
           setError={setError} Btn={Btn} Modal={Modal} />
       )}
+      {manualTxn && (
+        <ManualTxnModal txn={manualTxn.id ? manualTxn : null} accounts={accounts} cats={cats} supabase={supabase} session={session}
+          onClose={() => setManualTxn(null)} onDone={() => { setManualTxn(null); onReload(); }}
+          Btn={Btn} Modal={Modal} />
+      )}
     </div>
+  );
+}
+
+// ── Manual inflow/outflow entry (also edits an imported row) ─────────────────
+// For movements that aren't worth a screenshot (a single wire, a correction).
+// A manual entry enters the same double-check flow: it lands as
+// unreviewed/categorized and a DIFFERENT person still has to verify it.
+function ManualTxnModal({ txn, accounts, cats, supabase, session, onClose, onDone, Btn, Modal }) {
+  const [f, setF] = useState(() => txn ? {
+    bank_account_id: txn.bank_account_id || "", txn_date: txn.txn_date || "", operation_date: txn.operation_date || "",
+    direction: signedAmount(txn) < 0 ? "out" : "in", amount: Math.abs(numv(txn.amount)) || "",
+    raw_description: txn.raw_description || "", category: txn.category || "",
+    payment_method: txn.payment_method || "", payment_method_id: txn.payment_method_id || "",
+    supplier: txn.supplier || "", employee_name: txn.employee_name || "", notes: txn.notes || "",
+  } : {
+    bank_account_id: accounts[0]?.id || "", txn_date: todayISO(), operation_date: "",
+    direction: "out", amount: "", raw_description: "", category: "",
+    payment_method: "", payment_method_id: "", supplier: "", employee_name: "", notes: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setF(x => ({ ...x, [k]: e?.target ? e.target.value : e }));
+
+  const save = async () => {
+    if (!f.bank_account_id) { window.alert("Elegí la cuenta bancaria."); return; }
+    if (!f.txn_date) { window.alert("Falta la fecha."); return; }
+    if (!numv(f.amount)) { window.alert("Falta el monto."); return; }
+    setSaving(true);
+    const amount = f.direction === "out" ? -Math.abs(numv(f.amount)) : Math.abs(numv(f.amount));
+    const base = {
+      bank_account_id: f.bank_account_id, txn_date: f.txn_date, operation_date: f.operation_date || null,
+      amount, direction: f.direction, raw_description: f.raw_description || null,
+      category: f.category || null, payment_method: f.payment_method || null,
+      payment_method_id: f.payment_method_id || null, supplier: f.supplier || null,
+      employee_name: f.employee_name || null, notes: f.notes || null,
+      updated_by: session?.user?.email || null, updated_at: new Date().toISOString(),
+    };
+    let error;
+    if (txn) {
+      // Editing reopens the double check: whatever was verified must be re-verified.
+      ({ error } = await supabase.from("bank_transactions").update({
+        ...base, dedup_hash: dedupHash(base),
+        status: txn.status === "verified" ? "categorized" : txn.status, verified_by: null, verified_at: null,
+      }).eq("id", txn.id));
+    } else {
+      ({ error } = await supabase.from("bank_transactions").insert({
+        ...base, dedup_hash: dedupHash(base), source: "manual", status: "unreviewed",
+        created_by: session?.user?.email || null,
+      }));
+    }
+    setSaving(false);
+    if (error) {
+      window.alert(/duplicate|unique/i.test(error.message) ? "Ya existe un movimiento igual (misma cuenta, fecha, monto y descripción)." : error.message);
+      return;
+    }
+    onDone();
+  };
+
+  return (
+    <Modal title={txn ? "Editar movimiento" : "Movimiento manual"} onClose={onClose}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+        <Field label="Cuenta bancaria">
+          <select style={inp} value={f.bank_account_id} onChange={set("bank_account_id")}>
+            <option value="">— elegir —</option>
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Tipo">
+          <select style={inp} value={f.direction} onChange={set("direction")}>
+            <option value="in">🟢 Inflow (entra)</option>
+            <option value="out">🔴 Outflow (sale)</option>
+          </select>
+        </Field>
+        <Field label="Fecha banco"><input type="date" style={inp} value={f.txn_date} onChange={set("txn_date")} /></Field>
+        <Field label="Fecha operación (opcional)"><input type="date" style={inp} value={f.operation_date} onChange={set("operation_date")} /></Field>
+        <Field label="Monto (USD)"><input type="number" min="0" step="0.01" style={inp} value={f.amount} onChange={set("amount")} placeholder="0.00" /></Field>
+        <Field label="Categoría"><CategorySelect cats={cats} value={f.category} onChange={v => setF(x => ({ ...x, category: v }))} /></Field>
+      </div>
+      <Field label="Descripción"><input style={inp} value={f.raw_description} onChange={set("raw_description")} placeholder="Zelle de John Smith / Pago e-zpass…" /></Field>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+        <Field label="Método de pago">
+          <select style={inp} value={f.payment_method} onChange={set("payment_method")}>
+            <option value="">—</option>
+            {PAYMENT_METHODS_BANK.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+        <Field label="Nº de cheque / referencia (opcional)"><input style={inp} value={f.payment_method_id} onChange={set("payment_method_id")} /></Field>
+        <Field label="Supplier / contraparte (opcional)"><input style={inp} value={f.supplier} onChange={set("supplier")} placeholder="shell, cash app, cliente…" /></Field>
+        <Field label="Empleado (opcional)"><input style={inp} value={f.employee_name} onChange={set("employee_name")} placeholder="para salaries" /></Field>
+      </div>
+      <Field label="Notas"><input style={inp} value={f.notes} onChange={set("notes")} /></Field>
+      <div style={{ fontSize:11, color:"#999", marginBottom:8 }}>El movimiento entra al mismo doble check: otra persona lo tiene que verificar.</div>
+      <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
+        <Btn onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={save} disabled={saving}>{saving ? "Guardando…" : "Guardar"}</Btn>
+      </div>
+    </Modal>
   );
 }
 
