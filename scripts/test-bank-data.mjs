@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   parseCsv, mapBankCsv, dedupHash, signedAmount,
   matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl,
-  BANK_CATEGORIES, bankCatMeta, isTransferCat,
+  SEED_BANK_CATEGORIES, PNL_GROUPS, catByName, isTransferCat,
 } from "../src/bankData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -55,6 +55,9 @@ t("signedAmount: direction beats raw sign; signed passthrough", () => {
 });
 
 // ── Fixtures for reconciliation ─────────────────────────────────────────────
+// Categories use the bookkeeper's Excel taxonomy (SEED_BANK_CATEGORIES), which
+// is also what the DB seed contains: names like "Job", "Fuel", "Other",
+// "Transfer Between Accounts" (is_transfer).
 const payments = [
   { id: 1, method: "zelle", amount: 1200, discount: 0, received: true, received_date: "2026-07-01" }, // digital → auto-banked
   { id: 2, method: "cash", amount: 300, received: true, banked: true, banked_date: "2026-07-02" },
@@ -67,11 +70,11 @@ const expenses = [
   { id: 12, expense_date: "2026-07-03", amount: 40, paid_from: "driver_cash" },                         // not bank → ignored
 ];
 const bankTxns = [
-  { id: 100, txn_date: "2026-07-01", amount: 1200, direction: "in", raw_description: "ZELLE DEPOSIT", status: "verified", category: "customer_payment" },
-  { id: 101, txn_date: "2026-07-03", amount: 300, direction: "in", raw_description: "ATM DEPOSIT", status: "verified", category: "customer_payment" },
-  { id: 102, txn_date: "2026-07-02", amount: 89.1, direction: "out", raw_description: "SHELL OIL", status: "verified", category: "fuel" },
-  { id: 103, txn_date: "2026-07-04", amount: 777, direction: "out", raw_description: "UNKNOWN WIRE", status: "categorized", category: "other_expense" }, // no backing → discrepancy
-  { id: 104, txn_date: "2026-07-05", amount: 1000, direction: "out", raw_description: "TRANSFER TO SAVINGS", status: "verified", category: "transfer_out" },
+  { id: 100, txn_date: "2026-07-01", amount: 1200, direction: "in", raw_description: "ZELLE DEPOSIT", status: "verified", category: "Job" },
+  { id: 101, txn_date: "2026-07-03", amount: 300, direction: "in", raw_description: "ATM DEPOSIT", status: "verified", category: "Job" },
+  { id: 102, txn_date: "2026-07-02", amount: 89.1, direction: "out", raw_description: "SHELL OIL", status: "verified", category: "Fuel" },
+  { id: 103, txn_date: "2026-07-04", amount: 777, direction: "out", raw_description: "UNKNOWN WIRE", status: "categorized", category: "Other" }, // no backing → discrepancy
+  { id: 104, txn_date: "2026-07-05", amount: 1000, direction: "out", raw_description: "TRANSFER TO SAVINGS", status: "verified", category: "Transfer Between Accounts" },
   { id: 105, txn_date: "2026-07-05", amount: 60, direction: "out", raw_description: "IGNORED DUP", status: "ignored", category: "" },
 ];
 
@@ -119,9 +122,18 @@ t("bankPnl: verified-only, transfers excluded, per-category totals + net", () =>
   assert.ok(Math.abs(r.expense - 89.1) < 1e-9);
   assert.ok(Math.abs(r.net - 1410.9) < 1e-9);
   assert.equal(r.count, 3);
-  const cust = r.categories.find(c => c.v === "customer_payment");
-  assert.equal(cust.total, 1500);
-  assert.equal(cust.meta.dir, "in");
+  const job = r.categories.find(c => c.name === "Job");
+  assert.equal(job.total, 1500);
+  assert.equal(job.meta.direction, "in");
+});
+
+t("bankPnl: groups mirror the Excel P&L structure (Ingresos + Type groups)", () => {
+  const r = bankPnl({ bankTxns, from: "2026-07-01", to: "2026-07-31", onlyVerified: false });
+  const names = r.groups.map(g => g.group);
+  assert.deepEqual(names, ["Ingresos", "Cost of Revenues", "Structure Expenses"]);
+  assert.equal(r.groups[0].total, 1500);                            // Job
+  assert.ok(Math.abs(r.groups[1].total - -89.1) < 1e-9);            // Fuel
+  assert.ok(Math.abs(r.groups[2].total - -777) < 1e-9);             // Other
 });
 
 t("bankPnl: onlyVerified=false pulls in categorized rows", () => {
@@ -135,9 +147,21 @@ t("bankPnl: monthly series zero-fills the range", () => {
   assert.equal(r.series[0].net, 0);
 });
 
-t("catalog: every category has dir; transfers detected", () => {
-  for (const c of BANK_CATEGORIES) assert.ok(["in", "out", "transfer"].includes(c.dir), c.v);
-  assert.ok(isTransferCat("transfer_out") && isTransferCat("transfer_in"));
-  assert.ok(!isTransferCat("fuel"));
-  assert.equal(bankCatMeta("nope"), null);
+// ── Catalog (seed = the Excel taxonomy; helpers accept a live DB catalog) ───
+t("catalog: seed mirrors the Excel taxonomy; transfer detected; PNL groups valid", () => {
+  for (const c of SEED_BANK_CATEGORIES) {
+    assert.ok(c.is_transfer || ["in", "out"].includes(c.direction), c.name);
+    if (c.pnl_group) assert.ok(PNL_GROUPS.includes(c.pnl_group), c.name);
+  }
+  for (const name of ["Job", "Refund", "Hotels", "Fuel", "Salaries - Employees", "Storage", "Broker", "Marketing", "Loren Expenses", "Bauti Expenses"])
+    assert.ok(catByName([], name), name + " missing from seed");
+  assert.ok(isTransferCat([], "Transfer Between Accounts"));
+  assert.ok(!isTransferCat([], "Fuel"));
+  assert.equal(catByName([], "nope"), null);
+});
+
+t("catalog: a live DB catalog (owner-added category) overrides the seed", () => {
+  const live = [{ name: "Truck Wash", direction: "out", pnl_group: "Cost of Revenues", is_transfer: false }];
+  assert.ok(catByName(live, "Truck Wash"));
+  assert.equal(catByName(live, "Fuel"), null); // live catalog wins entirely
 });

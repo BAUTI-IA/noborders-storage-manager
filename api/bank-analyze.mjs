@@ -11,12 +11,16 @@ const admin = process.env.SUPABASE_SERVICE_ROLE_KEY
   ? createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
   : null;
 
-// Keep in sync with BANK_CATEGORIES in src/bankData.js.
-const CATEGORY_KEYS = [
-  "customer_payment", "broker_payment", "storage_income", "refund_in", "owner_contribution", "transfer_in", "other_income",
-  "fuel", "tolls", "maintenance", "materials", "lodging", "meals", "truck_lease", "driver_pay", "payroll_office",
-  "commissions", "insurance", "rent_storage", "utilities", "software_subscriptions", "bank_fees", "taxes",
-  "marketing", "refund_out", "owner_draw", "transfer_out", "other_expense",
+// Fallback list = the seed taxonomy (SEED_BANK_CATEGORIES in src/bankData.js).
+// The client normally sends its live catalog (body.categories) since the owner
+// can add categories from the UI — whatever arrives wins.
+const DEFAULT_CATEGORY_NAMES = [
+  "Job", "Refund",
+  "Hotels", "Fuel", "Salaries - Employees", "Salaries - Helpers", "Toll", "Truck Repair", "Packaging", "Commissions", "Claims",
+  "Storage", "Truck Licensing Fees", "Truck Rental", "Truck Maintenance", "Truck Insurance", "Truck Utilities",
+  "Fees", "Software Licenses", "Ground Transportation", "Airfare", "Car Rental", "Office Supplies",
+  "Loren Expenses", "Bauti Expenses", "Taxes", "Fines", "Other",
+  "Broker", "Marketing", "Transfer Between Accounts",
 ];
 
 export default async function handler(req, res) {
@@ -30,8 +34,10 @@ export default async function handler(req, res) {
     if (error || !user) { res.status(401).json({ error: "No autorizado." }); return; }
   }
 
-  const { image_base64, media_type, descriptions } = req.body || {};
+  const { image_base64, media_type, descriptions, categories } = req.body || {};
   if (!image_base64 && !Array.isArray(descriptions)) { res.status(400).json({ error: "Falta la imagen o las descripciones." }); return; }
+  const catNames = (Array.isArray(categories) && categories.length ? categories : DEFAULT_CATEGORY_NAMES)
+    .map(c => String(c).slice(0, 60)).slice(0, 100);
 
   try {
     let content;
@@ -40,7 +46,7 @@ export default async function handler(req, res) {
       const prompt = `This image is a screenshot of a US bank's online banking (or a bank statement) for a moving & storage company. All amounts are USD. ` +
         `Extract EVERY transaction line visible. For each line return: "date" (ISO YYYY-MM-DD; if the year is not visible assume the most recent plausible one), ` +
         `"description" (the verbatim transaction text), "amount" (positive number), "direction" ("in" for credits/deposits, "out" for debits/withdrawals), ` +
-        `"category" (your best guess from exactly this list, or "" if unsure: ${CATEGORY_KEYS.join(", ")}), and "confidence" (0 to 1). ` +
+        `"category" (your best guess from exactly this list, or "" if unsure: ${catNames.join(" | ")}), and "confidence" (0 to 1). ` +
         `Do NOT invent lines; skip running-balance columns, headers and totals. ` +
         `Respond with ONLY compact JSON: {"lines":[{"date":"","description":"","amount":0,"direction":"in","category":"","confidence":0}]}`;
       content = [
@@ -50,7 +56,7 @@ export default async function handler(req, res) {
     } else {
       // Text mode: batch-suggest categories for already-parsed CSV lines.
       const list = descriptions.slice(0, 300).map((d, i) => `${i}. [${d.direction === "out" ? "OUT" : "IN"}] $${d.amount} — ${String(d.description || "").slice(0, 160)}`).join("\n");
-      const prompt = `These are bank transaction lines (USD) from a moving & storage company. For each, suggest a category from exactly this list (or "" if unsure): ${CATEGORY_KEYS.join(", ")}. ` +
+      const prompt = `These are bank transaction lines (USD) from a moving & storage company. For each, suggest a category from exactly this list (or "" if unsure): ${catNames.join(" | ")}. ` +
         `Lines:\n${list}\n` +
         `Respond with ONLY compact JSON: {"lines":[{"i":0,"category":"","confidence":0}]} — one entry per input line, same order, "i" is the input index.`;
       content = [{ type: "text", text: prompt }];
@@ -69,7 +75,7 @@ export default async function handler(req, res) {
       ...l,
       amount: Math.abs(Number(l.amount) || 0),
       direction: l.direction === "out" ? "out" : "in",
-      category: CATEGORY_KEYS.includes(l.category) ? l.category : "",
+      category: catNames.includes(l.category) ? l.category : "",
       confidence: Math.max(0, Math.min(1, Number(l.confidence) || 0)),
     }));
     res.status(200).json({ lines });

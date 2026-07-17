@@ -9,8 +9,8 @@
 // src/bankData.js so it's unit-testable with node.
 import { useState, useMemo, useEffect, useCallback } from "react";
 import {
-  BANK_CATEGORIES, BANK_STATUS, bankCatMeta, isTransferCat,
-  EMPTY_BANK_ACCOUNT, dedupHash, signedAmount,
+  SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName,
+  EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
   parseCsv, mapBankCsv, reconcileBank, bankPnl,
 } from "./bankData.js";
 import { numv } from "./analyticsData.js";
@@ -26,10 +26,10 @@ function StatusBadge({ status }) {
   const c = BANK_STATUS[status] || BANK_STATUS.unreviewed;
   return <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}>{c.l}</span>;
 }
-function CatChip({ category }) {
-  const c = bankCatMeta(category);
-  if (!c) return <span style={{ fontSize:11, color:"#bbb" }}>Sin categoría</span>;
-  return <span style={{ fontSize:11, fontWeight:600, whiteSpace:"nowrap" }}>{c.icon} {c.l}</span>;
+function CatChip({ cats, category }) {
+  const c = catByName(cats, category);
+  if (!c) return category ? <span style={{ fontSize:11, fontWeight:600 }}>{category}</span> : <span style={{ fontSize:11, color:"#bbb" }}>Sin categoría</span>;
+  return <span style={{ fontSize:11, fontWeight:600, whiteSpace:"nowrap" }}>{c.icon} {c.name}</span>;
 }
 function Tile({ label, value, color = "#111", sub }) {
   return (
@@ -43,20 +43,22 @@ function Tile({ label, value, color = "#111", sub }) {
 function Field({ label, children }) {
   return <div style={{ marginBottom:10 }}><span style={fieldLabel}>{label}</span>{children}</div>;
 }
-const CategorySelect = ({ value, onChange, style }) => (
-  <select value={value || ""} onChange={e => onChange(e.target.value)} style={{ ...inp, ...style }}>
-    <option value="">— categoría —</option>
-    <optgroup label="Ingresos">
-      {BANK_CATEGORIES.filter(c => c.dir === "in").map(c => <option key={c.v} value={c.v}>{c.icon} {c.l}</option>)}
-    </optgroup>
-    <optgroup label="Egresos">
-      {BANK_CATEGORIES.filter(c => c.dir === "out").map(c => <option key={c.v} value={c.v}>{c.icon} {c.l}</option>)}
-    </optgroup>
-    <optgroup label="Transferencias">
-      {BANK_CATEGORIES.filter(c => c.dir === "transfer").map(c => <option key={c.v} value={c.v}>{c.icon} {c.l}</option>)}
-    </optgroup>
-  </select>
-);
+// Category picker fed by the live bank_categories catalog (editable by the
+// owner). Value = the category NAME. A stale value not in the catalog anymore
+// still renders so old rows don't display blank.
+const CategorySelect = ({ cats, value, onChange, style }) => {
+  const list = (cats?.length ? cats : SEED_BANK_CATEGORIES).filter(c => c.active !== false);
+  const opt = (c) => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>;
+  return (
+    <select value={value || ""} onChange={e => onChange(e.target.value)} style={{ ...inp, ...style }}>
+      <option value="">— categoría —</option>
+      <optgroup label="Ingresos">{list.filter(c => c.direction === "in" && !c.is_transfer).map(opt)}</optgroup>
+      <optgroup label="Egresos">{list.filter(c => c.direction === "out" && !c.is_transfer).map(opt)}</optgroup>
+      <optgroup label="Transferencias">{list.filter(c => c.is_transfer).map(opt)}</optgroup>
+      {value && !list.some(c => c.name === value) && <option value={value}>{value}</option>}
+    </select>
+  );
+};
 
 export function BancosSection({ supabase, session, profile, payments = [], expenses = [], can = () => true, Btn, Modal }) {
   const myName = profile?.full_name || session?.user?.email || "";
@@ -65,6 +67,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
 
   const [missing, setMissing] = useState(false);
   const [accounts, setAccounts] = useState([]);
+  const [cats, setCats] = useState([]);
   const [txns, setTxns] = useState([]);
   const [tab, setTab] = useState("bandeja");
   const [error, setError] = useState("");
@@ -75,20 +78,26 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
     if (error) { if (/does not exist|relation/i.test(error.message)) setMissing(true); return; }
     setMissing(false); setAccounts(data || []);
   }, [supabase]);
+  const loadCats = useCallback(async () => {
+    // Falls back to the seed while the table doesn't exist (v1 installs).
+    const { data, error } = await supabase.from("bank_categories").select("*").order("sort", { ascending: true }).order("name", { ascending: true });
+    if (!error && data?.length) setCats(data);
+  }, [supabase]);
   const loadTxns = useCallback(async () => {
     const { data, error } = await supabase.from("bank_transactions").select("*").order("txn_date", { ascending: false }).order("id", { ascending: false }).limit(2000);
     if (!error) setTxns(data || []);
   }, [supabase]);
 
-  useEffect(() => { loadAccounts(); loadTxns(); }, [loadAccounts, loadTxns]);
+  useEffect(() => { loadAccounts(); loadCats(); loadTxns(); }, [loadAccounts, loadCats, loadTxns]);
   useEffect(() => {
     if (missing) return;
     const ch = supabase.channel("bank-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "bank_accounts" }, () => loadAccounts())
+      .on("postgres_changes", { event: "*", schema: "public", table: "bank_categories" }, () => loadCats())
       .on("postgres_changes", { event: "*", schema: "public", table: "bank_transactions" }, () => loadTxns())
       .subscribe();
     return () => supabase.removeChannel(ch);
-  }, [supabase, missing, loadAccounts, loadTxns]);
+  }, [supabase, missing, loadAccounts, loadCats, loadTxns]);
 
   // ── Review actions (the double-check state machine) ────────────────────────
   const stamp = { updated_by: myName, updated_at: new Date().toISOString() };
@@ -144,7 +153,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
     );
   }
 
-  const TABS = [["bandeja", "Bandeja"], ["cuentas", "Cuentas"], ["conciliacion", "Conciliación"], ["pnl", "P&L"]];
+  const TABS = [["bandeja", "Bandeja"], ["cuentas", "Cuentas"], ["categorias", "Categorías"], ["conciliacion", "Conciliación"], ["pnl", "P&L"]];
   return (
     <div>
       <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
@@ -158,7 +167,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
       {error && <div style={{ background:"#FCEBEB", color:"#A32D2D", borderRadius:8, padding:"8px 12px", fontSize:12.5, marginBottom:10 }}>{error}</div>}
 
       {tab === "bandeja" && (
-        <InboxTab txns={txns} accounts={accounts} canEdit={canEdit} canCreate={canCreate} myName={myName}
+        <InboxTab txns={txns} accounts={accounts} cats={cats} canEdit={canEdit} canCreate={canCreate} myName={myName}
           supabase={supabase} session={session} onReload={loadTxns} setError={setError}
           setCategory={setCategory} categorize={categorize} verify={verify} reopen={reopen} setIgnored={setIgnored} removeTxn={removeTxn}
           Btn={Btn} Modal={Modal} />
@@ -166,15 +175,18 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
       {tab === "cuentas" && (
         <AccountsTab accounts={accounts} txns={txns} supabase={supabase} canCreate={canCreate} canEdit={canEdit} onReload={loadAccounts} Btn={Btn} Modal={Modal} />
       )}
-      {tab === "conciliacion" && <ReconTab txns={txns} payments={payments} expenses={expenses} />}
-      {tab === "pnl" && <PnlTab txns={txns} />}
+      {tab === "categorias" && (
+        <CategoriesTab cats={cats} txns={txns} supabase={supabase} canCreate={canCreate} canEdit={canEdit} onReload={loadCats} onReloadTxns={loadTxns} Btn={Btn} Modal={Modal} />
+      )}
+      {tab === "conciliacion" && <ReconTab txns={txns} cats={cats} payments={payments} expenses={expenses} />}
+      {tab === "pnl" && <PnlTab txns={txns} cats={cats} />}
     </div>
   );
 }
 
 // ── Tab: Bandeja (review queue + import) ─────────────────────────────────────
 function InboxTab(props) {
-  const { txns, accounts, canEdit, canCreate, supabase, session, onReload, setError,
+  const { txns, accounts, cats, canEdit, canCreate, supabase, session, onReload, setError,
     setCategory, categorize, verify, reopen, setIgnored, removeTxn, Btn, Modal } = props;
   const [fStatus, setFStatus] = useState("");
   const [fAccount, setFAccount] = useState("");
@@ -245,14 +257,14 @@ function InboxTab(props) {
                   <td style={{ ...td, maxWidth:280 }}>
                     <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={t.raw_description}>{t.raw_description || "—"}</div>
                     {t.ai_suggested_category && t.status === "unreviewed" && (
-                      <div style={{ fontSize:10.5, color:"#7C3AED" }}>🤖 sugiere: {bankCatMeta(t.ai_suggested_category)?.l || t.ai_suggested_category}{t.ai_confidence != null ? ` (${Math.round(numv(t.ai_confidence) * 100)}%)` : ""}</div>
+                      <div style={{ fontSize:10.5, color:"#7C3AED" }}>🤖 sugiere: {t.ai_suggested_category}{t.ai_confidence != null ? ` (${Math.round(numv(t.ai_confidence) * 100)}%)` : ""}</div>
                     )}
                   </td>
                   <td style={{ ...td, fontWeight:700, whiteSpace:"nowrap", color: amt >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(amt)}</td>
                   <td style={{ ...td, minWidth:170 }}>
                     {t.status === "verified" || !canEdit
-                      ? <CatChip category={t.category} />
-                      : <CategorySelect value={t.category} onChange={v => setCategory(t, v)} style={{ fontSize:12, padding:"5px 8px" }} />}
+                      ? <CatChip cats={cats} category={t.category} />
+                      : <CategorySelect cats={cats} value={t.category} onChange={v => setCategory(t, v)} style={{ fontSize:12, padding:"5px 8px" }} />}
                   </td>
                   <td style={td}><StatusBadge status={t.status} /></td>
                   <td style={{ ...td, fontSize:10.5, color:"#999", whiteSpace:"nowrap" }}>
@@ -278,7 +290,7 @@ function InboxTab(props) {
       </div>
 
       {showImport && (
-        <ImportModal accounts={accounts} supabase={supabase} session={session}
+        <ImportModal accounts={accounts} cats={cats} supabase={supabase} session={session}
           onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); onReload(); }}
           setError={setError} Btn={Btn} Modal={Modal} />
       )}
@@ -287,7 +299,9 @@ function InboxTab(props) {
 }
 
 // ── Import modal: screenshot (AI vision) or CSV ──────────────────────────────
-function ImportModal({ accounts, supabase, session, onClose, onDone, setError, Btn, Modal }) {
+function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setError, Btn, Modal }) {
+  // Live category names for the AI prompt (owner-added categories included).
+  const catNames = (cats?.length ? cats : SEED_BANK_CATEGORIES).filter(c => c.active !== false).map(c => c.name);
   const [accountId, setAccountId] = useState(accounts[0]?.id || "");
   const [mode, setMode] = useState("screenshot"); // screenshot | csv
   const [busy, setBusy] = useState(false);
@@ -318,7 +332,7 @@ function ImportModal({ accounts, supabase, session, onClose, onDone, setError, B
       const res = await fetch("/api/bank-analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
-        body: JSON.stringify({ image_base64: b64, media_type: file.type || "image/jpeg" }),
+        body: JSON.stringify({ image_base64: b64, media_type: file.type || "image/jpeg", categories: catNames }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "AI error");
@@ -366,7 +380,7 @@ function ImportModal({ accounts, supabase, session, onClose, onDone, setError, B
         const res = await fetch("/api/bank-analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
-          body: JSON.stringify({ descriptions: lines.map(l => ({ description: l.raw_description, amount: Math.abs(l.amount), direction: l.direction })) }),
+          body: JSON.stringify({ descriptions: lines.map(l => ({ description: l.raw_description, amount: Math.abs(l.amount), direction: l.direction })), categories: catNames }),
         });
         const json = await res.json();
         if (res.ok) for (const s of (json.lines || [])) {
@@ -479,7 +493,7 @@ function ImportModal({ accounts, supabase, session, onClose, onDone, setError, B
                     <td style={td}><input type="date" value={d.txn_date} onChange={e => setDrafts(ds => ds.map((x, j) => j === i ? { ...x, txn_date: e.target.value } : x))} style={{ ...inp, width:130, padding:"4px 6px", fontSize:12 }} /></td>
                     <td style={{ ...td, maxWidth:260, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={d.raw_description}>{d.raw_description}</td>
                     <td style={{ ...td, fontWeight:700, color: d.amount >= 0 ? "#3B6D11" : "#A32D2D", whiteSpace:"nowrap" }}>{fmt$(d.amount)}</td>
-                    <td style={{ ...td, minWidth:160 }}><CategorySelect value={d.category} onChange={v => setDrafts(ds => ds.map((x, j) => j === i ? { ...x, category: v } : x))} style={{ fontSize:12, padding:"4px 6px" }} /></td>
+                    <td style={{ ...td, minWidth:160 }}><CategorySelect cats={cats} value={d.category} onChange={v => setDrafts(ds => ds.map((x, j) => j === i ? { ...x, category: v } : x))} style={{ fontSize:12, padding:"4px 6px" }} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -574,9 +588,121 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
   );
 }
 
+// ── Tab: Categorías (editable chart of accounts) ─────────────────────────────
+// Seeded with the bookkeeper's Excel taxonomy; the owner can add his own.
+// Renaming cascades to bank_transactions.category (which stores the name).
+function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onReloadTxns, Btn, Modal }) {
+  const list = cats?.length ? cats : [];
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null); // row being edited, or null = new
+  const [form, setForm] = useState(EMPTY_BANK_CATEGORY);
+  const [saving, setSaving] = useState(false);
+
+  const usesOf = (name) => txns.filter(t => t.category === name).length;
+
+  const openAdd = () => { setEditing(null); setForm(EMPTY_BANK_CATEGORY); setShowModal(true); };
+  const openEdit = (c) => {
+    setEditing(c);
+    setForm({ name: c.name || "", direction: c.direction || (c.is_transfer ? "" : "out"), pnl_group: c.pnl_group || "", is_transfer: !!c.is_transfer, icon: c.icon || "", active: c.active !== false });
+    setShowModal(true);
+  };
+  const save = async () => {
+    const name = form.name.trim();
+    if (!name) { window.alert("La categoría necesita un nombre."); return; }
+    if (list.some(c => c.name.toLowerCase() === name.toLowerCase() && c.id !== editing?.id)) { window.alert("Ya existe una categoría con ese nombre."); return; }
+    setSaving(true);
+    const payload = {
+      name, icon: form.icon || null, is_transfer: !!form.is_transfer, active: form.active !== false,
+      direction: form.is_transfer ? null : (form.direction || "out"),
+      pnl_group: (form.is_transfer || form.direction === "in") ? null : (form.pnl_group || null),
+    };
+    let error;
+    if (editing) {
+      ({ error } = await supabase.from("bank_categories").update(payload).eq("id", editing.id));
+      // Rename cascades: transactions store the category NAME.
+      if (!error && editing.name !== name) {
+        await supabase.from("bank_transactions").update({ category: name }).eq("category", editing.name);
+        await supabase.from("bank_transactions").update({ ai_suggested_category: name }).eq("ai_suggested_category", editing.name);
+        onReloadTxns();
+      }
+    } else {
+      ({ error } = await supabase.from("bank_categories").insert({ ...payload, sort: 100 + list.length }));
+    }
+    setSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowModal(false); onReload();
+  };
+  const toggleActive = async (c) => {
+    await supabase.from("bank_categories").update({ active: c.active === false }).eq("id", c.id);
+    onReload();
+  };
+
+  const groupLabel = (c) => c.is_transfer ? "Transferencia" : c.direction === "in" ? "Ingreso" : (c.pnl_group || "—");
+  return (
+    <div>
+      {canCreate && <div style={{ marginBottom:12 }}><Btn onClick={openAdd}>＋ Nueva categoría</Btn></div>}
+      <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>
+        Estas son las mismas categorías y grupos del Excel de Bank Flows. Podés agregar nuevas o renombrar — los movimientos ya categorizados se actualizan solos. Desactivar una categoría la saca del selector sin tocar el histórico.
+      </div>
+      <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Categoría", "Dirección", "Grupo P&L", "Movimientos", "Activa", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {list.length === 0 && <tr><td colSpan={6} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Corré la migración setup-bank.mjs para sembrar las categorías del Excel.</td></tr>}
+            {list.map(c => (
+              <tr key={c.id} style={{ borderBottom:"1px solid #f7f7f7", opacity: c.active === false ? 0.5 : 1 }}>
+                <td style={{ ...td, fontWeight:600 }}>{c.icon} {c.name}</td>
+                <td style={td}>{c.is_transfer ? "🔁 Transfer" : c.direction === "in" ? "🟢 Ingreso" : "🔴 Egreso"}</td>
+                <td style={td}>{groupLabel(c)}</td>
+                <td style={td}>{usesOf(c.name)}</td>
+                <td style={td}>{c.active === false ? "No" : "Sí"}</td>
+                <td style={{ ...td, whiteSpace:"nowrap" }}>
+                  {canEdit && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => openEdit(c)}>Editar</Btn>}
+                  {canEdit && <button onClick={() => toggleActive(c)} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:12, marginLeft:6 }}>{c.active === false ? "Activar" : "Desactivar"}</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showModal && (
+        <Modal title={editing ? "Editar categoría" : "Nueva categoría"} onClose={() => setShowModal(false)}>
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:10 }}>
+            <Field label="Nombre"><input style={inp} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Truck Wash" /></Field>
+            <Field label="Icono (emoji)"><input style={inp} value={form.icon} onChange={e => setForm(f => ({ ...f, icon: e.target.value }))} placeholder="🧽" maxLength={4} /></Field>
+          </div>
+          <Field label="Tipo">
+            <select style={inp} value={form.is_transfer ? "transfer" : form.direction} onChange={e => {
+              const v = e.target.value;
+              setForm(f => ({ ...f, is_transfer: v === "transfer", direction: v === "transfer" ? "" : v }));
+            }}>
+              <option value="out">🔴 Egreso</option>
+              <option value="in">🟢 Ingreso</option>
+              <option value="transfer">🔁 Transferencia entre cuentas (fuera del P&L)</option>
+            </select>
+          </Field>
+          {!form.is_transfer && form.direction !== "in" && (
+            <Field label="Grupo del P&L">
+              <select style={inp} value={form.pnl_group} onChange={e => setForm(f => ({ ...f, pnl_group: e.target.value }))}>
+                <option value="">—</option>
+                {PNL_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </Field>
+          )}
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:12 }}>
+            <Btn onClick={() => setShowModal(false)}>Cancelar</Btn>
+            <Btn onClick={save} disabled={saving}>{saving ? "Guardando…" : "Guardar"}</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ── Tab: Conciliación ────────────────────────────────────────────────────────
-function ReconTab({ txns, payments, expenses }) {
-  const recon = useMemo(() => reconcileBank({ bankTxns: txns, payments, expenses }), [txns, payments, expenses]);
+function ReconTab({ txns, cats, payments, expenses }) {
+  const recon = useMemo(() => reconcileBank({ bankTxns: txns, payments, expenses, categories: cats }), [txns, cats, payments, expenses]);
   const KIND_LABEL = {
     bank_no_backing: { l:"Banco sin respaldo", color:"#A32D2D", hint:"Plata que se movió en el banco y nadie registró en la operación. Investigar." },
     payment_no_bank: { l:"Cobro que no llegó al banco", color:"#C2410C", hint:"Un cobro marcado como depositado que no aparece en el extracto. ¿Dónde está?" },
@@ -625,12 +751,15 @@ function ReconTab({ txns, payments, expenses }) {
 }
 
 // ── Tab: P&L bancario ────────────────────────────────────────────────────────
-function PnlTab({ txns }) {
+// Renders with the same section structure the bookkeeper's Excel P&L uses
+// (Ingresos, then the Type groups: Cost of Revenues / Production / Structure /
+// S&M / Broker / CapEx), one bar per category inside each section.
+function PnlTab({ txns, cats }) {
   const now = todayISO();
   const [from, setFrom] = useState(now.slice(0, 7) + "-01");
   const [to, setTo] = useState(now);
   const [onlyVerified, setOnlyVerified] = useState(true);
-  const pnl = useMemo(() => bankPnl({ bankTxns: txns, from, to, onlyVerified }), [txns, from, to, onlyVerified]);
+  const pnl = useMemo(() => bankPnl({ bankTxns: txns, categories: cats, from, to, onlyVerified }), [txns, cats, from, to, onlyVerified]);
   const maxAbs = Math.max(1, ...pnl.categories.map(c => Math.abs(c.total)));
 
   return (
@@ -651,15 +780,22 @@ function PnlTab({ txns }) {
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:14, marginBottom:16 }}>
-        <div style={{ fontSize:12.5, fontWeight:700, marginBottom:10 }}>Por categoría</div>
-        {pnl.categories.length === 0 && <div style={{ fontSize:12, color:"#bbb" }}>Sin movimientos en el período{onlyVerified ? " (o nada verificado todavía)" : ""}.</div>}
-        {pnl.categories.map(c => (
-          <div key={c.v} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
-            <div style={{ width:210, fontSize:12, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.meta ? `${c.meta.icon} ${c.meta.l}` : c.v}</div>
-            <div style={{ flex:1, height:14, background:"#f5f5f5", borderRadius:7, overflow:"hidden" }}>
-              <div style={{ width:`${Math.abs(c.total) / maxAbs * 100}%`, height:"100%", background: c.total >= 0 ? "#639922" : "#E24B4A" }} />
+        {pnl.groups.length === 0 && <div style={{ fontSize:12, color:"#bbb" }}>Sin movimientos en el período{onlyVerified ? " (o nada verificado todavía)" : ""}.</div>}
+        {pnl.groups.map(g => (
+          <div key={g.group} style={{ marginBottom:16 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", borderBottom:"1px solid #f3f3f3", paddingBottom:4, marginBottom:8 }}>
+              <div style={{ fontSize:12.5, fontWeight:700 }}>{g.group}</div>
+              <div style={{ fontSize:12.5, fontWeight:800, color: g.total >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(g.total)}</div>
             </div>
-            <div style={{ width:100, textAlign:"right", fontSize:12.5, fontWeight:700, color: c.total >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(c.total)}</div>
+            {g.categories.map(c => (
+              <div key={c.name} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
+                <div style={{ width:210, fontSize:12, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.meta ? `${c.meta.icon} ${c.meta.name}` : c.name}</div>
+                <div style={{ flex:1, height:14, background:"#f5f5f5", borderRadius:7, overflow:"hidden" }}>
+                  <div style={{ width:`${Math.abs(c.total) / maxAbs * 100}%`, height:"100%", background: c.total >= 0 ? "#639922" : "#E24B4A" }} />
+                </div>
+                <div style={{ width:100, textAlign:"right", fontSize:12.5, fontWeight:700, color: c.total >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(c.total)}</div>
+              </div>
+            ))}
           </div>
         ))}
       </div>

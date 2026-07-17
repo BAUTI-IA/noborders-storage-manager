@@ -14,43 +14,62 @@ import { numv, monthOf, monthsBetween } from "./analyticsData.js";
 import { effectiveBanked, bankedDateOf } from "./bankShared.js";
 
 // ── Chart of accounts ───────────────────────────────────────────────────────
-// One shared copy. `dir` drives the P&L sign; `mapExpense` maps to the existing
-// EXPENSE_CATEGORIES keys (src/expenses.jsx) so outflow reconciliation is direct.
-// `transfer` rows are kept for reconciliation but excluded from the P&L.
-export const BANK_CATEGORIES = [
-  // Income (inflows)
-  { v:"customer_payment", l:"Cobro de cliente", icon:"💰", dir:"in" },
-  { v:"broker_payment",   l:"Pago de broker",   icon:"🤝", dir:"in" },
-  { v:"storage_income",   l:"Ingreso storage",  icon:"🏬", dir:"in" },
-  { v:"refund_in",        l:"Reembolso recibido", icon:"↩️", dir:"in" },
-  { v:"owner_contribution", l:"Aporte del dueño", icon:"➕", dir:"in" },
-  { v:"transfer_in",      l:"Transferencia entre cuentas (entra)", icon:"🔁", dir:"transfer" },
-  { v:"other_income",     l:"Otro ingreso",     icon:"🟢", dir:"in" },
-  // Expense (outflows)
-  { v:"fuel",         l:"Combustible", icon:"⛽", dir:"out", mapExpense:"fuel" },
-  { v:"tolls",        l:"Peajes",      icon:"🛣️", dir:"out", mapExpense:"tolls" },
-  { v:"maintenance",  l:"Mantenimiento", icon:"🔧", dir:"out", mapExpense:"maintenance" },
-  { v:"materials",    l:"Materiales",  icon:"📦", dir:"out", mapExpense:"materials" },
-  { v:"lodging",      l:"Hotel / alojamiento", icon:"🏨", dir:"out", mapExpense:"hotel" },
-  { v:"meals",        l:"Comidas",     icon:"🍔", dir:"out", mapExpense:"meals" },
-  { v:"truck_lease",  l:"Lease / cuota camión", icon:"🚛", dir:"out" },
-  { v:"driver_pay",   l:"Pago a drivers", icon:"🧑‍✈️", dir:"out" },
-  { v:"payroll_office", l:"Sueldos oficina", icon:"👔", dir:"out" },
-  { v:"commissions",  l:"Comisiones",  icon:"📈", dir:"out" },
-  { v:"insurance",    l:"Seguros",     icon:"🛡️", dir:"out" },
-  { v:"rent_storage", l:"Alquiler depósito", icon:"🏢", dir:"out" },
-  { v:"utilities",    l:"Servicios (luz, agua…)", icon:"💡", dir:"out" },
-  { v:"software_subscriptions", l:"Software / suscripciones", icon:"💻", dir:"out" },
-  { v:"bank_fees",    l:"Comisiones bancarias", icon:"🏦", dir:"out" },
-  { v:"taxes",        l:"Impuestos",   icon:"🧾", dir:"out" },
-  { v:"marketing",    l:"Marketing",   icon:"📣", dir:"out" },
-  { v:"refund_out",   l:"Reembolso a cliente", icon:"↪️", dir:"out" },
-  { v:"owner_draw",   l:"Retiro del dueño", icon:"➖", dir:"out" },
-  { v:"transfer_out", l:"Transferencia entre cuentas (sale)", icon:"🔁", dir:"transfer" },
-  { v:"other_expense", l:"Otro gasto",  icon:"🔴", dir:"out" },
+// The catalog lives in the DB (public.bank_categories) so the owner can add his
+// own categories from the UI. This seed replicates EXACTLY the taxonomy the
+// bookkeeper already uses in the Bank Flows Excel (concept names + the Type
+// grouping used for the P&L), so nobody has to re-learn anything. Transactions
+// store the category NAME (bank_transactions.category); renaming a category in
+// the UI cascade-updates its transactions.
+//   direction: 'in' | 'out' | null (null = transfer, usable both ways)
+//   pnl_group: the Excel "Type" column — drives the P&L sections
+//   is_transfer: kept for reconciliation but excluded from the P&L
+export const PNL_GROUPS = ["Cost of Revenues", "Production Expenses", "Structure Expenses", "Sales & Marketing Expenses", "Broker", "CapEx"];
+export const SEED_BANK_CATEGORIES = [
+  // Inflows
+  { name:"Job",    direction:"in", pnl_group:null, is_transfer:false, icon:"💰", sort:1 },
+  { name:"Refund", direction:"in", pnl_group:null, is_transfer:false, icon:"↩️", sort:2 },
+  // Outflows · Cost of Revenues
+  { name:"Hotels",              direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🏨", sort:10 },
+  { name:"Fuel",                direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"⛽", sort:11 },
+  { name:"Salaries - Employees", direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🧑‍✈️", sort:12 },
+  { name:"Salaries - Helpers",  direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"💪", sort:13 },
+  { name:"Toll",                direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🛣️", sort:14 },
+  { name:"Truck Repair",        direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🔧", sort:15 },
+  { name:"Packaging",           direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"📦", sort:16 },
+  { name:"Commissions",         direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"📈", sort:17 },
+  { name:"Claims",              direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"⚠️", sort:18 },
+  // Outflows · Production Expenses
+  { name:"Storage",             direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🏬", sort:20 },
+  { name:"Truck Licensing Fees", direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"📋", sort:21 },
+  { name:"Truck Rental",        direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🚛", sort:22 },
+  { name:"Truck Maintenance",   direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🛠️", sort:23 },
+  { name:"Truck Insurance",     direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🛡️", sort:24 },
+  { name:"Truck Utilities",     direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"💡", sort:25 },
+  // Outflows · Structure Expenses
+  { name:"Fees",                direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🏦", sort:30 },
+  { name:"Software Licenses",   direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"💻", sort:31 },
+  { name:"Ground Transportation", direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚕", sort:32 },
+  { name:"Airfare",             direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"✈️", sort:33 },
+  { name:"Car Rental",          direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚗", sort:34 },
+  { name:"Office Supplies",     direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🖇️", sort:35 },
+  { name:"Loren Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", sort:36 },
+  { name:"Bauti Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", sort:37 },
+  { name:"Taxes",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🧾", sort:38 },
+  { name:"Fines",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚨", sort:39 },
+  { name:"Other",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"💵", sort:40 },
+  // Outflows · Broker / Sales & Marketing
+  { name:"Broker",              direction:"out", pnl_group:"Broker", is_transfer:false, icon:"🤝", sort:50 },
+  { name:"Marketing",           direction:"out", pnl_group:"Sales & Marketing Expenses", is_transfer:false, icon:"📣", sort:51 },
+  // Transfers (both directions; excluded from P&L and reconciliation)
+  { name:"Transfer Between Accounts", direction:null, pnl_group:null, is_transfer:true, icon:"🔁", sort:90 },
 ];
-export const bankCatMeta = (v) => BANK_CATEGORIES.find(c => c.v === v) || null;
-export const isTransferCat = (v) => bankCatMeta(v)?.dir === "transfer";
+
+// Category helpers take the live catalog (rows of bank_categories) so they see
+// whatever the owner added; they fall back to the seed when none is passed
+// (tests, or the DB table hasn't loaded yet).
+export const catByName = (categories, name) =>
+  (categories?.length ? categories : SEED_BANK_CATEGORIES).find(c => c.name === name) || null;
+export const isTransferCat = (categories, name) => !!catByName(categories, name)?.is_transfer;
 
 export const BANK_STATUS = {
   unreviewed: { l:"Sin revisar", bg:"#FEF3C7", text:"#92760B" },
@@ -59,8 +78,10 @@ export const BANK_STATUS = {
   ignored:    { l:"Ignorado", bg:"#f1f1f1", text:"#888" },
 };
 
+export const PAYMENT_METHODS_BANK = ["Zelle", "Venmo", "Cash Deposit", "Money Order", "Cashier's Check", "Personal Check", "Official Check", "Online Transfer", "Card", "Debit", "Credit", "Check", "Transfer", "Other"];
+
 export const EMPTY_BANK_ACCOUNT = { name:"", bank_name:"", account_last4:"", type:"checking", currency:"USD", opening_balance:"", opening_date:"", notes:"" };
-export const EMPTY_BANK_TXN = { bank_account_id:"", txn_date:"", amount:"", direction:"in", raw_description:"", counterparty:"", category:"", notes:"" };
+export const EMPTY_BANK_CATEGORY = { name:"", direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"", active:true };
 
 // ── Normalization / dedup ────────────────────────────────────────────────────
 export const normDesc = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -151,8 +172,8 @@ const daysApart = (a, b) => {
 
 // Match inflows to banked payments. One-to-one greedy match by amount (within
 // tolerance) and date proximity (within windowDays). Excludes transfers.
-export function matchBankToPayments({ bankTxns, payments, tolerance = 0.01, windowDays = 5 }) {
-  const inflows = bankTxns.filter(t => signedAmount(t) > 0 && !isTransferCat(t.category));
+export function matchBankToPayments({ bankTxns, payments, categories = [], tolerance = 0.01, windowDays = 5 }) {
+  const inflows = bankTxns.filter(t => signedAmount(t) > 0 && !isTransferCat(categories, t.category));
   const banked = payments.filter(p => effectiveBanked(p));
   const usedP = new Set();
   const matched = [], unmatchedBank = [];
@@ -171,8 +192,8 @@ export function matchBankToPayments({ bankTxns, payments, tolerance = 0.01, wind
 }
 
 // Match outflows to bank-paid expenses.
-export function matchBankToExpenses({ bankTxns, expenses, tolerance = 0.01, windowDays = 7 }) {
-  const outflows = bankTxns.filter(t => signedAmount(t) < 0 && !isTransferCat(t.category));
+export function matchBankToExpenses({ bankTxns, expenses, categories = [], tolerance = 0.01, windowDays = 7 }) {
+  const outflows = bankTxns.filter(t => signedAmount(t) < 0 && !isTransferCat(categories, t.category));
   const bankExp = expenses.filter(e => (e.paid_from || "bank") === "bank");
   const usedE = new Set();
   const matched = [], unmatchedBank = [];
@@ -195,20 +216,20 @@ export function matchBankToExpenses({ bankTxns, expenses, tolerance = 0.01, wind
 //  A) bank money with no operational counterpart (unrecorded income / theft)
 //  B) recorded banked payment / bank expense that never hit the bank
 //  C) (amount mismatches surface as A+B pairs the reviewer eyeballs)
-export function reconcileBank({ bankTxns, payments, expenses, tolerance = 0.01 }) {
+export function reconcileBank({ bankTxns, payments, expenses, categories = [], tolerance = 0.01 }) {
   const txns = bankTxns.filter(t => t.status !== "ignored");
-  const pay = matchBankToPayments({ bankTxns: txns, payments, tolerance });
-  const exp = matchBankToExpenses({ bankTxns: txns, expenses, tolerance });
+  const pay = matchBankToPayments({ bankTxns: txns, payments, categories, tolerance });
+  const exp = matchBankToExpenses({ bankTxns: txns, expenses, categories, tolerance });
 
   const linkByTxn = new Map();
   for (const m of pay.matched) linkByTxn.set(m.txn.id, { match_status: "matched", match_kind: "payment", payment_id: m.payment.id });
   for (const m of exp.matched) linkByTxn.set(m.txn.id, { match_status: "matched", match_kind: "expense", expense_id: m.expense.id });
 
-  const transfers = txns.filter(t => isTransferCat(t.category));
+  const transfers = txns.filter(t => isTransferCat(categories, t.category));
   const discrepancies = [];
   // A) bank lines (non-transfer) with no match
   for (const t of [...pay.unmatchedBank, ...exp.unmatchedBank]) {
-    if (isTransferCat(t.category)) continue;
+    if (isTransferCat(categories, t.category)) continue;
     discrepancies.push({ kind: "bank_no_backing", txn: t, amount: signedAmount(t),
       reason: signedAmount(t) > 0 ? "Entró plata al banco sin cobro operativo asociado" : "Salió plata del banco sin gasto operativo asociado" });
   }
@@ -234,27 +255,44 @@ function reconcileTotals(pay, exp) {
 }
 
 // ── Bank-based P&L ───────────────────────────────────────────────────────────
-// Categorized inflows − outflows over a period. Considers only verified rows by
-// default (owner shouldn't build a P&L on un-reviewed data); transfers excluded.
-export function bankPnl({ bankTxns, from, to, onlyVerified = true }) {
+// Categorized inflows − outflows over a period, with the same section structure
+// the bookkeeper's Excel uses (the category's pnl_group). Considers only
+// verified rows by default (the owner shouldn't build a P&L on un-reviewed
+// data); transfers excluded.
+export function bankPnl({ bankTxns, categories = [], from, to, onlyVerified = true }) {
   const inRange = (d) => (!from || d >= from) && (!to || d <= to);
   const rows = bankTxns.filter(t =>
     t.status !== "ignored" &&
     (!onlyVerified || t.status === "verified") &&
-    !isTransferCat(t.category) &&
+    !isTransferCat(categories, t.category) &&
     inRange(t.txn_date || ""));
 
   const byCat = {};
   let income = 0, expense = 0;
   for (const t of rows) {
     const amt = signedAmount(t);
-    const cat = t.category || (amt >= 0 ? "other_income" : "other_expense");
+    const cat = t.category || (amt >= 0 ? "(sin categoría)" : "(sin categoría)");
     byCat[cat] = (byCat[cat] || 0) + amt;
     if (amt >= 0) income += amt; else expense += amt; // expense is negative
   }
-  const categories = Object.entries(byCat)
-    .map(([v, total]) => ({ v, meta: bankCatMeta(v), total }))
+  const catRows = Object.entries(byCat)
+    .map(([name, total]) => ({ name, meta: catByName(categories, name), total }))
     .sort((a, b) => b.total - a.total);
+
+  // Sections in the bookkeeper's P&L structure: Ingresos first, then the Excel
+  // "Type" groups in their canonical order, then anything else.
+  const groupOf = (r) => r.total >= 0 && r.meta?.direction !== "out"
+    ? "Ingresos"
+    : (r.meta?.pnl_group || "Otros egresos");
+  const groupOrder = ["Ingresos", ...PNL_GROUPS, "Otros egresos"];
+  const byGroup = {};
+  for (const r of catRows) {
+    const g = groupOf(r);
+    (byGroup[g] = byGroup[g] || { group: g, total: 0, categories: [] });
+    byGroup[g].total += r.total;
+    byGroup[g].categories.push(r);
+  }
+  const groups = groupOrder.filter(g => byGroup[g]).map(g => byGroup[g]);
 
   // Monthly net series (zero-filled across the range when both ends are known).
   const monthTotals = {};
@@ -266,5 +304,5 @@ export function bankPnl({ bankTxns, from, to, onlyVerified = true }) {
   const months = (fromMo && toMo) ? monthsBetween(fromMo, toMo) : Object.keys(monthTotals).sort();
   const series = months.map(mo => ({ month: mo, net: monthTotals[mo] || 0 }));
 
-  return { income, expense: Math.abs(expense), net: income + expense, categories, series, count: rows.length };
+  return { income, expense: Math.abs(expense), net: income + expense, categories: catRows, groups, series, count: rows.length };
 }
