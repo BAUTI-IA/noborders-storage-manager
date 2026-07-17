@@ -8,6 +8,7 @@ import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./payme
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, materialShortages, computeDriverPnl } from "./analyticsData.js";
 import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
+import { BancosSection } from "./bank.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
@@ -3049,6 +3050,7 @@ const NAV = [
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
     { id:"expenses", label:"Expenses", icon:"💸" },
+    { id:"bancos", label:"Bancos", icon:"🏛️" },
     { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"clientes", label:"Clients", icon:"👥" },
   ]},
@@ -3122,6 +3124,7 @@ const PAGE_META = {
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
   expenses:    { title:"Expenses", sub:"Gastos por driver, truck y trip · días trabajados · materiales" },
+  bancos:      { title:"Bancos", sub:"Movimientos bancarios reales · categorización con doble check · conciliación · P&L" },
   clientes:    { title:"Clients", sub:"Clients and their jobs" },
   drivers:     { title:"Drivers", sub:"Operation drivers" },
   trucks:      { title:"Trucks", sub:"Truck fleet" },
@@ -10718,6 +10721,12 @@ export default function App() {
           setPayPhotoView={setPayPhotoView}
           Btn={Btn} Modal={Modal}
         />
+      )}
+
+      {/* ───────────────────────── BANCOS ───────────────────────── */}
+      {page === "bancos" && can("bancos", "view") && (
+        <BancosSection supabase={supabase} session={session} profile={profile}
+          payments={payments} expenses={expenses} can={can} Btn={Btn} Modal={Modal} />
       )}
 
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
