@@ -9260,7 +9260,7 @@ export default function App() {
             {!extrasMissing && (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px", marginBottom:14 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
-                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Extras (shuttle · stairs · long carry…)</div>
+                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Extras (shuttle · stairs · long carry…) — 100% nuestros, no entran en la cuenta del broker</div>
                   <span style={{ flex:1 }} />
                   {sheetExtras.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total: <b style={{ color:"#6D28D9" }}>${Math.round(sheetExtrasTotal).toLocaleString()}</b></span>}
                   <Btn onClick={() => setPage("extras")} style={{ padding:"4px 10px", fontSize:11 }}>Ver Extras & Comisiones →</Btn>
