@@ -11,7 +11,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
-  parseCsv, mapBankCsv, reconcileBank, bankPnl,
+  parseCsv, mapBankCsv, reconcileBank, bankPnlStatement,
 } from "./bankData.js";
 import { numv } from "./analyticsData.js";
 
@@ -855,16 +855,37 @@ function ReconTab({ txns, cats, payments, expenses }) {
 }
 
 // ── Tab: P&L bancario ────────────────────────────────────────────────────────
-// Renders with the same section structure the bookkeeper's Excel P&L uses
-// (Ingresos, then the Type groups: Cost of Revenues / Production / Structure /
-// S&M / Broker / CapEx), one bar per category inside each section.
+// Classic income-statement layout: months as columns, waterfall as rows —
+// Revenue at the top, each expense group subtracting down through Gross Profit
+// to Net Profit. Expenses render in accounting style: ($1,234) in red.
+const MONTH_ES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+const moLabel = (mo) => { const [y, m] = mo.split("-"); return `${MONTH_ES[Number(m) - 1] || m} ${y.slice(2)}`; };
+const acct$ = (v) => {
+  if (!v) return <span style={{ color:"#ccc" }}>—</span>;
+  const s = "$" + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  return v < 0 ? <span style={{ color:"#A32D2D" }}>({s})</span> : <span>{s}</span>;
+};
 function PnlTab({ txns, cats }) {
   const now = todayISO();
-  const [from, setFrom] = useState(now.slice(0, 7) + "-01");
+  const [from, setFrom] = useState(now.slice(0, 4) + "-01-01"); // default: full current year
   const [to, setTo] = useState(now);
   const [onlyVerified, setOnlyVerified] = useState(true);
-  const pnl = useMemo(() => bankPnl({ bankTxns: txns, categories: cats, from, to, onlyVerified }), [txns, cats, from, to, onlyVerified]);
-  const maxAbs = Math.max(1, ...pnl.categories.map(c => Math.abs(c.total)));
+  const st = useMemo(() => bankPnlStatement({ bankTxns: txns, categories: cats, from, to, onlyVerified }), [txns, cats, from, to, onlyVerified]);
+  const revenue = st.sections.find(s => s.group === "Revenue");
+
+  const tdN = { ...td, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
+  const rowCells = (line, style = {}) => (
+    <>
+      {st.months.map(m => <td key={m} style={{ ...tdN, ...style }}>{acct$(line.byMonth[m] || 0)}</td>)}
+      <td style={{ ...tdN, fontWeight:700, background:"#fafafa", ...style }}>{acct$(line.total)}</td>
+    </>
+  );
+  const subtotalRow = (label, line, opts = {}) => (
+    <tr style={{ borderTop:"1.5px solid #ddd", background: opts.bg || "#fff" }}>
+      <td style={{ ...td, fontWeight:800, whiteSpace:"nowrap", position:"sticky", left:0, background: opts.bg || "#fff", fontSize: opts.big ? 13 : 12.5 }}>{label}</td>
+      {rowCells(line, { fontWeight:800, background: opts.bg, fontSize: opts.big ? 13 : 12.5 })}
+    </tr>
+  );
 
   return (
     <div>
@@ -878,49 +899,52 @@ function PnlTab({ txns, cats }) {
         </label>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10, marginBottom:16 }}>
-        <Tile label="Ingresos" value={fmt$(pnl.income)} color="#3B6D11" />
-        <Tile label="Egresos" value={fmt$(-pnl.expense)} color="#A32D2D" />
-        <Tile label="Resultado neto" value={fmt$(pnl.net)} color={pnl.net >= 0 ? "#3B6D11" : "#A32D2D"} sub={`${pnl.count} movimientos · transferencias excluidas`} />
+        <Tile label="Revenue" value={fmt$(revenue?.total || 0)} color="#3B6D11" />
+        {st.gross && <Tile label="Gross Profit" value={fmt$(st.gross.total)} color={st.gross.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={revenue?.total ? `${Math.round(st.gross.total / revenue.total * 100)}% margen` : undefined} />}
+        <Tile label="Net Profit" value={fmt$(st.net.total)} color={st.net.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={`${st.count} movimientos · transferencias excluidas${revenue?.total ? ` · ${Math.round(st.net.total / revenue.total * 100)}% margen neto` : ""}`} />
       </div>
 
-      <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:14, marginBottom:16 }}>
-        {pnl.groups.length === 0 && <div style={{ fontSize:12, color:"#bbb" }}>Sin movimientos en el período{onlyVerified ? " (o nada verificado todavía)" : ""}.</div>}
-        {pnl.groups.map(g => (
-          <div key={g.group} style={{ marginBottom:16 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", borderBottom:"1px solid #f3f3f3", paddingBottom:4, marginBottom:8 }}>
-              <div style={{ fontSize:12.5, fontWeight:700 }}>{g.group}</div>
-              <div style={{ fontSize:12.5, fontWeight:800, color: g.total >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(g.total)}</div>
-            </div>
-            {g.categories.map(c => (
-              <div key={c.name} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
-                <div style={{ width:210, fontSize:12, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.meta ? `${c.meta.icon} ${c.meta.name}` : c.name}</div>
-                <div style={{ flex:1, height:14, background:"#f5f5f5", borderRadius:7, overflow:"hidden" }}>
-                  <div style={{ width:`${Math.abs(c.total) / maxAbs * 100}%`, height:"100%", background: c.total >= 0 ? "#639922" : "#E24B4A" }} />
-                </div>
-                <div style={{ width:100, textAlign:"right", fontSize:12.5, fontWeight:700, color: c.total >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(c.total)}</div>
-              </div>
+      <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
+        <table style={{ borderCollapse:"collapse", width:"100%", minWidth: 260 + st.months.length * 92 }}>
+          <thead>
+            <tr style={{ borderBottom:"1.5px solid #ddd" }}>
+              <th style={{ ...th, position:"sticky", left:0, background:"#fff", minWidth:210 }}></th>
+              {st.months.map(m => <th key={m} style={{ ...th, textAlign:"right" }}>{moLabel(m)}</th>)}
+              <th style={{ ...th, textAlign:"right", background:"#fafafa" }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {st.count === 0 && <tr><td colSpan={st.months.length + 2} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Sin movimientos en el período{onlyVerified ? " (o nada verificado todavía — destildá el filtro para ver lo categorizado)" : ""}.</td></tr>}
+            {st.sections.map(sec => (
+              <FragmentSection key={sec.group} sec={sec} months={st.months} rowCells={rowCells}
+                gross={sec.group === "Cost of Revenues" ? st.gross : null} subtotalRow={subtotalRow} />
             ))}
-          </div>
-        ))}
+            {st.count > 0 && subtotalRow("NET PROFIT", st.net, { bg: st.net.total >= 0 ? "#EAF3DE" : "#FCEBEB", big: true })}
+          </tbody>
+        </table>
       </div>
-
-      {pnl.series.length > 1 && (
-        <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:14 }}>
-          <div style={{ fontSize:12.5, fontWeight:700, marginBottom:10 }}>Neto por mes</div>
-          <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:120 }}>
-            {pnl.series.map(s => {
-              const maxNet = Math.max(1, ...pnl.series.map(x => Math.abs(x.net)));
-              return (
-                <div key={s.month} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
-                  <div style={{ fontSize:10, color: s.net >= 0 ? "#3B6D11" : "#A32D2D", fontWeight:700 }}>{fmt$(s.net)}</div>
-                  <div style={{ width:"70%", height: Math.max(3, Math.abs(s.net) / maxNet * 80), background: s.net >= 0 ? "#639922" : "#E24B4A", borderRadius:4 }} />
-                  <div style={{ fontSize:10, color:"#999" }}>{s.month}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <div style={{ fontSize:11, color:"#999", marginTop:8 }}>Los gastos se muestran entre paréntesis, estilo contable. Revenue → (Cost of Revenues) → <b>Gross Profit</b> → resto de los gastos → <b>Net Profit</b>.</div>
     </div>
+  );
+}
+
+// One P&L section: header row, one row per category, subtotal; after Cost of
+// Revenues also emits the Gross Profit line.
+function FragmentSection({ sec, months, rowCells, gross, subtotalRow }) {
+  const isRevenue = sec.group === "Revenue";
+  return (
+    <>
+      <tr>
+        <td colSpan={months.length + 2} style={{ ...td, fontWeight:700, fontSize:11, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em", paddingTop:14, position:"sticky", left:0, background:"#fff" }}>{isRevenue ? "Revenue (facturado)" : sec.group}</td>
+      </tr>
+      {sec.rows.map(c => (
+        <tr key={c.name} style={{ borderBottom:"1px solid #f7f7f7" }}>
+          <td style={{ ...td, whiteSpace:"nowrap", paddingLeft:22, position:"sticky", left:0, background:"#fff" }}>{c.meta ? `${c.meta.icon} ${c.meta.name}` : c.name}</td>
+          {rowCells(c)}
+        </tr>
+      ))}
+      {subtotalRow(isRevenue ? "Total Revenue" : `Total ${sec.group}`, sec)}
+      {gross && subtotalRow("GROSS PROFIT", gross, { bg: "#F8FAFC" })}
+    </>
   );
 }

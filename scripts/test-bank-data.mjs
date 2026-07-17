@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {
   parseCsv, mapBankCsv, dedupHash, signedAmount,
-  matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl,
+  matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl, bankPnlStatement,
   SEED_BANK_CATEGORIES, PNL_GROUPS, catByName, isTransferCat,
 } from "../src/bankData.js";
 
@@ -145,6 +145,25 @@ t("bankPnl: monthly series zero-fills the range", () => {
   const r = bankPnl({ bankTxns, from: "2026-06-01", to: "2026-07-31" });
   assert.deepEqual(r.series.map(s => s.month), ["2026-06", "2026-07"]);
   assert.equal(r.series[0].net, 0);
+});
+
+t("bankPnlStatement: waterfall Revenue → Gross → Net with monthly columns", () => {
+  const txns = [
+    { id: 1, txn_date: "2026-06-10", amount: 1000, direction: "in", status: "verified", category: "Job" },
+    { id: 2, txn_date: "2026-07-05", amount: 2000, direction: "in", status: "verified", category: "Job" },
+    { id: 3, txn_date: "2026-07-06", amount: 600, direction: "out", status: "verified", category: "Fuel" },      // Cost of Revenues
+    { id: 4, txn_date: "2026-07-07", amount: 300, direction: "out", status: "verified", category: "Fees" },      // Structure
+    { id: 5, txn_date: "2026-07-08", amount: 100, direction: "out", status: "verified", category: "Transfer Between Accounts" },
+  ];
+  const r = bankPnlStatement({ bankTxns: txns, from: "2026-06-01", to: "2026-07-31" });
+  assert.deepEqual(r.months, ["2026-06", "2026-07"]);
+  assert.deepEqual(r.sections.map(s => s.group), ["Revenue", "Cost of Revenues", "Structure Expenses"]);
+  assert.equal(r.sections[0].total, 3000);
+  assert.equal(r.sections[0].byMonth["2026-07"], 2000);
+  assert.equal(r.gross.total, 2400);            // 3000 − 600
+  assert.equal(r.gross.byMonth["2026-07"], 1400); // 2000 − 600
+  assert.equal(r.net.total, 2100);              // − 300 Fees; transfer excluded
+  assert.equal(r.net.byMonth["2026-06"], 1000);
 });
 
 // ── Catalog (seed = the Excel taxonomy; helpers accept a live DB catalog) ───
