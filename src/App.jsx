@@ -2005,9 +2005,15 @@ function billingReminderLink(b) {
   const txt = `Hi ${b.customer || "there"}, this is a reminder that your monthly storage fee of $${amount} is due for the period ${ps} to ${pe}. Please contact us to arrange payment. Thank you — No Borders Moving & Storage`;
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
-function settlementWaLink(sheet, calc, brokerName, driverName) {
+function settlementWaLink(sheet, calc, brokerName, driverName, sheetExtras = []) {
   const m = (n) => `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   const netResult = calc.net >= 0 ? `Broker owes you ${m(calc.net)}` : `You owe the broker ${m(-calc.net)}`;
+  const extrasTotal = sheetExtras.reduce((s, e) => s + numv(e.amount), 0);
+  const extrasLines = sheetExtras.length ? [
+    ``,
+    `Extras charged to clients: ${m(extrasTotal)}`,
+    ...sheetExtras.map(e => `  ${e._jobNumber || "-"} · ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}: ${m(e.amount)}`),
+  ] : [];
   const txt = [
     `Closing Sheet #${sheet.closing_sheet_number || "-"} — ${brokerName || "-"}`,
     `Load date: ${sheet.load_date || "-"} | Driver: ${driverName || "-"}`,
@@ -2019,6 +2025,7 @@ function settlementWaLink(sheet, calc, brokerName, driverName) {
     ``,
     `BOL collected from clients: ${m(calc.bolCollected)}`,
     `Pending collections: ${m(calc.pending)}`,
+    ...extrasLines,
     ``,
     `Settlement: ${netResult}`,
   ].join("\n");
@@ -8062,9 +8069,11 @@ export default function App() {
     } catch (e) { window.alert("Error: " + e.message); }
     setDocUploading(false);
   }
-  function exportCsPdf(sheet, calc, brokerNm, driverNm, jobsIn) {
+  function exportCsPdf(sheet, calc, brokerNm, driverNm, jobsIn, sheetExtras = []) {
     const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
     const rows = jobsIn.map(j => `<tr><td>${j.job_number||"-"}</td><td>${j.customer||"-"}</td><td>${Math.round(parseCf(j.volume))} CF</td><td>${m(numv(j.carrier_rate_per_cf))}</td><td>${m(parseCf(j.volume)*numv(j.carrier_rate_per_cf))}</td><td>${m(numv(j.bol_balance))}</td><td>${m(numv(j.bol_collected))}</td></tr>`).join("");
+    const extrasTotal = sheetExtras.reduce((s, e) => s + numv(e.amount), 0);
+    const extrasBox = sheetExtras.length ? `<div class="box"><div class="r"><span><b>Extras charged to clients</b></span><b>${m(extrasTotal)}</b></div>${sheetExtras.map(e => `<div class="r"><span>${e._jobNumber || "-"} · ${extraTypeLabel(e.extra_type)}${e.extra_type === "other" && e.description ? ` (${e.description})` : ""}</span><span>${m(numv(e.amount))}</span></div>`).join("")}</div>` : "";
     const net = calc.net >= 0 ? `Broker owes you ${m(calc.net)}` : `You owe the broker ${m(-calc.net)}`;
     const html = `<html><head><meta charset="utf-8"><title>CS ${sheet.closing_sheet_number||""}</title>
       <style>body{font-family:system-ui,sans-serif;padding:30px;color:#111}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f5f5f5}.box{border:1px solid #ddd;border-radius:8px;padding:12px;margin-top:10px}.r{display:flex;justify-content:space-between;font-size:13px;margin:3px 0}</style></head>
@@ -8078,6 +8087,7 @@ export default function App() {
       <div class="r"><span>− Pads (${calc.padsMissing})</span><span>${m(calc.padsCharge)}</span></div>
       <div class="r" style="border-top:1px solid #ddd;padding-top:6px;margin-top:6px"><span><b>Broker te debe</b></span><b>${m(calc.netCarrier)}</b></div></div>
       <div class="box"><div class="r"><span>BOL collected from clients</span><b>${m(calc.bolCollected)}</b></div><div class="r"><span>Pending collection</span><span>${m(calc.pending)}</span></div></div>
+      ${extrasBox}
       <div class="box" style="text-align:center;font-size:16px;font-weight:700">${net}</div>
       </body></html>`;
     const w = window.open("", "_blank");
@@ -9132,13 +9142,26 @@ export default function App() {
         const isImg = s.document_url && /\.(jpe?g|png|gif|webp|heic)$/i.test(s.document_url);
         const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
         const ageDays = s.created_at ? Math.round((startOfToday() - new Date(s.created_at)) / ONE_DAY) : 0;
+        // Active extras (shuttle, stairs, long carry…) of this sheet's jobs — same
+        // rows the Extras & Commissions module tracks, tagged with their job number.
+        const sheetExtras = extrasMissing ? [] : jobsIn.flatMap(j => {
+          const k = jobKey(j);
+          return (extrasByJobKey[k] || []).filter(e => e.active !== false).map(e => ({ ...e, _jobNumber: j.job_number, _jobKey: k }));
+        });
+        const sheetExtrasTotal = sheetExtras.reduce((acc, e) => acc + numv(e.amount), 0);
+        // Extras hang off the canonical (lowest-id) part of a job, like the job drawer does.
+        const repIdFor = (k) => Math.min(...jobs.filter(x => jobKey(x) === k).map(x => x.id));
+        const openSheetExtra = (k, firstDriver) => {
+          const d = commissionDefaults("shuttle", "driver_only");
+          setQuickExtra({ jobId: repIdFor(k), extra_type:"shuttle", description:"", amount:"", generated_by:"driver_only", driver_id: s.driver_id || firstDriver || "", rep_id:"", driver_commission_pct:d.driver, rep_commission_pct:d.rep, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct:"", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false });
+        };
         return (
           <>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
               <Btn onClick={() => setCsDetailId(null)}>← Back</Btn>
               <span style={{ flex:1 }} />
-              <Btn onClick={() => exportCsPdf(s, c, brokerNm, driverNm, jobsIn)}>📄 Export PDF</Btn>
-              <a href={settlementWaLink(s, c, brokerNm, driverNm)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn>💬 WhatsApp broker</Btn></a>
+              <Btn onClick={() => exportCsPdf(s, c, brokerNm, driverNm, jobsIn, sheetExtras)}>📄 Export PDF</Btn>
+              <a href={settlementWaLink(s, c, brokerNm, driverNm, sheetExtras)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn>💬 WhatsApp broker</Btn></a>
               <Btn onClick={() => openEditCs(s)}>Edit</Btn>
               {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark settled</Btn>}
             </div>
@@ -9187,14 +9210,14 @@ export default function App() {
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                   <thead>
                     <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Client","From → To","CF","Pads","Rate/CF","Carrier fee","BOL balance","Collected","Method","Collection","Actions"].map((h,i) => (
+                      {["Job #","Client","From → To","CF","Pads","Rate/CF","Carrier fee","BOL balance","Collected","Method","Collection","Extras","Actions"].map((h,i) => (
                         <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {jobsIn.length === 0 ? (
-                      <tr><td colSpan={12} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No jobs assigned. Use “Edit” to add jobs.</td></tr>
+                      <tr><td colSpan={13} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No jobs assigned. Use “Edit” to add jobs.</td></tr>
                     ) : jobsIn.map(j => {
                       const k = jobKey(j);
                       const cs = collectionStatus(j);
@@ -9213,6 +9236,17 @@ export default function App() {
                           <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600, color:"#1A8A4E" }}>{money(j.bol_collected) || "$0"}</td>
                           <td style={{ padding:"10px 12px", fontSize:12 }}>{j.bol_payment_method ? (PAY_METHODS.find(p=>p.v===j.bol_payment_method)?.l || j.bol_payment_method) : "—"}</td>
                           <td style={{ padding:"10px 12px" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span></td>
+                          <td style={{ padding:"10px 12px" }}>
+                            <span style={{ display:"flex", alignItems:"center", gap:4, flexWrap:"wrap" }}>
+                              {sheetExtras.filter(e => e._jobKey === k).map(e => (
+                                <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Edit extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>
+                              ))}
+                              {!extrasMissing && (
+                                <button onClick={() => openSheetExtra(k, Array.isArray(j.driver_ids) && j.driver_ids.length ? j.driver_ids[0] : "")} title="Add extra (shuttle, stairs, long carry…)"
+                                  style={{ border:"1px dashed #bbb", background:"none", borderRadius:20, padding:"1px 8px", fontSize:10.5, fontWeight:700, color:"#666", cursor:"pointer", whiteSpace:"nowrap" }}>+ Extra</button>
+                              )}
+                            </span>
+                          </td>
                           <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><Btn onClick={() => setPayModal({ jobKey:k, amount: j.bol_collected ?? "", method: j.bol_payment_method || "", date: j.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"4px 9px", fontSize:11 }}>Record payment</Btn></td>
                         </tr>
                       );
@@ -9221,6 +9255,31 @@ export default function App() {
                 </table>
               </div>
             </div>
+
+            {/* Extras of this sheet's jobs — same rows as Extras & Commissions */}
+            {!extrasMissing && (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px", marginBottom:14 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>Extras (shuttle · stairs · long carry…)</div>
+                  <span style={{ flex:1 }} />
+                  {sheetExtras.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total: <b style={{ color:"#6D28D9" }}>${Math.round(sheetExtrasTotal).toLocaleString()}</b></span>}
+                  <Btn onClick={() => setPage("extras")} style={{ padding:"4px 10px", fontSize:11 }}>Ver Extras & Comisiones →</Btn>
+                </div>
+                {sheetExtras.length === 0
+                  ? <div style={{ fontSize:12.5, color:"#bbb" }}>Sin extras en los jobs de este sheet. Usá “+ Extra” en cada fila para cargar shuttle, stairs, long carry, etc. — quedan linkeados al módulo Extras & Comisiones con sus comisiones.</div>
+                  : sheetExtras.map(e => (
+                    <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f4f4f4", fontSize:12.5, flexWrap:"wrap" }}>
+                      <span style={{ fontFamily:"monospace", fontWeight:600 }}>{e._jobNumber || "—"}</span>
+                      <span onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Edit extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>
+                      {e.extra_type === "other" && e.description && <span style={{ color:"#888" }}>{e.description}</span>}
+                      {driverById[e.driver_id]?.name && <span style={{ fontSize:11, color:"#888" }}>🧑‍✈️ {driverById[e.driver_id].name}</span>}
+                      <span style={{ flex:1 }} />
+                      <span style={{ fontSize:11.5, color:"#1A8A4E", fontWeight:600 }}>D {money(e.driver_commission_amount) || "$0"}</span>
+                      <span style={{ fontSize:11.5, color:"#185FA5", fontWeight:600 }}>R {money(e.rep_commission_amount) || "$0"}</span>
+                    </div>
+                  ))}
+              </div>
+            )}
 
             {/* Pads + Deductions + Settlement */}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
