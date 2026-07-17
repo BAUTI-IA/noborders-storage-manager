@@ -306,3 +306,66 @@ export function bankPnl({ bankTxns, categories = [], from, to, onlyVerified = tr
 
   return { income, expense: Math.abs(expense), net: income + expense, categories: catRows, groups, series, count: rows.length };
 }
+
+// ── P&L statement (classic income-statement layout) ─────────────────────────
+// Months as columns, waterfall as rows: Revenue at the top, then each expense
+// group subtracting down to Net Profit — the layout the owner reads:
+//   Revenue → (Cost of Revenues) → Gross Profit → (Production) → (Structure)
+//   → (S&M) → (Broker) → (CapEx) → Net Profit.
+// Same filters as bankPnl (verified-only by default, transfers/ignored out).
+export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVerified = true }) {
+  const inRange = (d) => (!from || d >= from) && (!to || d <= to);
+  const rows = bankTxns.filter(t =>
+    t.status !== "ignored" &&
+    (!onlyVerified || t.status === "verified") &&
+    !isTransferCat(categories, t.category) &&
+    inRange(t.txn_date || ""));
+
+  const fromMo = monthOf(from || ""), toMo = monthOf(to || "");
+  const dataMonths = [...new Set(rows.map(t => monthOf(t.txn_date || "")).filter(Boolean))].sort();
+  const months = (fromMo && toMo) ? monthsBetween(fromMo, toMo) : dataMonths;
+
+  // category name -> { byMonth, total } (amounts keep their sign)
+  const byCat = {};
+  for (const t of rows) {
+    const amt = signedAmount(t);
+    const name = t.category || "(sin categoría)";
+    const mo = monthOf(t.txn_date || "");
+    const c = (byCat[name] = byCat[name] || { name, byMonth: {}, total: 0 });
+    c.total += amt;
+    if (mo) c.byMonth[mo] = (c.byMonth[mo] || 0) + amt;
+  }
+
+  const catRows = Object.values(byCat).map(c => ({ ...c, meta: catByName(categories, c.name) }));
+  const isIncomeRow = (c) => c.meta ? (c.meta.direction === "in" && !c.meta.is_transfer) : c.total >= 0;
+  const sumLines = (lines) => {
+    const byMonth = {};
+    let total = 0;
+    for (const l of lines) { total += l.total; for (const [m, v] of Object.entries(l.byMonth)) byMonth[m] = (byMonth[m] || 0) + v; }
+    return { byMonth, total };
+  };
+  const addTotals = (a, b) => {
+    const byMonth = { ...a.byMonth };
+    for (const [m, v] of Object.entries(b.byMonth)) byMonth[m] = (byMonth[m] || 0) + v;
+    return { byMonth, total: a.total + b.total };
+  };
+
+  const revenueLines = catRows.filter(isIncomeRow).sort((a, b) => b.total - a.total);
+  const sections = [{ group: "Revenue", rows: revenueLines, ...sumLines(revenueLines) }];
+  const expenseRows = catRows.filter(c => !isIncomeRow(c));
+  for (const g of PNL_GROUPS) {
+    const lines = expenseRows.filter(c => c.meta?.pnl_group === g).sort((a, b) => a.total - b.total);
+    if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
+  }
+  const other = expenseRows.filter(c => !c.meta?.pnl_group || !PNL_GROUPS.includes(c.meta.pnl_group)).sort((a, b) => a.total - b.total);
+  if (other.length) sections.push({ group: "Otros egresos", rows: other, ...sumLines(other) });
+
+  // Running subtotals: Gross Profit = Revenue − Cost of Revenues; Net = everything.
+  let running = sections[0] ? { byMonth: { ...sections[0].byMonth }, total: sections[0].total } : { byMonth: {}, total: 0 };
+  const cor = sections.find(s => s.group === "Cost of Revenues");
+  const gross = cor ? addTotals(running, cor) : null; // expenses are negative → add
+  running = sections.slice(1).reduce((acc, s) => addTotals(acc, s), running);
+  const net = running;
+
+  return { months, sections, gross, net, count: rows.length };
+}
