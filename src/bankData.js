@@ -374,7 +374,7 @@ export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVeri
 
 // Categories that never enter the P&L even if not flagged is_transfer in the
 // catalog (kept in sync with the bank_pnl RPC's hardcoded exclusion).
-export const EXCLUDED_PNL_CATEGORIES = ["Transfer Between Accounts", "Financing"];
+export const EXCLUDED_PNL_CATEGORIES = ["Transfer Between Accounts", "Financing", "Financing - Loan", "Financing - Capital", "Credit Card Payment"];
 
 // Same statement shape as bankPnlStatement, but built from the rows the
 // bank_pnl RPC returns (month × category aggregates computed IN Postgres, so
