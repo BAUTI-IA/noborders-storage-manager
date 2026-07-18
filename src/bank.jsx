@@ -200,27 +200,51 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
 // .range() (no fixed row cap — you can scroll to the oldest movement) and the
 // tiles come from the bank_txn_totals RPC + exact counts, so they always
 // reflect the WHOLE table, not just the rows the client fetched.
-const INBOX_PAGE = 200;
+const INBOX_PAGE = 100;
+// Last day of a YYYY-MM month, as ISO date.
+const monthEnd = (mo) => { const [y, m] = mo.split("-").map(Number); return `${mo}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; };
+const MONTH_FULL_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+const monthTitle = (mo) => { const [y, m] = mo.split("-"); return `${MONTH_FULL_ES[Number(m) - 1] || m} ${y}`; };
+
 function InboxTab(props) {
   const { txns, accounts, cats, canEdit, canCreate, supabase, session, onReload, setError,
     setCategory, categorize, verify, reopen, setIgnored, removeTxn, Btn, Modal } = props;
+  // Folder navigation: null = month-folder grid; "all" = everything; "YYYY-MM" = that month.
+  const [viewMonth, setViewMonth] = useState(null);
   const [fStatus, setFStatus] = useState("");
   const [fAccount, setFAccount] = useState("");
   const [fCat, setFCat] = useState("");
   const [fDir, setFDir] = useState("");
-  const [fFrom, setFFrom] = useState("");
-  const [fTo, setFTo] = useState("");
   const [fSearch, setFSearch] = useState("");
   const [showImport, setShowImport] = useState(false);
   const [manualTxn, setManualTxn] = useState(null); // null = closed; {} = new; row = edit
 
   const [rows, setRows] = useState([]);
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [totals, setTotals] = useState({ tin: 0, tout: 0, count: 0 });
   const [unreviewedCount, setUnreviewedCount] = useState(0);
   const [rpcMissing, setRpcMissing] = useState(false);
 
   const accName = (id) => accounts.find(a => a.id === id)?.name || "—";
+  const fFrom = viewMonth && viewMonth !== "all" ? viewMonth + "-01" : "";
+  const fTo = viewMonth && viewMonth !== "all" ? monthEnd(viewMonth) : "";
+
+  // Month folders (computed from the full fetch the parent already does for
+  // the reconciliation — no extra queries).
+  const monthFolders = useMemo(() => {
+    const by = {};
+    for (const t of txns) {
+      const mo = (t.txn_date || "").slice(0, 7);
+      if (!mo) continue;
+      const f = (by[mo] = by[mo] || { mo, count: 0, tin: 0, tout: 0, unreviewed: 0 });
+      f.count += 1;
+      const a = signedAmount(t);
+      if (a >= 0) f.tin += a; else f.tout += a;
+      if (t.status === "unreviewed") f.unreviewed += 1;
+    }
+    return Object.values(by).sort((a, b) => b.mo.localeCompare(a.mo));
+  }, [txns]);
 
   // One query builder used by the list — all filters applied server-side.
   const buildQuery = useCallback(() => {
@@ -236,13 +260,12 @@ function InboxTab(props) {
     return q.order("txn_date", { ascending: false }).order("id", { ascending: false });
   }, [supabase, fStatus, fAccount, fCat, fDir, fFrom, fTo, fSearch]);
 
-  // Fetch the first `limitCount` rows of the filtered set (used both for the
-  // initial page and for "load more", which just widens the window).
-  const loadWindow = useCallback(async (limitCount) => {
+  // Numbered pages: each page is its own server range.
+  const loadPage = useCallback(async (p) => {
     setLoading(true);
-    const { data, error } = await buildQuery().range(0, limitCount - 1);
+    const { data, error } = await buildQuery().range(p * INBOX_PAGE, (p + 1) * INBOX_PAGE - 1);
     setLoading(false);
-    if (!error) setRows(data || []);
+    if (!error) { setRows(data || []); setPage(p); }
   }, [buildQuery]);
 
   // Exact totals/count for the ACTIVE filters via RPC (whole-table aggregate).
@@ -263,27 +286,82 @@ function InboxTab(props) {
     if (count != null) setUnreviewedCount(count);
   }, [supabase]);
 
-  // Filters changed → restart the window; external changes (realtime reload of
-  // `txns` in the parent, or a review action) → refresh the current window.
-  useEffect(() => { loadWindow(INBOX_PAGE); loadTotals(); loadUnreviewedCount(); }, [loadWindow, loadTotals, loadUnreviewedCount]);
+  // Filters/month changed → back to page 1; external changes (realtime reload
+  // of `txns`, or a review action) → refresh the current page in place.
+  useEffect(() => { if (viewMonth) { loadPage(0); loadTotals(); } loadUnreviewedCount(); }, [loadPage, loadTotals, loadUnreviewedCount, viewMonth]);
   useEffect(() => {
-    loadWindow(Math.max(INBOX_PAGE, rows.length));
-    loadTotals(); loadUnreviewedCount();
+    if (viewMonth) { loadPage(page); loadTotals(); }
+    loadUnreviewedCount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txns]);
 
-  const hasMore = rows.length < totals.count;
+  const pageCount = Math.max(1, Math.ceil(totals.count / INBOX_PAGE));
   const filtered = rows;
 
+  // ── Folder view: one card per month ─────────────────────────────────────
+  if (!viewMonth) {
+    return (
+      <div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14, alignItems:"center" }}>
+          {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Importar movimientos</Btn>}
+          {canCreate && <Btn onClick={() => setManualTxn({})}>＋ Movimiento manual</Btn>}
+          <button onClick={() => setViewMonth("all")} style={{ marginLeft:"auto", border:"none", background:"transparent", cursor:"pointer", color:"#888", fontSize:12.5, textDecoration:"underline" }}>Ver todos los movimientos →</button>
+        </div>
+        {unreviewedCount > 0 && (
+          <div style={{ background:"#FEF3C7", color:"#92760B", borderRadius:10, padding:"9px 14px", fontSize:12.5, marginBottom:14 }}>
+            ⏳ Hay <b>{unreviewedCount.toLocaleString()}</b> movimientos sin revisar en total — entrá al mes para categorizarlos.
+          </div>
+        )}
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(215px, 1fr))", gap:12 }}>
+          {monthFolders.length === 0 && <div style={{ fontSize:13, color:"#bbb", padding:20 }}>Sin movimientos todavía. Importá un screenshot o CSV del banco.</div>}
+          {monthFolders.map(f => (
+            <button key={f.mo} onClick={() => setViewMonth(f.mo)}
+              style={{ textAlign:"left", background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"14px 16px", cursor:"pointer" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ fontSize:18 }}>📁</span>
+                <span style={{ fontSize:14, fontWeight:700 }}>{monthTitle(f.mo)}</span>
+                {f.unreviewed > 0 && <span style={{ marginLeft:"auto", background:"#E24B4A", color:"#fff", fontSize:10, fontWeight:700, borderRadius:10, padding:"1px 7px" }}>{f.unreviewed}</span>}
+              </div>
+              <div style={{ fontSize:11.5, color:"#999", marginTop:6 }}>{f.count.toLocaleString()} movimientos</div>
+              <div style={{ display:"flex", gap:10, marginTop:4, fontSize:12, fontWeight:700 }}>
+                <span style={{ color:"#3B6D11" }}>{fmt$(f.tin)}</span>
+                <span style={{ color:"#A32D2D" }}>{fmt$(f.tout)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+        {showImport && (
+          <ImportModal accounts={accounts} cats={cats} supabase={supabase} session={session}
+            onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); onReload(); }}
+            setError={setError} Btn={Btn} Modal={Modal} />
+        )}
+        {manualTxn && (
+          <ManualTxnModal txn={null} accounts={accounts} cats={cats} supabase={supabase} session={session}
+            onClose={() => setManualTxn(null)} onDone={() => { setManualTxn(null); onReload(); }}
+            Btn={Btn} Modal={Modal} />
+        )}
+      </div>
+    );
+  }
+
+  // ── Month (or "all") view: server-paginated list ─────────────────────────
   return (
     <div>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+        <button onClick={() => setViewMonth(null)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"6px 12px", cursor:"pointer", fontSize:12.5, fontWeight:600, color:"#555" }}>← Meses</button>
+        <div style={{ fontSize:15, fontWeight:700 }}>📁 {viewMonth === "all" ? "Todos los movimientos" : monthTitle(viewMonth)}</div>
+        <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
+          {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Importar</Btn>}
+          {canCreate && <Btn onClick={() => setManualTxn({})}>＋ Manual</Btn>}
+        </div>
+      </div>
       {rpcMissing && (
         <div style={{ background:"#FFF7ED", border:"1px solid #FED7AA", borderRadius:10, padding:"10px 14px", fontSize:12.5, color:"#9A3412", marginBottom:12 }}>
           Falta la migración de agregados server-side. Corré <b>scripts/setup-bank-rpc.mjs</b> (o pegá su SQL en Supabase) para que los totales y el P&L usen toda la tabla.
         </div>
       )}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:10, marginBottom:14 }}>
-        <Tile label="Sin revisar" value={unreviewedCount} color="#92760B" />
+        <Tile label="Sin revisar (total)" value={unreviewedCount} color="#92760B" />
         <Tile label="Inflows (filtro)" value={fmt$(totals.tin)} color="#3B6D11" />
         <Tile label="Outflows (filtro)" value={fmt$(totals.tout)} color="#A32D2D" />
         <Tile label="Neto (filtro)" value={fmt$(totals.tin + totals.tout)} sub={`${totals.count.toLocaleString()} movimientos en el filtro`} />
@@ -305,11 +383,7 @@ function InboxTab(props) {
           <option value="">Todas las categorías</option>
           {(cats?.length ? cats : SEED_BANK_CATEGORIES).map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
         </select>
-        <input type="date" value={fFrom} onChange={e => setFFrom(e.target.value)} style={{ ...inp, width:"auto" }} />
-        <input type="date" value={fTo} onChange={e => setFTo(e.target.value)} style={{ ...inp, width:"auto" }} />
         <input placeholder="Buscar descripción…" value={fSearch} onChange={e => setFSearch(e.target.value)} style={{ ...inp, width:180 }} />
-        {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Importar movimientos</Btn>}
-        {canCreate && <Btn onClick={() => setManualTxn({})}>＋ Movimiento manual</Btn>}
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
@@ -359,11 +433,22 @@ function InboxTab(props) {
             })}
           </tbody>
         </table>
-        {hasMore && (
-          <div style={{ padding:12, textAlign:"center", borderTop:"1px solid #f3f3f3" }}>
-            <Btn onClick={() => loadWindow(rows.length + INBOX_PAGE)} disabled={loading}>
-              {loading ? "Cargando…" : `Cargar más (${rows.length.toLocaleString()} de ${totals.count.toLocaleString()})`}
-            </Btn>
+        {pageCount > 1 && (
+          <div style={{ padding:12, display:"flex", justifyContent:"center", alignItems:"center", gap:6, borderTop:"1px solid #f3f3f3", flexWrap:"wrap" }}>
+            <button disabled={page === 0 || loading} onClick={() => loadPage(page - 1)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"5px 10px", cursor: page === 0 ? "default" : "pointer", fontSize:12.5, color:"#555", opacity: page === 0 ? 0.4 : 1 }}>‹ Anterior</button>
+            {Array.from({ length: pageCount }, (_, i) => i)
+              .filter(i => i === 0 || i === pageCount - 1 || Math.abs(i - page) <= 2)
+              .reduce((acc, i, idx, arr) => { // insert ellipsis markers between gaps
+                if (idx > 0 && i - arr[idx - 1] > 1) acc.push("…" + i);
+                acc.push(i);
+                return acc;
+              }, [])
+              .map(i => typeof i === "string"
+                ? <span key={i} style={{ color:"#bbb", fontSize:12 }}>…</span>
+                : <button key={i} disabled={loading} onClick={() => loadPage(i)}
+                    style={{ border:"1px solid " + (i === page ? "#111" : "#e5e5e5"), background: i === page ? "#111" : "#fff", color: i === page ? "#fff" : "#555", borderRadius:8, padding:"5px 10px", cursor:"pointer", fontSize:12.5, fontWeight: i === page ? 700 : 500 }}>{i + 1}</button>)}
+            <button disabled={page >= pageCount - 1 || loading} onClick={() => loadPage(page + 1)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"5px 10px", cursor: page >= pageCount - 1 ? "default" : "pointer", fontSize:12.5, color:"#555", opacity: page >= pageCount - 1 ? 0.4 : 1 }}>Siguiente ›</button>
+            <span style={{ fontSize:11.5, color:"#999", marginLeft:8 }}>Página {page + 1} de {pageCount} · {totals.count.toLocaleString()} movimientos</span>
           </div>
         )}
       </div>
