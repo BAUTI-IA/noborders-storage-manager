@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {
   parseCsv, mapBankCsv, dedupHash, signedAmount,
-  matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl, bankPnlStatement,
+  matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl, bankPnlStatement, pnlStatementFromRows,
   SEED_BANK_CATEGORIES, PNL_GROUPS, catByName, isTransferCat,
 } from "../src/bankData.js";
 
@@ -164,6 +164,33 @@ t("bankPnlStatement: waterfall Revenue → Gross → Net with monthly columns", 
   assert.equal(r.gross.byMonth["2026-07"], 1400); // 2000 − 600
   assert.equal(r.net.total, 2100);              // − 300 Fees; transfer excluded
   assert.equal(r.net.byMonth["2026-06"], 1000);
+});
+
+t("bankPnlStatement: 'Financing' excluded like a transfer (matches the RPC)", () => {
+  const txns = [
+    { id: 1, txn_date: "2026-07-01", amount: 1000, direction: "in", status: "verified", category: "Job" },
+    { id: 2, txn_date: "2026-07-02", amount: 5000, direction: "in", status: "verified", category: "Financing" },
+  ];
+  const r = bankPnlStatement({ bankTxns: txns, from: "2026-07-01", to: "2026-07-31" });
+  assert.equal(r.net.total, 1000);
+});
+
+t("pnlStatementFromRows: builds the same waterfall from bank_pnl RPC rows", () => {
+  const rpcRows = [
+    { month: "2026-06", category: "Job", direction: "in", pnl_group: null, total: 1000, txn_count: 3 },
+    { month: "2026-07", category: "Job", direction: "in", pnl_group: null, total: 2000, txn_count: 5 },
+    { month: "2026-07", category: "Fuel", direction: "out", pnl_group: "Cost of Revenues", total: -600, txn_count: 4 },
+    { month: "2026-07", category: "Fees", direction: "out", pnl_group: "Structure Expenses", total: -300, txn_count: 2 },
+    { month: "2026-07", category: "(sin categoría)", direction: null, pnl_group: null, total: -50, txn_count: 1 },
+  ];
+  const r = pnlStatementFromRows(rpcRows, { from: "2026-06-01", to: "2026-07-31" });
+  assert.deepEqual(r.months, ["2026-06", "2026-07"]);
+  assert.deepEqual(r.sections.map(s => s.group), ["Revenue", "Cost of Revenues", "Structure Expenses", "Otros egresos"]);
+  assert.equal(r.sections[0].total, 3000);
+  assert.equal(r.gross.total, 2400);
+  assert.equal(r.gross.byMonth["2026-07"], 1400);
+  assert.equal(r.net.total, 2050);
+  assert.equal(r.count, 15);
 });
 
 // ── Catalog (seed = the Excel taxonomy; helpers accept a live DB catalog) ───

@@ -11,7 +11,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
-  parseCsv, mapBankCsv, reconcileBank, bankPnlStatement,
+  parseCsv, mapBankCsv, reconcileBank, bankPnlStatement, pnlStatementFromRows,
 } from "./bankData.js";
 import { numv } from "./analyticsData.js";
 
@@ -83,9 +83,20 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
     const { data, error } = await supabase.from("bank_categories").select("*").order("sort", { ascending: true }).order("name", { ascending: true });
     if (!error && data?.length) setCats(data);
   }, [supabase]);
+  // Full fetch in pages — the reconciliation needs every row, and a fixed
+  // limit silently truncated the oldest months once the table grew past it.
   const loadTxns = useCallback(async () => {
-    const { data, error } = await supabase.from("bank_transactions").select("*").order("txn_date", { ascending: false }).order("id", { ascending: false }).limit(2000);
-    if (!error) setTxns(data || []);
+    const PAGE = 1000;
+    const all = [];
+    for (let fromIdx = 0; ; fromIdx += PAGE) {
+      const { data, error } = await supabase.from("bank_transactions").select("*")
+        .order("txn_date", { ascending: false }).order("id", { ascending: false })
+        .range(fromIdx, fromIdx + PAGE - 1);
+      if (error) return;
+      all.push(...(data || []));
+      if (!data || data.length < PAGE) break;
+    }
+    setTxns(all);
   }, [supabase]);
 
   useEffect(() => { loadAccounts(); loadCats(); loadTxns(); }, [loadAccounts, loadCats, loadTxns]);
@@ -179,17 +190,23 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
         <CategoriesTab cats={cats} txns={txns} supabase={supabase} canCreate={canCreate} canEdit={canEdit} onReload={loadCats} onReloadTxns={loadTxns} Btn={Btn} Modal={Modal} />
       )}
       {tab === "conciliacion" && <ReconTab txns={txns} cats={cats} payments={payments} expenses={expenses} />}
-      {tab === "pnl" && <PnlTab txns={txns} cats={cats} />}
+      {tab === "pnl" && <PnlTab txns={txns} cats={cats} accounts={accounts} supabase={supabase} />}
     </div>
   );
 }
 
 // ── Tab: Bandeja (review queue + import) ─────────────────────────────────────
+// Server-driven: every filter goes to Postgres, the list paginates with
+// .range() (no fixed row cap — you can scroll to the oldest movement) and the
+// tiles come from the bank_txn_totals RPC + exact counts, so they always
+// reflect the WHOLE table, not just the rows the client fetched.
+const INBOX_PAGE = 200;
 function InboxTab(props) {
   const { txns, accounts, cats, canEdit, canCreate, supabase, session, onReload, setError,
     setCategory, categorize, verify, reopen, setIgnored, removeTxn, Btn, Modal } = props;
   const [fStatus, setFStatus] = useState("");
   const [fAccount, setFAccount] = useState("");
+  const [fCat, setFCat] = useState("");
   const [fDir, setFDir] = useState("");
   const [fFrom, setFFrom] = useState("");
   const [fTo, setFTo] = useState("");
@@ -197,31 +214,79 @@ function InboxTab(props) {
   const [showImport, setShowImport] = useState(false);
   const [manualTxn, setManualTxn] = useState(null); // null = closed; {} = new; row = edit
 
-  const accName = (id) => accounts.find(a => a.id === id)?.name || "—";
-  const filtered = useMemo(() => txns.filter(t => {
-    if (fStatus && t.status !== fStatus) return false;
-    if (fAccount && String(t.bank_account_id) !== fAccount) return false;
-    if (fDir === "in" && signedAmount(t) < 0) return false;
-    if (fDir === "out" && signedAmount(t) >= 0) return false;
-    if (fFrom && (t.txn_date || "") < fFrom) return false;
-    if (fTo && (t.txn_date || "") > fTo) return false;
-    if (fSearch && !(t.raw_description || "").toLowerCase().includes(fSearch.toLowerCase())) return false;
-    return true;
-  }), [txns, fStatus, fAccount, fDir, fFrom, fTo, fSearch]);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [totals, setTotals] = useState({ tin: 0, tout: 0, count: 0 });
+  const [unreviewedCount, setUnreviewedCount] = useState(0);
+  const [rpcMissing, setRpcMissing] = useState(false);
 
-  const totals = useMemo(() => {
-    let tin = 0, tout = 0;
-    for (const t of filtered) { const a = signedAmount(t); if (a >= 0) tin += a; else tout += a; }
-    return { tin, tout };
-  }, [filtered]);
+  const accName = (id) => accounts.find(a => a.id === id)?.name || "—";
+
+  // One query builder used by the list — all filters applied server-side.
+  const buildQuery = useCallback(() => {
+    let q = supabase.from("bank_transactions").select("*");
+    if (fStatus) q = q.eq("status", fStatus);
+    if (fAccount) q = q.eq("bank_account_id", fAccount);
+    if (fCat) q = q.eq("category", fCat);
+    if (fDir === "in") q = q.gt("amount", 0);
+    if (fDir === "out") q = q.lt("amount", 0);
+    if (fFrom) q = q.gte("txn_date", fFrom);
+    if (fTo) q = q.lte("txn_date", fTo);
+    if (fSearch.trim()) q = q.ilike("raw_description", "%" + fSearch.trim() + "%");
+    return q.order("txn_date", { ascending: false }).order("id", { ascending: false });
+  }, [supabase, fStatus, fAccount, fCat, fDir, fFrom, fTo, fSearch]);
+
+  // Fetch the first `limitCount` rows of the filtered set (used both for the
+  // initial page and for "load more", which just widens the window).
+  const loadWindow = useCallback(async (limitCount) => {
+    setLoading(true);
+    const { data, error } = await buildQuery().range(0, limitCount - 1);
+    setLoading(false);
+    if (!error) setRows(data || []);
+  }, [buildQuery]);
+
+  // Exact totals/count for the ACTIVE filters via RPC (whole-table aggregate).
+  const loadTotals = useCallback(async () => {
+    const { data, error } = await supabase.rpc("bank_txn_totals", {
+      p_from: fFrom || null, p_to: fTo || null,
+      p_account_id: fAccount || null, p_status: fStatus || null,
+      p_category: fCat || null, p_search: fSearch.trim() || null,
+    });
+    if (error) { setRpcMissing(true); return; }
+    setRpcMissing(false);
+    const r = Array.isArray(data) ? data[0] : data;
+    if (r) setTotals({ tin: numv(r.inflows), tout: numv(r.outflows), count: Number(r.txn_count) || 0 });
+  }, [supabase, fStatus, fAccount, fCat, fFrom, fTo, fSearch]);
+
+  const loadUnreviewedCount = useCallback(async () => {
+    const { count } = await supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("status", "unreviewed");
+    if (count != null) setUnreviewedCount(count);
+  }, [supabase]);
+
+  // Filters changed → restart the window; external changes (realtime reload of
+  // `txns` in the parent, or a review action) → refresh the current window.
+  useEffect(() => { loadWindow(INBOX_PAGE); loadTotals(); loadUnreviewedCount(); }, [loadWindow, loadTotals, loadUnreviewedCount]);
+  useEffect(() => {
+    loadWindow(Math.max(INBOX_PAGE, rows.length));
+    loadTotals(); loadUnreviewedCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txns]);
+
+  const hasMore = rows.length < totals.count;
+  const filtered = rows;
 
   return (
     <div>
+      {rpcMissing && (
+        <div style={{ background:"#FFF7ED", border:"1px solid #FED7AA", borderRadius:10, padding:"10px 14px", fontSize:12.5, color:"#9A3412", marginBottom:12 }}>
+          Falta la migración de agregados server-side. Corré <b>scripts/setup-bank-rpc.mjs</b> (o pegá su SQL en Supabase) para que los totales y el P&L usen toda la tabla.
+        </div>
+      )}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:10, marginBottom:14 }}>
-        <Tile label="Sin revisar" value={txns.filter(t => t.status === "unreviewed").length} color="#92760B" />
+        <Tile label="Sin revisar" value={unreviewedCount} color="#92760B" />
         <Tile label="Inflows (filtro)" value={fmt$(totals.tin)} color="#3B6D11" />
         <Tile label="Outflows (filtro)" value={fmt$(totals.tout)} color="#A32D2D" />
-        <Tile label="Neto (filtro)" value={fmt$(totals.tin + totals.tout)} />
+        <Tile label="Neto (filtro)" value={fmt$(totals.tin + totals.tout)} sub={`${totals.count.toLocaleString()} movimientos en el filtro`} />
       </div>
 
       <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12, alignItems:"center" }}>
@@ -235,6 +300,10 @@ function InboxTab(props) {
         </select>
         <select value={fDir} onChange={e => setFDir(e.target.value)} style={{ ...inp, width:"auto" }}>
           <option value="">In + Out</option><option value="in">Inflows</option><option value="out">Outflows</option>
+        </select>
+        <select value={fCat} onChange={e => setFCat(e.target.value)} style={{ ...inp, width:"auto", maxWidth:180 }}>
+          <option value="">Todas las categorías</option>
+          {(cats?.length ? cats : SEED_BANK_CATEGORIES).map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
         </select>
         <input type="date" value={fFrom} onChange={e => setFFrom(e.target.value)} style={{ ...inp, width:"auto" }} />
         <input type="date" value={fTo} onChange={e => setFTo(e.target.value)} style={{ ...inp, width:"auto" }} />
@@ -290,6 +359,13 @@ function InboxTab(props) {
             })}
           </tbody>
         </table>
+        {hasMore && (
+          <div style={{ padding:12, textAlign:"center", borderTop:"1px solid #f3f3f3" }}>
+            <Btn onClick={() => loadWindow(rows.length + INBOX_PAGE)} disabled={loading}>
+              {loading ? "Cargando…" : `Cargar más (${rows.length.toLocaleString()} de ${totals.count.toLocaleString()})`}
+            </Btn>
+          </div>
+        )}
       </div>
 
       {showImport && (
@@ -619,8 +695,23 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_BANK_ACCOUNT);
   const [saving, setSaving] = useState(false);
+  const [rpcBalances, setRpcBalances] = useState(null); // account_id -> {balance, txn_count}; null → client fallback
 
-  const balanceOf = (a) => numv(a.opening_balance) + txns.filter(t => t.bank_account_id === a.id && t.status !== "ignored").reduce((s, t) => s + signedAmount(t), 0);
+  // Balances aggregate in Postgres so they never depend on client row limits.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.rpc("bank_account_balances");
+      if (cancelled || error) return;
+      setRpcBalances(Object.fromEntries((data || []).map(r => [r.bank_account_id, { balance: numv(r.balance), count: Number(r.txn_count) || 0 }])));
+    })();
+    return () => { cancelled = true; };
+  }, [supabase, txns]);
+
+  const balanceOf = (a) => numv(a.opening_balance) + (rpcBalances
+    ? (rpcBalances[a.id]?.balance || 0)
+    : txns.filter(t => t.bank_account_id === a.id && t.status !== "ignored").reduce((s, t) => s + signedAmount(t), 0));
+  const txnCountOf = (a) => rpcBalances ? (rpcBalances[a.id]?.count || 0) : txns.filter(t => t.bank_account_id === a.id).length;
 
   const openAdd = () => { setEditingId(null); setForm(EMPTY_BANK_ACCOUNT); setShowModal(true); };
   const openEdit = (a) => {
@@ -653,7 +744,7 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
                 <td style={td}>{a.bank_name || "—"}</td>
                 <td style={td}>{a.type || "checking"}</td>
                 <td style={{ ...td, fontWeight:700 }}>{fmt$(balanceOf(a))}</td>
-                <td style={td}>{txns.filter(t => t.bank_account_id === a.id).length}</td>
+                <td style={td}>{txnCountOf(a)}</td>
                 <td style={td}>{a.active === false ? "No" : "Sí"}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>
                   {canEdit && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => openEdit(a)}>Editar</Btn>}
@@ -865,12 +956,35 @@ const acct$ = (v) => {
   const s = "$" + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
   return v < 0 ? <span style={{ color:"#A32D2D" }}>({s})</span> : <span>{s}</span>;
 };
-function PnlTab({ txns, cats }) {
+function PnlTab({ txns, cats, accounts = [], supabase }) {
   const now = todayISO();
   const [from, setFrom] = useState(now.slice(0, 4) + "-01-01"); // default: full current year
   const [to, setTo] = useState(now);
+  const [account, setAccount] = useState("");
   const [onlyVerified, setOnlyVerified] = useState(true);
-  const st = useMemo(() => bankPnlStatement({ bankTxns: txns, categories: cats, from, to, onlyVerified }), [txns, cats, from, to, onlyVerified]);
+  const [rpcRows, setRpcRows] = useState(null); // null = RPC unavailable → client fallback
+  const [rpcMissing, setRpcMissing] = useState(false);
+
+  // The P&L aggregates in Postgres (bank_pnl RPC), so it covers the whole
+  // table no matter how many rows the browser fetched.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.rpc("bank_pnl", {
+        p_from: from || null, p_to: to || null,
+        p_account_id: account || null, p_only_verified: onlyVerified,
+      });
+      if (cancelled) return;
+      if (error) { setRpcMissing(true); setRpcRows(null); return; }
+      setRpcMissing(false); setRpcRows(data || []);
+    })();
+    return () => { cancelled = true; };
+  }, [supabase, from, to, account, onlyVerified, txns]);
+
+  const st = useMemo(() => rpcRows
+    ? pnlStatementFromRows(rpcRows, { from, to })
+    : bankPnlStatement({ bankTxns: txns, categories: cats, from, to, onlyVerified }),
+  [rpcRows, txns, cats, from, to, onlyVerified]);
   const revenue = st.sections.find(s => s.group === "Revenue");
 
   const tdN = { ...td, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
@@ -893,11 +1007,20 @@ function PnlTab({ txns, cats }) {
         <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...inp, width:"auto" }} />
         <span style={{ color:"#bbb" }}>→</span>
         <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ ...inp, width:"auto" }} />
+        <select value={account} onChange={e => setAccount(e.target.value)} style={{ ...inp, width:"auto" }}>
+          <option value="">Todas las cuentas</option>
+          {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
         <label style={{ fontSize:12.5, color:"#555", display:"flex", alignItems:"center", gap:6, marginLeft:8 }}>
           <input type="checkbox" checked={onlyVerified} onChange={e => setOnlyVerified(e.target.checked)} />
           Solo movimientos verificados
         </label>
       </div>
+      {rpcMissing && (
+        <div style={{ background:"#FFF7ED", border:"1px solid #FED7AA", borderRadius:10, padding:"10px 14px", fontSize:12.5, color:"#9A3412", marginBottom:12 }}>
+          Falta la migración <b>scripts/setup-bank-rpc.mjs</b> — el P&L está calculando en el navegador y puede quedarse corto si hay muchos movimientos. Pegá el SQL de esa migración en Supabase.
+        </div>
+      )}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10, marginBottom:16 }}>
         <Tile label="Revenue" value={fmt$(revenue?.total || 0)} color="#3B6D11" />
         {st.gross && <Tile label="Gross Profit" value={fmt$(st.gross.total)} color={st.gross.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={revenue?.total ? `${Math.round(st.gross.total / revenue.total * 100)}% margen` : undefined} />}

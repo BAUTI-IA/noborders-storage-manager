@@ -265,6 +265,7 @@ export function bankPnl({ bankTxns, categories = [], from, to, onlyVerified = tr
     t.status !== "ignored" &&
     (!onlyVerified || t.status === "verified") &&
     !isTransferCat(categories, t.category) &&
+    !EXCLUDED_PNL_CATEGORIES.includes(t.category || "") &&
     inRange(t.txn_date || ""));
 
   const byCat = {};
@@ -319,6 +320,7 @@ export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVeri
     t.status !== "ignored" &&
     (!onlyVerified || t.status === "verified") &&
     !isTransferCat(categories, t.category) &&
+    !EXCLUDED_PNL_CATEGORIES.includes(t.category || "") &&
     inRange(t.txn_date || ""));
 
   const fromMo = monthOf(from || ""), toMo = monthOf(to || "");
@@ -368,4 +370,61 @@ export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVeri
   const net = running;
 
   return { months, sections, gross, net, count: rows.length };
+}
+
+// Categories that never enter the P&L even if not flagged is_transfer in the
+// catalog (kept in sync with the bank_pnl RPC's hardcoded exclusion).
+export const EXCLUDED_PNL_CATEGORIES = ["Transfer Between Accounts", "Financing"];
+
+// Same statement shape as bankPnlStatement, but built from the rows the
+// bank_pnl RPC returns (month × category aggregates computed IN Postgres, so
+// no client row limit can truncate the result). rpcRows:
+//   { month, category, direction, pnl_group, total, txn_count }
+export function pnlStatementFromRows(rpcRows, { from, to } = {}) {
+  const fromMo = monthOf(from || ""), toMo = monthOf(to || "");
+  const dataMonths = [...new Set(rpcRows.map(r => r.month).filter(Boolean))].sort();
+  const months = (fromMo && toMo) ? monthsBetween(fromMo, toMo) : dataMonths;
+
+  const byCat = {};
+  let count = 0;
+  for (const r of rpcRows) {
+    const name = r.category || "(sin categoría)";
+    const c = (byCat[name] = byCat[name] || { name, byMonth: {}, total: 0, meta: (r.direction || r.pnl_group) ? { name, direction: r.direction, pnl_group: r.pnl_group, icon: "" } : null });
+    const v = numv(r.total);
+    c.total += v;
+    if (r.month) c.byMonth[r.month] = (c.byMonth[r.month] || 0) + v;
+    count += Number(r.txn_count) || 0;
+  }
+
+  const catRows = Object.values(byCat);
+  const isIncomeRow = (c) => c.meta?.direction ? c.meta.direction === "in" : c.total >= 0;
+  const sumLines = (lines) => {
+    const byMonth = {};
+    let total = 0;
+    for (const l of lines) { total += l.total; for (const [m, v] of Object.entries(l.byMonth)) byMonth[m] = (byMonth[m] || 0) + v; }
+    return { byMonth, total };
+  };
+  const addTotals = (a, b) => {
+    const byMonth = { ...a.byMonth };
+    for (const [m, v] of Object.entries(b.byMonth)) byMonth[m] = (byMonth[m] || 0) + v;
+    return { byMonth, total: a.total + b.total };
+  };
+
+  const revenueLines = catRows.filter(isIncomeRow).sort((a, b) => b.total - a.total);
+  const sections = [{ group: "Revenue", rows: revenueLines, ...sumLines(revenueLines) }];
+  const expenseRows = catRows.filter(c => !isIncomeRow(c));
+  for (const g of PNL_GROUPS) {
+    const lines = expenseRows.filter(c => c.meta?.pnl_group === g).sort((a, b) => a.total - b.total);
+    if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
+  }
+  const other = expenseRows.filter(c => !c.meta?.pnl_group || !PNL_GROUPS.includes(c.meta.pnl_group)).sort((a, b) => a.total - b.total);
+  if (other.length) sections.push({ group: "Otros egresos", rows: other, ...sumLines(other) });
+
+  let running = sections[0] ? { byMonth: { ...sections[0].byMonth }, total: sections[0].total } : { byMonth: {}, total: 0 };
+  const cor = sections.find(s => s.group === "Cost of Revenues");
+  const gross = cor ? addTotals(running, cor) : null;
+  running = sections.slice(1).reduce((acc, s) => addTotals(acc, s), running);
+  const net = running;
+
+  return { months, sections, gross, net, count };
 }
