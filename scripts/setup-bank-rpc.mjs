@@ -26,7 +26,7 @@ create index if not exists bank_txn_account on public.bank_transactions (bank_ac
 
 -- P&L aggregate: month × category within the range/account, excluding ignored
 -- rows, transfer categories (bank_categories.is_transfer) and the hardcoded
--- non-P&L concepts ('Transfer Between Accounts', 'Financing').
+-- non-P&L concepts (transfers, financing, credit-card payments).
 -- security invoker → the caller's RLS still applies.
 create or replace function public.bank_pnl(
   p_from date default null,
@@ -60,7 +60,7 @@ $$
     and (p_to is null or t.txn_date <= p_to)
     and (p_account_id is null or t.bank_account_id = p_account_id)
     and coalesce(c.is_transfer, false) = false
-    and coalesce(t.category, '') not in ('Transfer Between Accounts', 'Financing')
+    and coalesce(t.category, '') not in ('Transfer Between Accounts', 'Financing', 'Financing - Loan', 'Financing - Capital', 'Credit Card Payment')
   group by 1, 2, 3, 4
 $$;
 
