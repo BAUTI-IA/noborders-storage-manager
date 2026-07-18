@@ -575,6 +575,9 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
   // CSV column mapping
   const [csvRows, setCsvRows] = useState(null);
   const [map, setMap] = useState({ date:"", description:"", amount:"", debit:"", credit:"" });
+  // Master-CSV bulk mode (per-row account_name + category → verified)
+  const [master, setMaster] = useState(null);
+  const [masterProgress, setMasterProgress] = useState("");
 
   const readAsBase64 = (file) => new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -620,9 +623,42 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       const rows = parseCsv(text);
       if (!rows.length) throw new Error("El CSV está vacío.");
       setFileRef(file.name);
+
+      // "CSV maestro": a per-row account_name column + category already set
+      // (the bookkeeper's master export). Rows go straight in as verified,
+      // each matched to its account by name — no manual mapping, no review
+      // queue for 5.000 rows.
+      const h = rows[0].map(x => x.toLowerCase().trim());
+      if (h.includes("account_name")) {
+        const idx = (name) => h.indexOf(name);
+        const iAcc = idx("account_name"), iDate = idx("txn_date"), iDesc = idx("description"),
+          iAmt = idx("amount"), iDir = idx("direction"), iCat = idx("category");
+        if (iDate < 0 || iAmt < 0) throw new Error("El CSV maestro necesita columnas txn_date y amount.");
+        const accByName = Object.fromEntries(accounts.map(a => [a.name.toLowerCase().trim(), a.id]));
+        const unknown = new Set();
+        const parsed = rows.slice(1).map(r => {
+          const accName = String(r[iAcc] || "").trim();
+          const accId = accByName[accName.toLowerCase()];
+          if (!accId) unknown.add(accName || "(vacío)");
+          const rawAmt = numv(String(r[iAmt] ?? "").replace(/[^0-9.\-]/g, ""));
+          const dir = String(iDir >= 0 ? r[iDir] : "").toLowerCase().trim();
+          const amount = dir === "debit" || dir === "out" ? -Math.abs(rawAmt) : dir === "credit" || dir === "in" ? Math.abs(rawAmt) : rawAmt;
+          return {
+            bank_account_id: accId, account_name: accName,
+            txn_date: String(r[iDate] || "").trim(), amount,
+            raw_description: iDesc >= 0 ? String(r[iDesc] || "").trim() : "",
+            category: iCat >= 0 ? String(r[iCat] || "").trim() : "",
+          };
+        }).filter(r => r.txn_date && r.amount);
+        if (unknown.size) throw new Error("Cuentas del CSV que no existen en la app: " + [...unknown].join(", ") + ". Crealas en la tab Cuentas con ese nombre exacto y volvé a subir.");
+        if (!parsed.length) throw new Error("No salieron movimientos del CSV maestro.");
+        setMaster({ rows: parsed, fileName: file.name });
+        setBusy(false);
+        return;
+      }
+
       setCsvRows(rows);
       // Best-effort auto-map by common header names.
-      const h = rows[0].map(x => x.toLowerCase().trim());
       const find = (...names) => { const i = h.findIndex(c => names.some(n => c.includes(n))); return i >= 0 ? rows[0][i] : ""; };
       setMap({
         date: find("date", "fecha"), description: find("desc", "detail", "detalle", "memo", "concepto"),
@@ -630,6 +666,40 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       });
     } catch (e) { setError(e.message || "Error leyendo el CSV."); }
     setBusy(false);
+  };
+
+  // Bulk load of the master CSV: rows enter as VERIFIED (they come categorized
+  // from the bookkeeper's file) in chunks; the dedup index makes re-uploads
+  // idempotent.
+  const confirmMasterImport = async () => {
+    if (!master?.rows?.length) return;
+    setBusy(true); setError("");
+    try {
+      const who = session?.user?.email || "csv_reload";
+      const now = new Date().toISOString();
+      const { data: batch, error: bErr } = await supabase.from("bank_import_batches").insert({
+        bank_account_id: null, source: "csv_reload", file_ref: master.fileName || null,
+        rows_extracted: master.rows.length, rows_imported: master.rows.length, created_by: who,
+      }).select("id").single();
+      if (bErr) throw bErr;
+      const rows = master.rows.map(d => ({
+        bank_account_id: d.bank_account_id, import_batch_id: batch.id,
+        txn_date: d.txn_date, amount: d.amount, direction: d.amount < 0 ? "out" : "in",
+        raw_description: d.raw_description || null, category: d.category || null,
+        status: "verified", source: "csv_reload", source_ref: master.fileName || null,
+        categorized_by: who, categorized_at: now, verified_by: who, verified_at: now,
+        created_by: who,
+        dedup_hash: dedupHash(d),
+      }));
+      const CHUNK = 500;
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        setMasterProgress(`${Math.min(i + CHUNK, rows.length)} / ${rows.length}`);
+        const { error: iErr } = await supabase.from("bank_transactions").upsert(rows.slice(i, i + CHUNK), { onConflict: "dedup_hash", ignoreDuplicates: true });
+        if (iErr) throw iErr;
+      }
+      onDone();
+    } catch (e) { setError(e.message || "Error importando el CSV maestro."); }
+    setBusy(false); setMasterProgress("");
   };
 
   const applyCsvMap = async () => {
@@ -717,14 +787,39 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         </div>
       )}
 
-      {mode === "csv" && !csvRows && (
+      {mode === "csv" && !csvRows && !master && (
         <div onClick={() => !busy && document.getElementById("bank-csv-input")?.click()}
           style={{ border:"2px dashed #ddd", borderRadius:10, padding:18, textAlign:"center", background:"#fafafa", cursor:"pointer", fontSize:12.5, color:"#888", marginBottom:12 }}>
-          {busy ? "Procesando…" : "Tocá para subir el CSV exportado del banco (si tu banco exporta Excel, guardalo como CSV primero)."}
+          {busy ? "Procesando…" : "Tocá para subir el CSV exportado del banco (si tu banco exporta Excel, guardalo como CSV primero). Si el CSV trae la columna account_name + category (CSV maestro), se carga solo, ya verificado."}
           <input id="bank-csv-input" type="file" accept=".csv,text/csv" style={{ display:"none" }}
             onChange={e => { const f = e.target.files[0]; if (f) onCsvFile(f); e.target.value = ""; }} />
         </div>
       )}
+
+      {mode === "csv" && master && (() => {
+        const byAcc = {};
+        const months = new Set();
+        let tin = 0, tout = 0;
+        for (const r of master.rows) {
+          byAcc[r.account_name] = (byAcc[r.account_name] || 0) + 1;
+          months.add(r.txn_date.slice(0, 7));
+          if (r.amount >= 0) tin += r.amount; else tout += r.amount;
+        }
+        return (
+          <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:10, padding:14, marginBottom:12 }}>
+            <div style={{ fontSize:13, fontWeight:700, marginBottom:6 }}>✅ CSV maestro detectado — {master.rows.length.toLocaleString()} movimientos listos</div>
+            <div style={{ fontSize:12, color:"#555", lineHeight:1.7 }}>
+              {Object.entries(byAcc).map(([n, c]) => <div key={n}>· {n}: <b>{c.toLocaleString()}</b> movimientos</div>)}
+              <div>· Meses: {[...months].sort()[0]} → {[...months].sort().slice(-1)[0]} · Inflows <b style={{ color:"#3B6D11" }}>{fmt$(tin)}</b> · Outflows <b style={{ color:"#A32D2D" }}>{fmt$(tout)}</b></div>
+            </div>
+            <div style={{ fontSize:11.5, color:"#888", margin:"8px 0" }}>Cada fila va a su cuenta (por nombre) con la categoría del CSV, y entra como <b>verificada</b>. Re-subir el mismo archivo no duplica nada.</div>
+            <div style={{ display:"flex", gap:8 }}>
+              <Btn onClick={confirmMasterImport} disabled={busy}>{busy ? `Cargando… ${masterProgress}` : `⬆ Cargar ${master.rows.length.toLocaleString()} movimientos`}</Btn>
+              <Btn onClick={() => setMaster(null)} disabled={busy}>Cancelar</Btn>
+            </div>
+          </div>
+        );
+      })()}
 
       {mode === "csv" && csvRows && (
         <div style={{ background:"#F8FAFC", border:"1px solid #E2E8F0", borderRadius:10, padding:12, marginBottom:12 }}>
