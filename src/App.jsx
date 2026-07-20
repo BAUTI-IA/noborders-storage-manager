@@ -3638,7 +3638,7 @@ export default function App() {
   const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
   const [splitJobRow, setSplitJobRow] = useState(null);       // storage_jobs row being split across two trucks
   const [splitCf, setSplitCf] = useState("");                 // CF to peel onto the second truck
-  const [splitDest, setSplitDest] = useState("");             // "" | "trip:<id>" | "truck:<id>" for the peeled portion
+  const [splitDest, setSplitDest] = useState("");             // "" | "trip:<id>" | "truck:<id>" | "unit:<id>" | "wh:<name>" for the peeled portion
   const [dropModal, setDropModal] = useState(null); // { trip, jobKey, label } drop-at-storage popup (trip cards)
   const [dropSel, setDropSel] = useState("");       // selected drop target key ("u:<id>" | "w:<name>") in dropModal
   const [dropCreating, setDropCreating] = useState(false); // inline "create storage unit" form open in dropModal
@@ -7080,10 +7080,18 @@ export default function App() {
     // Zero money / identity-duplicating fields — only those present on this schema.
     const zeroable = { bol_balance: 0, bol_collected: null, bol_collected_date: null, pickup_balance: 0, delivery_balance: 0, client_monthly_rate: null, billing_active: false, broker_job_share_amount: null, broker_job_share_pct: null, estimate: null, deposit: null, price_per_cf: null };
     for (const k in zeroable) if (k in portion) portion[k] = zeroable[k];
-    // 3) Optionally place the portion straight onto an existing trip, or spin up a
-    //    brand-new loading trip on a chosen (free) truck.
-    let destTripId = null, destTrip = null;
-    if (typeof dest === "string" && dest.startsWith("trip:")) {
+    // 3) Optionally place the portion straight onto an existing trip, spin up a
+    //    brand-new loading trip on a chosen (free) truck, or leave it sitting at a
+    //    storage unit / warehouse (in_storage, off any trip).
+    let destTripId = null, destTrip = null, destStorageLabel = null;
+    if (typeof dest === "string" && dest.startsWith("unit:")) {
+      const u = records.find(r => r.id === Number(dest.slice(5)));
+      portion.storage_id = Number(dest.slice(5)); portion.warehouse = null; portion.status = "in_storage";
+      destStorageLabel = u ? ([u.brand, u.unit && "U" + u.unit, u.state].filter(Boolean).join(" ") || `Unit #${u.id}`) : `Unit #${dest.slice(5)}`;
+    } else if (typeof dest === "string" && dest.startsWith("wh:")) {
+      portion.warehouse = dest.slice(3); portion.storage_id = null; portion.status = "in_storage";
+      destStorageLabel = `Warehouse ${dest.slice(3)}`;
+    } else if (typeof dest === "string" && dest.startsWith("trip:")) {
       destTripId = Number(dest.slice(5));
       destTrip = trips.find(t => t.id === destTripId) || null;
     } else if (typeof dest === "string" && dest.startsWith("truck:")) {
@@ -7107,7 +7115,7 @@ export default function App() {
     setTripBusy(false);
     if (error) { window.alert(error.message); return; }
     setSplitJobRow(null); setSplitCf(""); setSplitDest("");
-    const destName = destTrip ? (destTrip.trip_number || trips.find(t => t.id === destTripId)?.trip_number) : null;
+    const destName = destTrip ? (destTrip.trip_number || trips.find(t => t.id === destTripId)?.trip_number) : destStorageLabel;
     showToast(destName
       ? trAI(`Split: ${Math.round(p)} CF → ${destName}`, `Dividido: ${Math.round(p)} CF → ${destName}`)
       : trAI(`Job split: ${Math.round(total - p)} CF + ${Math.round(p)} CF`, `Job dividido: ${Math.round(total - p)} CF + ${Math.round(p)} CF`));
@@ -13985,6 +13993,9 @@ export default function App() {
         // plus a brand-new trip on any free truck.
         const destTrips = trips.filter(t => TRIP_ACTIVE(t.status) && t.id !== splitJobRow.trip_id)
           .map(t => { const c = tripCalc(t); return { t, free: c.cap > 0 ? Math.round(c.cap - c.loadedCf) : null }; });
+        // ...or it can stay behind at a storage unit / warehouse (in_storage, off any trip).
+        const splitUnits = records.filter(r => r.space_type !== "warehouse")
+          .map(r => ({ id: r.id, label: [r.brand, r.unit && "U" + r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` }));
         // Free CF at the chosen destination (null = unknown capacity), for an overload hint.
         let destFree = null;
         if (splitDest.startsWith("trip:")) destFree = destTrips.find(d => d.t.id === Number(splitDest.slice(5)))?.free ?? null;
@@ -13994,7 +14005,7 @@ export default function App() {
           <Modal title={trAI("Split job across two trucks", "Dividir job en dos camiones")} onClose={closeSplit}
             footer={<>
               <Btn onClick={closeSplit}>{trAI("Cancel", "Cancelar")}</Btn>
-              <Btn primary disabled={tripBusy || !valid} onClick={() => splitJob(splitJobRow, p, splitDest)}>{tripBusy ? "…" : (splitDest.startsWith("truck:") ? trAI("Split & create trip", "Dividir y crear trip") : trAI("Split", "Dividir"))}</Btn>
+              <Btn primary disabled={tripBusy || !valid} onClick={() => splitJob(splitJobRow, p, splitDest)}>{tripBusy ? "…" : (splitDest.startsWith("truck:") ? trAI("Split & create trip", "Dividir y crear trip") : (splitDest.startsWith("unit:") || splitDest.startsWith("wh:")) ? trAI("Split & send to storage", "Dividir y mandar a storage") : trAI("Split", "Dividir"))}</Btn>
             </>}>
             <div style={{ fontSize:13, marginBottom:10 }}>
               <b style={{ fontFamily:"monospace" }}>{splitJobRow.job_number || "(job)"}</b> · {splitJobRow.customer || "—"}
@@ -14027,6 +14038,20 @@ export default function App() {
                     ))}
                   </optgroup>
                 )}
+                {splitUnits.length > 0 && (
+                  <optgroup label={trAI("Storage units", "Storage units")}>
+                    {splitUnits.map(u => (
+                      <option key={u.id} value={"unit:" + u.id}>📦 {u.label}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {WAREHOUSES.length > 0 && (
+                  <optgroup label={trAI("Warehouses", "Warehouses")}>
+                    {WAREHOUSES.map(w => (
+                      <option key={w} value={"wh:" + w}>🏭 {w}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </Field>
             {overloads && (
@@ -14036,8 +14061,8 @@ export default function App() {
               </div>
             )}
             <div style={{ fontSize:11.5, color:"#888", marginTop:10 }}>
-              {trAI("The new portion keeps the same job number and is billed as one job. Leave it unassigned to add it from a trip's job picker later.",
-                    "La nueva porción mantiene el mismo número de job y se factura como uno solo. Dejala sin asignar para agregarla después desde el buscador de un trip.")}
+              {trAI("The new portion keeps the same job number and is billed as one job. Leave it unassigned to add it from a trip's job picker later, or send it to a storage unit / warehouse to load it onto a trip later.",
+                    "La nueva porción mantiene el mismo número de job y se factura como uno solo. Dejala sin asignar para agregarla después desde el buscador de un trip, o mandala a un storage unit / warehouse para cargarla a un trip más adelante.")}
             </div>
           </Modal>
         );
