@@ -2029,7 +2029,10 @@ function settlementWaLink(sheet, calc, brokerName, driverName) {
 // balFor resolves each job's balance shown to the driver — callers pass the
 // OUTSTANDING amount (what's still owed) so partially-paid moves never show
 // their full balance again; defaults to the raw total for safety.
-function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, totalCollect, balFor = jobToCollect) {
+// seq (optional) is the full ordered stop sequence — jobs and custom non-job
+// stops interleaved (tripSequenceByTrip[trip.id]) — so the driver also sees
+// maintenance/fuel/other extra stops in order. Falls back to jobsIn alone.
+function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, totalCollect, balFor = jobToCollect, seq = null) {
   const lines = [
     `TRIP #${trip.trip_number || "-"} — ${truckName || "-"}`,
     `Driver: ${driverName || "-"} | Departure: ${trip.departure_date || "-"}`,
@@ -2038,7 +2041,7 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
     ``,
     `STOPS:`,
   ];
-  jobsIn.forEach((j, i) => {
+  const pushJob = (j, i) => {
     lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}${j.split_group ? " (split load — partial)" : ""}${isRelocation(j) ? " (RELOCATION)" : ""}`);
     if (isRelocation(j)) {
       lines.push(`   Move to: storage/warehouse (relocation)`);
@@ -2050,7 +2053,26 @@ function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, 
       lines.push(`   Balance to collect: $${Math.round(balFor(j)).toLocaleString()}`);
     }
     lines.push("");
-  });
+  };
+  const pushCustom = (s, i) => {
+    const cat = tripStopCat(s.category);
+    lines.push(`${i + 1}. ${cat.icon} ${cat.label}${s.note ? ` — ${s.note}` : ""}`);
+    if (s.address) lines.push(`   Address: ${s.address}`);
+    lines.push(`   (extra stop — no job / nothing to collect)`);
+    lines.push("");
+  };
+  if (seq && seq.length) {
+    // Manifest follows the trip's stop order; jobsIn only fills any job the
+    // sequence might be missing (shouldn't happen, but stay safe).
+    const seen = new Set();
+    seq.forEach((item, i) => {
+      if (item.kind === "custom") pushCustom(item.s, i);
+      else { pushJob(item.j, i); seen.add(item.j); }
+    });
+    jobsIn.filter(j => !seen.has(j)).forEach((j, k) => pushJob(j, seq.length + k));
+  } else {
+    jobsIn.forEach(pushJob);
+  }
   return lines.join("\n");
 }
 const tripManifestLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripManifestText(...args));
@@ -8536,7 +8558,7 @@ export default function App() {
                     const ns = nextStatus(g);
                     const gTrip = g.trip_id ? tripById[g.trip_id] : null;
                     const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
-                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalOutstanding, jobOutstanding); })()
+                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalOutstanding, jobOutstanding, tripSequenceByTrip[gTrip.id]); })()
                       : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
                     const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
                     const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
@@ -9679,7 +9701,7 @@ export default function App() {
                         <span style={{ color:"#666" }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
-                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding, tripSequenceByTrip[t.id])} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
                         {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart</Btn>}
                       </div>
                     </div>
@@ -13718,7 +13740,7 @@ export default function App() {
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
               <span style={{ color:"#666" }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
             </div>
-            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding, tripSequenceByTrip[t.id])} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
 
             {/* event log */}
             <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
