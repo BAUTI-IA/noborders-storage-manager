@@ -5,6 +5,7 @@ import {
   parseCsv, mapBankCsv, dedupHash, signedAmount,
   matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl, bankPnlStatement, pnlStatementFromRows,
   SEED_BANK_CATEGORIES, PNL_GROUPS, catByName, isTransferCat,
+  derivePaymentMethod, DERIVED_PAYMENT_METHODS,
 } from "../src/bankData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -210,4 +211,39 @@ t("catalog: a live DB catalog (owner-added category) overrides the seed", () => 
   const live = [{ name: "Truck Wash", direction: "out", pnl_group: "Cost of Revenues", is_transfer: false }];
   assert.ok(catByName(live, "Truck Wash"));
   assert.equal(catByName(live, "Fuel"), null); // live catalog wins entirely
+});
+
+// ── payment_method derivation (mirrors the SQL CASE in setup-payment-method) ─
+t("derivePaymentMethod: first match wins, per the SQL rule table", () => {
+  const cases = [
+    ["Zelle payment to John Smith", "Zelle"],
+    ["ORIG CO NAME:VENMO   PAYMENT", "Venmo"],            // venmo beats ACH markers
+    ["CASH APP*JOHN 866-555", "Cash App"],
+    ["APPLE CASH SENT MONEY", "Apple Cash"],
+    ["Payment to Chase card ending in 1234", "Credit Card Payment"],
+    ["CHECK # 1042", "Check"],
+    ["check 553", "Check"],
+    ["REMOTE ONLINE DEPOSIT #  1", "Check"],
+    ["DEPOSIT ID NUMBER 884421", "Check"],
+    ["FEDWIRE CREDIT VIA: BANK OF AMERICA", "Wire Transfer"],
+    ["BOOK TRANSFER CREDIT B/O", "Wire Transfer"],
+    ["REAL TIME TRANSFER RECD FROM ABA", "RTP"],
+    ["RTP RCVD FROM SOMEBANK", "RTP"],
+    ["VISA DDA PUR 1234 SHELL OIL", "Card"],
+    ["POS DEBIT  WAL-MART", "Card"],
+    ["SOME STORE (...5678)", "Card"],
+    ["ATM CASH DEPOSIT ON 07/01", "Cash"],
+    ["NON-CHASE ATM WITHDRAW DDA WITHDRAW", "ATM"],
+    ["Online Transfer to CHK ...1234", "Online Transfer"],
+    ["ORIG CO NAME:RAMP        CO ENTRY", "ACH"],
+    ["MONTHLY SERVICE FEE", "Bank Fee"],
+    ["SERVICE CHARGES FOR THE MONTH", "Bank Fee"],
+    ["ADJUSTMENT FOR POSTING ERROR", "Adjustment"],
+    ["SHELL OIL 5744 MIAMI FL 07/02", "Card"],             // ST + MM/DD fallback
+    ["DEPOSIT", "Deposit"],
+    ["totally unrecognizable line", "Other"],
+  ];
+  for (const [desc, want] of cases) assert.equal(derivePaymentMethod(desc), want, desc);
+  assert.equal(derivePaymentMethod(null), "Other");
+  for (const [desc] of cases) assert.ok(DERIVED_PAYMENT_METHODS.includes(derivePaymentMethod(desc)));
 });

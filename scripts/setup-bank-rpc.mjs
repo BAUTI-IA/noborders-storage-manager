@@ -65,13 +65,17 @@ $$
 $$;
 
 -- Bandeja tiles: exact inflow/outflow totals + count under the active filters.
+-- v2 adds p_method (filter by payment_method) — drop the old signature so the
+-- new one doesn't become an ambiguous overload.
+drop function if exists public.bank_txn_totals(date, date, bigint, text, text, text);
 create or replace function public.bank_txn_totals(
   p_from date default null,
   p_to date default null,
   p_account_id bigint default null,
   p_status text default null,
   p_category text default null,
-  p_search text default null
+  p_search text default null,
+  p_method text default null
 )
 returns table (inflows numeric, outflows numeric, txn_count bigint)
 language sql stable security invoker as
@@ -87,6 +91,7 @@ $$
     and (p_status is null or t.status = p_status)
     and (p_category is null or t.category = p_category)
     and (p_search is null or t.raw_description ilike '%' || p_search || '%')
+    and (p_method is null or t.payment_method = p_method)
 $$;
 
 -- Cuentas: signed sum + count per account (excludes ignored rows), so the
@@ -102,7 +107,7 @@ $$
 $$;
 
 grant execute on function public.bank_pnl(date, date, bigint, boolean) to anon, authenticated;
-grant execute on function public.bank_txn_totals(date, date, bigint, text, text, text) to anon, authenticated;
+grant execute on function public.bank_txn_totals(date, date, bigint, text, text, text, text) to anon, authenticated;
 grant execute on function public.bank_account_balances() to anon, authenticated;`;
 
 if (!TOKEN) {

@@ -10,6 +10,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
+  DERIVED_PAYMENT_METHODS, derivePaymentMethod,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
   parseCsv, mapBankCsv, reconcileBank, bankPnlStatement, pnlStatementFromRows,
 } from "./bankData.js";
@@ -214,6 +215,7 @@ function InboxTab(props) {
   const [fStatus, setFStatus] = useState("");
   const [fAccount, setFAccount] = useState("");
   const [fCat, setFCat] = useState("");
+  const [fMethod, setFMethod] = useState("");
   const [fDir, setFDir] = useState("");
   const [fSearch, setFSearch] = useState("");
   const [showImport, setShowImport] = useState(false);
@@ -252,13 +254,14 @@ function InboxTab(props) {
     if (fStatus) q = q.eq("status", fStatus);
     if (fAccount) q = q.eq("bank_account_id", fAccount);
     if (fCat) q = q.eq("category", fCat);
+    if (fMethod) q = q.eq("payment_method", fMethod);
     if (fDir === "in") q = q.gt("amount", 0);
     if (fDir === "out") q = q.lt("amount", 0);
     if (fFrom) q = q.gte("txn_date", fFrom);
     if (fTo) q = q.lte("txn_date", fTo);
     if (fSearch.trim()) q = q.ilike("raw_description", "%" + fSearch.trim() + "%");
     return q.order("txn_date", { ascending: false }).order("id", { ascending: false });
-  }, [supabase, fStatus, fAccount, fCat, fDir, fFrom, fTo, fSearch]);
+  }, [supabase, fStatus, fAccount, fCat, fMethod, fDir, fFrom, fTo, fSearch]);
 
   // Numbered pages: each page is its own server range.
   const loadPage = useCallback(async (p) => {
@@ -270,16 +273,19 @@ function InboxTab(props) {
 
   // Exact totals/count for the ACTIVE filters via RPC (whole-table aggregate).
   const loadTotals = useCallback(async () => {
+    // p_method only travels when set, so the RPC keeps working on installs
+    // that haven't re-run setup-bank-rpc.mjs yet (param added there).
     const { data, error } = await supabase.rpc("bank_txn_totals", {
       p_from: fFrom || null, p_to: fTo || null,
       p_account_id: fAccount || null, p_status: fStatus || null,
       p_category: fCat || null, p_search: fSearch.trim() || null,
+      ...(fMethod ? { p_method: fMethod } : {}),
     });
     if (error) { setRpcMissing(true); return; }
     setRpcMissing(false);
     const r = Array.isArray(data) ? data[0] : data;
     if (r) setTotals({ tin: numv(r.inflows), tout: numv(r.outflows), count: Number(r.txn_count) || 0 });
-  }, [supabase, fStatus, fAccount, fCat, fFrom, fTo, fSearch]);
+  }, [supabase, fStatus, fAccount, fCat, fMethod, fFrom, fTo, fSearch]);
 
   const loadUnreviewedCount = useCallback(async () => {
     const { count } = await supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("status", "unreviewed");
@@ -383,16 +389,20 @@ function InboxTab(props) {
           <option value="">Todas las categorías</option>
           {(cats?.length ? cats : SEED_BANK_CATEGORIES).map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
         </select>
+        <select value={fMethod} onChange={e => setFMethod(e.target.value)} style={{ ...inp, width:"auto" }}>
+          <option value="">Todos los métodos</option>
+          {DERIVED_PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
         <input placeholder="Buscar descripción…" value={fSearch} onChange={e => setFSearch(e.target.value)} style={{ ...inp, width:180 }} />
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>
-            {["Fecha", "Cuenta", "Descripción", "Monto", "Categoría", "Estado", "Quién", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
+            {["Fecha", "Cuenta", "Descripción", "Monto", "Método", "Categoría", "Estado", "Quién", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {filtered.length === 0 && <tr><td colSpan={8} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Sin movimientos. Importá un screenshot o CSV del banco.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={9} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Sin movimientos. Importá un screenshot o CSV del banco.</td></tr>}
             {filtered.map(t => {
               const amt = signedAmount(t);
               return (
@@ -406,6 +416,11 @@ function InboxTab(props) {
                     )}
                   </td>
                   <td style={{ ...td, fontWeight:700, whiteSpace:"nowrap", color: amt >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(amt)}</td>
+                  <td style={td}>
+                    {t.payment_method
+                      ? <span style={{ fontSize:10.5, fontWeight:600, padding:"2px 8px", borderRadius:20, background:"#f1f5f9", color:"#475569", whiteSpace:"nowrap" }}>{t.payment_method}</span>
+                      : <span style={{ fontSize:11, color:"#ccc" }}>—</span>}
+                  </td>
                   <td style={{ ...td, minWidth:170 }}>
                     {t.status === "verified" || !canEdit
                       ? <CatChip cats={cats} category={t.category} />
@@ -495,7 +510,8 @@ function ManualTxnModal({ txn, accounts, cats, supabase, session, onClose, onDon
     const base = {
       bank_account_id: f.bank_account_id, txn_date: f.txn_date, operation_date: f.operation_date || null,
       amount, direction: f.direction, raw_description: f.raw_description || null,
-      category: f.category || null, payment_method: f.payment_method || null,
+      category: f.category || null,
+      payment_method: f.payment_method || derivePaymentMethod(f.raw_description),
       payment_method_id: f.payment_method_id || null, supplier: f.supplier || null,
       employee_name: f.employee_name || null, notes: f.notes || null,
       updated_by: session?.user?.email || null, updated_at: new Date().toISOString(),
@@ -686,6 +702,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         bank_account_id: d.bank_account_id, import_batch_id: batch.id,
         txn_date: d.txn_date, amount: d.amount, direction: d.amount < 0 ? "out" : "in",
         raw_description: d.raw_description || null, category: d.category || null,
+        payment_method: derivePaymentMethod(d.raw_description),
         status: "verified", source: "csv_reload", source_ref: master.fileName || null,
         categorized_by: who, categorized_at: now, verified_by: who, verified_at: now,
         created_by: who,
@@ -746,6 +763,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
           bank_account_id: accountId, import_batch_id: batch.id,
           txn_date: d.txn_date || null, amount: d.amount, direction: d.amount < 0 ? "out" : "in",
           raw_description: d.raw_description || null, category: d.category || null,
+          payment_method: derivePaymentMethod(d.raw_description),
           ai_suggested_category: d.ai_suggested_category || null, ai_confidence: d.ai_confidence,
           status: "unreviewed", source: mode, source_ref: fileRef || null,
           created_by: session?.user?.email || null,

@@ -80,6 +80,36 @@ export const BANK_STATUS = {
 
 export const PAYMENT_METHODS_BANK = ["Zelle", "Venmo", "Cash Deposit", "Money Order", "Cashier's Check", "Personal Check", "Official Check", "Online Transfer", "Card", "Debit", "Credit", "Check", "Transfer", "Other"];
 
+// ── Payment method derived from raw_description ─────────────────────────────
+// Same rule table (first match wins) as the SQL backfill in
+// scripts/setup-payment-method.mjs — keep BOTH in sync. Validated against the
+// real ledger (~5.670 lines, 99.7% land on a non-Other bucket).
+export const DERIVED_PAYMENT_METHODS = ["Zelle", "Venmo", "Cash App", "Apple Cash", "Credit Card Payment", "Check", "Wire Transfer", "RTP", "Card", "Cash", "ATM", "Online Transfer", "ACH", "Bank Fee", "Adjustment", "Deposit", "Other"];
+export function derivePaymentMethod(rawDescription) {
+  const d = String(rawDescription || "");
+  const s = d.toLowerCase();
+  const has = (...subs) => subs.some(x => s.includes(x));
+  if (has("zelle")) return "Zelle";
+  if (has("venmo")) return "Venmo";
+  if (has("cash app")) return "Cash App";
+  if (has("apple cash")) return "Apple Cash";
+  if (has("payment to chase card ending")) return "Credit Card Payment";
+  if (/^\s*check #?\s*\d/i.test(d)) return "Check";
+  if (has("remote online deposit", "deposit id number", "sbb mdeposit")) return "Check";
+  if (has("fedwire", "chips credit", "wire transfer", "domestic wire", "book transfer", "wire out")) return "Wire Transfer";
+  if (has("real time transfer", "rtp rcvd")) return "RTP";
+  if (has("visa dda", "pos debit", "dda purchase", "merch bnkcd", "debit card") || /\(\.\.\.\d{4}\)/.test(d)) return "Card";
+  if (has("atm cash", "cash deposit")) return "Cash";
+  if (has("dda withdraw")) return "ATM";
+  if (has("online transfer", "xfer transfer", "realtime transfer", "transfer from chk", "transfer to chk", "transfer to chase")) return "Online Transfer";
+  if (has("orig co name", "ind name:", "web pmts", "sigonfile", "ramp")) return "ACH";
+  if (has("service charge", "overdraft", "monthly service", "return fee") || /\bfee\b/i.test(d)) return "Bank Fee";
+  if (has("adjustment")) return "Adjustment";
+  if (/[A-Z]{2}\s+\d{2}\/\d{2}/.test(d) || /\d{2}\/\d{2}\s*$/.test(d)) return "Card";
+  if (s.startsWith("deposit")) return "Deposit";
+  return "Other";
+}
+
 export const EMPTY_BANK_ACCOUNT = { name:"", bank_name:"", account_last4:"", type:"checking", currency:"USD", opening_balance:"", opening_date:"", notes:"" };
 export const EMPTY_BANK_CATEGORY = { name:"", direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"", active:true };
 
