@@ -1883,6 +1883,36 @@ create policy "claimdocs_update" on storage.objects for update to anon, authenti
 do $$ begin alter publication supabase_realtime add table public.claims; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.claim_notes; exception when others then null; end $$;`;
 
+// Claims → broker link: claims usually come from an external broker that sold the
+// move (we run the job under our own carrier brands), so reporting groups by the
+// broker who owns the customer, not by our executing brand. Existing claims keep
+// broker_id = null ("Sin broker") until reviewed by hand. Also seeds the real
+// broker list (matched case/space-insensitively so reruns never duplicate).
+const CLAIMS_BROKER_SQL = `alter table public.claims
+  add column if not exists broker_id bigint references public.brokers(id);
+
+insert into public.brokers (name)
+select v.name from (values
+  ('Safeship'),
+  ('Vantage Movers / Vantage Home Movers'),
+  ('Adams Moving and Storage'),
+  ('Transit Moving and Storage'),
+  ('Petrolino Moves'),
+  ('Compass Moving Group'),
+  ('Howards Van Line'),
+  ('Americas Moving and Storage'),
+  ('Full Value Van Lines LLC'),
+  ('Extra Mile Van Lines LLC'),
+  ('Home Advisor Moving Service'),
+  ('Dependable Movers'),
+  ('AMB Moving Services'),
+  ('USA Moving')
+) as v(name)
+where not exists (
+  select 1 from public.brokers b
+  where lower(regexp_replace(b.name, '\\s+', ' ', 'g')) = lower(regexp_replace(v.name, '\\s+', ' ', 'g'))
+);`;
+
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
 // Occupancy colors: green <70%, amber 70–90%, red >90%.
@@ -2255,7 +2285,7 @@ const CLAIM_RESOLUTIONS = [
   ["discount", "Discount applied"],
 ];
 const claimResolutionLabel = (v) => CLAIM_RESOLUTIONS.find(r => r[0] === v)?.[1] || "—";
-const EMPTY_CLAIM = { job_number:"", trip_id:"", client_name:"", incident_type:"damage", description:"", incident_date:"", status:"open", assigned_to:"", claimed_amount:"", paid_amount:"", resolution_type:"", closed_date:"" };
+const EMPTY_CLAIM = { job_number:"", trip_id:"", client_name:"", broker_id:"", incident_type:"damage", description:"", incident_date:"", status:"open", assigned_to:"", claimed_amount:"", paid_amount:"", resolution_type:"", closed_date:"" };
 // Claim↔job matching must tolerate case/whitespace drift between rows of the
 // same job (same rule as jobKey in analyticsData.js).
 const normJobNumber = (s) => (s || "").trim().toLowerCase();
@@ -3753,6 +3783,8 @@ export default function App() {
   const [claimSearch, setClaimSearch] = useState("");     // job # / client / description / assigned
   const [claimFilterType, setClaimFilterType] = useState("");
   const [claimFilterRes, setClaimFilterRes] = useState("");
+  const [claimFilterBroker, setClaimFilterBroker] = useState("");  // "" all | "none" sin broker | broker id
+  const [claimBrokerMissing, setClaimBrokerMissing] = useState(false);  // claims.broker_id column
   const [claimFilterFrom, setClaimFilterFrom] = useState("");  // incident-date range
   const [claimFilterTo, setClaimFilterTo] = useState("");
   const [claimsPage, setClaimsPage] = useState(0);
@@ -4548,6 +4580,26 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session, loadClaims]);
+
+  // Probe the claims.broker_id column (claims grouped by external broker) and
+  // run the migration (column + broker seed) if missing.
+  useEffect(() => {
+    if (!session || claimsMissing || crmV2Missing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("claims").select("broker_id").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: CLAIMS_BROKER_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { loadClaims(); loadBrokers(); }
+      else setClaimBrokerMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, claimsMissing, crmV2Missing, loadClaims, loadBrokers]);
 
   // Track the claim open in the modal so the realtime handler (stable channel,
   // no re-subscribe per claim) can refresh the right notes timeline.
@@ -6676,6 +6728,7 @@ export default function App() {
     setEditingClaimId(c.id);
     setClaimForm({
       job_number:c.job_number||"", trip_id:c.trip_id ? String(c.trip_id) : "", client_name:c.client_name||"",
+      broker_id:c.broker_id ? String(c.broker_id) : "",
       incident_type:c.incident_type||"damage", description:c.description||"", incident_date:c.incident_date||"",
       status:c.status||"open", assigned_to:c.assigned_to||"", claimed_amount:c.claimed_amount ?? "", paid_amount:c.paid_amount ?? "",
       resolution_type:c.resolution_type||"", closed_date:c.closed_date||"",
@@ -6700,6 +6753,7 @@ export default function App() {
       paid_amount: f.paid_amount === "" ? null : Number(f.paid_amount),
       resolution_type: f.resolution_type || null, closed_date: closedDate,
     };
+    if (!claimBrokerMissing) payload.broker_id = f.broker_id ? Number(f.broker_id) : null;
     let error = null, claimId = editingClaimId;
     if (editingClaimId) ({ error } = await supabase.from("claims").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingClaimId));
     else {
@@ -10482,9 +10536,25 @@ export default function App() {
           .filter(c => claimTab === "all" || c.status === claimTab)
           .filter(c => !claimFilterType || c.incident_type === claimFilterType)
           .filter(c => !claimFilterRes || c.resolution_type === claimFilterRes)
+          .filter(c => !claimFilterBroker || (claimFilterBroker === "none" ? !c.broker_id : String(c.broker_id || "") === claimFilterBroker))
           .filter(c => !claimFilterFrom || (c.incident_date || "") >= claimFilterFrom)
           .filter(c => !claimFilterTo || (c.incident_date || "9999") <= claimFilterTo)
-          .filter(c => !q || [c.job_number, c.client_name, c.description, c.assigned_to].join(" ").toLowerCase().includes(q));
+          .filter(c => !q || [c.job_number, c.client_name, c.description, c.assigned_to, brokerName(c.broker_id)].join(" ").toLowerCase().includes(q));
+        // Per-broker rollup over ALL claims (ignores the filters above): open
+        // count, total claimed and total paid, with a "Sin broker" bucket for
+        // legacy claims not yet assigned. Sorted by open desc, then claimed.
+        const byBroker = (() => {
+          const m = new Map();
+          for (const c of claims) {
+            const k = c.broker_id || "none";
+            if (!m.has(k)) m.set(k, { key:k, name: c.broker_id ? (brokerName(c.broker_id) || `Broker #${c.broker_id}`) : "Sin broker", open:0, total:0, claimed:0, paid:0 });
+            const r = m.get(k);
+            r.total++;
+            if (CLAIM_ACTIVE(c.status)) r.open++;
+            r.claimed += numv(c.claimed_amount); r.paid += numv(c.paid_amount);
+          }
+          return [...m.values()].sort((a, b) => (b.open - a.open) || (b.claimed - a.claimed));
+        })();
         // Clamp like Pager does, so deleting the last row of the last page never strands the view.
         const pageCur = Math.min(claimsPage, Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1));
         const pageRows = rows.slice(pageCur * PAGE_SIZE, (pageCur + 1) * PAGE_SIZE);
@@ -10501,6 +10571,12 @@ export default function App() {
             {claimsMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <span>For Claims & Incidents (claims + follow-up notes), run the setup SQL once in Supabase.</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+              </div>
+            )}
+            {!claimsMissing && claimBrokerMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>To link claims to brokers (broker column, filter and per-broker report), run the setup SQL once in Supabase.</span>
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
@@ -10538,6 +10614,11 @@ export default function App() {
                 <option value="">All resolutions</option>
                 {CLAIM_RESOLUTIONS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
               </select>
+              <select value={claimFilterBroker} onChange={e => { setClaimFilterBroker(e.target.value); setClaimsPage(0); }} style={{ ...inp, width:"auto", minWidth:150 }} disabled={claimBrokerMissing}>
+                <option value="">All brokers</option>
+                <option value="none">Sin broker</option>
+                {brokers.map(b => <option key={b.id} value={String(b.id)}>{b.name}</option>)}
+              </select>
               <input style={{ ...inp, width:"auto" }} type="date" value={claimFilterFrom} onChange={e => { setClaimFilterFrom(e.target.value); setClaimsPage(0); }} title="Incident date from" />
               <span style={{ fontSize:12, color:"#bbb" }}>→</span>
               <input style={{ ...inp, width:"auto" }} type="date" value={claimFilterTo} onChange={e => { setClaimFilterTo(e.target.value); setClaimsPage(0); }} title="Incident date to" />
@@ -10548,11 +10629,11 @@ export default function App() {
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                     <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Client","Trip","Type","Incident","Status","Claimed","Paid","Assigned","Days",""].map((h,i) => <th key={i} style={th}>{h}</th>)}
+                      {["Job #","Client","Broker","Trip","Type","Incident","Status","Claimed","Paid","Assigned","Days",""].map((h,i) => <th key={i} style={th}>{h}</th>)}
                     </tr></thead>
                     <tbody>
                       {pageRows.length === 0 ? (
-                        <tr><td colSpan={11} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No claims in this filter. Report one with “+ New claim”.</td></tr>
+                        <tr><td colSpan={12} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No claims in this filter. Report one with “+ New claim”.</td></tr>
                       ) : pageRows.map(c => {
                         const tMeta = claimTypeMeta(c.incident_type);
                         const trip = c.trip_id ? tripById[c.trip_id] : null;
@@ -10567,6 +10648,7 @@ export default function App() {
                                 : "—"}
                             </td>
                             <td style={{ ...td, fontWeight:600 }}>{c.client_name || "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{brokerName(c.broker_id) || <span style={{ color:"#bbb" }}>Sin broker</span>}</td>
                             <td style={{ ...td, fontFamily:"monospace", fontSize:12 }}>{trip ? (trip.trip_number || "#"+trip.id) : "—"}</td>
                             <td style={{ ...td, whiteSpace:"nowrap" }}>{tMeta.icon} {tMeta.l}</td>
                             <td style={{ ...td, whiteSpace:"nowrap" }}>{c.incident_date || "—"}</td>
@@ -10587,6 +10669,36 @@ export default function App() {
                 </div>
                 <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
                   <Pager page={pageCur} total={rows.length} onPage={setClaimsPage} unit="claim(s)" />
+                </div>
+              </div>
+            )}
+
+            {!claimsMissing && !claimBrokerMissing && byBroker.length > 0 && (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", marginTop:16 }}>
+                <div style={{ padding:"12px 14px 4px", fontSize:13, fontWeight:700 }}>Claims by broker</div>
+                <div style={{ padding:"0 14px 8px", fontSize:11.5, color:"#aaa" }}>All claims regardless of the filters above. Click a broker to filter the list.</div>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Broker","Open claims","Total claims","Total claimed","Total paid"].map((h,i) => <th key={i} style={{ ...th, textAlign: i === 0 ? "left" : "right" }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {byBroker.map(r => (
+                        <tr key={r.key} style={{ borderBottom:"1px solid #fafafa" }}>
+                          <td style={{ ...td, fontWeight:600 }}>
+                            <button onClick={() => { setClaimFilterBroker(r.key === "none" ? "none" : String(r.key)); setClaimsPage(0); }}
+                              style={{ background:"none", border:"none", padding:0, cursor:"pointer", fontWeight:600, fontSize:12.5, color: r.key === "none" ? "#888" : "#185FA5", textDecoration:"underline" }}>
+                              {r.name}
+                            </button>
+                          </td>
+                          <td style={{ ...td, textAlign:"right", fontWeight:700, color: r.open > 0 ? "#E24B4A" : "#888" }}>{r.open}</td>
+                          <td style={{ ...td, textAlign:"right", color:"#888" }}>{r.total}</td>
+                          <td style={{ ...td, textAlign:"right", fontWeight:600 }}>{"$"+Math.round(r.claimed).toLocaleString()}</td>
+                          <td style={{ ...td, textAlign:"right", fontWeight:600, color:"#7C3AED" }}>{"$"+Math.round(r.paid).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -12170,7 +12282,7 @@ export default function App() {
           // whatever the user typed.
           const j = jobOpts.find(x => x.job_number === jn);
           if (!jn) { set({ job_number: "" }); return; }
-          set({ job_number: jn, client_name: j?.customer || f.client_name || "", trip_id: j?.trip_id ? String(j.trip_id) : "" });
+          set({ job_number: jn, client_name: j?.customer || f.client_name || "", trip_id: j?.trip_id ? String(j.trip_id) : "", broker_id: j?.broker_id ? String(j.broker_id) : f.broker_id || "" });
         };
         const tm = claimTypeMeta(f.incident_type);
         return (
@@ -12204,6 +12316,12 @@ export default function App() {
                 </select>
               </Field>
               <Field label="Client"><input style={inp} value={f.client_name} onChange={e => set({ client_name:e.target.value })} placeholder="Client name" disabled={!canEdit} /></Field>
+              <Field label="Broker">
+                <select style={inp} value={f.broker_id} onChange={e => set({ broker_id: e.target.value })} disabled={!canEdit || claimBrokerMissing} title={claimBrokerMissing ? "Run the setup SQL to enable the broker column on claims." : undefined}>
+                  <option value="">— Sin broker (venta directa) —</option>
+                  {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </Field>
               <Field label="Incident date *"><input style={inp} type="date" value={f.incident_date} onChange={e => set({ incident_date:e.target.value })} disabled={!canEdit} /></Field>
               <Field label="Incident type *">
                 <select style={inp} value={f.incident_type} onChange={e => set({ incident_type:e.target.value })} disabled={!canEdit}>
@@ -12287,7 +12405,7 @@ export default function App() {
       })()}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, CLAIMS_BROKER_SQL, EXPENSES_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
