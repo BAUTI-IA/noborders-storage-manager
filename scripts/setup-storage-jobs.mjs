@@ -29,7 +29,7 @@ alter table public.storage_jobs enable row level security;
 drop policy if exists "storage_jobs_auth_all" on public.storage_jobs;
 create policy "storage_jobs_auth_all" on public.storage_jobs
   for all to authenticated using (true) with check (true);
-alter publication supabase_realtime add table public.storage_jobs;`;
+do $$ begin alter publication supabase_realtime add table public.storage_jobs; exception when others then null; end $$;`;
 
 if (!TOKEN) {
   console.error("Missing SUPABASE_ACCESS_TOKEN. Run:\n  SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-storage-jobs.mjs");

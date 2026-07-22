@@ -95,8 +95,52 @@ insert into public.chat_channels (name, is_dm)
 select 'general', false
 where not exists (select 1 from public.chat_channels where name = 'general' and not is_dm);
 
-alter publication supabase_realtime add table public.chat_channels;
-alter publication supabase_realtime add table public.chat_messages;`;
+do $$ begin alter publication supabase_realtime add table public.chat_channels; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.chat_messages; exception when others then null; end $$;
+
+-- Read receipts + last connection (also available standalone in
+-- scripts/setup-chat-receipts.mjs for databases that ran the block above).
+create table if not exists public.chat_presence (
+  user_id uuid primary key references public.profiles(id) on delete cascade,
+  last_seen_at timestamptz not null default now()
+);
+alter table public.chat_presence enable row level security;
+drop policy if exists "chat_presence_select" on public.chat_presence;
+create policy "chat_presence_select" on public.chat_presence
+  for select to authenticated using (true);
+drop policy if exists "chat_presence_insert" on public.chat_presence;
+create policy "chat_presence_insert" on public.chat_presence
+  for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists "chat_presence_update" on public.chat_presence;
+create policy "chat_presence_update" on public.chat_presence
+  for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "chat_members_select_mates" on public.chat_channel_members;
+create policy "chat_members_select_mates" on public.chat_channel_members
+  for select to authenticated using (
+    exists (select 1 from public.chat_channels c where c.id = channel_id and public.chat_can_see(c))
+  );
+do $$ begin alter publication supabase_realtime add table public.chat_channel_members; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.chat_presence; exception when others then null; end $$;
+
+-- Private group chats with hand-picked members (also standalone in
+-- scripts/setup-chat-groups.mjs). Redefines chat_can_see to add the
+-- private-group case on top of the public-channel/DM cases above.
+alter table public.chat_channels add column if not exists is_private boolean not null default false;
+create or replace function public.chat_is_member(cid bigint)
+returns boolean language sql security definer stable as
+$$ select exists(select 1 from public.chat_channel_members where channel_id = cid and user_id = auth.uid()) $$;
+create or replace function public.chat_can_see(ch public.chat_channels)
+returns boolean language sql stable as
+$$ select case
+     when ch.is_dm then auth.uid() in (ch.dm_a, ch.dm_b)
+     when coalesce(ch.is_private, false) then (ch.created_by = auth.uid() or public.chat_is_member(ch.id))
+     else true
+   end $$;
+drop policy if exists "chat_members_add_by_creator" on public.chat_channel_members;
+create policy "chat_members_add_by_creator" on public.chat_channel_members
+  for insert to authenticated with check (
+    exists (select 1 from public.chat_channels c where c.id = channel_id and c.created_by = auth.uid())
+  );`;
 
 if (!TOKEN) {
   console.error("Missing SUPABASE_ACCESS_TOKEN. Run:\n  SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-chat.mjs");

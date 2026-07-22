@@ -19,6 +19,12 @@ export const parseCf = (v) => { if (!v) return 0; const m = String(v).match(/[\d
 export const effCf = (j) => { const r = Number(j?.real_cf); return isFinite(r) && r > 0 ? r : parseCf(j?.volume); };
 export const hasRealCf = (j) => { const r = Number(j?.real_cf); return isFinite(r) && r > 0; };
 
+// Cash, check and money order are physically held; everything else is digital.
+// (Single copy — App.jsx and the driver P&L math must agree on what "physical" means.)
+export const PHYSICAL_METHODS = ["cash", "check", "money_order"];
+export const isPhysical = (m) => PHYSICAL_METHODS.includes(m);
+export const isDigitalMethod = (m) => !!m && !PHYSICAL_METHODS.includes(m);
+
 // Job status palette — the app's de-facto categorical color table.
 export const STATUSES = [
   { v:"scheduled", l:"Scheduled", bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },        // blue
@@ -85,6 +91,11 @@ export function dedupeJobs(jobs) {
       g = { key: k, rep: j, parts: [], anyOut: false, allOut: true, dateIn: j.date_in || null, dateOut: null };
       m.set(k, g);
     }
+    // A split job has extra "portion" rows (same job_number, own CF, money zeroed)
+    // so it can ride two trucks. The representative must be the row that carries the
+    // money: a non-split unit row if any, else the original (lowest id) split row —
+    // the peeled-off portions always have a higher id and zeroed money.
+    else if (g.rep.split_group && (!j.split_group || j.id < g.rep.id)) g.rep = j;
     g.parts.push(j);
     if (j.date_in && (!g.dateIn || j.date_in < g.dateIn)) g.dateIn = j.date_in;
     if (j.date_out) { g.anyOut = true; if (!g.dateOut || j.date_out > g.dateOut) g.dateOut = j.date_out; }
@@ -169,7 +180,9 @@ export function computeStoragePnl(records, jobs, sitFn) {
   for (const p of activeParts) { const k = jobKey(p); (partsByKey[k] = partsByKey[k] || []).push(p); }
   const incomeByStorage = {}, jobsByStorage = {};
   for (const parts of Object.values(partsByKey)) {
-    const j = parts[0];
+    // Billing lives on the money-bearing row: a non-split unit row if any, else the
+    // original (lowest id) split row. Peeled-off portions have billing zeroed.
+    const j = parts.find(p => !p.split_group) || parts.reduce((a, b) => (b.id < a.id ? b : a));
     const storageParts = parts.filter(p => p.storage_id);
     for (const p of storageParts) (jobsByStorage[p.storage_id] = jobsByStorage[p.storage_id] || []).push(p);
     if (!j.billing_active) continue;
@@ -463,6 +476,184 @@ export function jobsFlowSeries(ctx) {
     if (g.anyOut && g.dateOut) get(monthOf(g.dateOut)).entregados += 1;
   }
   return ctx.months.map(month => ({ month, label: monthLabel(month), ...(by[month] || { nuevos: 0, entregados: 0 }) }));
+}
+
+// ── Driver P&L ────────────────────────────────────────────────────────────────
+// Revenue attributed per driver over deduped job groups. Multi-driver jobs split
+// evenly across driver_ids (union over the group's parts) — an approximation the
+// owner can sanity-check by hand; weight-based strategies can plug in later.
+// Legacy jobs with only the free-text `driver` field match drivers by name.
+export function attributeRevenueToDrivers(groups, driversList, { strategy = "even" } = {}) {
+  void strategy; // only "even" exists today
+  const nameToId = driversList
+    .filter(d => (d.name || "").trim())
+    .map(d => [d.name.trim().toLowerCase(), d.id]);
+  const byId = new Map(); // driverId -> { revenue, jobs }
+  for (const g of groups) {
+    const ids = new Set();
+    for (const p of g.parts) for (const id of (Array.isArray(p.driver_ids) ? p.driver_ids : [])) ids.add(id);
+    if (!ids.size) {
+      const txt = (g.rep.driver || "").toLowerCase();
+      if (txt) for (const [nm, id] of nameToId) if (txt.includes(nm)) ids.add(id);
+    }
+    if (!ids.size) continue;
+    const share = groupCollected(g) / ids.size;
+    for (const id of ids) {
+      const cur = byId.get(id) || { revenue: 0, jobs: 0 };
+      cur.revenue += share; cur.jobs += 1;
+      byId.set(id, cur);
+    }
+  }
+  return byId;
+}
+
+// ── Pay weeks (Wednesday → Tuesday; the company pays every Wednesday) ─────────
+const pad2 = (n) => String(n).padStart(2, "0");
+const dateToISO = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+export function addDaysISO(dateISO, days) {
+  const d = new Date(dateISO + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return dateToISO(d);
+}
+// The Wednesday that starts the pay week containing dateISO (getDay(): Wed = 3).
+export function payWeekStart(dateISO) {
+  const d = new Date(dateISO + "T00:00:00");
+  d.setDate(d.getDate() - ((d.getDay() - 3 + 7) % 7));
+  return dateToISO(d);
+}
+// The 7 ISO dates of a pay week (Wed..Tue) given its starting Wednesday.
+export const payWeekDays = (startISO) => Array.from({ length: 7 }, (_, i) => addDaysISO(startISO, i));
+
+// What one work-day row pays. day_type: full (rate), half (rate/2), hourly
+// (hours × rate). `rate` is the snapshot taken when the day was logged (daily
+// or hourly depending on day_type); rows without it fall back to the driver's
+// current daily_rate/hourly_rate.
+export function workDayPay(w, driver) {
+  const t = w.day_type || "full";
+  if (t === "hourly") {
+    const r = w.rate != null && w.rate !== "" ? numv(w.rate) : numv(driver?.hourly_rate);
+    return numv(w.hours) * r;
+  }
+  const r = w.rate != null && w.rate !== "" ? numv(w.rate) : numv(driver?.daily_rate);
+  return t === "half" ? r / 2 : r;
+}
+
+// Full per-driver P&L: attributed revenue vs labor (work days × rate) + approved
+// expenses + extras commissions ± pay adjustments (bonus adds cost, deduction —
+// a fuck-up charged to the driver — reduces it). `groups` and `jobExtras` come
+// pre-filtered from the analytics ctx; expenses/workDays/adjustments are
+// filtered here by their own dates.
+export function computeDriverPnl({ driversList, groups, jobExtras, expenses, workDays, adjustments = [], range }) {
+  const inRange = (d) => { const m = monthOf(d); return !!m && (!range || !range.fromMonth || (m >= range.fromMonth && m <= range.toMonth)); };
+  const revById = attributeRevenueToDrivers(groups, driversList);
+  const rows = driversList.map(d => {
+    const rev = revById.get(d.id) || { revenue: 0, jobs: 0 };
+    const days = workDays.filter(w => w.driver_id === d.id && inRange(w.work_date));
+    const laborCost = days.reduce((s, w) => s + workDayPay(w, d), 0);
+    const myAdj = adjustments.filter(a => a.driver_id === d.id && inRange(a.adj_date || (a.created_at || "").slice(0, 10)));
+    const bonuses = myAdj.filter(a => a.kind === "bonus").reduce((s, a) => s + numv(a.amount), 0);
+    const deductions = myAdj.filter(a => a.kind !== "bonus").reduce((s, a) => s + numv(a.amount), 0);
+    const mine = expenses.filter(e => e.driver_id === d.id && inRange(e.expense_date || (e.created_at || "").slice(0, 10)));
+    const expensesByCategory = {};
+    let expensesTotal = 0, pendingTotal = 0;
+    for (const e of mine) {
+      if (e.status === "rejected") continue;
+      const amt = numv(e.amount);
+      if (e.status === "approved") {
+        expensesByCategory[e.category || "other"] = (expensesByCategory[e.category || "other"] || 0) + amt;
+        expensesTotal += amt;
+      } else pendingTotal += amt;
+    }
+    const commissions = jobExtras
+      .filter(e => e.driver_id === d.id && e.active !== false)
+      .reduce((s, e) => s + numv(e.driver_commission_amount), 0);
+    const adjustmentsNet = bonuses - deductions;
+    const totalCost = laborCost + expensesTotal + commissions + adjustmentsNet;
+    const net = rev.revenue - totalCost;
+    return {
+      driverId: d.id, name: d.name || `Driver #${d.id}`, active: d.active !== false,
+      revenue: rev.revenue, jobsCount: rev.jobs,
+      workedDays: days.length, laborCost,
+      expensesByCategory, expensesTotal, pendingTotal, commissions,
+      bonuses, deductions, adjustmentsNet,
+      totalCost, net,
+      margin: rev.revenue > 0 ? net / rev.revenue : null,
+    };
+  }).filter(r => r.revenue || r.totalCost || r.pendingTotal || r.workedDays || r.adjustmentsNet)
+    .sort((a, b) => b.net - a.net);
+  const totals = rows.reduce((t, r) => ({
+    revenue: t.revenue + r.revenue, laborCost: t.laborCost + r.laborCost,
+    expensesTotal: t.expensesTotal + r.expensesTotal, commissions: t.commissions + r.commissions,
+    adjustmentsNet: t.adjustmentsNet + r.adjustmentsNet,
+    totalCost: t.totalCost + r.totalCost, net: t.net + r.net,
+  }), { revenue: 0, laborCost: 0, expensesTotal: 0, commissions: 0, adjustmentsNet: 0, totalCost: 0, net: 0 });
+  return { rows, totals };
+}
+
+// Cash the driver should still hand in: physical payments they hold (received,
+// not banked — the same rule as the Payments "in circulation" view, matched by
+// holder NAME) minus approved driver_cash expenses not yet settled (matched by
+// driver ID). Computed, never stored — the payments ledger is untouched.
+export function driverCashReconciliation({ payments, expenses, driverName, driverId }) {
+  const name = (driverName || "").trim();
+  const mine = payments.filter(p => [p.cash_with_whom, p.received_by].some(v => (v || "").trim() && (v || "").trim() === name));
+  const holding = mine.filter(p => isPhysical(p.method) && p.received && !p.banked);
+  const held = holding.reduce((s, p) => s + paymentNet(p), 0);
+  const unsettledItems = expenses.filter(e => e.driver_id === driverId && e.paid_from === "driver_cash" && e.status === "approved" && !e.settled);
+  const approvedCashExpenses = unsettledItems.reduce((s, e) => s + numv(e.amount), 0);
+  return { held, holdingCount: holding.length, approvedCashExpenses, expectedOnHand: held - approvedCashExpenses, unsettledItems };
+}
+
+// Materials each driver should still have on hand: issued − returned − consumed
+// (± adjustments carrying a driver_id). A positive balance that never comes back
+// is the shortage the owner wants to see. Value uses the movement's cost snapshot,
+// falling back to the item's current unit_cost.
+export function materialShortages({ items, movements }) {
+  const itemById = {};
+  for (const it of items) itemById[it.id] = it;
+  const by = {}; // driverId|itemId -> row
+  for (const mv of movements) {
+    if (!mv.driver_id || !itemById[mv.item_id]) continue;
+    const k = mv.driver_id + "|" + mv.item_id;
+    const r = (by[k] = by[k] || { driverId: mv.driver_id, itemId: mv.item_id, issued: 0, returned: 0, consumed: 0, onHand: 0, value: 0 });
+    const qty = numv(mv.quantity);
+    const cost = mv.unit_cost != null ? numv(mv.unit_cost) : numv(itemById[mv.item_id].unit_cost);
+    if (mv.movement_type === "issue") { r.issued += qty; r.onHand += qty; r.value += qty * cost; }
+    else if (mv.movement_type === "return") { r.returned += qty; r.onHand -= qty; r.value -= qty * cost; }
+    else if (mv.movement_type === "consume") { r.consumed += qty; r.onHand -= qty; r.value -= qty * cost; }
+    else if (mv.movement_type === "adjust") { r.onHand += qty; r.value += qty * cost; }
+  }
+  return Object.values(by)
+    .map(r => ({ ...r, itemName: itemById[r.itemId]?.name || `#${r.itemId}`, unit: itemById[r.itemId]?.unit || "unit" }))
+    .sort((a, b) => b.value - a.value);
+}
+
+// Fuel theft signals from manual data (ELD refines this later):
+// price-per-gallon vs the fleet median (flag >1.5× / <0.5×), and $/mile between
+// consecutive odometer readings per truck.
+export function fuelOutliers({ expenses }) {
+  const fuel = expenses.filter(e => e.category === "fuel" && e.status !== "rejected" && numv(e.amount) > 0);
+  const withPpg = fuel.filter(e => numv(e.gallons) > 0).map(e => ({ ...e, ppg: numv(e.amount) / numv(e.gallons) }));
+  const sorted = withPpg.map(e => e.ppg).sort((a, b) => a - b);
+  const medianPpg = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+  const outliers = medianPpg
+    ? withPpg.filter(e => e.ppg > medianPpg * 1.5 || e.ppg < medianPpg * 0.5)
+        .map(e => ({ id: e.id, expense_date: e.expense_date, driver_id: e.driver_id, truck_id: e.truck_id, amount: numv(e.amount), gallons: numv(e.gallons), ppg: e.ppg, medianPpg }))
+    : [];
+  // $/mile between consecutive fills per truck (needs odometer on both fills).
+  const byTruck = {};
+  for (const e of fuel) { if (e.truck_id && numv(e.odometer) > 0) (byTruck[e.truck_id] = byTruck[e.truck_id] || []).push(e); }
+  const costPerMile = [];
+  for (const [truckId, list] of Object.entries(byTruck)) {
+    list.sort((a, b) => numv(a.odometer) - numv(b.odometer));
+    for (let i = 1; i < list.length; i++) {
+      const miles = numv(list[i].odometer) - numv(list[i - 1].odometer);
+      if (miles <= 0) continue;
+      costPerMile.push({ truckId: Number(truckId), from: list[i - 1].expense_date, to: list[i].expense_date, miles, amount: numv(list[i].amount), perMile: numv(list[i].amount) / miles, driver_id: list[i].driver_id });
+    }
+  }
+  costPerMile.sort((a, b) => b.perMile - a.perMile);
+  return { medianPpg, outliers, costPerMile, fillsWithGallons: withPpg.length, fills: fuel.length };
 }
 
 // First n rows + an "Otros" catch-all summing the tail.

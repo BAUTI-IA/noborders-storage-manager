@@ -3,9 +3,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
 import { MessagesSection } from "./messages.jsx";
+import { SuggestionsSection } from "./suggestions.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
-import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta } from "./analyticsData.js";
+import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, materialShortages, computeDriverPnl } from "./analyticsData.js";
+import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
+import { BancosSection } from "./bank.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
@@ -41,17 +44,53 @@ const I18N_ES = {
   "You: ": "Vos: ",
   "No messages yet": "Todavía no hay mensajes",
   "No messages yet. Say hi! 👋": "Todavía no hay mensajes. ¡Saludá! 👋",
-  "No chats yet — tap ✏️ to start one.": "Todavía no hay chats — tocá ✏️ para empezar uno.",
+  "No chats yet — tap + to start one.": "Todavía no hay chats — tocá + para empezar uno.",
   "Pick a chat to start messaging": "Elegí un chat para empezar a conversar",
   "Group chat · visible to the whole team": "Chat grupal · visible para todo el equipo",
-  "…or create a group chat (visible to the whole team)": "…o creá un chat grupal (visible para todo el equipo)",
-  "Group name, e.g. dispatch": "Nombre del grupo, ej. dispatch",
+  "Pick one person for a direct message, or several for a private group.": "Elegí una persona para un mensaje directo, o varias para un grupo privado.",
+  "Group name (optional)": "Nombre del grupo (opcional)",
+  "Select people": "Elegí personas",
+  "Private group": "Grupo privado",
+  "Cancel": "Cancelar",
+  "To create private groups with selected members, run this SQL once in Supabase (SQL Editor):": "Para crear grupos privados con miembros elegidos, corré este SQL una vez en Supabase (SQL Editor):",
+  "I ran it — dismiss": "Ya lo corrí — cerrar",
   "No teammates found.": "No se encontraron compañeros.",
   "Delete message": "Borrar mensaje",
   "Delete group": "Borrar grupo",
+  "Seen": "Visto",
+  "Seen by": "Visto por",
+  "Delivered": "Entregado",
+  "Sent": "Enviado",
+  "Last seen": "Últ. vez",
+  "To enable read receipts and last connection, run this SQL once in Supabase (SQL Editor):": "Para activar los recibos de lectura y la última conexión, corré este SQL una vez en Supabase (SQL Editor):",
   "Send": "Enviar",
   "One-time setup needed": "Se necesita una configuración única",
   "I ran it — retry": "Ya lo corrí — reintentar",
+  "Employee feedback and improvement ideas": "Feedback del equipo e ideas de mejora",
+  "💡 Share a suggestion": "💡 Compartí una sugerencia",
+  "Tell us what's working, what isn't, and what you'd change — ideas here go straight to management.": "Contanos qué funciona, qué no, y qué cambiarías — las ideas llegan directo a la gerencia.",
+  "Your idea or feedback… e.g. 'The pickup calendar should show the driver's phone'": "Tu idea o feedback… ej: 'El calendario de pickups debería mostrar el teléfono del driver'",
+  "Post without my name": "Publicar sin mi nombre",
+  "Send suggestion": "Enviar sugerencia",
+  "Sending…": "Enviando…",
+  "Write your suggestion first.": "Escribí tu sugerencia primero.",
+  "In review": "En revisión",
+  "Implemented": "Implementada",
+  "Rejected": "Rechazada",
+  "Most recent": "Más recientes",
+  "Most voted": "Más votadas",
+  "No suggestions yet": "Todavía no hay sugerencias",
+  "No suggestions in this status": "No hay sugerencias en este estado",
+  "Be the first — every idea helps us improve.": "Sé el primero — cada idea nos ayuda a mejorar.",
+  "Anonymous": "Anónimo",
+  "(you)": "(vos)",
+  "Management reply:": "Respuesta de la gerencia:",
+  "Reply": "Responder",
+  "Edit reply": "Editar respuesta",
+  "Save reply": "Guardar respuesta",
+  "Reply to the team about this suggestion…": "Respondele al equipo sobre esta sugerencia…",
+  "Vote for this": "Votar esta sugerencia",
+  "Remove my vote": "Quitar mi voto",
   "Active": "Activo",
   "Active companies": "Empresas activas",
   "Active jobs": "Jobs activos",
@@ -94,6 +133,7 @@ const I18N_ES = {
   "Cancel": "Cancelar",
   "Cancelled": "Cancelado",
   "Cash": "Cash",
+  "Change password": "Cambiar contraseña",
   "Check": "Check",
   "Choose a destination.": "Elegí un destino.",
   "Choose a unit first": "Elegí una unidad primero",
@@ -128,6 +168,7 @@ const I18N_ES = {
   "Completed": "Completado",
   "Concept": "Concepto",
   "Confirm": "Confirmar",
+  "Confirm new password": "Confirmar nueva contraseña",
   "Contact": "Contacto",
   "Copy the summary:": "Copiá el resumen:",
   "Create": "Crear",
@@ -138,6 +179,8 @@ const I18N_ES = {
   "Create split payments": "Crear pagos divididos",
   "Create trip": "Crear trip",
   "Create your account to sign in": "Crea tu cuenta para acceder",
+  "Current password": "Contraseña actual",
+  "Current password is incorrect.": "La contraseña actual es incorrecta.",
   "Database": "Base de datos",
   "Database setup": "Configuración de base de datos",
   "Date": "Fecha",
@@ -242,6 +285,7 @@ const I18N_ES = {
   "New document": "Nuevo documento",
   "New driver": "Nuevo driver",
   "New job": "Nuevo job",
+  "New password": "Nueva contraseña",
   "New payment": "Nuevo pago",
   "New trip": "Nuevo trip",
   "New truck": "Nuevo camión",
@@ -287,6 +331,9 @@ const I18N_ES = {
   "Pads outstanding ($)": "Pads pendientes ($)",
   "Pads received from broker": "Pads recibidos del broker",
   "Pads returned (post-delivery)": "Pads devueltos (post-delivery)",
+  "Password must be at least 8 characters.": "La contraseña debe tener al menos 8 caracteres.",
+  "Password updated.": "Contraseña actualizada.",
+  "Passwords do not match.": "Las contraseñas no coinciden.",
   "Payment date": "Fecha de pago",
   "Payment due date": "Vencimiento de pago",
   "Payment method": "Método de pago",
@@ -374,6 +421,7 @@ const I18N_ES = {
   "Unit status": "Estado de la unidad",
   "Units": "Unidades",
   "Up to date": "Al día",
+  "Update password": "Actualizar contraseña",
   "User": "Usuario",
   "View": "Ver",
   "We owe": "Le debemos",
@@ -452,6 +500,14 @@ const I18N_ES = {
   "Today": "Hoy",
   "➕ Add existing job": "➕ Agregar job existente",
   "Add existing job to calendar": "Agregar job existente al calendario",
+  "Pickup Calendar": "Calendario de Pickups",
+  "Delivery Calendar": "Calendario de Entregas",
+  "Scheduled deliveries": "Entregas programadas",
+  "Add existing job to delivery calendar": "Agregar job existente al calendario de entregas",
+  "Delivery date": "Fecha de delivery",
+  "Only jobs without a delivery date are listed. Pick a date above, then click a job to put it on the calendar.": "Solo se listan jobs sin fecha de delivery. Elegí una fecha arriba y hacé clic en un job para ponerlo en el calendario.",
+  "No matching jobs without a delivery date.": "No hay jobs sin fecha de delivery que coincidan.",
+  "No jobs pending a delivery date.": "No hay jobs pendientes de fecha de delivery.",
   "Add to calendar": "Agregar al calendario",
   "Edit pickup date": "Editar fecha de pickup",
   "Remove from calendar": "Quitar del calendario",
@@ -559,9 +615,10 @@ const STORAGE_JOBS_SQL = `create table if not exists public.storage_jobs (
   created_at timestamptz default now()
 );
 alter table public.storage_jobs enable row level security;
+drop policy if exists "storage_jobs_auth_all" on public.storage_jobs;
 create policy "storage_jobs_auth_all" on public.storage_jobs
   for all to authenticated using (true) with check (true);
-alter publication supabase_realtime add table public.storage_jobs;`;
+do $$ begin alter publication supabase_realtime add table public.storage_jobs; exception when others then null; end $$;`;
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -580,11 +637,11 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", notes:"", active:true };
+const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true };
 const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
-const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[] };
+const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[], purposes:{} };
 const TRIP_STATUS = {
   loading:    { l:"Loading", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" },
   in_transit: { l:"In transit", bg:"#EDE9FE", text:"#6D28D9", dot:"#7C3AED" },
@@ -596,6 +653,8 @@ function TripBadge({ status }) {
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
 }
 const TRIP_ACTIVE = (s) => s === "loading" || s === "in_transit";
+// Expense form constants (EMPTY_EXPENSE, categories, statuses, material forms)
+// live in expenses.jsx — one copy shared by the page UI and App.jsx state.
 
 // ── Extras & Commissions ──
 const EXTRA_TYPES = [
@@ -866,9 +925,7 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
   );
 }
 // Cash, check and money order are physically held; everything else is digital.
-const PHYSICAL_METHODS = ["cash", "check", "money_order"];
-const isPhysical = (m) => PHYSICAL_METHODS.includes(m);
-const isDigitalMethod = (m) => !!m && !PHYSICAL_METHODS.includes(m);
+// (PHYSICAL_METHODS/isPhysical/isDigitalMethod live in analyticsData.js — one copy.)
 const paymentNet = (p) => numv(p.amount) - numv(p.discount);
 // Whether a payment counts as banked/deposited. Digital methods are auto-banked
 // (legacy rows may still have banked = null), so they always count as banked;
@@ -970,8 +1027,32 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
 const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", real_cf:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
 
 // A job physically occupies its storage/warehouse only while it's actually there:
-// not delivered (date_out) and not already loaded onto a truck (out_for_delivery).
-const jobInStorageNow = (j) => !j.date_out && j.status !== "out_for_delivery";
+// not delivered (date_out) and not already loaded onto a truck (out_for_delivery,
+// or picked_up while riding a trip — the relocation leg between two locations).
+const jobInStorageNow = (j) => !j.date_out && j.status !== "out_for_delivery" && !(j.trip_id && j.status === "picked_up");
+
+// Purpose of a job's current trip assignment: 'relocation' = internal move between
+// locations (no delivery, balances NOT collected on this trip); null/'delivery' = normal.
+const isRelocation = (j) => j?.trip_purpose === "relocation";
+
+// Trip-layer identity. Everything OUTSIDE trips groups a job by jobKey (job_number),
+// so a job stays ONE job in billing/analytics/client view. But a split job has
+// "portion" rows (same job_number) that must ride different trucks, so inside the
+// Trips layer the assignment unit is the individual row. Non-split rows keep
+// collapsing by jobKey (no regression); split portions are addressed by row id.
+const tripUnitKey = (j) => j.split_group ? "row:" + j.id : jobKey(j);
+
+// Order rows of a job so the money-bearing one comes first: non-split unit rows
+// before split rows, then by id. Groupings that take job-level fields from the
+// first row per jobKey must iterate in this order, else a zeroed split portion
+// (created later, so newest-first in load order) could shadow the real balances.
+const moneyRowFirst = (a, b) => ((a.split_group ? 1 : 0) - (b.split_group ? 1 : 0)) || (a.id - b.id);
+
+// Total to collect from the client for a job: pickup + delivery balances
+// (whichever the job type uses) plus the broker BOL balance. numv() treats
+// blank/null as 0, so jobs with only one balance sum correctly. Split portions
+// carry zeroed money fields (see splitJob), so per-row sums never double-count.
+const jobToCollect = (j) => numv(j.pickup_balance) + numv(j.delivery_balance) + numv(j.bol_balance);
 
 // Google Maps directions URL from the job's storage location to its delivery address.
 const routeUrl = (g) => {
@@ -1083,6 +1164,30 @@ function FaddCell({ group, onSet }) {
   );
 }
 
+// One row of the "Entregas por agendar" panel on the delivery calendar: job info +
+// FADD urgency + a date picker (defaults to max(FADD, today)) + one-click schedule.
+// Module-level so the date input keeps focus across App re-renders (see FaddCell).
+function ScheduleDeliveryRow({ cand, onSchedule, onOpen }) {
+  const td = today();
+  const [date, setDate] = useState((cand.fadd && cand.fadd > td) ? cand.fadd : td);
+  const where = cand.warehouse ? `🏭 ${cand.warehouse}`
+    : cand.storage_id ? "🏬 Storage"
+    : [cand.delivery_city, cand.delivery_state].filter(Boolean).join(", ");
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderBottom:"1px solid #f6f6f6", fontSize:12.5, flexWrap:"wrap" }}>
+      <button onClick={() => onOpen(cand.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:12.5 }}>{cand.job_number || "(sin #)"}</button>
+      <span style={{ color:"#555", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:180 }}>{cand.customer || "—"}</span>
+      {cand.job_type === "broker_delivery" && <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Broker</span>}
+      <FaddBadge fadd={cand.fadd} />
+      {where && <span style={{ color:"#999", fontSize:11.5 }}>{where}</span>}
+      <span style={{ flex:1 }} />
+      <input type="date" value={date} min={cand.fadd || undefined} onChange={e => setDate(e.target.value)}
+        style={{ fontSize:12, padding:"4px 7px", borderRadius:7, border:"1px solid #ddd" }} />
+      <Btn primary disabled={!date} onClick={() => onSchedule(cand, date)} style={{ padding:"5px 12px", fontSize:12 }}>Agendar</Btn>
+    </div>
+  );
+}
+
 // Click-to-edit field used in the job detail. Date inputs commit on change
 // (the native calendar steals focus); text/datalist inputs commit on blur/Enter.
 function InlineField({ value, onSave, type = "text", listId, placeholder = "—", display, transform, mono }) {
@@ -1165,9 +1270,7 @@ alter table public.storage_jobs
   add column if not exists pickup_balance numeric,
   add column if not exists delivery_balance numeric;
 
-do $$ begin
-  alter publication supabase_realtime add table public.brokers;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.brokers; exception when others then null; end $$;`;
 // Storage occupancy + client storage billing (CRM v3). Probed via storage_billing
 // table + storages.space_type + storage_jobs.billing_active.
 const BILLING_SQL = `alter table public.storages
@@ -1196,9 +1299,7 @@ alter table public.storage_billing enable row level security;
 drop policy if exists "storage_billing_all" on public.storage_billing;
 create policy "storage_billing_all" on public.storage_billing for all to anon, authenticated using (true) with check (true);
 
-do $$ begin
-  alter publication supabase_realtime add table public.storage_billing;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.storage_billing; exception when others then null; end $$;`;
 
 // CRM v3: extra job fields (rep, financials, contacts, multi-driver) + drivers table.
 const CRM_V3_SQL = `alter table public.storage_jobs
@@ -1233,9 +1334,7 @@ alter table public.drivers enable row level security;
 drop policy if exists "drivers_all" on public.drivers;
 create policy "drivers_all" on public.drivers for all to anon, authenticated using (true) with check (true);
 
-do $$ begin
-  alter publication supabase_realtime add table public.drivers;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.drivers; exception when others then null; end $$;`;
 
 // Carrier Settlements: closing sheets + BOL collection fields + a public docs bucket.
 const SETTLEMENTS_SQL = `create table if not exists public.closing_sheets (
@@ -1284,9 +1383,7 @@ create policy "csdocs_write" on storage.objects for insert to anon, authenticate
 drop policy if exists "csdocs_update" on storage.objects;
 create policy "csdocs_update" on storage.objects for update to anon, authenticated using (bucket_id = 'closing-sheet-docs');
 
-do $$ begin
-  alter publication supabase_realtime add table public.closing_sheets;
-exception when others then null; end $$;`;
+do $$ begin alter publication supabase_realtime add table public.closing_sheets; exception when others then null; end $$;`;
 
 // Trips / Live Load: trucks + trips tables + trip link columns on storage_jobs.
 const TRIPS_SQL = `create table if not exists public.trucks (
@@ -1328,12 +1425,15 @@ create table if not exists public.trips (
 );
 alter table public.trips enable row level security;
 alter table public.trips add column if not exists trip_log jsonb default '[]'::jsonb;
+alter table public.trips add column if not exists route_overrides jsonb default '{}'::jsonb;
 drop policy if exists "trips_all" on public.trips;
 create policy "trips_all" on public.trips for all to anon, authenticated using (true) with check (true);
 
 alter table public.storage_jobs
   add column if not exists trip_id bigint references public.trips(id),
-  add column if not exists trip_stop_order integer;
+  add column if not exists trip_stop_order integer,
+  add column if not exists split_group text,
+  add column if not exists trip_purpose text;
 
 -- Audit trail of dynamic changes while a trip is in transit.
 create table if not exists public.trip_events (
@@ -1371,6 +1471,148 @@ alter table public.trip_stops enable row level security;
 drop policy if exists "trip_stops_all" on public.trip_stops;
 create policy "trip_stops_all" on public.trip_stops for all to anon, authenticated using (true) with check (true);
 do $$ begin alter publication supabase_realtime add table public.trip_stops; exception when others then null; end $$;`;
+
+// Internal equipment / materials (pads, dollies, pallets, tools…): company cargo
+// that lives at a storage unit or warehouse and can ride a trip between locations.
+// Not customer jobs — no balances, no delivery semantics.
+const EQUIPMENT_SQL = `create table if not exists public.equipment_items (
+  id bigint generated always as identity primary key,
+  name text,
+  category text,
+  quantity numeric default 1,
+  storage_id bigint references public.storages(id),
+  warehouse text,
+  trip_id bigint references public.trips(id),
+  status text default 'available',
+  notes text,
+  created_by text,
+  created_at timestamptz default now(),
+  updated_at timestamptz
+);
+alter table public.equipment_items enable row level security;
+drop policy if exists "equipment_items_all" on public.equipment_items;
+create policy "equipment_items_all" on public.equipment_items for all to anon, authenticated using (true) with check (true);
+do $$ begin alter publication supabase_realtime add table public.equipment_items; exception when others then null; end $$;`;
+
+// Per-driver expense tracking: every cost (fuel, hotels, materials, tolls…) linked
+// to driver/truck/trip/job, with bank-vs-driver-cash source so cash taken from
+// customer collections reconciles against the "in circulation" money. Also the
+// per-day driver pay log and the materials issue/return ledger (theft control).
+// job_number (not just job_id) so aggregation dedupes by jobKey like everything else.
+const EXPENSES_SQL = `create table if not exists public.expenses (
+  id bigint generated always as identity primary key,
+  expense_date date,
+  category text,
+  amount numeric,
+  vendor text,
+  driver_id bigint references public.drivers(id),
+  truck_id bigint references public.trucks(id),
+  trip_id bigint references public.trips(id),
+  job_id bigint references public.storage_jobs(id) on delete set null,
+  job_number text,
+  paid_from text default 'bank',
+  bank_account text,
+  status text default 'pending',
+  receipt_url text,
+  gallons numeric,
+  odometer numeric,
+  fuel_state text,
+  settled boolean default false,
+  settled_date date,
+  notes text,
+  created_by text,
+  created_at timestamptz default now(),
+  updated_by text,
+  updated_at timestamptz
+);
+alter table public.expenses enable row level security;
+drop policy if exists "expenses_all" on public.expenses;
+create policy "expenses_all" on public.expenses for all to anon, authenticated using (true) with check (true);
+
+alter table public.drivers add column if not exists daily_rate numeric;
+alter table public.drivers add column if not exists hourly_rate numeric;
+
+create table if not exists public.driver_work_days (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  work_date date,
+  rate numeric,
+  trip_id bigint references public.trips(id),
+  notes text,
+  created_by text,
+  created_at timestamptz default now(),
+  unique (driver_id, work_date)
+);
+alter table public.driver_work_days add column if not exists day_type text default 'full';
+alter table public.driver_work_days add column if not exists hours numeric;
+alter table public.driver_work_days enable row level security;
+drop policy if exists "driver_work_days_all" on public.driver_work_days;
+create policy "driver_work_days_all" on public.driver_work_days for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.driver_adjustments (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  adj_date date,
+  kind text default 'deduction',
+  amount numeric,
+  reason text,
+  job_number text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.driver_adjustments enable row level security;
+drop policy if exists "driver_adjustments_all" on public.driver_adjustments;
+create policy "driver_adjustments_all" on public.driver_adjustments for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.material_items (
+  id bigint generated always as identity primary key,
+  name text,
+  category text,
+  unit text default 'unit',
+  unit_cost numeric,
+  active boolean default true,
+  notes text,
+  created_at timestamptz default now()
+);
+alter table public.material_items enable row level security;
+drop policy if exists "material_items_all" on public.material_items;
+create policy "material_items_all" on public.material_items for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.material_movements (
+  id bigint generated always as identity primary key,
+  item_id bigint references public.material_items(id) on delete cascade,
+  movement_type text,
+  quantity numeric,
+  unit_cost numeric,
+  driver_id bigint references public.drivers(id),
+  trip_id bigint references public.trips(id),
+  job_id bigint references public.storage_jobs(id) on delete set null,
+  job_number text,
+  expense_id bigint references public.expenses(id) on delete set null,
+  movement_date date,
+  notes text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.material_movements enable row level security;
+drop policy if exists "material_movements_all" on public.material_movements;
+create policy "material_movements_all" on public.material_movements for all to anon, authenticated using (true) with check (true);
+
+insert into storage.buckets (id, name, public)
+  values ('expense-receipts', 'expense-receipts', true)
+  on conflict (id) do update set public = true;
+drop policy if exists "expensereceipts_read" on storage.objects;
+create policy "expensereceipts_read" on storage.objects for select to anon, authenticated using (bucket_id = 'expense-receipts');
+drop policy if exists "expensereceipts_write" on storage.objects;
+create policy "expensereceipts_write" on storage.objects for insert to anon, authenticated with check (bucket_id = 'expense-receipts');
+drop policy if exists "expensereceipts_update" on storage.objects;
+create policy "expensereceipts_update" on storage.objects for update to anon, authenticated using (bucket_id = 'expense-receipts');
+
+do $$ begin alter publication supabase_realtime add table public.expenses; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.driver_work_days; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.driver_adjustments; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.material_items; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.material_movements; exception when others then null; end $$;`;
 
 // Manual per-job timeline events (logged directly on a job, no formal trip needed).
 const JOB_EVENTS_SQL = `create table if not exists public.job_events (
@@ -1591,6 +1833,56 @@ create policy "compdocs_update" on storage.objects for update to anon, authentic
 do $$ begin alter publication supabase_realtime add table public.companies; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.compliance_documents; exception when others then null; end $$;`;
 
+// Claims & Incidents: customer claims per job (damage, theft, missing items…)
+// + a follow-up notes timeline + a public docs bucket for evidence photos/files.
+const CLAIMS_SQL = `create table if not exists public.claims (
+  id bigint generated always as identity primary key,
+  job_number text,
+  trip_id bigint,
+  client_name text,
+  incident_type text,
+  description text,
+  incident_date date,
+  status text default 'open',
+  assigned_to text,
+  claimed_amount numeric,
+  paid_amount numeric,
+  resolution_type text,
+  closed_date date,
+  attachments jsonb default '[]'::jsonb,
+  created_by text,
+  created_at timestamptz default now(),
+  updated_by text,
+  updated_at timestamptz
+);
+alter table public.claims enable row level security;
+drop policy if exists "claims_all" on public.claims;
+create policy "claims_all" on public.claims for all to anon, authenticated using (true) with check (true);
+
+create table if not exists public.claim_notes (
+  id bigint generated always as identity primary key,
+  claim_id bigint references public.claims(id) on delete cascade,
+  note text,
+  created_by text,
+  created_at timestamptz default now()
+);
+alter table public.claim_notes enable row level security;
+drop policy if exists "claim_notes_all" on public.claim_notes;
+create policy "claim_notes_all" on public.claim_notes for all to anon, authenticated using (true) with check (true);
+
+insert into storage.buckets (id, name, public)
+  values ('claim-docs', 'claim-docs', true)
+  on conflict (id) do update set public = true;
+drop policy if exists "claimdocs_read" on storage.objects;
+create policy "claimdocs_read" on storage.objects for select to anon, authenticated using (bucket_id = 'claim-docs');
+drop policy if exists "claimdocs_write" on storage.objects;
+create policy "claimdocs_write" on storage.objects for insert to anon, authenticated with check (bucket_id = 'claim-docs');
+drop policy if exists "claimdocs_update" on storage.objects;
+create policy "claimdocs_update" on storage.objects for update to anon, authenticated using (bucket_id = 'claim-docs');
+
+do $$ begin alter publication supabase_realtime add table public.claims; exception when others then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.claim_notes; exception when others then null; end $$;`;
+
 // Cubic feet stored in a job: volume is free text ("1200 cu ft / 5 pallets"),
 // so pull the first number for occupancy math.
 // Occupancy colors: green <70%, amber 70–90%, red >90%.
@@ -1626,6 +1918,19 @@ const TRIP_STOP_CATEGORIES = [
   { key:"other",        label:"Other",                 es:"Otro",                 icon:"📋", color:"#888888" },
 ];
 const tripStopCat = (k) => TRIP_STOP_CATEGORIES.find(c => c.key === k) || TRIP_STOP_CATEGORIES[TRIP_STOP_CATEGORIES.length - 1];
+
+// Internal equipment / materials categories (Equipment tab — company cargo, not jobs).
+const EQUIPMENT_CATEGORIES = [
+  { key:"pads",     label:"Pads / blankets", es:"Pads / mantas",     icon:"🧺", color:"#185FA5" },
+  { key:"dollies",  label:"Dollies",         es:"Dollies",           icon:"🛒", color:"#7C3AED" },
+  { key:"straps",   label:"Straps",          es:"Correas",           icon:"🪢", color:"#B4690E" },
+  { key:"pallets",  label:"Pallets",         es:"Pallets",           icon:"🪵", color:"#3B6D11" },
+  { key:"boxes",    label:"Boxes / packing", es:"Cajas / embalaje",  icon:"📦", color:"#1A8A4E" },
+  { key:"tools",    label:"Tools",           es:"Herramientas",      icon:"🛠️", color:"#A32D2D" },
+  { key:"other",    label:"Other",           es:"Otro",              icon:"🧰", color:"#888888" },
+];
+const equipmentCat = (k) => EQUIPMENT_CATEGORIES.find(c => c.key === k) || EQUIPMENT_CATEGORIES[EQUIPMENT_CATEGORIES.length - 1];
+const EMPTY_EQUIPMENT = { name:"", category:"pads", quantity:"1", location:"", notes:"" };
 
 // ── Live-load map: truck GPS status colors + relative-time helper ──
 const LIVE_STATUS = {
@@ -1721,22 +2026,53 @@ function settlementWaLink(sheet, calc, brokerName, driverName) {
   return "https://wa.me/?text=" + encodeURIComponent(txt);
 }
 // Full trip manifest to the driver's WhatsApp group (jobsIn already ordered by stop).
-function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, totalBol) {
+// balFor resolves each job's balance shown to the driver — callers pass the
+// OUTSTANDING amount (what's still owed) so partially-paid moves never show
+// their full balance again; defaults to the raw total for safety.
+// seq (optional) is the full ordered stop sequence — jobs and custom non-job
+// stops interleaved (tripSequenceByTrip[trip.id]) — so the driver also sees
+// maintenance/fuel/other extra stops in order. Falls back to jobsIn alone.
+function tripManifestText(trip, truckName, driverName, jobsIn, totalCf, occPct, totalCollect, balFor = jobToCollect, seq = null) {
   const lines = [
     `TRIP #${trip.trip_number || "-"} — ${truckName || "-"}`,
     `Driver: ${driverName || "-"} | Departure: ${trip.departure_date || "-"}`,
     `Total load: ${Math.round(totalCf || 0)} CF (${occPct != null ? occPct + "% capacity" : "—"})`,
-    `Total to collect: $${Math.round(totalBol || 0).toLocaleString()}`,
+    `Total to collect: $${Math.round(totalCollect || 0).toLocaleString()}`,
     ``,
     `STOPS:`,
   ];
-  jobsIn.forEach((j, i) => {
-    lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}`);
-    lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
-    lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
-    lines.push(`   Balance to collect: $${numv(j.bol_balance).toLocaleString()}`);
+  const pushJob = (j, i) => {
+    lines.push(`${i + 1}. Job ${j.job_number || "-"} — ${j.customer || "-"}${j.split_group ? " (split load — partial)" : ""}${isRelocation(j) ? " (RELOCATION)" : ""}`);
+    if (isRelocation(j)) {
+      lines.push(`   Move to: storage/warehouse (relocation)`);
+      lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
+      lines.push(`   RELOCATION — move to storage. DO NOT COLLECT.`);
+    } else {
+      lines.push(`   Delivery: ${[j.delivery_address, j.delivery_city, j.delivery_state].filter(Boolean).join(", ") || "-"}`);
+      lines.push(`   FADD: ${j.fadd || "-"} | CF: ${Math.round(effCf(j))} | Sticker: ${j.sticker_color || "-"} Lot ${j.lot_number || "-"}`);
+      lines.push(`   Balance to collect: $${Math.round(balFor(j)).toLocaleString()}`);
+    }
     lines.push("");
-  });
+  };
+  const pushCustom = (s, i) => {
+    const cat = tripStopCat(s.category);
+    lines.push(`${i + 1}. ${cat.icon} ${cat.label}${s.note ? ` — ${s.note}` : ""}`);
+    if (s.address) lines.push(`   Address: ${s.address}`);
+    lines.push(`   (extra stop — no job / nothing to collect)`);
+    lines.push("");
+  };
+  if (seq && seq.length) {
+    // Manifest follows the trip's stop order; jobsIn only fills any job the
+    // sequence might be missing (shouldn't happen, but stay safe).
+    const seen = new Set();
+    seq.forEach((item, i) => {
+      if (item.kind === "custom") pushCustom(item.s, i);
+      else { pushJob(item.j, i); seen.add(item.j); }
+    });
+    jobsIn.filter(j => !seen.has(j)).forEach((j, k) => pushJob(j, seq.length + k));
+  } else {
+    jobsIn.forEach(pushJob);
+  }
   return lines.join("\n");
 }
 const tripManifestLink = (...args) => "https://wa.me/?text=" + encodeURIComponent(tripManifestText(...args));
@@ -1770,41 +2106,70 @@ function geoCandidates({ address, city, state, zip }) {
 function deliveryQuery(j) {
   return fmtPlace({ address: j.delivery_address, city: j.delivery_city, state: j.delivery_state, zip: j.delivery_zip });
 }
-// Where a job was actually loaded from: storage unit → warehouse → the job's own
-// pickup address (matching how routeUrl resolves origin). Returns null if unknown.
-function jobOrigin(j, storageById) {
+// Every place a job could have been loaded from, most preferred first: storage
+// unit → warehouse → the job's own pickup address (matching how routeUrl resolves
+// origin). Each option: { kind, label, query, candidates }.
+function jobOriginOptions(j, storageById) {
+  const out = [];
   const st = j.storage_id ? ((storageById || {})[j.storage_id] || null) : null;
   if (st && (st.address || st.state || st.zip)) {
-    return { kind: "storage", label: [st.brand, st.unit].filter(Boolean).join(" ") || "Storage",
+    out.push({ kind: "storage", label: [st.brand, st.unit].filter(Boolean).join(" ") || "Storage",
       query: fmtPlace({ address: st.address, state: st.state, zip: st.zip }),
-      candidates: geoCandidates({ address: st.address, state: st.state, zip: st.zip }) };
+      candidates: geoCandidates({ address: st.address, state: st.state, zip: st.zip }) });
   }
   if (j.warehouse) {
-    return { kind: "warehouse", label: `Warehouse ${j.warehouse}`, query: j.warehouse, candidates: [j.warehouse].filter(Boolean) };
+    out.push({ kind: "warehouse", label: `Warehouse ${j.warehouse}`, query: j.warehouse, candidates: [j.warehouse].filter(Boolean) });
   }
-  const candidates = geoCandidates({ address: j.pickup_address, city: j.pickup_city, state: j.pickup_state, zip: j.pickup_zip });
-  if (!candidates.length) return null;
-  return { kind: "pickup", label: "Pickup", query: fmtPlace({ address: j.pickup_address, city: j.pickup_city, state: j.pickup_state, zip: j.pickup_zip }), candidates };
+  const pc = geoCandidates({ address: j.pickup_address, city: j.pickup_city, state: j.pickup_state, zip: j.pickup_zip });
+  if (pc.length) {
+    out.push({ kind: "pickup", label: "Pickup", query: fmtPlace({ address: j.pickup_address, city: j.pickup_city, state: j.pickup_state, zip: j.pickup_zip }), candidates: pc });
+  }
+  return out;
 }
-// The full journey the truck made: for each stop (in trip order) a pickup/origin
-// waypoint (where it was loaded) followed by the delivery waypoint. Jobs with no
-// delivery location still yield a (non-locatable) delivery waypoint so they're listed.
-function tripRouteWaypoints(jobsIn, storageById) {
-  const wps = [];
-  (jobsIn || []).forEach((j, idx) => {
-    const jobNumber = j.job_number || "(job)";
-    const customer = j.customer || "";
-    const o = jobOrigin(j, storageById);
-    if (o) wps.push({ type: "pickup", stop: idx + 1, jobNumber, customer, sourceKind: o.kind, sourceLabel: o.label, query: o.query, candidates: o.candidates });
-    wps.push({ type: "delivery", stop: idx + 1, jobNumber, customer, query: deliveryQuery(j), candidates: geoCandidates({ address: j.delivery_address, city: j.delivery_city, state: j.delivery_state, zip: j.delivery_zip }) });
-  });
-  return wps;
-}
-// Google Maps directions link through every locatable waypoint, in journey order.
-function tripRouteLink(jobsIn, storageById) {
-  const wps = tripRouteWaypoints(jobsIn, storageById).filter(w => w.candidates.length);
-  if (wps.length < 2) return null;
-  return "https://www.google.com/maps/dir/" + wps.map(w => encodeURIComponent(w.query || w.candidates[0])).join("/");
+// Where a job was actually loaded from (the auto-picked origin). Null if unknown.
+function jobOrigin(j, storageById) { return jobOriginOptions(j, storageById)[0] || null; }
+// Every candidate route stop for a trip, in journey order, with default + effective
+// selection. seq = tripSequenceByTrip[tripId] (jobs and custom stops interleaved).
+// Per job: ALL origin options (only the auto-picked one on by default) then the
+// delivery (always emitted — even non-locatable — so it's listed). Custom stops ride
+// at their sequence position; ones with no address are listed off and unroutable.
+// overrides = trips.route_overrides: { stopKey: bool } (only deviations from
+// default), plus an optional ROUTE_ORDER_KEY entry: the full key list in the
+// dispatcher's custom order. Bool-only readers skip it (non-boolean value).
+const ROUTE_ORDER_KEY = "__order";
+function tripRouteStopOptions(seq, storageById, overrides) {
+  const ov = overrides || {};
+  const out = [];
+  let stopN = 0;
+  for (const item of (seq || [])) {
+    if (item.kind === "job") {
+      const j = item.j; stopN++;
+      const base = { stop: stopN, jobNumber: j.job_number || "(job)", customer: j.customer || "" };
+      jobOriginOptions(j, storageById).forEach((o, i) => out.push({ ...base,
+        key: `job:${tripUnitKey(j)}:${o.kind}`, type: "pickup",
+        sourceKind: o.kind, sourceLabel: o.label, query: o.query, candidates: o.candidates, defaultOn: i === 0 }));
+      out.push({ ...base, key: `job:${tripUnitKey(j)}:delivery`, type: "delivery",
+        query: deliveryQuery(j),
+        candidates: geoCandidates({ address: j.delivery_address, city: j.delivery_city, state: j.delivery_state, zip: j.delivery_zip }),
+        defaultOn: true });
+    } else if (item.kind === "custom") {
+      const s = item.s, addr = (s.address || "").trim();
+      out.push({ key: `stop:${s.id}`, type: "custom", cat: tripStopCat(s.category), note: s.note || "",
+        query: addr, candidates: addr ? [addr] : [], defaultOn: !!addr });
+    }
+  }
+  // defaultIdx = position in the auto-built journey; kept so the modal can tell
+  // a custom order apart from the default one (and only persist real deviations).
+  let opts = out.map((o, i) => ({ ...o, defaultIdx: i, on: typeof ov[o.key] === "boolean" ? ov[o.key] : o.defaultOn }));
+  const saved = Array.isArray(ov[ROUTE_ORDER_KEY]) ? ov[ROUTE_ORDER_KEY] : null;
+  if (saved) {
+    // Saved order first (skipping keys that no longer exist); stops added to the
+    // trip after the reorder keep their default position at the end.
+    const byKey = Object.fromEntries(opts.map(o => [o.key, o]));
+    const seen = new Set(saved);
+    opts = [...saved.map(k => byKey[k]).filter(Boolean), ...opts.filter(o => !seen.has(o.key))];
+  }
+  return opts;
 }
 
 // WhatsApp "trip update" sent to the driver group when a job is added mid-trip.
@@ -1814,10 +2179,10 @@ function tripUpdateWaText(trip, g, totalCf) {
   return [
     `🔄 TRIP #${trip.trip_number || trip.id} UPDATE`,
     `New job added to your trip:`,
-    `Job: ${g.job_number || "-"} — ${g.customer || "-"}`,
+    `Job: ${g.job_number || "-"} — ${g.customer || "-"}${isRelocation(g) ? " (RELOCATION)" : ""}`,
     `Pickup/delivery: ${dest || pick || "-"}`,
     `CF: ${Math.round(effCf(g))} | Sticker: ${g.sticker_color || "-"} Lot ${g.lot_number || "-"}`,
-    `Balance to collect: $${numv(g.bol_balance).toLocaleString()}`,
+    isRelocation(g) ? `RELOCATION — move to storage. DO NOT COLLECT.` : `Balance to collect: $${numv(g.bol_balance).toLocaleString()}`,
     `Updated total load: ${Math.round(totalCf || 0)} CF`,
   ].join("\n");
 }
@@ -1831,6 +2196,8 @@ const TRIP_EVENT_META = {
   unplanned_pickup:   { l:"Unplanned pickup", icon:"🆕" },
   delivery_completed: { l:"Delivered", icon:"✅" },
   driver_handoff:     { l:"Handoff de driver", icon:"🔄" },
+  equipment_loaded:   { l:"Equipment loaded", icon:"🧰" },
+  equipment_unloaded: { l:"Equipment unloaded", icon:"📤" },
 };
 const tripEventLabel = (v) => TRIP_EVENT_META[v]?.l || v;
 // Why a driver handed a job (or the whole trip) to another driver.
@@ -1858,6 +2225,58 @@ const JOB_EVENT_TYPES = [
   { v:"other", l:"Other", icon:"📝" },
 ];
 const jobEventMeta = (v) => JOB_EVENT_TYPES.find(t => t.v === v) || { l: v || "Evento", icon:"•" };
+
+// ── Claims & Incidents: incident types, status workflow and resolutions ──
+const CLAIM_TYPES = [
+  { v:"damage", l:"Damage", icon:"💥" },
+  { v:"theft", l:"Theft / Robo", icon:"🚨" },
+  { v:"missing_items", l:"Missing items", icon:"🔍" },
+  { v:"incomplete_delivery", l:"Incomplete delivery", icon:"📭" },
+  { v:"complaint", l:"Complaint", icon:"😠" },
+  { v:"other", l:"Other", icon:"📝" },
+];
+const claimTypeMeta = (v) => CLAIM_TYPES.find(t => t.v === v) || { l: v || "—", icon:"📝" };
+const CLAIM_STATUS = {
+  open:          { l:"Open", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" },
+  investigating: { l:"Investigating", bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" },
+  resolved:      { l:"Resolved", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
+  denied:        { l:"Denied", bg:"#f1f1f1", text:"#666", dot:"#999" },
+};
+// A claim is "active" (still costs attention) while open or under investigation.
+const CLAIM_ACTIVE = (s) => s === "open" || s === "investigating";
+function ClaimBadge({ status }) {
+  const c = CLAIM_STATUS[status] || CLAIM_STATUS.open;
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
+}
+const CLAIM_RESOLUTIONS = [
+  ["paid", "Paid to client"],
+  ["denied", "Denied"],
+  ["insurance", "Covered by insurance"],
+  ["discount", "Discount applied"],
+];
+const claimResolutionLabel = (v) => CLAIM_RESOLUTIONS.find(r => r[0] === v)?.[1] || "—";
+const EMPTY_CLAIM = { job_number:"", trip_id:"", client_name:"", incident_type:"damage", description:"", incident_date:"", status:"open", assigned_to:"", claimed_amount:"", paid_amount:"", resolution_type:"", closed_date:"" };
+// Claim↔job matching must tolerate case/whitespace drift between rows of the
+// same job (same rule as jobKey in analyticsData.js).
+const normJobNumber = (s) => (s || "").trim().toLowerCase();
+// Small red "⚠ n" pill shown next to a job/trip identifier when it has active claims.
+function ClaimCountPill({ count }) {
+  if (!count) return null;
+  return <span title={`${count} open claim(s)`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"2px 7px", fontFamily:"system-ui, sans-serif" }}>⚠ {count}</span>;
+}
+// One-line claim summary (badge + type + open link + ellipsized description),
+// shared by the job and trip detail modals.
+function ClaimLine({ claim, onOpen, linkLabel }) {
+  const m = claimTypeMeta(claim.incident_type);
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, flexWrap:"wrap" }}>
+      <ClaimBadge status={claim.status} />
+      <span>{m.icon} {m.l}</span>
+      <button onClick={onOpen} style={{ border:"none", background:"none", padding:0, cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12.5, fontWeight:600 }}>{linkLabel}</button>
+      <span style={{ color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:270 }}>{claim.description}</span>
+    </div>
+  );
+}
 
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
@@ -2113,27 +2532,34 @@ function Modal({ title, onClose, children, footer }) {
           <button onClick={onClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>x</button>
         </div>
         <div style={{ padding:"16px 20px" }}>{children}</div>
-        {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8 }}>{footer}</div>}
+        {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8, flexWrap:"wrap" }}>{footer}</div>}
       </div>
     </div>
   );
 }
 
 // In-app popup that geocodes a trip's full journey (via /api/geocode → OSM
-// Nominatim) — each stop's pickup/origin (storage, warehouse, or the job's pickup)
-// and its delivery — and draws the route legs in order on the US map.
-const PICKUP_COLOR = "#1A8A4E", DELIVERY_COLOR = "#111";
-function TripRouteModal({ title, waypoints, googleLink, onClose }) {
-  const [pts, setPts] = useState(null);   // resolved waypoints, or null while geocoding
+// Nominatim) — every candidate stop (each job's origin options + delivery, plus
+// custom trip stops) — and draws the SELECTED legs in order on the US map. Each
+// row has a checkbox; the dispatcher's selection persists per trip in
+// trips.route_overrides (only deviations from the auto-picked defaults).
+const PICKUP_COLOR = "#1A8A4E", DELIVERY_COLOR = "#111", CUSTOM_COLOR = "#4B5563";
+function TripRouteModal({ title, tripId, options, canPersist, tr, onClose }) {
+  const [geo, setGeo] = useState({});     // key → {lat,lng,resolvedLabel,approx} | {failed:true}
+  const [on, setOn] = useState(() => Object.fromEntries(options.map(o => [o.key, !!o.on])));
+  const [ord, setOrd] = useState(() => options.map(o => o.key)); // route order (options come pre-sorted by any saved order)
   const [err, setErr] = useState(null);
+  const [saveErr, setSaveErr] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const out = [];
-        for (const w of waypoints) {
-          let resolved = { ...w, failed: true };
+        // Selected stops resolve first so the visible route draws as fast as before;
+        // unticked alternatives fill in afterwards (stable sort keeps journey order).
+        const ordered = [...options].sort((a, b) => (b.on ? 1 : 0) - (a.on ? 1 : 0));
+        for (const w of ordered) {
+          let resolved = { failed: true };
           // Try candidates from most to least specific; stop at the first hit.
           for (let i = 0; i < w.candidates.length; i++) {
             try {
@@ -2141,7 +2567,7 @@ function TripRouteModal({ title, waypoints, googleLink, onClose }) {
               if (r.ok) {
                 const d = await r.json();
                 if (d && d.lat != null && d.lng != null) {
-                  resolved = { ...w, lat: Number(d.lat), lng: Number(d.lng), resolvedLabel: d.label, approx: i > 0 };
+                  resolved = { lat: Number(d.lat), lng: Number(d.lng), resolvedLabel: d.label, approx: i > 0 };
                   break;
                 }
               }
@@ -2149,8 +2575,7 @@ function TripRouteModal({ title, waypoints, googleLink, onClose }) {
             if (cancelled) return;
           }
           if (cancelled) return;
-          out.push(resolved);
-          setPts([...out]);   // progressive reveal as each waypoint resolves
+          setGeo(g => ({ ...g, [w.key]: resolved }));   // progressive reveal as each stop resolves
         }
       } catch (e) {
         if (!cancelled) setErr(e?.message || "Error geolocating stops");
@@ -2159,11 +2584,43 @@ function TripRouteModal({ title, waypoints, googleLink, onClose }) {
     return () => { cancelled = true; };
   }, []);
 
-  const done = pts != null && pts.length === waypoints.length;
-  // Sequential route number for each locatable waypoint (shared by map + list).
+  // Persist the full recomputed deviations map (also prunes keys of deleted jobs/stops).
+  const persist = (onMap, ordArr) => {
+    if (!tripId) return;
+    if (!canPersist) { setSaveErr(true); return; }
+    const overrides = {};
+    for (const o of options) if (!!onMap[o.key] !== !!o.defaultOn) overrides[o.key] = !!onMap[o.key];
+    // Only store the order when it deviates from the auto-built journey, so trips
+    // the dispatcher never reordered keep following the sequence on the trip card.
+    const defaultOrd = [...options].sort((a, b) => a.defaultIdx - b.defaultIdx).map(o => o.key);
+    if (ordArr.join("|") !== defaultOrd.join("|")) overrides[ROUTE_ORDER_KEY] = ordArr;
+    supabase.from("trips").update({ route_overrides: overrides }).eq("id", tripId)
+      .then(({ error }) => setSaveErr(!!error));
+  };
+  const toggle = (key) => setOn(prev => { const next = { ...prev, [key]: !prev[key] }; persist(next, ord); return next; });
+  const move = (key, dir) => setOrd(prev => {
+    const i = prev.indexOf(key), j = i + dir;
+    if (i < 0 || j < 0 || j >= prev.length) return prev;
+    const next = [...prev]; [next[i], next[j]] = [next[j], next[i]];
+    persist(on, next);
+    return next;
+  });
+
+  const done = options.every(o => geo[o.key]);
+  // Sequential route number for each SELECTED locatable stop (shared by map + list).
+  const optByKey = Object.fromEntries(options.map(o => [o.key, o]));
   let n = 0;
-  const rows = (pts || []).map(p => { const ok = p.lat != null && p.lng != null; return { ...p, num: ok ? ++n : null }; });
+  const rows = ord.map(k => optByKey[k]).filter(Boolean).map(o => {
+    const g = geo[o.key] || null;
+    const checked = !!on[o.key];
+    return { ...o, ...(g || {}), checked, pending: !g, num: checked && g && g.lat != null ? ++n : null };
+  });
   const located = rows.filter(r => r.num != null);
+  const stopColor = (p) => p.type === "pickup" ? PICKUP_COLOR : p.type === "custom" ? (p.cat?.color || CUSTOM_COLOR) : DELIVERY_COLOR;
+  const sel = rows.filter(r => r.checked && (r.query || r.candidates.length));
+  const googleLink = sel.length >= 2
+    ? "https://www.google.com/maps/dir/" + sel.map(w => encodeURIComponent(w.query || w.candidates[0])).join("/")
+    : null;
   const footer = (
     <>
       {googleLink && <a href={googleLink} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn>Open in Google Maps</Btn></a>}
@@ -2198,7 +2655,7 @@ function TripRouteModal({ title, waypoints, googleLink, onClose }) {
               {located.map((p, i) => (
                 <Marker key={"mk" + i} coordinates={[p.lng, p.lat]}>
                   <g>
-                    <circle r={9} fill={p.type === "pickup" ? PICKUP_COLOR : DELIVERY_COLOR} stroke="#fff" strokeWidth={1.6} />
+                    <circle r={9} fill={stopColor(p)} stroke="#fff" strokeWidth={1.6} />
                     <text textAnchor="middle" y={3} style={{ fontSize:9, fontWeight:800, fill:"#fff" }}>{p.num}</text>
                   </g>
                 </Marker>
@@ -2208,24 +2665,54 @@ function TripRouteModal({ title, waypoints, googleLink, onClose }) {
           <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", marginBottom:10 }}>
             <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:PICKUP_COLOR }} />Pickup / loaded from</span>
             <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:DELIVERY_COLOR }} />Delivery</span>
+            <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:"50%", background:CUSTOM_COLOR }} />{tr("Custom stop", "Parada personalizada")}</span>
+            <span style={{ marginLeft:"auto", color:"#aaa" }}>{tr("Tick the real stops · reorder with the arrows", "Ticá las paradas reales · ordenalas con las flechas")}</span>
           </div>
-          {!done && <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>Geolocating stops… ({(pts || []).length}/{waypoints.length})</div>}
+          {!done && <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>Geolocating stops… ({Object.keys(geo).length}/{options.length})</div>}
           <div style={{ border:"1px solid #f0f0f0", borderRadius:8, overflow:"hidden" }}>
-            {rows.map((p, i) => (
-              <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12.5 }}>
-                <span style={{ width:20, height:20, borderRadius:"50%", background: p.num == null ? "#ccc" : (p.type === "pickup" ? PICKUP_COLOR : DELIVERY_COLOR), color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{p.num ?? "–"}</span>
+            {rows.map((p, idx) => {
+              const routable = p.candidates.length > 0;
+              const locFailed = p.checked && routable && !p.pending && p.lat == null;
+              // Arrows live inside the row <label>: preventDefault stops the click
+              // from also activating the checkbox.
+              const arrow = (dir, glyph, disabled) => (
+                <button type="button" disabled={disabled}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); move(p.key, dir); }}
+                  title={dir < 0 ? tr("Move up", "Subir") : tr("Move down", "Bajar")}
+                  style={{ border:"1px solid #eee", background:"#fff", borderRadius:5, width:22, height:18, lineHeight:"14px", fontSize:9, color: disabled ? "#ddd" : "#888", cursor: disabled ? "default" : "pointer", padding:0 }}>{glyph}</button>
+              );
+              return (
+              <label key={p.key} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"8px 10px", borderBottom:"1px solid #f4f4f4", fontSize:12.5, cursor:"pointer", opacity: p.checked ? 1 : 0.55, background: p.checked ? "#fff" : "#fafafa" }}>
+                <input type="checkbox" checked={p.checked} onChange={() => toggle(p.key)} style={{ marginTop:3, flexShrink:0, cursor:"pointer" }} />
+                <span style={{ width:20, height:20, borderRadius:"50%", background: p.num == null ? "#ccc" : stopColor(p), color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{p.num ?? "–"}</span>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div>
-                    <span style={{ fontSize:10.5, fontWeight:700, color: p.type === "pickup" ? "#1A6E3E" : "#333", textTransform:"uppercase", letterSpacing:"0.03em" }}>{originText(p)}</span>
-                    <span style={{ color:"#bbb" }}> · </span>
-                    <b style={{ fontFamily:"monospace" }}>{p.jobNumber}</b>{p.customer ? ` · ${p.customer}` : ""}
+                    {p.type === "custom" ? (
+                      <span style={{ fontSize:10.5, fontWeight:700, color: p.cat?.color || CUSTOM_COLOR, textTransform:"uppercase", letterSpacing:"0.03em" }}>{p.cat?.icon} {tr(p.cat?.label || "Stop", p.cat?.es || "Parada")}</span>
+                    ) : (
+                      <>
+                        <span style={{ fontSize:10.5, fontWeight:700, color: p.type === "pickup" ? "#1A6E3E" : "#333", textTransform:"uppercase", letterSpacing:"0.03em" }}>{originText(p)}</span>
+                        <span style={{ color:"#bbb" }}> · </span>
+                        <b style={{ fontFamily:"monospace" }}>{p.jobNumber}</b>{p.customer ? ` · ${p.customer}` : ""}
+                      </>
+                    )}
                     {p.approx && p.num != null && <span style={{ fontSize:10.5, fontWeight:600, color:"#854F0B", background:"#FAEEDA", borderRadius:20, padding:"1px 7px", marginLeft:6 }}>approx.</span>}
                   </div>
-                  <div style={{ color: p.num == null ? "#A32D2D" : "#888", marginTop:1 }}>{p.num == null ? (p.candidates.length ? `Couldn't locate: ${p.query}` : (p.type === "pickup" ? "No pickup location on file" : "No delivery address on file")) : (p.resolvedLabel || p.query)}</div>
+                  <div style={{ color: locFailed || !routable ? "#A32D2D" : "#888", marginTop:1 }}>
+                    {!routable
+                      ? (p.type === "custom" ? tr("No address — not routable", "Sin dirección — no se puede rutear") : (p.type === "pickup" ? "No pickup location on file" : "No delivery address on file"))
+                      : locFailed ? `Couldn't locate: ${p.query}` : (p.resolvedLabel || p.query)}
+                    {p.note ? <span style={{ color:"#aaa" }}> · {p.note}</span> : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+                <div style={{ display:"flex", flexDirection:"column", gap:2, flexShrink:0, marginTop:1 }}>
+                  {arrow(-1, "▲", idx === 0)}
+                  {arrow(1, "▼", idx === rows.length - 1)}
+                </div>
+              </label>
+            ); })}
           </div>
+          {saveErr && <div style={{ fontSize:11.5, marginTop:8, background:"#FFF6E8", border:"1px solid #F4DDB0", color:"#B45309", borderRadius:7, padding:"6px 9px" }}>{tr("Changes shown here but not saved — run the setup SQL to persist route edits.", "Los cambios se ven acá pero no se guardan — corré el setup SQL para persistir la ruta.")}</div>}
           {done && located.length < 2 && <div style={{ fontSize:12, color:"#A32D2D", marginTop:8 }}>Need at least 2 located points to draw a route.</div>}
         </>
       )}
@@ -2572,7 +3059,8 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
 const NAV = [
   { section:"Operations", items:[
     { id:"dispatching", label:"Dispatching", icon:"🚚" },
-    { id:"calendario", label:"Calendar", icon:"📅" },
+    { id:"calendario", label:"Pickup Calendar", icon:"📅" },
+    { id:"calendario_entregas", label:"Delivery Calendar", icon:"📦" },
     { id:"storage", label:"Storage", icon:"🏬" },
     { id:"jobs", label:"Jobs", icon:"💼" },
     { id:"messages", label:"Chats", icon:"💬" },
@@ -2583,16 +3071,21 @@ const NAV = [
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
+    { id:"expenses", label:"Expenses", icon:"💸" },
+    { id:"bancos", label:"Bancos", icon:"🏛️" },
+    { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"clientes", label:"Clients", icon:"👥" },
   ]},
   { section:"Fleet", items:[
     { id:"drivers", label:"Drivers", icon:"🪪" },
     { id:"trucks", label:"Trucks", icon:"🚛" },
     { id:"trips", label:"Trips / Live Load", icon:"🛣️" },
+    { id:"equipment", label:"Equipment", icon:"🧰" },
   ]},
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
     { id:"analytics", label:"Analytics", icon:"📊" },
+    { id:"suggestions", label:"Suggestions", icon:"💡" },
     { id:"bol", label:"BOL", icon:"📄" },
     { id:"users", label:"Users", icon:"👤" },
     { id:"settings", label:"Settings", icon:"⚙️" },
@@ -2604,7 +3097,7 @@ const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
 function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAdmin = false }) {
   // Only show sections the user can view; the Users section is admin-only.
   const visibleNav = NAV
-    .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : can(it.id, "view")) }))
+    .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : it.id === "suggestions" ? true : can(it.id, "view")) }))
     .filter(group => group.items.length > 0);
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
@@ -2642,7 +3135,8 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAd
 
 const PAGE_META = {
   dispatching: { title:"Dispatching", sub:"Pickup & delivery dispatch" },
-  calendario:  { title:"Calendar", sub:"Pick ups programados" },
+  calendario:  { title:"Pickup Calendar", sub:"Pick ups programados" },
+  calendario_entregas: { title:"Delivery Calendar", sub:"Scheduled deliveries" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
   messages:    { title:"Chats", sub:"Team conversations and direct messages" },
@@ -2651,19 +3145,25 @@ const PAGE_META = {
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
+  expenses:    { title:"Expenses", sub:"Gastos por driver, truck y trip · días trabajados · materiales" },
+  bancos:      { title:"Bancos", sub:"Movimientos bancarios reales · categorización con doble check · conciliación · P&L" },
   clientes:    { title:"Clients", sub:"Clients and their jobs" },
   drivers:     { title:"Drivers", sub:"Operation drivers" },
   trucks:      { title:"Trucks", sub:"Truck fleet" },
   trips:       { title:"Trips / Live Load", sub:"Live load per truck" },
+  equipment:   { title:"Equipment", sub:"Internal equipment & materials per location" },
   compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
+  claims:      { title:"Claims & Incidents", sub:"Damage, theft and customer claims per job" },
   analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
+  suggestions: { title:"Suggestions", sub:"Employee feedback and improvement ideas" },
   users:       { title:"Users", sub:"Team members, roles and permissions" },
   bol:         { title:"BOL", sub:"Bill of Lading templates and generation" },
   settings:    { title:"Settings", sub:"Operation settings" },
 };
 
-// Sections that carry per-section permissions (everything except the admin-only Users section).
-const PERMISSION_SECTIONS = NAV.flatMap(g => g.items).filter(it => it.id !== "users");
+// Sections that carry per-section permissions (everything except the admin-only
+// Users section and Suggestions, which is open to every employee by design).
+const PERMISSION_SECTIONS = NAV.flatMap(g => g.items).filter(it => it.id !== "users" && it.id !== "suggestions");
 const PERM_LEVELS = ["view", "edit", "create"];
 const EMPTY_PERMS = () => Object.fromEntries(PERMISSION_SECTIONS.map(s => [s.id, { view:false, edit:false, create:false }]));
 
@@ -2674,6 +3174,7 @@ function UsersSection({ session }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [warn, setWarn] = useState(null); // non-fatal: the admin service is down but the RLS fallback works
   const [modal, setModal] = useState(null); // null | { mode, id, email, full_name, role, permissions, active }
   const [busy, setBusy] = useState(false);
 
@@ -2684,7 +3185,10 @@ function UsersSection({ session }) {
       body: JSON.stringify({ action, payload }),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json.error || `Error ${res.status}`);
+    if (!res.ok) {
+      const msg = json.error || `Error ${res.status}`;
+      throw new Error(json.detail ? `${msg} (${json.detail})` : msg);
+    }
     return json;
   }, [session]);
 
@@ -2714,8 +3218,13 @@ function UsersSection({ session }) {
       // Fall back to the direct RLS query if the function is unavailable (then
       // last_login is simply absent).
       let list;
-      try { const r = await api("list"); list = r.users || []; }
-      catch (e1) { list = await listProfiles(); }
+      try { const r = await api("list"); list = r.users || []; setWarn(null); }
+      catch (e1) {
+        list = await listProfiles();
+        // Surface the outage instead of failing silently (it also explains why
+        // Last login shows "—"): invites won't work until the service is fixed.
+        setWarn(`Admin service unavailable: ${e1.message}. User list loaded in read-only fallback mode (no last login, invites will fail). Open /api/admin-users in the browser for a config health check.`);
+      }
       setUsers(list);
     } catch (e) { setError(e.message); }
     setLoading(false);
@@ -2748,17 +3257,53 @@ function UsersSection({ session }) {
     setModal(m => ({ ...m, permissions: Object.fromEntries(PERMISSION_SECTIONS.map(s => [s.id, { view:value, edit:value, create:value }])) }));
   }
 
+  // Fallback invite that needs no server credentials: sign the person up with a
+  // random throwaway password on a secondary client (so the admin's own session
+  // is never replaced), let the on_auth_user_created trigger create the profile
+  // row, attach role/permissions through the admin's RLS write access, and make
+  // sure an email goes out so they can set their password.
+  async function inviteFallback(email, full_name) {
+    const tmp = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const password = Array.from(crypto.getRandomValues(new Uint8Array(24)), b => alphabet[b % alphabet.length]).join("");
+    const { data, error } = await tmp.auth.signUp({
+      email, password,
+      options: { emailRedirectTo: window.location.origin + "/?invited=1", data: { full_name } },
+    });
+    if (error) throw new Error(error.message);
+    // With email confirmation on, an existing email comes back as a fake user
+    // with no identities instead of an error — detect it so we don't mislead.
+    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0)
+      throw new Error(`${email} already has an account. Use Send reset instead.`);
+    await writeProfile(data.user.id, { email, full_name, role: modal.role, permissions: modal.permissions, active: true });
+    if (!data.session) {
+      // Email confirmation is on → Supabase already sent the confirmation link;
+      // opening it lands on /?invited=1 where they set their password.
+      return `Invitation sent to ${email} (signup confirmation email).`;
+    }
+    // Confirmation off → no email was sent; send a set-your-password email.
+    const { error: rErr } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + "/?invited=1" });
+    if (rErr) return `Account for ${email} was created, but the email failed (${rErr.message}). Use Send reset from the list.`;
+    return `Invitation sent to ${email} (set-password email).`;
+  }
+
   async function save() {
     setBusy(true); setError(null); setNotice(null);
     try {
       if (modal.mode === "new") {
-        // Creating a login requires the service role → must go through the API.
+        const email = modal.email.trim(), full_name = modal.full_name.trim();
+        // Preferred path: the serverless invite (needs the service role key).
         try {
-          await api("invite", { email: modal.email.trim(), full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions });
+          await api("invite", { email, full_name, role: modal.role, permissions: modal.permissions });
+          setNotice(`Invitation sent to ${email}.`);
         } catch (e) {
-          throw new Error(`Couldn't invite ${modal.email.trim()}: ${e.message}. Inviting a new login needs the admin service configured in Vercel (SUPABASE_SERVICE_ROLE_KEY + SUPABASE_URL). Existing users can still be edited here.`);
+          // Admin service down/misconfigured → create the login from the browser.
+          try {
+            setNotice(await inviteFallback(email, full_name));
+          } catch (e2) {
+            throw new Error(`Couldn't invite ${email}. Admin service: ${e.message}. Direct signup fallback: ${e2.message}`);
+          }
         }
-        setNotice(`Invitation sent to ${modal.email.trim()}.`);
       } else {
         const patch = { full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions, active: modal.active };
         // Try the API; fall back to a direct RLS-protected update if it's down.
@@ -2813,6 +3358,7 @@ function UsersSection({ session }) {
         <Btn primary onClick={openNew}>+ New user</Btn>
       </div>
       {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
+      {warn && <div style={{ background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#92400e", marginBottom:12 }}>{warn}</div>}
       {notice && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{notice}</div>}
 
       <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
@@ -2897,7 +3443,7 @@ function UsersSection({ session }) {
               </>
             )}
 
-            <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:18 }}>
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:18, flexWrap:"wrap" }}>
               <button onClick={() => setModal(null)} disabled={busy} style={{ padding:"9px 16px", borderRadius:8, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:13 }}>Cancel</button>
               <Btn primary disabled={busy || !modal.email} onClick={save}>{busy ? "Saving…" : modal.mode === "new" ? "Send invitation" : "Save changes"}</Btn>
             </div>
@@ -2914,6 +3460,9 @@ export default function App() {
   const [nameInput, setNameInput] = useState("");    // editable name in Settings
   const [savingName, setSavingName] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState(null);
+  const [pwForm, setPwForm] = useState({ current:"", next:"", confirm:"" }); // change-password form in Settings
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwNotice, setPwNotice] = useState(null); // { ok, text }
   const [pwRecovery, setPwRecovery] = useState(false); // invite / reset-password landing
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3022,6 +3571,14 @@ export default function App() {
   const [calAddSearch, setCalAddSearch] = useState("");
   const [calAddDate, setCalAddDate] = useState("");
   const [pickupEditor, setPickupEditor] = useState(null); // { from, to } — inline pickup-date editor inside job detail
+  // Delivery calendar (same UX as the pickup calendar, indexed by delivery_date)
+  const [dcalView, setDcalView] = useState("week");      // week | month
+  const [dcalAnchor, setDcalAnchor] = useState(today()); // ISO date inside the visible range
+  const [dcalDayMenu, setDcalDayMenu] = useState(null);  // ISO date — "what to add" menu for a clicked day
+  const [dcalAddExisting, setDcalAddExisting] = useState(null); // { date } — search existing jobs to put on the delivery calendar
+  const [dcalAddSearch, setDcalAddSearch] = useState("");
+  const [dcalAddDate, setDcalAddDate] = useState("");
+  const [dcalPanelOpen, setDcalPanelOpen] = useState(true); // "Entregas por agendar" strip
   // Trips / Live Load + trucks
   const [tripsMissing, setTripsMissing] = useState(false);
   const [truckLocMissing, setTruckLocMissing] = useState(false); // live-load location columns not yet in DB
@@ -3043,6 +3600,37 @@ export default function App() {
   // Custom (non-job) stops on a trip: maintenance, DOT inspection, fuel, etc.
   const [tripStops, setTripStops] = useState([]);
   const [tripStopsMissing, setTripStopsMissing] = useState(false); // trip_stops table not yet in DB
+  // Equipment / materials tab (internal cargo, not customer jobs)
+  const [equipmentItems, setEquipmentItems] = useState([]);
+  const [equipmentMissing, setEquipmentMissing] = useState(false); // equipment_items table not yet in DB
+  const [equipmentSearch, setEquipmentSearch] = useState("");
+  const [showEquipmentModal, setShowEquipmentModal] = useState(false);
+  const [equipmentForm, setEquipmentForm] = useState(EMPTY_EQUIPMENT);
+  const [editingEquipmentId, setEditingEquipmentId] = useState(null);
+  const [equipmentSaving, setEquipmentSaving] = useState(false);
+  const [equipLoadItem, setEquipLoadItem] = useState(null);   // item being loaded onto a trip
+  const [equipUnloadItem, setEquipUnloadItem] = useState(null); // {item, tripId} being unloaded at a destination
+  // Expenses (per-driver cost tracking) + work days + materials ledger
+  const [expensesMissing, setExpensesMissing] = useState(false); // expenses tables not yet in DB
+  const [expenses, setExpenses] = useState([]);
+  const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [expenseForm, setExpenseForm] = useState(EMPTY_EXPENSE);
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [expenseSaving, setExpenseSaving] = useState(false);
+  const [expenseUploading, setExpenseUploading] = useState(false);
+  const [workDays, setWorkDays] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);   // driver pay bonuses/deductions
+  const [showAdjModal, setShowAdjModal] = useState(false);
+  const [adjForm, setAdjForm] = useState(EMPTY_ADJUSTMENT);
+  const [adjSaving, setAdjSaving] = useState(false);
+  const [materialItems, setMaterialItems] = useState([]);
+  const [materialMovements, setMaterialMovements] = useState([]);
+  const [showMaterialItemModal, setShowMaterialItemModal] = useState(false);
+  const [materialItemForm, setMaterialItemForm] = useState(EMPTY_MATERIAL_ITEM);
+  const [editingMaterialItemId, setEditingMaterialItemId] = useState(null);
+  const [showMaterialMoveModal, setShowMaterialMoveModal] = useState(false);
+  const [materialMoveForm, setMaterialMoveForm] = useState(EMPTY_MATERIAL_MOVE);
+  const [materialSaving, setMaterialSaving] = useState(false);
   const [addStopModal, setAddStopModal] = useState(null); // { trip } — the "add stop" popup
   const [stopForm, setStopForm] = useState({ category:"maintenance", address:"", note:"" });
   const [stopSaving, setStopSaving] = useState(false);
@@ -3060,6 +3648,7 @@ export default function App() {
   const [tripDetailId, setTripDetailId] = useState(null);     // trip detail modal
   const [tripEvents, setTripEvents] = useState([]);
   const [tripEventsMissing, setTripEventsMissing] = useState(false);
+  const [routeOverridesMissing, setRouteOverridesMissing] = useState(false); // trips.route_overrides column not yet in DB
   // Manual job timeline events
   const [jobEvents, setJobEvents] = useState([]);
   const [jobEventsMissing, setJobEventsMissing] = useState(false);
@@ -3069,13 +3658,19 @@ export default function App() {
   const [tripAction, setTripAction] = useState(null);         // "add" | "pickup" | "unplanned" | "handoff" | null
   const [handoffForm, setHandoffForm] = useState({ jobKey:"", to:"", reason:"better_fit", note:"" }); // jobKey "" = whole trip
   const [storageDropJob, setStorageDropJob] = useState(null); // { trip, jobKey } for the drop modal
+  const [splitJobRow, setSplitJobRow] = useState(null);       // storage_jobs row being split across two trucks
+  const [splitCf, setSplitCf] = useState("");                 // CF to peel onto the second truck
+  const [splitDest, setSplitDest] = useState("");             // "" | "trip:<id>" | "truck:<id>" | "unit:<id>" | "wh:<name>" for the peeled portion
   const [dropModal, setDropModal] = useState(null); // { trip, jobKey, label } drop-at-storage popup (trip cards)
-  const [dropSel, setDropSel] = useState("");       // selected drop target index in dropModal
+  const [dropSel, setDropSel] = useState("");       // selected drop target key ("u:<id>" | "w:<name>") in dropModal
+  const [dropCreating, setDropCreating] = useState(false); // inline "create storage unit" form open in dropModal
+  const [dropNewUnit, setDropNewUnit] = useState({ brand:"", unit:"", state:"", size:"" }); // quick-create fields
+  const [dropCreatingBusy, setDropCreatingBusy] = useState(false);
   const [unplannedForm, setUnplannedForm] = useState(EMPTY_UNPLANNED);
   const [tripBusy, setTripBusy] = useState(false);
   const [tripCompleteModal, setTripCompleteModal] = useState(null); // { trip } completion summary
-  const [tripRouteModal, setTripRouteModal] = useState(null); // { title, waypoints, googleLink } route popup
-  const [completeDropTarget, setCompleteDropTarget] = useState("");
+  const [tripRouteModal, setTripRouteModal] = useState(null); // { tripId, title, options } route popup
+  const [completeDropTarget, setCompleteDropTarget] = useState({}); // unit key -> dropTargets index (per-job storage choice)
   const [tripWaLink, setTripWaLink] = useState(null);         // { href, label } pending driver notification
   const [showTruckModal, setShowTruckModal] = useState(false);
   const [truckForm, setTruckForm] = useState(EMPTY_TRUCK);
@@ -3108,6 +3703,8 @@ export default function App() {
   const [splitMissing, setSplitMissing] = useState(false);       // split_group / extra_type / source / payment_id
   const [allocMissing, setAllocMissing] = useState(false);       // payments.job_extra_id (charge allocation)
   const [realCfMissing, setRealCfMissing] = useState(false);     // storage_jobs.real_cf (measured cubic feet)
+  const [jobSplitColMissing, setJobSplitColMissing] = useState(false); // storage_jobs.split_group (job split across trips)
+  const [tripPurposeColMissing, setTripPurposeColMissing] = useState(false); // storage_jobs.trip_purpose (delivery vs relocation)
   const [expandedSplits, setExpandedSplits] = useState(() => new Set());
   const [commAssign, setCommAssign] = useState(null);            // pending commission assignment for a payment-split extra
   const [payDocUploading, setPayDocUploading] = useState(false);
@@ -3115,6 +3712,7 @@ export default function App() {
   const [payments, setPayments] = useState([]);
   const [payAccounts, setPayAccounts] = useState([]);
   const [payTab, setPayTab] = useState("all");            // all | pending | received | circulation | banked
+  const [paySearch, setPaySearch] = useState("");         // job # / client / ref filter + "does this job have payments?" lookup
   const [depositSel, setDepositSel] = useState(() => new Set());  // payment ids ticked for batch deposit (circulation tab)
   const [depositForm, setDepositForm] = useState({ bank_account:"", date:"" });
   const [showAccountsModal, setShowAccountsModal] = useState(false);
@@ -3147,6 +3745,24 @@ export default function App() {
   const [docFilterEntity, setDocFilterEntity] = useState("");   // all-docs filters
   const [docFilterStatus, setDocFilterStatus] = useState("");
   const [docFilterDays, setDocFilterDays] = useState("");
+  // Claims & Incidents
+  const [claimsMissing, setClaimsMissing] = useState(false);
+  const [claims, setClaims] = useState([]);
+  const [claimNotes, setClaimNotes] = useState([]);       // notes of the claim currently open in the modal
+  const [claimTab, setClaimTab] = useState("all");        // all | open | investigating | resolved | denied
+  const [claimSearch, setClaimSearch] = useState("");     // job # / client / description / assigned
+  const [claimFilterType, setClaimFilterType] = useState("");
+  const [claimFilterRes, setClaimFilterRes] = useState("");
+  const [claimFilterFrom, setClaimFilterFrom] = useState("");  // incident-date range
+  const [claimFilterTo, setClaimFilterTo] = useState("");
+  const [claimsPage, setClaimsPage] = useState(0);
+  const [showClaimModal, setShowClaimModal] = useState(false);
+  const [claimForm, setClaimForm] = useState(EMPTY_CLAIM);
+  const [editingClaimId, setEditingClaimId] = useState(null);
+  const [claimSaving, setClaimSaving] = useState(false);
+  const [claimUploading, setClaimUploading] = useState(false);
+  const [claimNoteInput, setClaimNoteInput] = useState("");
+  const [claimJobSearch, setClaimJobSearch] = useState(""); // job search inside the claim form
   const [toast, setToast] = useState(null);               // brief success notification
   const fileRef = useRef();
   const autoGenRef = useRef(false);
@@ -3200,10 +3816,24 @@ export default function App() {
     setSavingName(false);
   }
 
+  // Change the current user's own password. Re-authenticates with the current
+  // password first so a borrowed open session can't silently take over the account.
+  async function changeMyPassword() {
+    if (pwForm.next.length < 8) { setPwNotice({ ok:false, text:"Password must be at least 8 characters." }); return; }
+    if (pwForm.next !== pwForm.confirm) { setPwNotice({ ok:false, text:"Passwords do not match." }); return; }
+    setPwSaving(true); setPwNotice(null);
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email: session.user.email, password: pwForm.current });
+    if (authErr) { setPwSaving(false); setPwNotice({ ok:false, text:"Current password is incorrect." }); return; }
+    const { error } = await supabase.auth.updateUser({ password: pwForm.next });
+    setPwSaving(false);
+    if (error) setPwNotice({ ok:false, text: error.message });
+    else { setPwNotice({ ok:true, text:"Password updated." }); setPwForm({ current:"", next:"", confirm:"" }); }
+  }
+
   // Keep `page` pointed at a section the user is actually allowed to see.
   useEffect(() => {
     if (!profile) return;
-    const allowed = (id) => id === "users" ? isAdmin : can(id, "view");
+    const allowed = (id) => id === "users" ? isAdmin : id === "suggestions" ? true : can(id, "view");
     if (!allowed(page)) {
       const first = SECTION_IDS.find(allowed);
       if (first) setPage(first);
@@ -3258,6 +3888,30 @@ export default function App() {
     const { data, error } = await supabase.from("trip_stops").select("*").order("stop_order", { ascending: true });
     if (!error) setTripStops(data || []);
   }, []);
+  const loadEquipment = useCallback(async () => {
+    const { data, error } = await supabase.from("equipment_items").select("*").order("created_at", { ascending: false });
+    if (!error) setEquipmentItems(data || []);
+  }, []);
+  const loadExpenses = useCallback(async () => {
+    const { data, error } = await supabase.from("expenses").select("*").order("expense_date", { ascending: false });
+    if (!error) setExpenses(data || []);
+  }, []);
+  const loadWorkDays = useCallback(async () => {
+    const { data, error } = await supabase.from("driver_work_days").select("*").order("work_date", { ascending: false });
+    if (!error) setWorkDays(data || []);
+  }, []);
+  const loadAdjustments = useCallback(async () => {
+    const { data, error } = await supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false });
+    if (!error) setAdjustments(data || []);
+  }, []);
+  const loadMaterialItems = useCallback(async () => {
+    const { data, error } = await supabase.from("material_items").select("*").order("name", { ascending: true });
+    if (!error) setMaterialItems(data || []);
+  }, []);
+  const loadMaterialMovements = useCallback(async () => {
+    const { data, error } = await supabase.from("material_movements").select("*").order("created_at", { ascending: false });
+    if (!error) setMaterialMovements(data || []);
+  }, []);
   const loadJobEvents = useCallback(async () => {
     const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
     if (!error) setJobEvents(data || []);
@@ -3285,6 +3939,15 @@ export default function App() {
   const loadComplianceDocs = useCallback(async () => {
     const { data, error } = await supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true });
     if (!error) setComplianceDocs(data || []);
+  }, []);
+  const loadClaims = useCallback(async () => {
+    const { data, error } = await supabase.from("claims").select("*").order("created_at", { ascending: false });
+    if (!error) setClaims(data || []);
+  }, []);
+  const loadClaimNotes = useCallback(async (claimId) => {
+    if (!claimId) { setClaimNotes([]); return; }
+    const { data, error } = await supabase.from("claim_notes").select("*").eq("claim_id", claimId).order("created_at", { ascending: false });
+    if (!error) setClaimNotes(data || []);
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -3595,6 +4258,51 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session, tripStopsMissing, loadTripStops]);
 
+  // Probe / auto-migrate the equipment_items table (Equipment tab — internal cargo).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("equipment_items").select("id").limit(1);
+      if (cancelled) return;
+      if (!error) { setEquipmentMissing(false); loadEquipment(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: EQUIPMENT_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) { setEquipmentMissing(false); loadEquipment(); }
+      else setEquipmentMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadEquipment]);
+
+  useEffect(() => {
+    if (!session || equipmentMissing) return;
+    const channel = supabase.channel("equipment-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "equipment_items" }, () => loadEquipment())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, equipmentMissing, loadEquipment]);
+
+  // Probe / auto-migrate the trips.route_overrides column (editable route stops).
+  useEffect(() => {
+    if (!session || tripsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("trips").select("route_overrides").limit(1);
+      if (cancelled || !error) return;
+      const sql = "alter table public.trips add column if not exists route_overrides jsonb default '{}'::jsonb;";
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { if (!cancelled) loadTrips(); return; }
+      }
+      if (!cancelled) setRouteOverridesMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, tripsMissing, loadTrips]);
+
   // Probe the job_events table (manual per-job timeline; needs storage_jobs).
   useEffect(() => {
     if (!session || !dbReady) return;
@@ -3820,6 +4528,75 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, [session, complianceMissing, loadCompanies, loadComplianceDocs]);
 
+  // Probe the Claims & Incidents module (claims + claim_notes tables).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error: cErr } = await supabase.from("claims").select("id").limit(1);
+      const { error: nErr } = await supabase.from("claim_notes").select("id").limit(1);
+      if (cancelled) return;
+      if (!cErr && !nErr) { loadClaims(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: CLAIMS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadClaims();
+      else setClaimsMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadClaims]);
+
+  // Track the claim open in the modal so the realtime handler (stable channel,
+  // no re-subscribe per claim) can refresh the right notes timeline.
+  const editingClaimIdRef = useRef(null); editingClaimIdRef.current = editingClaimId;
+  useEffect(() => {
+    if (!session || claimsMissing) return;
+    const channel = supabase.channel("claims-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "claims" }, () => loadClaims())
+      .on("postgres_changes", { event: "*", schema: "public", table: "claim_notes" }, () => { if (editingClaimIdRef.current) loadClaimNotes(editingClaimIdRef.current); })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, claimsMissing, loadClaims, loadClaimNotes]);
+
+  // Probe the Expenses module (expenses + driver_work_days + material tables).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    const loadAll = () => { loadExpenses(); loadWorkDays(); loadAdjustments(); loadMaterialItems(); loadMaterialMovements(); };
+    (async () => {
+      const { error: eErr } = await supabase.from("expenses").select("id").limit(1);
+      const { error: wErr } = await supabase.from("driver_work_days").select("day_type").limit(1);
+      const { error: aErr } = await supabase.from("driver_adjustments").select("id").limit(1);
+      const { error: mErr } = await supabase.from("material_movements").select("id").limit(1);
+      if (cancelled) return;
+      if (!eErr && !wErr && !aErr && !mErr) { loadAll(); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: EXPENSES_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadAll();
+      else setExpensesMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, loadExpenses, loadWorkDays, loadAdjustments, loadMaterialItems, loadMaterialMovements]);
+
+  useEffect(() => {
+    if (!session || expensesMissing) return;
+    const channel = supabase.channel("expenses-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => loadExpenses())
+      .on("postgres_changes", { event: "*", schema: "public", table: "driver_work_days" }, () => loadWorkDays())
+      .on("postgres_changes", { event: "*", schema: "public", table: "driver_adjustments" }, () => loadAdjustments())
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_items" }, () => loadMaterialItems())
+      .on("postgres_changes", { event: "*", schema: "public", table: "material_movements" }, () => loadMaterialMovements())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, expensesMissing, loadExpenses, loadWorkDays, loadAdjustments, loadMaterialItems, loadMaterialMovements]);
+
   // Probe the payment_stage column (added after the initial Payments release).
   useEffect(() => {
     if (!session || paymentsMissing) return;
@@ -3907,6 +4684,43 @@ export default function App() {
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled && !created) setRealCfMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  // Probe storage_jobs.split_group (marks a row as one portion of a job split
+  // across two trucks/trips — same job_number, its own CF and trip_id).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("split_group").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storage_jobs add column if not exists split_group text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setJobSplitColMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  // Probe storage_jobs.trip_purpose ('delivery' | 'relocation'; null = delivery).
+  // Marks WHY a job rides its current trip: relocation legs move it between
+  // locations without delivery semantics and without collecting its balances.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("storage_jobs").select("trip_purpose").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.storage_jobs add column if not exists trip_purpose text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled && !created) setTripPurposeColMissing(true);
     })();
     return () => { cancelled = true; };
   }, [session]);
@@ -4106,7 +4920,7 @@ export default function App() {
         return true;
       });
     const map = new Map();
-    for (const p of parts) {
+    for (const p of [...parts].sort(moneyRowFirst)) {
       const key = jobKey(p);
       if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, date_out:p.date_out, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, trip_id:p.trip_id, trip_stop_order:p.trip_stop_order, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
@@ -4227,7 +5041,7 @@ export default function App() {
         return true;
       });
     const map = new Map();
-    for (const p of parts) {
+    for (const p of [...parts].sort(moneyRowFirst)) {
       const key = jobKey(p);
       if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, trip_id:p.trip_id, trip_stop_order:p.trip_stop_order, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
@@ -4240,6 +5054,7 @@ export default function App() {
     else if (dispatchFilter === "on_hold") arr = arr.filter(g => (g.status || "scheduled") === "on_hold");
     else if (dispatchFilter === "no_trip") arr = arr.filter(g => !g.trip_id);
     else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
+    else if (dispatchFilter === "no_delivery") arr = arr.filter(g => !g.delivery_date);
     // Most urgent FADD first; jobs with no FADD sink to the bottom.
     arr.sort((a, b) => {
       const da = daysUntilFadd(a.fadd), db = daysUntilFadd(b.fadd);
@@ -4267,6 +5082,53 @@ export default function App() {
     }
     return byDate;
   }, [jobs]);
+
+  // Delivery calendar: deliveries grouped by job and indexed by delivery_date
+  // (a single day — unlike pickups, deliveries have no date range).
+  const deliveryEvents = useMemo(() => {
+    const map = new Map();
+    const byDate = {};
+    for (const j of jobs) {
+      if (!j.delivery_date) continue;
+      const k = jobKey(j);
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, calendar_status:j.calendar_status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, delivery_date:j.delivery_date, pickup_state:j.pickup_state, delivery_state:j.delivery_state });
+    }
+    for (const g of map.values()) (byDate[g.delivery_date] = byDate[g.delivery_date] || []).push(g);
+    return byDate;
+  }, [jobs]);
+
+  // Jobs that should get a delivery date: picked up and waiting (in storage /
+  // warehouse / client not ready) or broker deliveries, with no delivery_date yet.
+  // Grouped by job (ids collects every row so scheduling patches split jobs too)
+  // and sorted by FADD urgency, no-FADD last. Deliberately NOT filtered by trip_id:
+  // a job dropped at storage mid-trip keeps its trip_id and is a prime candidate.
+  const deliveryCandidates = useMemo(() => {
+    const map = new Map();
+    for (const j of jobs) {
+      if (j.date_out || j.delivery_date) continue;
+      const st = j.status || "scheduled";
+      if (st === "cancelled" || st === "delivered" || st === "out_for_delivery") continue;
+      const stored = st === "in_storage" || st === "picked_up" || j.storage_id || j.warehouse;
+      if (!stored && j.job_type !== "broker_delivery") continue;
+      const k = jobKey(j);
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, fadd:j.fadd, job_type:j.job_type, status:st, warehouse:j.warehouse, storage_id:j.storage_id, delivery_city:j.delivery_city, delivery_state:j.delivery_state, ids:[] });
+      const g = map.get(k);
+      g.ids.push(j.id);
+      // Split jobs: a later row may carry the field the first one lacks.
+      if (!g.fadd && j.fadd) g.fadd = j.fadd;
+      if (!g.warehouse && j.warehouse) g.warehouse = j.warehouse;
+      if (!g.storage_id && j.storage_id) g.storage_id = j.storage_id;
+    }
+    return [...map.values()].sort((a, b) => {
+      const da = daysUntilFadd(a.fadd), db = daysUntilFadd(b.fadd);
+      return (da === null ? Infinity : da) - (db === null ? Infinity : db);
+    });
+  }, [jobs]);
+  // Menu badge: candidates whose FADD is within a week (or overdue).
+  const deliveryToSchedule = useMemo(() => deliveryCandidates.filter(c => {
+    const d = daysUntilFadd(c.fadd);
+    return d !== null && d <= 7;
+  }).length, [deliveryCandidates]);
 
   // Top-bar metrics for the Dispatching page (distinct active jobs).
   const dispatchMetrics = useMemo(() => {
@@ -4397,9 +5259,10 @@ export default function App() {
   // Sidebar alert badges.
   const sidebarBadges = useMemo(() => ({
     dispatching: faddStats.overdue,
+    calendario_entregas: deliveryToSchedule,
     billing: billingOverdueCount,
     storage: urgentPayments,
-  }), [faddStats.overdue, billingOverdueCount, urgentPayments]);
+  }), [faddStats.overdue, deliveryToSchedule, billingOverdueCount, urgentPayments]);
 
   // ── Carrier settlements derived data ──
   const sheetById = useMemo(() => { const m = {}; for (const s of closingSheets) m[s.id] = s; return m; }, [closingSheets]);
@@ -4450,38 +5313,94 @@ export default function App() {
     const m = {}; const seen = new Set();
     for (const j of jobs) {
       if (!j.trip_id) continue;
-      const sk = j.trip_id + "|" + jobKey(j);
+      const sk = j.trip_id + "|" + tripUnitKey(j);
       if (seen.has(sk)) continue; seen.add(sk);
       (m[j.trip_id] = m[j.trip_id] || []).push(j);
     }
     for (const id of Object.keys(m)) m[id].sort((a, b) => (a.trip_stop_order ?? 9999) - (b.trip_stop_order ?? 9999));
     return m;
   }, [jobs]);
+  const jobKeyByRowId = useMemo(() => { const m = {}; for (const j of jobs) m[j.id] = jobKey(j); return m; }, [jobs]);
+  const extrasByJobKey = useMemo(() => {
+    const m = {};
+    for (const e of jobExtras) { const k = jobKeyByRowId[e.job_id]; if (!k) continue; (m[k] = m[k] || []).push(e); }
+    return m;
+  }, [jobExtras, jobKeyByRowId]);
+  // Money already collected per jobKey, split by charge (job balance vs extras,
+  // tracked independently — same math as the job-detail Payments panel).
+  // For the job balance, take the MAX against the job's bol_collected mirror
+  // rather than the sum — the two are two-way synced, so summing would
+  // double-count, and legacy data may carry only one of them.
+  const jobPaidByKey = useMemo(() => {
+    const m = {};
+    for (const p of payments) {
+      if (!p.received || (p.concept !== "job" && p.concept !== "extra")) continue;
+      const k = jobKeyByRowId[p.job_id]; if (!k) continue;
+      const e = (m[k] = m[k] || { job: 0, extra: 0 });
+      e[p.concept] += paymentNet(p);
+    }
+    return m;
+  }, [payments, jobKeyByRowId]);
+  const jobCollectedFor = useCallback((j, key) => Math.max(numv(j.bol_collected), jobPaidByKey[key || jobKey(j)]?.job || 0), [jobPaidByKey]);
+  // Extras still owed for a job: billed active extras − extra-concept payments
+  // received (aggregate, so legacy unassigned extra payments still count).
+  const extrasOwedFor = useCallback((key) => (extrasByJobKey[key] || []).reduce((s, e) => s + (e.active === false ? 0 : numv(e.amount)), 0), [extrasByJobKey]);
+  const extrasOutstandingFor = useCallback((key) => Math.max(0, extrasOwedFor(key) - (jobPaidByKey[key]?.extra || 0)), [extrasOwedFor, jobPaidByKey]);
+  // Outstanding (remaining) balance of a job = (job balance − collected) +
+  // pending extras. Dispatch and Trips surface THIS number, so a move that was
+  // partially paid — or that accumulated extras — always shows what's actually
+  // left to collect, never the original balance.
+  const jobOutstanding = useCallback((j, key) => {
+    const k = key || jobKey(j);
+    return Math.max(0, jobToCollect(j) - jobCollectedFor(j, k)) + extrasOutstandingFor(k);
+  }, [jobCollectedFor, extrasOutstandingFor]);
   const tripCalc = useCallback((trip) => {
     const jobsIn = jobsByTrip[trip.id] || [];
     // totalCf = everything assigned to the trip; loadedCf = what is physically on
     // the truck right now — delivered jobs and jobs sitting in storage (dropped
     // mid-trip or not picked up yet) don't take up space. Occupancy uses loadedCf
     // so the bar matches the stops' "Delivered" / "Dropped in storage" badges.
-    let totalCf = 0, loadedCf = 0, totalBol = 0, delivered = 0;
+    let totalCf = 0, loadedCf = 0, totalCollect = 0, totalOutstanding = 0, delivered = 0, deliveryCount = 0, relocCount = 0, relocDone = 0;
+    // Extras live at the job level: count them ONCE per jobKey even when a
+    // split job has two portions riding this same trip.
+    const seenKeys = new Set();
+    // storage_drop events log the unit's min row id; a row is covered when any
+    // row of its unit (same job_number, non-split) appears in the set.
+    const dropIds = new Set();
+    for (const e of tripEvents) { if (e.trip_id === trip.id && e.event_type === "storage_drop" && e.job_id != null) dropIds.add(e.job_id); }
+    const unitDropped = (j) => dropIds.has(j.id) || (!j.split_group && !!j.job_number && jobsIn.some(x => x.id !== j.id && x.job_number === j.job_number && dropIds.has(x.id)));
     for (const j of jobsIn) {
-      const cf = effCf(j);
-      totalCf += cf; totalBol += numv(j.bol_balance);
-      if (j.date_out || j.status === "delivered") delivered++;
-      else if (j.status !== "in_storage") loadedCf += cf;
+      const cf = effCf(j); const k = jobKey(j);
+      totalCf += cf;
+      // Relocation legs never collect on this trip: they move the job between
+      // locations, so their balances (and extras) stay off the manifest /
+      // dashboard money. A relocation is done only once its storage_drop event
+      // exists — in_storage alone also matches a job still waiting at origin.
+      if (isRelocation(j)) {
+        relocCount++;
+        if (j.status === "in_storage" && unitDropped(j)) relocDone++;
+      } else {
+        deliveryCount++;
+        totalCollect += jobToCollect(j);
+        totalOutstanding += Math.max(0, jobToCollect(j) - jobCollectedFor(j, k));
+        if (!seenKeys.has(k)) { seenKeys.add(k); totalCollect += extrasOwedFor(k); totalOutstanding += extrasOutstandingFor(k); }
+        if (j.date_out || j.status === "delivered") delivered++;
+      }
+      if (!(j.date_out || j.status === "delivered") && j.status !== "in_storage") loadedCf += cf;
     }
     const cap = numv(truckById[trip.truck_id]?.capacity_cf);
     const occPct = cap > 0 ? Math.round((loadedCf / cap) * 100) : null;
-    return { jobsIn, totalCf, loadedCf, totalBol, delivered, count: jobsIn.length, cap, occPct, allDelivered: jobsIn.length > 0 && delivered === jobsIn.length };
-  }, [jobsByTrip, truckById]);
+    return { jobsIn, totalCf, loadedCf, totalCollect, totalOutstanding, delivered, deliveryCount, relocCount, relocDone, count: jobsIn.length, cap, occPct,
+      allDelivered: jobsIn.length > 0 && delivered === deliveryCount && relocDone === relocCount };
+  }, [jobsByTrip, truckById, jobCollectedFor, extrasOwedFor, extrasOutstandingFor, tripEvents]);
   const tripMetrics = useMemo(() => {
     const td = today();
-    let activeCount = 0, cfTransit = 0, bolTransit = 0, deliveredToday = 0;
+    let activeCount = 0, cfTransit = 0, collectTransit = 0, deliveredToday = 0;
     for (const t of trips) {
-      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.loadedCf; bolTransit += c.totalBol; }
+      if (TRIP_ACTIVE(t.status)) { const c = tripCalc(t); activeCount++; cfTransit += c.loadedCf; collectTransit += c.totalOutstanding; }
     }
     for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
-    return { activeCount, cfTransit, bolTransit, deliveredToday };
+    return { activeCount, cfTransit, collectTransit, deliveredToday };
   }, [trips, jobs, tripCalc]);
   // Custom (non-job) stops grouped by trip, ordered by stop_order then creation.
   const tripStopsByTrip = useMemo(() => {
@@ -4498,7 +5417,7 @@ export default function App() {
     const ids = new Set([...Object.keys(jobsByTrip), ...Object.keys(tripStopsByTrip)]);
     for (const id of ids) {
       const items = [
-        ...(jobsByTrip[id] || []).map(j => ({ kind:"job", order: j.trip_stop_order ?? 9999, j, key: "j:" + jobKey(j) })),
+        ...(jobsByTrip[id] || []).map(j => ({ kind:"job", order: j.trip_stop_order ?? 9999, j, key: "j:" + tripUnitKey(j) })),
         ...(tripStopsByTrip[id] || []).map(s => ({ kind:"custom", order: s.stop_order ?? 9999, s, key: "c:" + s.id })),
       ];
       items.sort((a, b) => (a.order - b.order) || (a.kind === b.kind ? 0 : a.kind === "job" ? -1 : 1));
@@ -4520,7 +5439,7 @@ export default function App() {
       if (j.date_out || j.trip_id) continue;
       if (j.status !== "in_storage" && !j.storage_id && !j.warehouse) continue;
       if (j.status === "delivered" || j.status === "cancelled") continue;
-      const k = jobKey(j);
+      const k = tripUnitKey(j);
       if (!m.has(k)) m.set(k, j);
     }
     return [...m.values()];
@@ -4532,7 +5451,7 @@ export default function App() {
     for (const j of jobs) {
       if (j.trip_id || j.date_out) continue;
       if (!["scheduled", "picked_up", "in_storage"].includes(j.status)) continue;
-      const k = jobKey(j);
+      const k = tripUnitKey(j);
       if (!m.has(k)) m.set(k, j);
     }
     return [...m.values()];
@@ -4609,7 +5528,53 @@ export default function App() {
     return rows.sort((a, b) => (a.days ?? 0) - (b.days ?? 0));
   }, [complianceDocs, entityName]);
 
-  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0, messages: chatUnread || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length, chatUnread]);
+  // ── Claims derived data: active-claim counts per job / trip (for ⚠ badges) + page metrics ──
+  const claimsActive = useMemo(() => claims.filter(c => CLAIM_ACTIVE(c.status)), [claims]);
+  // Keys are normalized job numbers (normJobNumber) — job rows of one logical
+  // job can differ in case/whitespace, and claims must still match all of them.
+  const claimsByJob = useMemo(() => {
+    const m = {};
+    for (const c of claimsActive) { const k = normJobNumber(c.job_number); if (k) m[k] = (m[k] || 0) + 1; }
+    return m;
+  }, [claimsActive]);
+  const jobByNumber = useMemo(() => {
+    const m = {};
+    for (const j of jobs) { const k = normJobNumber(j.job_number); if (k && !m[k]) m[k] = j; }
+    return m;
+  }, [jobs]);
+  const claimsByTrip = useMemo(() => {
+    // A claim counts against a trip when linked directly (trip_id) or through any
+    // trip its job's rows sit on (split jobs can span several trips — count all).
+    const tripsByJobNumber = {};
+    for (const j of jobs) {
+      const k = normJobNumber(j.job_number);
+      if (k && j.trip_id) (tripsByJobNumber[k] = tripsByJobNumber[k] || new Set()).add(j.trip_id);
+    }
+    const m = {};
+    for (const c of claimsActive) {
+      const tids = new Set(tripsByJobNumber[normJobNumber(c.job_number)] || []);
+      if (c.trip_id) tids.add(c.trip_id);
+      for (const tid of tids) m[tid] = (m[tid] || 0) + 1;
+    }
+    return m;
+  }, [claimsActive, jobs]);
+  const claimMetrics = useMemo(() => {
+    const year = new Date().getFullYear();
+    let open = 0, investigating = 0, resolvedYtd = 0, claimed = 0, paid = 0, closeDays = 0, closed = 0;
+    for (const c of claims) {
+      if (c.status === "open") open++;
+      if (c.status === "investigating") investigating++;
+      if (c.status === "resolved" && (c.closed_date || "").startsWith(String(year))) resolvedYtd++;
+      claimed += numv(c.claimed_amount); paid += numv(c.paid_amount);
+      if (!CLAIM_ACTIVE(c.status) && c.closed_date && c.incident_date) {
+        const d = Math.round((new Date(c.closed_date) - new Date(c.incident_date)) / ONE_DAY);
+        if (d >= 0) { closeDays += d; closed++; }
+      }
+    }
+    return { open, investigating, resolvedYtd, claimed, paid, avgClose: closed ? Math.round(closeDays / closed) : null };
+  }, [claims]);
+
+  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0, claims: claimsActive.length || 0, messages: chatUnread || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length, claimsActive.length, chatUnread]);
 
   // Team-chat unread badge while the Messages section is closed. Realtime rows
   // respect RLS, so only channels visible to this user arrive here. When the
@@ -4637,13 +5602,24 @@ export default function App() {
     return () => { supabase.removeChannel(ch); setOnlineIds([]); };
   }, [session]);
 
+  // Last-connection heartbeat: stamp my chat_presence row every minute while
+  // the app is open (silently a no-op until the chat receipts SQL is run).
+  useEffect(() => {
+    if (!session) return;
+    const beat = () => { supabase.from("chat_presence").upsert({ user_id: session.user.id, last_seen_at: new Date().toISOString() }).then(() => {}); };
+    beat();
+    const iv = setInterval(beat, 60_000);
+    const onVis = () => { if (document.visibilityState === "visible") beat(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [session]);
+
   // Trip status is MANUAL only — never auto-changed from job delivery state.
   // The `allDelivered` flag (from tripCalc) is used solely to surface a
   // non-blocking "ready to complete?" suggestion inside the trip detail.
 
   // ── Extras & commissions derived data ──
   const empById = useMemo(() => { const m = {}; for (const e of employees) m[e.id] = e; return m; }, [employees]);
-  const jobKeyByRowId = useMemo(() => { const m = {}; for (const j of jobs) m[j.id] = jobKey(j); return m; }, [jobs]);
   // Distinct-by-jobKey job groups (light) for the extras module, with a representative
   // row id (smallest) used as the FK target when creating extras.
   const extraJobGroups = useMemo(() => {
@@ -4660,13 +5636,8 @@ export default function App() {
     return m;
   }, [jobs]);
   // Expected to be collected for a job = pickup + delivery balances (+ broker BOL balance).
-  const jobExpected = useCallback((g) => g ? numv(g.pickup_balance) + numv(g.delivery_balance) + numv(g.bol_balance) : 0, []);
+  const jobExpected = useCallback((g) => g ? jobToCollect(g) : 0, []);
   const groupMonth = useCallback((g) => (g.date_in || g.created_at || "").slice(0, 7), []);
-  const extrasByJobKey = useMemo(() => {
-    const m = {};
-    for (const e of jobExtras) { const k = jobKeyByRowId[e.job_id]; if (!k) continue; (m[k] = m[k] || []).push(e); }
-    return m;
-  }, [jobExtras, jobKeyByRowId]);
   const jobKeysWithExtras = useMemo(() => {
     const s = new Set();
     for (const e of jobExtras) { if (e.active === false) continue; const k = jobKeyByRowId[e.job_id]; if (k) s.add(k); }
@@ -4698,12 +5669,6 @@ export default function App() {
     extras: extrasByJobKey[key] || [],
     payments: paymentsByJobKey[key] || [],
   }), [extraJobGroups, jobExpected, extrasByJobKey, paymentsByJobKey]);
-  // Net received per job (only payments flagged received), for outstanding-balance math.
-  const jobReceivedByKey = useMemo(() => {
-    const m = {};
-    for (const p of payments) { if (!p.received) continue; const k = jobKeyByRowId[p.job_id]; if (!k) continue; m[k] = (m[k] || 0) + paymentNet(p); }
-    return m;
-  }, [payments, jobKeyByRowId]);
   // Enrich each payment with its job group for table/grouping/search.
   const paymentRows = useMemo(() => payments.map(p => {
     const k = jobKeyByRowId[p.job_id];
@@ -4868,7 +5833,10 @@ export default function App() {
     if (!jobDetailKey) return null;
     const parts = jobs.filter(j => jobKey(j) === jobDetailKey).map(j => ({ ...j, storage: storageById[j.storage_id] || null }));
     if (!parts.length) return null;
-    const f = parts[0];
+    // Representative for the job-level fields (money, billing, addresses): the row
+    // that carries the money — a non-split unit if any, else the original (lowest id)
+    // split row. Split portions have their money zeroed, so never let one be `f`.
+    const f = parts.find(p => !p.split_group) || parts.reduce((a, b) => (b.id < a.id ? b : a));
     return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, calendar_status:f.calendar_status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
@@ -4978,6 +5946,30 @@ export default function App() {
     await setJobPickup(ids, date, "");
     setCalAddExisting(null);
     showToast(`Job ${g.job_number || ""} added to the calendar`.replace(/\s+/g, " ").trim());
+  }
+  function openAddJobDeliveryDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, delivery_date: dateStr }); setJobErr(null); setShowAddJob(true); }
+  // Open the "add existing job to the delivery calendar" search modal, optionally seeded with a day.
+  function openDcalAddExisting(dateStr) {
+    setDcalDayMenu(null);
+    setDcalAddSearch("");
+    setDcalAddDate(dateStr || today());
+    setDcalAddExisting({ date: dateStr || "" });
+  }
+  // Set a job's delivery date across all of its rows. Empty `date` clears the job
+  // off the delivery calendar.
+  async function setJobDelivery(ids, date) {
+    if (!ids?.length) return;
+    const patch = { delivery_date: date || null, updated_by: userEmail, updated_at: new Date().toISOString() };
+    await supabase.from("storage_jobs").update(patch).in("id", ids);
+    loadJobs();
+  }
+  // Add an existing (no-delivery-date) job to the delivery calendar on the chosen date.
+  async function addExistingJobToDeliveryCalendar(g, dateStr) {
+    const date = dateStr || today();
+    const ids = jobs.filter(j => jobKey(j) === g.key).map(j => j.id);
+    await setJobDelivery(ids, date);
+    setDcalAddExisting(null);
+    showToast(`Job ${g.job_number || ""} added to the delivery calendar`.replace(/\s+/g, " ").trim());
   }
   function showToast(msg) {
     setToast(msg);
@@ -5123,6 +6115,12 @@ export default function App() {
       fields.broker_job_share_amount = collected * bjPct / 100;
     }
 
+    // A collection typed straight into the job form (BOL collected) must reach
+    // the Payments module too, else Dispatching and Payments disagree on what's
+    // still owed. Capture the pre-save value to sync only on a real change.
+    const prevRows = editingJobKey ? jobs.filter(j => jobKey(j) === editingJobKey) : [];
+    const prevBolCollected = numv((prevRows.find(p => !p.split_group) || prevRows[0])?.bol_collected);
+
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
     if (editingJobKey) {
       const current = jobs.filter(j => jobKey(j) === editingJobKey);
@@ -5170,6 +6168,11 @@ export default function App() {
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
     }
+    // Mirror the form's collected amount into Payments (concept "job"), same as
+    // the "Record payment" flow, so both modules stay connected.
+    if (!settlementsMissing && !paymentsMissing && editingJobKey && numv(jobForm.bol_collected) > 0 && numv(jobForm.bol_collected) !== prevBolCollected) {
+      await upsertJobPayment(editingJobKey, { amount: jobForm.bol_collected, method: jobForm.bol_payment_method, date: jobForm.bol_collected_date });
+    }
     setShowAddJob(false);
     loadJobs();
     if (!settlementsMissing) loadClosingSheets();
@@ -5216,13 +6219,13 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", notes:d.notes||"", active: d.active !== false });
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false });
     setShowDriverModal(true);
   }
   async function saveDriver() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
-    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, notes:driverForm.notes||null, active: !!driverForm.active };
+    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active };
     if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
     else await supabase.from("drivers").insert([payload]);
     setDriverSaving(false); setShowDriverModal(false);
@@ -5235,6 +6238,204 @@ export default function App() {
   }
   function toggleJobDriver(id) {
     setJobForm(f => { const cur = Array.isArray(f.driver_ids) ? f.driver_ids : []; return { ...f, driver_ids: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id] }; });
+  }
+
+  // ── Expenses CRUD ──
+  function openAddExpense(prefill = {}) {
+    setEditingExpenseId(null);
+    setExpenseForm({ ...EMPTY_EXPENSE, expense_date: today(), ...prefill });
+    setShowExpenseModal(true);
+  }
+  function openEditExpense(e) {
+    setEditingExpenseId(e.id);
+    setExpenseForm({
+      expense_date: e.expense_date || "", category: e.category || "other", amount: e.amount ?? "",
+      vendor: e.vendor || "", driver_id: e.driver_id || "", truck_id: e.truck_id || "", trip_id: e.trip_id || "",
+      job_number: e.job_number || "", paid_from: e.paid_from || "bank", bank_account: e.bank_account || "",
+      status: e.status || "pending", gallons: e.gallons ?? "", odometer: e.odometer ?? "",
+      fuel_state: e.fuel_state || "", receipt_url: e.receipt_url || "", notes: e.notes || "",
+    });
+    setShowExpenseModal(true);
+  }
+  async function saveExpense() {
+    const f = expenseForm;
+    if (f.amount === "" || isNaN(Number(f.amount))) { window.alert("Ingresá el monto del gasto."); return; }
+    if (f.paid_from === "driver_cash" && !f.driver_id) { window.alert("Un gasto pagado con cash del driver necesita el driver."); return; }
+    setExpenseSaving(true);
+    const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
+    const jobNumber = (f.job_number || "").trim();
+    // Keep job_id in sync with job_number so job-level rollups can join either way.
+    const jobRow = jobNumber ? jobs.find(j => normJobNumber(j.job_number) === normJobNumber(jobNumber)) : null;
+    const payload = {
+      expense_date: f.expense_date || null, category: f.category || "other", amount: num(f.amount),
+      vendor: f.vendor || null, driver_id: num(f.driver_id), truck_id: num(f.truck_id), trip_id: num(f.trip_id),
+      job_id: jobRow?.id ?? null, job_number: jobNumber || null,
+      paid_from: f.paid_from || "bank", bank_account: f.paid_from === "bank" ? (f.bank_account || null) : null,
+      status: f.status || "pending", gallons: num(f.gallons), odometer: num(f.odometer),
+      fuel_state: f.category === "fuel" ? (f.fuel_state || null) : null,
+      receipt_url: f.receipt_url || null, notes: f.notes || null,
+    };
+    let error;
+    if (editingExpenseId) ({ error } = await supabase.from("expenses").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingExpenseId));
+    else ({ error } = await supabase.from("expenses").insert([{ ...payload, created_by: userEmail }]));
+    setExpenseSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowExpenseModal(false); setEditingExpenseId(null);
+    loadExpenses();
+  }
+  async function deleteExpense(e) {
+    if (!window.confirm(`Delete ${e.category || "expense"} de $${Math.round(numv(e.amount)).toLocaleString()}?`)) return;
+    const { error } = await supabase.from("expenses").delete().eq("id", e.id);
+    if (error) { window.alert(error.message); return; }
+    loadExpenses();
+  }
+  async function setExpenseStatus(e, status) {
+    const { error } = await supabase.from("expenses").update({ status, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", e.id);
+    if (error) { window.alert(error.message); return; }
+    loadExpenses();
+  }
+  // Mark a driver-cash expense as squared up (the driver handed in the remainder).
+  async function settleExpense(e, settled = true) {
+    const { error } = await supabase.from("expenses").update({ settled, settled_date: settled ? today() : null, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", e.id);
+    if (error) { window.alert(error.message); return; }
+    loadExpenses();
+  }
+  async function uploadExpenseReceipt(file) {
+    if (!file) return;
+    setExpenseUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const path = `receipt-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("expense-receipts").upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) { window.alert("Upload error: " + error.message); setExpenseUploading(false); return; }
+      const { data } = supabase.storage.from("expense-receipts").getPublicUrl(path);
+      setExpenseForm(f => ({ ...f, receipt_url: data?.publicUrl || "" }));
+    } catch (err) { window.alert("Error: " + err.message); }
+    setExpenseUploading(false);
+  }
+  // Click a day in the work-day grid: cycle empty → full → half → hourly → empty.
+  // The applicable rate is snapshotted per row (daily for full/half, hourly for
+  // hourly) so changing the driver's rates never rewrites history. Drivers with
+  // ONLY an hourly rate start the cycle at hourly. unique(driver_id, work_date)
+  // keeps it idempotent.
+  async function cycleWorkDay(driver, dateISO) {
+    const existing = workDays.find(w => w.driver_id === driver.id && w.work_date === dateISO);
+    const hasDaily = driver.daily_rate != null && driver.daily_rate !== "";
+    const hasHourly = driver.hourly_rate != null && driver.hourly_rate !== "";
+    const cur = existing ? (existing.day_type || "full") : null;
+    let next;
+    if (cur === null) next = (!hasDaily && hasHourly) ? "hourly" : "full";
+    else if (cur === "full") next = "half";
+    else if (cur === "half") next = hasHourly ? "hourly" : null;
+    else next = null; // hourly → empty
+    if (next === "hourly") {
+      const hrs = window.prompt(trAI("Hours worked that day:", "Horas trabajadas ese día:"), existing?.hours || "8");
+      if (hrs === null || isNaN(Number(hrs)) || Number(hrs) <= 0) next = null;
+      else {
+        const payload = { day_type: "hourly", hours: Number(hrs), rate: hasHourly ? Number(driver.hourly_rate) : null };
+        const { error } = existing
+          ? await supabase.from("driver_work_days").update(payload).eq("id", existing.id)
+          : await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, created_by: userEmail, ...payload }]);
+        if (error) { window.alert(error.message); return; }
+        loadWorkDays(); return;
+      }
+    }
+    if (next === null) {
+      if (existing) {
+        const { error } = await supabase.from("driver_work_days").delete().eq("id", existing.id);
+        if (error) { window.alert(error.message); return; }
+      }
+    } else {
+      const payload = { day_type: next, hours: null, rate: hasDaily ? Number(driver.daily_rate) : null };
+      const { error } = existing
+        ? await supabase.from("driver_work_days").update(payload).eq("id", existing.id)
+        : await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, created_by: userEmail, ...payload }]);
+      if (error) { window.alert(error.message); return; }
+    }
+    loadWorkDays();
+  }
+
+  // ── Driver pay adjustments (fuck-ups charged to the driver / bonuses) ──
+  function openAddAdjustment(prefill = {}) {
+    setAdjForm({ ...EMPTY_ADJUSTMENT, adj_date: today(), ...prefill });
+    setShowAdjModal(true);
+  }
+  async function saveAdjustment() {
+    const f = adjForm;
+    if (!f.driver_id) { window.alert("Elegí el driver."); return; }
+    if (f.amount === "" || isNaN(Number(f.amount)) || Number(f.amount) <= 0) { window.alert("Ingresá el monto (positivo)."); return; }
+    setAdjSaving(true);
+    const { error } = await supabase.from("driver_adjustments").insert([{
+      driver_id: Number(f.driver_id), adj_date: f.adj_date || null, kind: f.kind || "deduction",
+      amount: Number(f.amount), reason: f.reason || null, job_number: (f.job_number || "").trim() || null,
+      created_by: userEmail,
+    }]);
+    setAdjSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowAdjModal(false); loadAdjustments();
+  }
+  async function deleteAdjustment(a) {
+    if (!window.confirm(`Delete ${a.kind === "bonus" ? "compensación" : "descuento"} de $${Math.round(numv(a.amount)).toLocaleString()}?`)) return;
+    const { error } = await supabase.from("driver_adjustments").delete().eq("id", a.id);
+    if (error) { window.alert(error.message); return; }
+    loadAdjustments();
+  }
+
+  // ── Materials catalog + movements ──
+  function openAddMaterialItem() { setEditingMaterialItemId(null); setMaterialItemForm(EMPTY_MATERIAL_ITEM); setShowMaterialItemModal(true); }
+  function openEditMaterialItem(it) {
+    setEditingMaterialItemId(it.id);
+    setMaterialItemForm({ name: it.name || "", category: it.category || "", unit: it.unit || "unit", unit_cost: it.unit_cost ?? "", active: it.active !== false, notes: it.notes || "" });
+    setShowMaterialItemModal(true);
+  }
+  async function saveMaterialItem() {
+    if (!materialItemForm.name.trim()) return;
+    setMaterialSaving(true);
+    const payload = { name: materialItemForm.name.trim(), category: materialItemForm.category || null, unit: materialItemForm.unit || "unit", unit_cost: materialItemForm.unit_cost === "" ? null : Number(materialItemForm.unit_cost), active: !!materialItemForm.active, notes: materialItemForm.notes || null };
+    let error;
+    if (editingMaterialItemId) ({ error } = await supabase.from("material_items").update(payload).eq("id", editingMaterialItemId));
+    else ({ error } = await supabase.from("material_items").insert([payload]));
+    setMaterialSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowMaterialItemModal(false); loadMaterialItems();
+  }
+  async function deleteMaterialItem(it) {
+    if (!window.confirm(`Delete material "${it.name}"? Sus movimientos también se borran.`)) return;
+    const { error } = await supabase.from("material_items").delete().eq("id", it.id);
+    if (error) { window.alert(error.message); return; }
+    loadMaterialItems(); loadMaterialMovements();
+  }
+  function openAddMaterialMove(prefill = {}) {
+    setMaterialMoveForm({ ...EMPTY_MATERIAL_MOVE, movement_date: today(), ...prefill });
+    setShowMaterialMoveModal(true);
+  }
+  async function saveMaterialMove() {
+    const f = materialMoveForm;
+    if (!f.item_id) { window.alert("Elegí el material."); return; }
+    if (f.quantity === "" || isNaN(Number(f.quantity)) || Number(f.quantity) === 0) { window.alert("Ingresá la cantidad."); return; }
+    if (["issue", "return", "consume"].includes(f.movement_type) && !f.driver_id) { window.alert("Este movimiento necesita el driver."); return; }
+    setMaterialSaving(true);
+    const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
+    const item = materialItems.find(i => i.id === Number(f.item_id));
+    const jobNumber = (f.job_number || "").trim();
+    const jobRow = jobNumber ? jobs.find(j => normJobNumber(j.job_number) === normJobNumber(jobNumber)) : null;
+    const payload = {
+      item_id: Number(f.item_id), movement_type: f.movement_type, quantity: Number(f.quantity),
+      unit_cost: num(f.unit_cost) ?? (item?.unit_cost ?? null),
+      driver_id: num(f.driver_id), trip_id: num(f.trip_id),
+      job_id: jobRow?.id ?? null, job_number: jobNumber || null,
+      movement_date: f.movement_date || null, notes: f.notes || null, created_by: userEmail,
+    };
+    const { error } = await supabase.from("material_movements").insert([payload]);
+    setMaterialSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowMaterialMoveModal(false); loadMaterialMovements();
+  }
+  async function deleteMaterialMove(mv) {
+    if (!window.confirm("Delete este movimiento de material?")) return;
+    const { error } = await supabase.from("material_movements").delete().eq("id", mv.id);
+    if (error) { window.alert(error.message); return; }
+    loadMaterialMovements();
   }
 
   // ── Carrier settlements handlers ──
@@ -5464,6 +6665,114 @@ export default function App() {
     loadComplianceDocs();
   }
 
+  // ── Claims & Incidents handlers ──
+  function openAddClaim(prefill = {}) {
+    setEditingClaimId(null);
+    setClaimForm({ ...EMPTY_CLAIM, incident_date: today(), ...prefill, trip_id: prefill.trip_id ? String(prefill.trip_id) : "" });
+    setClaimNotes([]); setClaimNoteInput(""); setClaimJobSearch("");
+    setShowClaimModal(true);
+  }
+  function openEditClaim(c) {
+    setEditingClaimId(c.id);
+    setClaimForm({
+      job_number:c.job_number||"", trip_id:c.trip_id ? String(c.trip_id) : "", client_name:c.client_name||"",
+      incident_type:c.incident_type||"damage", description:c.description||"", incident_date:c.incident_date||"",
+      status:c.status||"open", assigned_to:c.assigned_to||"", claimed_amount:c.claimed_amount ?? "", paid_amount:c.paid_amount ?? "",
+      resolution_type:c.resolution_type||"", closed_date:c.closed_date||"",
+    });
+    setClaimNotes([]); setClaimNoteInput(""); setClaimJobSearch("");
+    loadClaimNotes(c.id);
+    setShowClaimModal(true);
+  }
+  async function saveClaim() {
+    const f = claimForm;
+    if (!f.incident_type || !f.description.trim()) { window.alert("Complete the incident type and description."); return; }
+    setClaimSaving(true);
+    const prev = editingClaimId ? claims.find(c => c.id === editingClaimId) : null;
+    // Closing statuses auto-stamp the closed date so "days to close" always
+    // computes; reopening clears it so metrics don't reuse a stale close.
+    const closedDate = !CLAIM_ACTIVE(f.status) ? (f.closed_date || today()) : null;
+    const payload = {
+      job_number: f.job_number || null, trip_id: f.trip_id ? Number(f.trip_id) : null, client_name: f.client_name || null,
+      incident_type: f.incident_type, description: f.description.trim(), incident_date: f.incident_date || null,
+      status: f.status, assigned_to: f.assigned_to || null,
+      claimed_amount: f.claimed_amount === "" ? null : Number(f.claimed_amount),
+      paid_amount: f.paid_amount === "" ? null : Number(f.paid_amount),
+      resolution_type: f.resolution_type || null, closed_date: closedDate,
+    };
+    let error = null, claimId = editingClaimId;
+    if (editingClaimId) ({ error } = await supabase.from("claims").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingClaimId));
+    else {
+      const { data, error: insErr } = await supabase.from("claims").insert([{ ...payload, created_by: userEmail }]).select("id").single();
+      error = insErr; claimId = data?.id;
+    }
+    if (!error && prev && prev.status !== f.status) {
+      const { error: nErr } = await supabase.from("claim_notes").insert([{ claim_id: claimId, note: `Status: ${CLAIM_STATUS[prev.status]?.l || prev.status} → ${CLAIM_STATUS[f.status]?.l || f.status}`, created_by: userEmail }]);
+      if (nErr) console.warn("claim status note not saved:", nErr.message);
+    }
+    setClaimSaving(false);
+    if (error) { window.alert(error.message); return; }
+    if (!CLAIM_ACTIVE(f.status)) setClaimForm(prev2 => ({ ...prev2, closed_date: closedDate }));
+    else setClaimForm(prev2 => ({ ...prev2, closed_date: "" }));
+    loadClaims();
+    if (!editingClaimId && claimId) {
+      // Stay open in edit mode so photos and notes can be attached right away
+      // (only promise that when the user actually has edit rights).
+      setEditingClaimId(claimId); loadClaimNotes(claimId);
+      showToast(can("claims","edit") ? "Claim created — you can attach files and notes now" : "Claim created");
+    } else {
+      loadClaimNotes(claimId);
+      showToast("Claim saved");
+    }
+  }
+  async function deleteClaim(c) {
+    if (!window.confirm(`Delete the claim for job ${c.job_number || "(sin #)"}? Its notes and links are removed too.`)) return;
+    const { error } = await supabase.from("claims").delete().eq("id", c.id);
+    if (error) { window.alert(error.message); return; }
+    setShowClaimModal(false); setEditingClaimId(null); loadClaims();
+  }
+  async function addClaimNote() {
+    const note = claimNoteInput.trim();
+    if (!note || !editingClaimId) return;
+    const { error } = await supabase.from("claim_notes").insert([{ claim_id: editingClaimId, note, created_by: userEmail }]);
+    if (error) { window.alert(error.message); return; }
+    setClaimNoteInput(""); loadClaimNotes(editingClaimId);
+  }
+  async function deleteClaimNote(n) {
+    const { error } = await supabase.from("claim_notes").delete().eq("id", n.id);
+    if (error) { window.alert(error.message); return; }
+    loadClaimNotes(editingClaimId);
+  }
+  // Read the claim's CURRENT attachments from the DB (not from possibly-stale
+  // React state) so two quick uploads/removals never overwrite each other.
+  async function mutateClaimAttachments(claimId, mutate) {
+    const { data, error } = await supabase.from("claims").select("attachments").eq("id", claimId).single();
+    if (error) { window.alert(error.message); return; }
+    const attachments = mutate(Array.isArray(data?.attachments) ? data.attachments : []);
+    const { error: uErr } = await supabase.from("claims").update({ attachments }).eq("id", claimId);
+    if (uErr) { window.alert(uErr.message); return; }
+    loadClaims();
+  }
+  // Upload evidence (photo/PDF) to the claim-docs bucket and append it to the claim's attachments.
+  async function uploadClaimFile(file) {
+    if (!file || !editingClaimId) return;
+    setClaimUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const path = `claim-${editingClaimId}/${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("claim-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) { window.alert("Upload error: " + error.message); setClaimUploading(false); return; }
+      const { data } = supabase.storage.from("claim-docs").getPublicUrl(path);
+      const url = data?.publicUrl || "";
+      await mutateClaimAttachments(editingClaimId, (cur) => [...cur, { url, name: file.name, uploaded_by: userEmail, uploaded_at: new Date().toISOString() }]);
+    } catch (e) { window.alert("Error: " + e.message); }
+    setClaimUploading(false);
+  }
+  async function removeClaimAttachment(att) {
+    if (!editingClaimId || !window.confirm(`Remove attachment "${att.name || "file"}"?`)) return;
+    await mutateClaimAttachments(editingClaimId, (cur) => cur.filter(a => a.url !== att.url));
+  }
+
   // ── Trips CRUD ──
   function nextTripNumber() {
     let max = 0;
@@ -5477,8 +6786,11 @@ export default function App() {
   }
   function openEditTrip(t) {
     setEditingTripId(t.id);
-    const assigned = (jobsByTrip[t.id] || []).map(jobKey);
-    setTripForm({ trip_number:t.trip_number||"", truck_id:t.truck_id||"", driver_id:t.driver_id||"", departure_date:t.departure_date||"", status:t.status||"loading", notes:t.notes||"", job_keys: assigned });
+    const assignedJobs = jobsByTrip[t.id] || [];
+    const assigned = assignedJobs.map(tripUnitKey);
+    const purposes = {};
+    for (const j of assignedJobs) { if (isRelocation(j)) purposes[tripUnitKey(j)] = "relocation"; }
+    setTripForm({ trip_number:t.trip_number||"", truck_id:t.truck_id||"", driver_id:t.driver_id||"", departure_date:t.departure_date||"", status:t.status||"loading", notes:t.notes||"", job_keys: assigned, purposes });
     setTripJobSearch(""); setShowTripModal(true);
   }
   // ── AI trip suggestions ──────────────────────────────────────────────
@@ -5495,10 +6807,11 @@ export default function App() {
       today: today(),
       lang, // the AI writes reasoning/notes in the user's display language
       jobs: sorted.slice(0, 150).map(j => ({
-        key: jobKey(j),
+        key: tripUnitKey(j),
         job_number: j.job_number || "",
         customer: j.customer || "",
         volume_cf: Math.round(effCf(j)),
+        split: !!j.split_group,
         fadd: j.fadd || "",
         status: j.status || "",
         // Load point with its real location: the customer's own pickup address,
@@ -5536,7 +6849,7 @@ export default function App() {
   // modal (create or edit) so the dispatcher picks the driver, reviews the live
   // capacity bar and confirms through saveTrip() as always.
   function applyTripSuggestion(s, kind) {
-    const live = new Set(tripCandidateJobs.map(jobKey));
+    const live = new Set(tripCandidateJobs.map(tripUnitKey));
     const valid = s.job_keys.filter(k => live.has(k));
     if (!valid.length) { window.alert(trAI("The jobs in this suggestion are no longer available.", "Los jobs de esta sugerencia ya no están disponibles.")); return; }
     if (valid.length < s.job_keys.length && !window.confirm(trAI(
@@ -5546,10 +6859,13 @@ export default function App() {
       const t = trips.find(x => x.id === s.trip_id);
       if (!t || t.status !== "loading") { window.alert(trAI("That trip is no longer in Loading status.", "Ese trip ya no está en estado Loading.")); return; }
       setEditingTripId(t.id);
+      const tripPurposes = {};
+      for (const j of (jobsByTrip[t.id] || [])) { if (isRelocation(j)) tripPurposes[tripUnitKey(j)] = "relocation"; }
       setTripForm({
         trip_number: t.trip_number || "", truck_id: t.truck_id || "", driver_id: t.driver_id || "",
         departure_date: t.departure_date || "", status: t.status || "loading", notes: t.notes || "",
-        job_keys: [...(jobsByTrip[t.id] || []).map(jobKey), ...valid.filter(k => !(jobsByTrip[t.id] || []).some(j => jobKey(j) === k))],
+        job_keys: [...(jobsByTrip[t.id] || []).map(tripUnitKey), ...valid.filter(k => !(jobsByTrip[t.id] || []).some(j => tripUnitKey(j) === k))],
+        purposes: tripPurposes,
       });
     } else {
       setEditingTripId(null);
@@ -5590,13 +6906,15 @@ export default function App() {
     if (!error && tripId) {
       const wanted = tripForm.job_keys;
       // Assign trip_id + stop order in the chosen sequence; clear de-selected jobs.
+      // Keys are trip-unit keys: "row:<id>" for a split portion, jobKey otherwise.
       for (let i = 0; i < wanted.length; i++) {
-        const ids = jobs.filter(j => jobKey(j) === wanted[i]).map(j => j.id);
-        if (ids.length) await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+        const ids = jobRowIdsForUnit(wanted[i]);
+        const purpose = tripPurposeColMissing ? {} : { trip_purpose: tripForm.purposes?.[wanted[i]] === "relocation" ? "relocation" : "delivery" };
+        if (ids.length) await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, ...purpose, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
       }
       const wantedSet = new Set(wanted);
-      const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(jobKey(j))).map(j => j.id);
-      if (toClear.length) await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
+      const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(tripUnitKey(j))).map(j => j.id);
+      if (toClear.length) await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
     }
     setTripSaving(false);
     if (error) { window.alert(error.message); return; }
@@ -5619,7 +6937,7 @@ export default function App() {
   }
   async function deleteTrip(t) {
     if (!window.confirm(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`)) return;
-    await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null }).eq("trip_id", t.id);
+    await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }) }).eq("trip_id", t.id);
     await supabase.from("trips").delete().eq("id", t.id);
     loadTrips(); loadJobs();
   }
@@ -5629,7 +6947,7 @@ export default function App() {
     for (let i = 0; i < orderedItems.length; i++) {
       const it = orderedItems[i];
       if (it.kind === "job") {
-        const ids = jobs.filter(j => jobKey(j) === jobKey(it.j)).map(j => j.id);
+        const ids = jobRowIdsForUnit(tripUnitKey(it.j));
         if (ids.length) await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids);
       } else {
         await supabase.from("trip_stops").update({ stop_order: i + 1 }).eq("id", it.s.id);
@@ -5682,9 +7000,11 @@ export default function App() {
     await supabase.from("trip_stops").delete().eq("id", s.id);
     loadTripStops();
   }
-  // Mark one trip job delivered (stamps date_out + status across its rows).
+  // Mark one trip job delivered. A split portion delivers on its own (only its
+  // row) so a sibling portion on another truck stays in transit; an ordinary job
+  // still stamps all its unit rows together.
   async function tripMarkDelivered(j, trip) {
-    const ids = jobs.filter(x => jobKey(x) === jobKey(j)).map(x => x.id);
+    const ids = jobRowIdsForUnit(tripUnitKey(j));
     await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     if (trip) await logTripEvent(trip.id, "delivery_completed", { job_id: Math.min(...ids), notes: j.job_number || "" });
     loadJobs();
@@ -5693,6 +7013,17 @@ export default function App() {
   // ── Dynamic in-transit trip changes ──
   // All storage_jobs row ids that make up a job (by jobKey).
   const jobRowIds = (k) => jobs.filter(j => jobKey(j) === k).map(j => j.id);
+  // Row ids for a trip-unit key: a single portion row for "row:<id>" keys, else
+  // every row of the jobKey (whole-job ops keep their existing behavior).
+  const jobRowIdsForUnit = (k) => (typeof k === "string" && k.startsWith("row:")) ? [Number(k.slice(4))] : jobRowIds(k);
+  // The portion rows of a split job (same split_group), ordered stably by id.
+  const splitPartsOf = (j) => j?.split_group ? jobs.filter(x => x.split_group === j.split_group).sort((a, b) => a.id - b.id) : [];
+  // "Part i/N" label for a split portion row (empty for ordinary jobs).
+  const splitLabel = (j) => {
+    if (!j?.split_group) return "";
+    const parts = splitPartsOf(j); const i = parts.findIndex(x => x.id === j.id);
+    return parts.length > 1 ? `Part ${i + 1}/${parts.length}` : "Split";
+  };
   async function logTripEvent(tripId, event_type, opts = {}) {
     if (tripEventsMissing) return;
     await supabase.from("trip_events").insert([{ trip_id: tripId, event_type, job_id: opts.job_id ?? null, storage_id: opts.storage_id ?? null, notes: opts.notes || null, created_by: opts.created_by || "dispatcher" }]);
@@ -5703,7 +7034,8 @@ export default function App() {
   // primary (money follows him — cash-in-circulation defaults and new-extra
   // commission prefills read driver_ids[0]); other assigned drivers stay.
   async function handoffJob(k, toDriverId, reason, note) {
-    const rows = jobs.filter(j => jobKey(j) === k);
+    const ids0 = jobRowIdsForUnit(k);
+    const rows = jobs.filter(j => ids0.includes(j.id));
     if (!rows.length || !toDriverId) return;
     const toId = Number(toDriverId);
     const cur = Array.isArray(rows[0].driver_ids) ? rows[0].driver_ids.map(Number) : [];
@@ -5728,15 +7060,110 @@ export default function App() {
   // Quick-set the measured cubic feet of a job (from the trip stop card):
   // occupancy math switches from the broker estimate to this value.
   async function quickSetRealCf(j) {
-    const k = jobKey(j);
+    // A split portion carries its own CF, so only its row is updated; an ordinary
+    // job updates all its unit rows.
+    const ids = jobRowIdsForUnit(tripUnitKey(j));
     const cur = hasRealCf(j) ? String(Math.round(Number(j.real_cf))) : "";
     const v = window.prompt(`CF real medido para ${j.job_number || j.customer || "el job"} (estimado: ${Math.round(parseCf(j.volume))} CF).\nVacío = volver al estimado.`, cur);
     if (v === null) return;
     const val = v.trim() === "" ? null : Number(v.trim());
     if (val !== null && (!isFinite(val) || val < 0)) { window.alert("Número inválido."); return; }
-    await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", jobRowIds(k));
+    await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     await loadJobs();
     showToast(val === null ? "Real CF borrado — vuelve al estimado" : `Real CF: ${Math.round(val).toLocaleString()} CF`);
+  }
+  // Split one storage_jobs row into two portions so the job can ride two trucks.
+  // The portion keeps the SAME job_number (so it stays ONE job in billing/analytics/
+  // client view — see dedupeJobs), but gets its own CF, its own trip_id and status.
+  // Money fields are zeroed on the portion so totals never double-count.
+  async function splitJob(sourceRow, portionCf, dest) {
+    if (!sourceRow) return;
+    const total = effCf(sourceRow);
+    const p = Number(portionCf);
+    if (!isFinite(p) || p <= 0 || p >= total) {
+      window.alert(trAI(`Enter a portion between 1 and ${Math.round(total) - 1} CF.`, `Ingresá una porción entre 1 y ${Math.round(total) - 1} CF.`));
+      return;
+    }
+    setTripBusy(true);
+    const sg = sourceRow.split_group || (jobKey(sourceRow) + ":" + Date.now());
+    const now = new Date().toISOString();
+    const useReal = !realCfMissing; // real_cf column present → store the CF numerically
+    // 1) Keep the remainder on the source row (and mark it as a split if new).
+    const srcPatch = { split_group: sg, updated_by: userEmail, updated_at: now };
+    if (useReal) srcPatch.real_cf = total - p; else srcPatch.volume = String(Math.round(total - p));
+    const { error: upErr } = await supabase.from("storage_jobs").update(srcPatch).eq("id", sourceRow.id);
+    if (upErr) { setTripBusy(false); window.alert(upErr.message); return; }
+    // 2) Build the portion from the columns that ACTUALLY exist on the source row.
+    //    `select("*")` only returns real columns, so spreading `rest` never invents
+    //    one (schemas vary — broker-share / billing columns are optional).
+    const { id, created_at, updated_at, storage, ...rest } = sourceRow;
+    const portion = { ...rest, split_group: sg, trip_id: null, trip_stop_order: null, date_out: null, status: "scheduled", created_by: userEmail };
+    if (useReal) portion.real_cf = p; else portion.volume = String(Math.round(p));
+    // Zero money / identity-duplicating fields — only those present on this schema.
+    const zeroable = { bol_balance: 0, bol_collected: null, bol_collected_date: null, pickup_balance: 0, delivery_balance: 0, client_monthly_rate: null, billing_active: false, broker_job_share_amount: null, broker_job_share_pct: null, estimate: null, deposit: null, price_per_cf: null };
+    for (const k in zeroable) if (k in portion) portion[k] = zeroable[k];
+    // 3) Optionally place the portion straight onto an existing trip, spin up a
+    //    brand-new loading trip on a chosen (free) truck, or leave it sitting at a
+    //    storage unit / warehouse (in_storage, off any trip).
+    let destTripId = null, destTrip = null, destStorageLabel = null;
+    if (typeof dest === "string" && dest.startsWith("unit:")) {
+      const u = records.find(r => r.id === Number(dest.slice(5)));
+      portion.storage_id = Number(dest.slice(5)); portion.warehouse = null; portion.status = "in_storage";
+      destStorageLabel = u ? ([u.brand, u.unit && "U" + u.unit, u.state].filter(Boolean).join(" ") || `Unit #${u.id}`) : `Unit #${dest.slice(5)}`;
+    } else if (typeof dest === "string" && dest.startsWith("wh:")) {
+      portion.warehouse = dest.slice(3); portion.storage_id = null; portion.status = "in_storage";
+      destStorageLabel = `Warehouse ${dest.slice(3)}`;
+    } else if (typeof dest === "string" && dest.startsWith("trip:")) {
+      destTripId = Number(dest.slice(5));
+      destTrip = trips.find(t => t.id === destTripId) || null;
+    } else if (typeof dest === "string" && dest.startsWith("truck:")) {
+      const truckId = Number(dest.slice(6));
+      const tn = nextTripNumber();
+      const { data: newTrip, error: tErr } = await supabase.from("trips")
+        .insert([{ trip_number: tn, truck_id: truckId, departure_date: today(), status: "loading" }])
+        .select("id").single();
+      if (tErr) { setTripBusy(false); window.alert(tErr.message); return; }
+      destTripId = newTrip?.id; destTrip = { id: destTripId, status: "loading", trip_number: tn };
+    }
+    if (destTripId) {
+      portion.trip_id = destTripId;
+      portion.trip_stop_order = (jobsByTrip[destTripId] || []).length + 1;
+      // In-transit trip → the load is physically on the truck; loading trip → just
+      // assigned (keep it scheduled, same as saveTrip).
+      portion.status = (destTrip && destTrip.status !== "loading") ? "out_for_delivery" : "scheduled";
+    }
+    const { data: insData, error } = await supabase.from("storage_jobs").insert([portion]).select("id").single();
+    if (!error && destTripId) await logTripEvent(destTripId, "job_added", { job_id: insData?.id, notes: (sourceRow.job_number || "") + " (split)" });
+    setTripBusy(false);
+    if (error) { window.alert(error.message); return; }
+    setSplitJobRow(null); setSplitCf(""); setSplitDest("");
+    const destName = destTrip ? (destTrip.trip_number || trips.find(t => t.id === destTripId)?.trip_number) : destStorageLabel;
+    showToast(destName
+      ? trAI(`Split: ${Math.round(p)} CF → ${destName}`, `Dividido: ${Math.round(p)} CF → ${destName}`)
+      : trAI(`Job split: ${Math.round(total - p)} CF + ${Math.round(p)} CF`, `Job dividido: ${Math.round(total - p)} CF + ${Math.round(p)} CF`));
+    loadJobs(); loadTrips();
+  }
+  // Undo a split: fold all portion CF back onto the original row and delete the
+  // rest. The original (lowest id) keeps the money; portions never had any.
+  async function mergeSplit(anyPortion) {
+    const parts = splitPartsOf(anyPortion);
+    if (parts.length < 2) return;
+    const totalCf = Math.round(parts.reduce((s, p) => s + effCf(p), 0));
+    const [primary, ...others] = parts;
+    const onActive = parts.filter(p => p.trip_id && TRIP_ACTIVE(tripById[p.trip_id]?.status));
+    const distinctTrips = new Set(onActive.map(p => p.trip_id));
+    if (distinctTrips.size > 1 && !window.confirm(trAI(
+      "These portions are on different active trips. Merge them back into one job anyway?",
+      "Estas porciones están en trips activos distintos. ¿Volver a unirlas en un solo job igual?"))) return;
+    setTripBusy(true);
+    const { error } = await supabase.from("storage_jobs")
+      .update({ split_group: null, real_cf: totalCf, updated_by: userEmail, updated_at: new Date().toISOString() })
+      .eq("id", primary.id);
+    if (!error && others.length) await supabase.from("storage_jobs").delete().in("id", others.map(p => p.id));
+    setTripBusy(false);
+    if (error) { window.alert(error.message); return; }
+    showToast(trAI(`Portions merged: ${totalCf} CF`, `Porciones unidas: ${totalCf} CF`));
+    loadJobs();
   }
   // Hand the whole trip (truck swap case) to another driver.
   async function handoffTrip(trip, toDriverId, reason, note) {
@@ -5752,23 +7179,27 @@ export default function App() {
     showToast(`Trip pasado a ${toNm}`);
   }
   // Add an existing (non-trip) job to a trip in transit, log it, queue a driver WA update.
-  async function tripAddExistingJob(trip, k) {
-    const rows = jobs.filter(j => jobKey(j) === k);
+  // purpose: 'relocation' rides the truck as an internal move (picked_up, no collection);
+  // anything else is the normal delivery flow (out_for_delivery).
+  async function tripAddExistingJob(trip, k, purpose) {
+    const ids = jobRowIdsForUnit(k);
+    const rows = jobs.filter(j => ids.includes(j.id));
     if (!rows.length) return;
+    const reloc = purpose === "relocation" && !tripPurposeColMissing;
     setTripBusy(true);
-    const ids = rows.map(j => j.id);
     const order = (jobsByTrip[trip.id] || []).length + 1;
-    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: rows[0].date_out ? rows[0].status : "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-    await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: rows[0].job_number || "" });
+    const status = rows[0].date_out ? rows[0].status : (reloc ? "picked_up" : "out_for_delivery");
+    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status, ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: (rows[0].job_number || "") + (reloc ? " · relocation" : "") });
     const newTotal = tripCalc(trip).loadedCf + effCf(rows[0]);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
-    setTripWaLink({ href: tripUpdateWaLink(trip, rows[0], newTotal), label: `Job ${rows[0].job_number || ""} added` });
-    showToast(`Job added to the trip`);
+    setTripWaLink({ href: tripUpdateWaLink(trip, { ...rows[0], trip_purpose: reloc ? "relocation" : "delivery" }, newTotal), label: `Job ${rows[0].job_number || ""} added` });
+    showToast(reloc ? `Job loaded for relocation — no collection` : `Job added to the trip`);
   }
   // Drop a job at a storage unit / warehouse: unlink from trip, set location, status in_storage.
   async function tripDropAtStorage(trip, k, target) {
-    const ids = jobRowIds(k);
+    const ids = jobRowIdsForUnit(k);
     if (!ids.length || !target) return;
     setTripBusy(true);
     // Keep the job on the trip (trip_id / stop order stay) so it still shows there,
@@ -5777,22 +7208,39 @@ export default function App() {
     if (target.kind === "warehouse") { patch.warehouse = target.name; patch.storage_id = null; }
     else { patch.storage_id = target.id; patch.warehouse = null; }
     await supabase.from("storage_jobs").update(patch).in("id", ids);
-    await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label });
+    const relocDrop = jobs.some(j => ids.includes(j.id) && isRelocation(j));
+    await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label + (relocDrop ? " · relocation" : "") });
     await loadJobs();
     setTripBusy(false); setStorageDropJob(null);
-    showToast(`Job dropped at ${target.label}`);
+    const hasDelivery = jobs.some(j => ids.includes(j.id) && j.delivery_date);
+    showToast(relocDrop ? `Job relocated to ${target.label}` : `Job dropped at ${target.label}${hasDelivery ? "" : " — pendiente agendar delivery"}`);
   }
-  // Pick a job up from storage onto the trip: link to trip, status out_for_delivery.
-  async function tripPickupFromStorage(trip, k) {
-    const ids = jobRowIds(k);
+  // Pick a job up from storage onto the trip. purpose 'relocation' = internal move
+  // between locations: picked_up (never out_for_delivery), balances not collected.
+  async function tripPickupFromStorage(trip, k, purpose) {
+    const ids = jobRowIdsForUnit(k);
     if (!ids.length) return;
+    const reloc = purpose === "relocation" && !tripPurposeColMissing;
     setTripBusy(true);
     const order = (jobsByTrip[trip.id] || []).length + 1;
-    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: "out_for_delivery", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: jobs.find(j => jobKey(j) === k)?.job_number || "" });
+    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: reloc ? "picked_up" : "out_for_delivery", ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: (jobs.find(j => ids.includes(j.id))?.job_number || "") + (reloc ? " · relocation" : "") });
     await loadJobs();
     setTripBusy(false); setTripAction(null);
-    showToast(`Job loaded onto the trip`);
+    showToast(reloc ? `Job loaded for relocation — no collection` : `Job loaded onto the trip`);
+  }
+  // Load an already-assigned relocation stop onto the truck (status → picked_up),
+  // keeping its stop order. Origin location fields stay on the row until the drop,
+  // matching the delivery flow's convention.
+  async function tripRelocLoad(trip, j) {
+    const ids = jobRowIdsForUnit(tripUnitKey(j));
+    if (!ids.length) return;
+    setTripBusy(true);
+    await supabase.from("storage_jobs").update({ status: "picked_up", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), storage_id: j.storage_id || null, notes: (j.job_number || "") + " · relocation" });
+    await loadJobs();
+    setTripBusy(false);
+    showToast(`Job loaded for relocation — no collection`);
   }
   // Create an unplanned new job and immediately add it to the trip.
   async function saveUnplannedPickup(trip) {
@@ -5816,21 +7264,77 @@ export default function App() {
     setTripWaLink({ href: tripUpdateWaLink(trip, payload, newTotal), label: `Unplanned pickup: ${f.job_number || f.customer || ""}` });
     showToast("Unplanned pickup added");
   }
-  // Complete a trip: optionally drop the still-on-truck jobs at a storage, then mark completed.
-  async function completeTrip(trip, undeliveredKeys, dropTarget) {
+  // Complete a trip: drop each still-on-truck job at its chosen storage, release the
+  // jobs already dropped mid-trip (they keep their storage), then mark completed.
+  async function completeTrip(trip, drops, storedKeys = []) {
+    const equipAboard = equipmentItems.filter(i => i.trip_id === trip.id);
+    if (equipAboard.length && !window.confirm(trAI(
+      `${equipAboard.length} equipment item(s) still on this trip — they will stay marked as in transit. Complete anyway?`,
+      `${equipAboard.length} item(s) de equipo siguen en este trip — van a quedar marcados en tránsito. ¿Completar igual?`))) return;
     setTripBusy(true);
-    if (undeliveredKeys.length && dropTarget) {
-      const t = dropTarget.kind === "warehouse" ? { warehouse: dropTarget.name, storage_id: null } : { storage_id: dropTarget.id, warehouse: null };
-      for (const k of undeliveredKeys) {
-        const ids = jobRowIds(k);
-        await supabase.from("storage_jobs").update({ ...t, trip_id: null, trip_stop_order: null, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-        await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: dropTarget.kind === "warehouse" ? null : dropTarget.id, notes: dropTarget.label });
-      }
+    const purposeClear = tripPurposeColMissing ? {} : { trip_purpose: null };
+    for (const { key, target } of drops) {
+      if (!target) continue;
+      const ids = jobRowIdsForUnit(key);
+      const loc = target.kind === "warehouse" ? { warehouse: target.name, storage_id: null } : { storage_id: target.id, warehouse: null };
+      await supabase.from("storage_jobs").update({ ...loc, trip_id: null, trip_stop_order: null, ...purposeClear, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+      await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label });
+    }
+    for (const k of storedKeys) {
+      const ids = jobRowIdsForUnit(k);
+      await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...purposeClear, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     }
     await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id);
-    setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget("");
+    setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget({});
     loadTrips(); loadJobs();
     showToast(`Trip ${trip.trip_number || trip.id} completed`);
+  }
+
+  // ── Equipment / materials (internal cargo — Equipment tab) ──
+  async function saveEquipmentItem() {
+    setEquipmentSaving(true);
+    const f = equipmentForm;
+    const loc = f.location || "";
+    const payload = {
+      name: f.name.trim() || null,
+      category: f.category || "other",
+      quantity: f.quantity === "" ? 1 : Number(f.quantity),
+      storage_id: loc.startsWith("u:") ? Number(loc.slice(2)) : null,
+      warehouse: loc.startsWith("w:") ? loc.slice(2) : null,
+      notes: f.notes.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+    let error;
+    if (editingEquipmentId) ({ error } = await supabase.from("equipment_items").update(payload).eq("id", editingEquipmentId));
+    else ({ error } = await supabase.from("equipment_items").insert([{ ...payload, created_by: userEmail }]));
+    setEquipmentSaving(false);
+    if (error) { window.alert(error.message); return; }
+    setShowEquipmentModal(false); loadEquipment();
+  }
+  async function deleteEquipmentItem(item) {
+    if (!window.confirm(trAI(`Delete "${item.name || "this item"}"?`, `¿Eliminar "${item.name || "este item"}"?`))) return;
+    await supabase.from("equipment_items").delete().eq("id", item.id);
+    loadEquipment();
+  }
+  // Load an equipment item onto an active trip (rides as internal cargo, no money).
+  async function equipmentLoadOnTrip(item, tripId) {
+    const { error } = await supabase.from("equipment_items").update({ trip_id: tripId, status: "in_transit", updated_at: new Date().toISOString() }).eq("id", item.id);
+    if (error) { window.alert(error.message); return; }
+    await logTripEvent(tripId, "equipment_loaded", { notes: `${item.name || "equipment"} ×${numv(item.quantity) || 1}`, created_by: userEmail });
+    setEquipLoadItem(null); loadEquipment();
+    showToast(trAI("Equipment loaded onto the trip", "Equipo cargado al trip"));
+  }
+  // Unload an equipment item at a storage unit / warehouse and free it from the trip.
+  async function equipmentUnload(item, target) {
+    if (!target) return;
+    const patch = { trip_id: null, status: "available", updated_at: new Date().toISOString() };
+    if (target.kind === "warehouse") { patch.warehouse = target.name; patch.storage_id = null; }
+    else { patch.storage_id = target.id; patch.warehouse = null; }
+    const { error } = await supabase.from("equipment_items").update(patch).eq("id", item.id);
+    if (error) { window.alert(error.message); return; }
+    if (item.trip_id) await logTripEvent(item.trip_id, "equipment_unloaded", { storage_id: target.kind === "warehouse" ? null : target.id, notes: `${item.name || "equipment"} → ${target.label}`, created_by: userEmail });
+    setEquipUnloadItem(null); loadEquipment();
+    showToast(trAI(`Equipment unloaded at ${target.label}`, `Equipo descargado en ${target.label}`));
   }
 
   // ── Manual job timeline events ──
@@ -6875,13 +8379,16 @@ export default function App() {
           {page === "trips" && can("trips","create") && <Btn disabled={tripsMissing || tripAILoading} onClick={requestTripSuggestions}>✨ Suggest trips (AI)</Btn>}
           {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
           {page === "trucks" && can("trucks","create") && <Btn primary disabled={tripsMissing} onClick={openAddTruck}>+ Truck</Btn>}
+          {page === "equipment" && can("equipment","create") && <Btn primary disabled={equipmentMissing} onClick={() => { setEditingEquipmentId(null); setEquipmentForm(EMPTY_EQUIPMENT); setShowEquipmentModal(true); }}>+ Item</Btn>}
           {page === "extras" && can("extras","create") && <Btn disabled={extrasMissing} onClick={() => { setEmpForm(EMPTY_EMPLOYEE); setShowEmpModal(true); }}>Reps / Employees</Btn>}
           {page === "payments" && can("payments","create") && <Btn disabled={paymentsMissing} onClick={() => setShowAccountsModal(true)}>🏦 Bank accounts</Btn>}
           {page === "payments" && can("payments","create") && !paymentsMissing && !extrasMissing && <Btn onClick={openAddExtraFromPayments}>+ Extra</Btn>}
           {page === "payments" && can("payments","create") && <Btn primary disabled={paymentsMissing} onClick={() => openAddPayment()}>+ Payment</Btn>}
           {page === "compliance" && can("compliance","create") && <><Btn disabled={complianceMissing} onClick={() => openAddDoc()}>+ Document</Btn><Btn primary disabled={complianceMissing} onClick={openAddCompany}>+ Company</Btn></>}
+          {page === "expenses" && can("expenses","create") && <Btn primary disabled={expensesMissing} onClick={() => openAddExpense()}>+ Expense</Btn>}
+          {page === "claims" && can("claims","create") && <Btn primary disabled={claimsMissing} onClick={() => openAddClaim()}>+ New claim</Btn>}
           {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
-          {(page === "dispatching" || page === "jobs" || page === "calendario") && (can("jobs","create") || can("dispatching","create") || can("calendario","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
+          {(page === "dispatching" || page === "jobs" || page === "calendario" || page === "calendario_entregas") && (can("jobs","create") || can("dispatching","create") || can("calendario","create") || can("calendario_entregas","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
       </div>
 
@@ -6963,6 +8470,9 @@ export default function App() {
       {/* ───────────────────────── MESSAGES (team chat) ───────────────────────── */}
       {page === "messages" && can("messages","view") && <MessagesSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} onlineIds={onlineIds} onUnreadTotal={setChatUnread} />}
 
+      {/* ───────────────────────── SUGGESTIONS (employee feedback) ───────────────────────── */}
+      {page === "suggestions" && <SuggestionsSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} />}
+
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
       {/* ───────────────────────── DISPATCHING ───────────────────────── */}
@@ -7012,7 +8522,7 @@ export default function App() {
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"]].map(([t,l]) => (
+            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"],["no_delivery","Sin delivery"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -7048,7 +8558,7 @@ export default function App() {
                     const ns = nextStatus(g);
                     const gTrip = g.trip_id ? tripById[g.trip_id] : null;
                     const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
-                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalBol); })()
+                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalOutstanding, jobOutstanding, tripSequenceByTrip[gTrip.id]); })()
                       : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
                     const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
                     const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
@@ -7066,7 +8576,7 @@ export default function App() {
                             <span title="Tiene extras registrados" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>
                           )}
                           {!paymentsMissing && (() => {
-                            const outstanding = numv(g.pickup_balance) + numv(g.delivery_balance) + numv(g.bol_balance) - (jobReceivedByKey[g.key] || 0);
+                            const outstanding = jobOutstanding(g, g.key);
                             if (outstanding <= 0) return null;
                             const delivered = g.status === "delivered" || g.parts?.some(p => p.date_out);
                             return delivered
@@ -7262,6 +8772,178 @@ export default function App() {
                     </div>
                   </div>
                   <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={(e) => { e.stopPropagation(); addExistingJobToCalendar(g, calAddDate); }}>Add</Btn>
+                </div>
+              ))}
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ───────────────────── DELIVERY CALENDAR ───────────────────── */}
+      {page === "calendario_entregas" && (() => {
+        const range = dcalView === "week" ? weekDays(dcalAnchor) : null;
+        const grid = dcalView === "month" ? monthGrid(dcalAnchor) : null;
+        const anchorD = new Date(dcalAnchor + "T00:00:00");
+        const title = dcalView === "week"
+          ? (() => { const w = weekDays(dcalAnchor); return `${w[0]} → ${w[6]}`; })()
+          : `${MONTHS_ES[anchorD.getMonth()]} ${anchorD.getFullYear()}`;
+        const step = dcalView === "week" ? 7 : 30;
+        const Event = ({ g }) => {
+          const c = calEventColor(g);
+          const route = [g.pickup_state, g.delivery_state].filter(Boolean).join(" to ");
+          const drv = jobDriverNames(g);
+          return (
+            <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
+              style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${c.bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
+              <div style={{ fontWeight:700, fontFamily:"monospace" }}>{g.job_number || "(job)"}{g.job_type === "broker_delivery" && <span style={{ fontWeight:600, opacity:0.8 }}> · Broker</span>}</div>
+              {route && <div>{route}</div>}
+              {drv && <div style={{ opacity:0.85 }}>🧑‍✈️ {drv}</div>}
+            </div>
+          );
+        };
+        return (
+          <>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+              <Btn onClick={() => setDcalAnchor(shiftDate(dcalAnchor, -step))}>←</Btn>
+              <Btn onClick={() => setDcalAnchor(today())}>Today</Btn>
+              <Btn onClick={() => setDcalAnchor(shiftDate(dcalAnchor, step))}>→</Btn>
+              <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
+              <span style={{ flex:1 }} />
+              <Btn onClick={() => openDcalAddExisting("")}>➕ Add existing job</Btn>
+              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+                {[["week","Week"],["month","Month"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setDcalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: dcalView===v?"#fff":"none", color: dcalView===v?"#111":"#888", fontWeight: dcalView===v?600:400, boxShadow: dcalView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap", fontSize:11, color:"#666" }}>
+              {[["#639922","Active"],["#FACC15","On hold / Redispatch"],["#E24B4A","Cancelled"],["#7C3AED","Long haul"],["#378ADD","Delivered"]].map(([c,l]) => (
+                <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
+              ))}
+            </div>
+
+            {/* Jobs picked up & waiting (or broker deliveries) with no delivery date yet. */}
+            {deliveryCandidates.length > 0 && (
+              <div style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:10, marginBottom:14, overflow:"hidden" }}>
+                <div onClick={() => setDcalPanelOpen(o => !o)} style={{ padding:"10px 14px", cursor:"pointer", display:"flex", alignItems:"center", gap:8, background:"#FFF9EE" }}>
+                  <span style={{ fontSize:13, fontWeight:700, color:"#854F0B" }}>📋 Entregas por agendar ({deliveryCandidates.length})</span>
+                  {deliveryToSchedule > 0 && <span style={{ fontSize:10.5, fontWeight:700, background:"#E24B4A", color:"#fff", borderRadius:10, padding:"1px 7px" }}>{deliveryToSchedule} con FADD ≤ 7 días</span>}
+                  <span style={{ flex:1 }} />
+                  <span style={{ color:"#B58B3D", fontSize:12 }}>{dcalPanelOpen ? "▾ ocultar" : "▸ mostrar"}</span>
+                </div>
+                {dcalPanelOpen && (
+                  <>
+                    {deliveryCandidates.slice(0, 10).map(c => (
+                      <ScheduleDeliveryRow key={c.key} cand={c}
+                        onOpen={setJobDetailKey}
+                        onSchedule={(cand, date) => { setJobDelivery(cand.ids, date); showToast(`Entrega de ${cand.job_number || "job"} agendada para ${date}`.replace(/\s+/g, " ").trim()); }} />
+                    ))}
+                    {deliveryCandidates.length > 10 && (
+                      <div style={{ padding:"8px 14px", fontSize:11.5, color:"#999" }}>
+                        +{deliveryCandidates.length - 10} más — <button onClick={() => openDcalAddExisting("")} style={{ border:"none", background:"none", color:"#185FA5", cursor:"pointer", padding:0, fontSize:11.5, textDecoration:"underline" }}>buscar con “Add existing job”</button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {dcalView === "week" ? (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
+                {range.map(ds => {
+                  const d = new Date(ds + "T00:00:00");
+                  const evs = deliveryEvents[ds] || [];
+                  const isToday = ds === today();
+                  return (
+                    <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday?"#378ADD":"#efefef"}`, borderRadius:10, minHeight:160, display:"flex", flexDirection:"column" }}>
+                      <div onClick={() => setDcalDayMenu(ds)} title="Add to this day" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <span style={{ fontSize:11, fontWeight:600 }}>{DOW_ES[d.getDay()]} {d.getDate()}</span>
+                        <span style={{ color:"#bbb", fontSize:13 }}>+</span>
+                      </div>
+                      <div style={{ padding:7, flex:1 }}>{evs.map(g => <Event key={g.key} g={g} />)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+                  {DOW_ES.map(d => <div key={d} style={{ padding:"8px 6px", textAlign:"center", fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", borderBottom:"1px solid #efefef" }}>{d}</div>)}
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+                  {grid.map(({ date, inMonth }) => {
+                    const d = new Date(date + "T00:00:00");
+                    const evs = deliveryEvents[date] || [];
+                    const isToday = date === today();
+                    return (
+                      <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth?"#fff":"#fafafa", opacity: inMonth?1:0.6 }}>
+                        <div onClick={() => setDcalDayMenu(date)} title="Add to this day" style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
+                        {evs.slice(0,3).map(g => <Event key={g.key} g={g} />)}
+                        {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} more</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+
+      {/* Delivery calendar: "what do you want to add to this day?" menu */}
+      {dcalDayMenu && (
+        <Modal title={`Add to ${dcalDayMenu}`} onClose={() => setDcalDayMenu(null)}
+          footer={<><Btn onClick={() => setDcalDayMenu(null)}>Cancel</Btn></>}>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <Btn primary onClick={() => { const d = dcalDayMenu; setDcalDayMenu(null); openAddJobDeliveryDate(d); }} style={{ justifyContent:"center", padding:"12px" }}>🆕 Create new job on this day</Btn>
+            <Btn onClick={() => openDcalAddExisting(dcalDayMenu)} style={{ justifyContent:"center", padding:"12px" }}>📋 Add an existing job to this day</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delivery calendar: search existing jobs (no delivery date yet) and put them on a date */}
+      {dcalAddExisting && (() => {
+        const q = dcalAddSearch.trim().toLowerCase();
+        const seen = new Set(); const results = [];
+        for (const j of jobs) {
+          if (j.delivery_date) continue;                            // only jobs not on the delivery calendar yet
+          if (j.date_out || j.status === "cancelled") continue;     // skip closed/cancelled jobs
+          const k = jobKey(j); if (seen.has(k)) continue; seen.add(k);
+          const names = jobDriverNames(j);
+          const hay = [j.job_number, j.customer, j.driver, names].filter(Boolean).join(" ").toLowerCase();
+          if (q && !hay.includes(q)) continue;
+          results.push({ key:k, job_number:j.job_number, customer:j.customer, status:j.status, drivers:names });
+        }
+        const shown = results.slice(0, 60);
+        return (
+          <Modal title="Add existing job to delivery calendar" onClose={() => setDcalAddExisting(null)}
+            footer={<><Btn onClick={() => setDcalAddExisting(null)}>Close</Btn></>}>
+            <div style={{ display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap", marginBottom:10 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Delivery date</label>
+                <input style={inp} type="date" value={dcalAddDate} onChange={e => setDcalAddDate(e.target.value)} />
+              </div>
+              <div style={{ flex:1, minWidth:180, display:"flex", flexDirection:"column", gap:3 }}>
+                <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Search</label>
+                <input style={inp} value={dcalAddSearch} onChange={e => setDcalAddSearch(e.target.value)} placeholder="Search job # / client / driver…" autoFocus />
+              </div>
+            </div>
+            <div style={{ fontSize:11.5, color:"#999", marginBottom:8 }}>Only jobs without a delivery date are listed. Pick a date above, then click a job to put it on the calendar.</div>
+            <div style={{ border:"1px solid #eee", borderRadius:9, maxHeight:340, overflowY:"auto", background:"#fff" }}>
+              {shown.length === 0 ? (
+                <div style={{ padding:"16px", fontSize:12.5, color:"#bbb", textAlign:"center" }}>{q ? "No matching jobs without a delivery date." : "No jobs pending a delivery date."}</div>
+              ) : shown.map(g => (
+                <div key={g.key} onClick={() => addExistingJobToDeliveryCalendar(g, dcalAddDate)}
+                  style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderBottom:"1px solid #f6f6f6", cursor:"pointer", fontSize:12.5 }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#f7faf1"} onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div><b style={{ fontFamily:"monospace" }}>{g.job_number || "(no #)"}</b> · {g.customer || "—"}</div>
+                    <div style={{ color:"#999", marginTop:2, display:"flex", gap:8, flexWrap:"wrap" }}>
+                      <StatusBadge status={g.status} />{g.drivers && <span>🧑‍✈️ {g.drivers}</span>}
+                    </div>
+                  </div>
+                  <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={(e) => { e.stopPropagation(); addExistingJobToDeliveryCalendar(g, dcalAddDate); }}>Add</Btn>
                 </div>
               ))}
             </div>
@@ -7688,6 +9370,79 @@ export default function App() {
         </div>
       )}
 
+      {/* ───────────────────────── EQUIPMENT / MATERIALS ───────────────────────── */}
+      {page === "equipment" && (() => {
+        const locLabel = (i) => i.warehouse ? `🏭 ${i.warehouse}` : (i.storage_id ? ([storageById[i.storage_id]?.brand, storageById[i.storage_id]?.unit && "U" + storageById[i.storage_id]?.unit].filter(Boolean).join(" ") || `Unit #${i.storage_id}`) : "—");
+        const q = equipmentSearch.trim().toLowerCase();
+        const shownItems = q ? equipmentItems.filter(i => [i.name, i.category, i.notes, i.warehouse].join(" ").toLowerCase().includes(q)) : equipmentItems;
+        const inTransit = equipmentItems.filter(i => i.status === "in_transit").length;
+        const activeTrips = trips.filter(t => TRIP_ACTIVE(t.status));
+        return (
+          <>
+            {equipmentMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>{trAI("For the Equipment tab, run the setup SQL once in Supabase.", "Para la pestaña de Equipment, corré el SQL de setup una vez en Supabase.")}</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
+              {[
+                { label:trAI("Items", "Items"), value:equipmentItems.length, color:"#111" },
+                { label:trAI("Available", "Disponibles"), value:equipmentItems.length - inTransit, color:"#1A8A4E" },
+                { label:trAI("In transit", "En tránsito"), value:inTransit, color:"#7C3AED" },
+              ].map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:20, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+            <input style={{ ...inp, maxWidth:340, marginBottom:12 }} value={equipmentSearch} onChange={e => setEquipmentSearch(e.target.value)} placeholder={trAI("Search by name / category / location…", "Buscar por nombre / categoría / location…")} />
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {[trAI("Item", "Item"), trAI("Category", "Categoría"), trAI("Qty", "Cant."), trAI("Location", "Location"), "Status", ""].map((h,i) => (
+                        <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shownItems.length === 0 ? (
+                      <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{equipmentMissing ? trAI("Run the setup SQL to enable equipment.", "Corré el SQL de setup para habilitar equipment.") : trAI("No equipment items. Add one with “+ Item”.", "Sin items de equipo. Agregá uno con “+ Item”.")}</td></tr>
+                    ) : shownItems.map(item => {
+                      const cat = equipmentCat(item.category);
+                      const onTrip = item.trip_id ? tripById[item.trip_id] : null;
+                      return (
+                        <tr key={item.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                          <td style={{ padding:"12px" }}>
+                            <div style={{ fontWeight:600 }}>{item.name || "—"}</div>
+                            {item.notes && <div style={{ fontSize:11, color:"#888", marginTop:2 }}>{item.notes}</div>}
+                          </td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}><span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 9px" }}>{cat.icon} {trAI(cat.label, cat.es)}</span></td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{numv(item.quantity) || 1}</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{item.status === "in_transit" && onTrip ? `🚚 ${onTrip.trip_number || "#" + onTrip.id}` : locLabel(item)}</td>
+                          <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: item.status === "in_transit" ? "#EDE9FE" : "#EAF3DE", color: item.status === "in_transit" ? "#6D28D9" : "#3B6D11", whiteSpace:"nowrap" }}>{item.status === "in_transit" ? trAI("In transit", "En tránsito") : trAI("Available", "Disponible")}</span></td>
+                          <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                            {item.status === "in_transit"
+                              ? <Btn onClick={() => setEquipUnloadItem(item)} style={{ padding:"4px 10px", fontSize:12 }}>📤 {trAI("Unload", "Descargar")}</Btn>
+                              : <Btn disabled={!activeTrips.length} title={!activeTrips.length ? trAI("No active trips", "No hay trips activos") : ""} onClick={() => setEquipLoadItem(item)} style={{ padding:"4px 10px", fontSize:12 }}>🚚 {trAI("Load on trip", "Cargar a trip")}</Btn>}
+                            <Btn onClick={() => { setEditingEquipmentId(item.id); setEquipmentForm({ name:item.name || "", category:item.category || "other", quantity:String(numv(item.quantity) || 1), location: item.storage_id ? `u:${item.storage_id}` : (item.warehouse ? `w:${item.warehouse}` : ""), notes:item.notes || "" }); setShowEquipmentModal(true); }} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Edit</Btn>
+                            <Btn danger onClick={() => deleteEquipmentItem(item)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{shownItems.length} item(s)</div>
+            </div>
+          </>
+        );
+      })()}
+
       {/* ───────────────────────── TRIPS / LIVE LOAD ───────────────────────── */}
       {page === "trips" && (() => {
         // One row in a trip's unified stop sequence — a job or a custom stop.
@@ -7737,9 +9492,14 @@ export default function App() {
             );
           }
           const j = item.j;
+          const reloc = isRelocation(j);
           const delivered = !!j.date_out || j.status === "delivered";
           // Dropped at storage during the trip: still on the trip, but sitting in storage.
-          const dropped = !delivered && j.status === "in_storage";
+          // A relocation stop only counts as dropped once its storage_drop event exists —
+          // in_storage without it means it's still waiting at the origin location.
+          const relocDropped = reloc && (tripEventsByTrip[trip.id] || []).some(e => e.event_type === "storage_drop" && e.job_id && jobRowIdsForUnit(tripUnitKey(j)).includes(e.job_id));
+          const dropped = !delivered && j.status === "in_storage" && (!reloc || relocDropped);
+          const relocAtOrigin = reloc && !delivered && j.status === "in_storage" && !relocDropped;
           const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
           const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
           return (
@@ -7750,6 +9510,8 @@ export default function App() {
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                   <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                  {j.split_group && <span style={{ color:"#7C3AED", fontWeight:700, fontSize:10.5 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
+                  {reloc && <span title={trAI("Internal move between locations — no delivery, no collection", "Movimiento interno entre locations — sin delivery, sin cobro")} style={{ color:"#185FA5", background:"#E6F1FB", fontWeight:700, fontSize:10, borderRadius:20, padding:"1px 7px", whiteSpace:"nowrap" }}>🔁 Relocation</span>}
                   <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                   {fromTo && <span style={{ color:"#888" }}>· {fromTo}</span>}
                 </div>
@@ -7758,16 +9520,26 @@ export default function App() {
                   {j.sticker_color && <span style={{ width:9, height:9, borderRadius:"50%", background: colorHex(j.sticker_color) || "#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                   {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                   <FaddBadge fadd={j.fadd} />
-                  {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                  {!reloc && (() => {
+                    const out = jobOutstanding(j); const tot = jobToCollect(j) + extrasOwedFor(jobKey(j));
+                    if (tot <= 0) return null;
+                    return out > 0
+                      ? <span title={`Pendiente de cobrar (balance + extras · total $${Math.round(tot).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(out).toLocaleString()}</span>
+                      : <span title="Balance y extras cobrados por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
+                  })()}
+                  {reloc && jobToCollect(j) > 0 && <span title={trAI("Outstanding balance — NOT collected on this trip (relocation)", "Balance pendiente — NO se cobra en este trip (reubicación)")} style={{ color:"#999", textDecoration:"line-through" }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                 </div>
               </div>
               {delivered
                 ? <span style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 8px" }}>Delivered</span>
                 : dropped
-                ? <span title={dropLoc} style={{ fontSize:10, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>
+                ? <span title={dropLoc} style={{ fontSize:10, fontWeight:700, color: reloc ? "#3B6D11" : "#185FA5", background: reloc ? "#EAF3DE" : "#E7EFF8", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>{reloc ? "✅ Relocated" : "📦 Dropped in storage"}</span>
                 : <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
-                    <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>
-                    <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 Dropped at storage</Btn>
+                    {!reloc && <Btn onClick={() => tripMarkDelivered(j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>Mark delivered</Btn>}
+                    {relocAtOrigin
+                      ? <Btn onClick={() => tripRelocLoad(trip, j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>🔼 {trAI("Load onto truck", "Cargar al camión")}</Btn>
+                      : <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 {reloc ? trAI("Drop at destination", "Dejar en destino") : "Dropped at storage"}</Btn>}
+                    {!jobSplitColMissing && !reloc && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
                   </div>}
             </div>
           );
@@ -7787,7 +9559,7 @@ export default function App() {
               {[
                 { label:"Trips activos", value:tripMetrics.activeCount, color:"#7C3AED" },
                 { label:"CF in transit", value:Math.round(tripMetrics.cfTransit).toLocaleString()+" CF", color:"#185FA5" },
-                { label:"BOL in transit", value:"$"+Math.round(tripMetrics.bolTransit).toLocaleString(), color:"#1A8A4E" },
+                { label:"To collect in transit", value:"$"+Math.round(tripMetrics.collectTransit).toLocaleString(), color:"#1A8A4E" },
                 { label:"Delivered today", value:tripMetrics.deliveredToday, color:"#3B6D11" },
               ].map(mt => (
                 <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
@@ -7904,7 +9676,7 @@ export default function App() {
                           <Btn onClick={() => openEditTrip(t)} style={{ padding:"4px 9px", fontSize:11 }}>Edit Trip</Btn>
                           <Btn disabled={tripStopsMissing} title={tripStopsMissing ? trAI("Run the setup SQL to enable custom stops", "Corré el setup SQL para habilitar paradas") : trAI("Add a maintenance, inspection, fuel… stop", "Agregar parada de mantenimiento, inspección, combustible…")} onClick={() => openAddStop(t)} style={{ padding:"4px 9px", fontSize:11 }}>➕ {trAI("Add stop", "Agregar parada")}</Btn>
                           {c.jobsIn.length
-                            ? <Btn onClick={() => setTripRouteModal({ title: t.trip_number || `#${t.id}`, waypoints: tripRouteWaypoints(c.jobsIn, storageById), googleLink: tripRouteLink(c.jobsIn, storageById) })} style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>
+                            ? <Btn onClick={() => setTripRouteModal({ tripId: t.id, title: t.trip_number || `#${t.id}`, options: tripRouteStopOptions(tripSequenceByTrip[t.id] || [], storageById, t.route_overrides) })} style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>
                             : <Btn disabled title="No jobs in this trip" style={{ padding:"4px 9px", fontSize:11 }}>🗺️ View route</Btn>}
                         </div>
                       </div>
@@ -7926,10 +9698,10 @@ export default function App() {
                       </>); })()}
                       <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:10 }}>
                         <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-                        <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+                        <span style={{ color:"#666" }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:10 }}>
-                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+                        <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding, tripSequenceByTrip[t.id])} target="_blank" rel="noreferrer" style={{ textDecoration:"none", flex:1 }}><Btn primary style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
                         {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart</Btn>}
                       </div>
                     </div>
@@ -7946,13 +9718,13 @@ export default function App() {
                     <tbody>
                       {shown.map(t => { const c = tripCalc(t); return (
                         <tr key={t.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700 }}><button onClick={() => setTripDetailId(t.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button></td>
+                          <td style={{ padding:"12px", fontFamily:"monospace", fontWeight:700, whiteSpace:"nowrap" }}><button onClick={() => setTripDetailId(t.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{t.trip_number || `#${t.id}`}</button>{!claimsMissing && can("claims","view") && <ClaimCountPill count={claimsByTrip[t.id]} />}</td>
                           <td style={{ padding:"12px" }}>{truckById[t.truck_id]?.name || "—"}</td>
                           <td style={{ padding:"12px" }}>{driverById[t.driver_id]?.name || "—"}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{t.departure_date || "—"}</td>
                           <td style={{ padding:"12px" }}>{c.count}</td>
                           <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{Math.round(c.totalCf).toLocaleString()} CF</td>
-                          <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }}>${Math.round(c.totalBol).toLocaleString()}</td>
+                          <td style={{ padding:"12px", whiteSpace:"nowrap", color:"#1A8A4E", fontWeight:600 }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()}`}>${Math.round(c.totalOutstanding).toLocaleString()}</td>
                           <td style={{ padding:"12px" }}><TripBadge status={t.status} /></td>
                           <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                             <Btn onClick={() => setTripDetailId(t.id)} style={{ padding:"4px 10px", fontSize:12 }}>Open</Btn>
@@ -8235,7 +10007,12 @@ export default function App() {
       {page === "payments" && (() => {
         const m = paymentMetrics;
         const tabFilter = (p) => payTab === "pending" ? !p.received : payTab === "received" ? p.received : payTab === "banked" ? (p.received && effectiveBanked(p)) : true;
-        const rows = paymentRows.filter(tabFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        const pq = paySearch.trim().toLowerCase();
+        const searchFilter = (p) => !pq || [p._g?.job_number, p._g?.customer, payRef(p)].filter(Boolean).join(" ").toLowerCase().includes(pq);
+        const rows = paymentRows.filter(tabFilter).filter(searchFilter).sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+        // Jobs matching the search, to answer "does this job have a payment?" even when
+        // it has zero payment rows (an empty table alone doesn't say if the job exists).
+        const searchedJobs = pq ? [...extraJobGroups.values()].filter(g => (g.job_number || "").toLowerCase().includes(pq)).slice(0, 5) : [];
         // Weekly window (Mon–Sun) for the cash-flow summary.
         const td = today(); const dd = new Date(td + "T00:00:00"); const dow = dd.getDay();
         const mon = new Date(dd); mon.setDate(dd.getDate() - ((dow + 6) % 7));
@@ -8352,11 +10129,47 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
-              {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
-                <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
-              ))}
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, flexWrap:"wrap" }}>
+                {[["all","All"],["pending","Pending"],["received","Received"],["circulation","In circulation"],["banked","Deposited"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setPayTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: payTab===v?"#fff":"none", color: payTab===v?"#111":"#888", fontWeight: payTab===v?600:400, boxShadow: payTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+                ))}
+              </div>
+              <input style={{ ...inp, minWidth:230 }} value={paySearch} onChange={e => setPaySearch(e.target.value)} placeholder="🔎 Search job # / client / ref…" />
+              {paySearch && <button onClick={() => setPaySearch("")} title="Clear search" style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:15 }}>✕</button>}
             </div>
+
+            {/* Search verdict: does each matching job have payments loaded or not? */}
+            {pq && searchedJobs.length === 0 && (
+              <div style={{ background:"#FEF9C3", border:"1px solid #FACC15", borderRadius:10, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#854D0E" }}>
+                ⚠️ Ningún job coincide con “{paySearch.trim()}”. Revisá el número de job.
+              </div>
+            )}
+            {searchedJobs.map(g => {
+              const pays = paymentsByJobKey[g.key] || [];
+              const totalNet = pays.reduce((s, p) => s + paymentNet(p), 0);
+              const receivedNet = pays.filter(p => p.received).reduce((s, p) => s + paymentNet(p), 0);
+              const expected = jobExpected(g);
+              const has = pays.length > 0;
+              return (
+                <div key={g.key} style={{ background: has ? "#F0FAF4" : "#FCEBEB", border:`1px solid ${has ? "#CDEBD8" : "#E24B4A"}`, borderRadius:10, padding:"10px 14px", marginBottom:10, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:12.5 }}>
+                  <span style={{ fontSize:15 }}>{has ? "✅" : "🚫"}</span>
+                  <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:13 }}>{g.job_number || "(sin #)"}</button>
+                  <span style={{ color:"#555" }}>{g.customer || "—"}</span>
+                  {g.status === "cancelled" && <StatusBadge status={g.status} />}
+                  {has ? (
+                    <span style={{ color:"#1A8A4E", fontWeight:700 }}>{pays.length} pago(s) · ${Math.round(totalNet).toLocaleString()}{receivedNet !== totalNet ? ` (recibido $${Math.round(receivedNet).toLocaleString()})` : ""}</span>
+                  ) : (
+                    <span style={{ color:"#A32D2D", fontWeight:700 }}>Sin pagos cargados</span>
+                  )}
+                  {expected > 0 && <span style={{ color:"#777" }}>Esperado ${Math.round(expected).toLocaleString()} · Pendiente ${Math.max(0, Math.round(expected - receivedNet)).toLocaleString()}</span>}
+                  <span style={{ flex:1 }} />
+                  {can("payments","create") && !paymentsMissing && (
+                    <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={() => openAddPayment({ job_id: g.repId })}>+ Payment</Btn>
+                  )}
+                </div>
+              );
+            })}
 
             {paymentsMissing ? null : payTab === "circulation" ? (
               circulation.length === 0 ? (
@@ -8659,6 +10472,128 @@ export default function App() {
         );
       })()}
 
+      {/* ───────────────────────── CLAIMS & INCIDENTS ───────────────────────── */}
+      {page === "claims" && (() => {
+        const m = claimMetrics;
+        const th = { padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" };
+        const td = { padding:"11px 12px", fontSize:12.5, verticalAlign:"middle" };
+        const q = claimSearch.trim().toLowerCase();
+        const rows = claims
+          .filter(c => claimTab === "all" || c.status === claimTab)
+          .filter(c => !claimFilterType || c.incident_type === claimFilterType)
+          .filter(c => !claimFilterRes || c.resolution_type === claimFilterRes)
+          .filter(c => !claimFilterFrom || (c.incident_date || "") >= claimFilterFrom)
+          .filter(c => !claimFilterTo || (c.incident_date || "9999") <= claimFilterTo)
+          .filter(c => !q || [c.job_number, c.client_name, c.description, c.assigned_to].join(" ").toLowerCase().includes(q));
+        // Clamp like Pager does, so deleting the last row of the last page never strands the view.
+        const pageCur = Math.min(claimsPage, Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1));
+        const pageRows = rows.slice(pageCur * PAGE_SIZE, (pageCur + 1) * PAGE_SIZE);
+        // Days a claim has been sitting open (or took to close).
+        const claimAge = (c) => {
+          const from = c.incident_date || (c.created_at || "").slice(0, 10);
+          if (!from) return null;
+          const to = !CLAIM_ACTIVE(c.status) && c.closed_date ? new Date(c.closed_date) : startOfToday();
+          return Math.max(0, Math.round((to - new Date(from)) / ONE_DAY));
+        };
+        const tabs = [["all","All"],["open","Open"],["investigating","Investigating"],["resolved","Resolved"],["denied","Denied"]];
+        return (
+          <>
+            {claimsMissing && (
+              <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span>For Claims & Incidents (claims + follow-up notes), run the setup SQL once in Supabase.</span>
+                <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
+              {[
+                { label:"Open claims", value:m.open, color:"#E24B4A" },
+                { label:"Investigating", value:m.investigating, color:"#EF9F27" },
+                { label:"Resolved this year", value:m.resolvedYtd, color:"#1A8A4E" },
+                { label:"Total claimed", value:"$"+Math.round(m.claimed).toLocaleString(), color:"#111" },
+                { label:"Total paid out", value:"$"+Math.round(m.paid).toLocaleString(), color:"#7C3AED" },
+                { label:"Avg days to close", value:m.avgClose ?? "—", color:"#185FA5" },
+              ].map(mt => (
+                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
+                  <div style={{ fontSize:20, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
+              {tabs.map(([v,l]) => (
+                <button key={v} onClick={() => { setClaimTab(v); setClaimsPage(0); }} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: claimTab===v?"#fff":"none", color: claimTab===v?"#111":"#888", fontWeight: claimTab===v?600:400, boxShadow: claimTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>
+                  {l}{v === "open" && m.open > 0 ? ` (${m.open})` : ""}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
+              <input style={{ ...inp, width:"auto", minWidth:230, flex:1, maxWidth:340 }} value={claimSearch} onChange={e => { setClaimSearch(e.target.value); setClaimsPage(0); }} placeholder="🔎 Job #, client, description…" />
+              <select value={claimFilterType} onChange={e => { setClaimFilterType(e.target.value); setClaimsPage(0); }} style={{ ...inp, width:"auto", minWidth:150 }}>
+                <option value="">All types</option>
+                {CLAIM_TYPES.map(t => <option key={t.v} value={t.v}>{t.icon} {t.l}</option>)}
+              </select>
+              <select value={claimFilterRes} onChange={e => { setClaimFilterRes(e.target.value); setClaimsPage(0); }} style={{ ...inp, width:"auto", minWidth:150 }}>
+                <option value="">All resolutions</option>
+                {CLAIM_RESOLUTIONS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+              <input style={{ ...inp, width:"auto" }} type="date" value={claimFilterFrom} onChange={e => { setClaimFilterFrom(e.target.value); setClaimsPage(0); }} title="Incident date from" />
+              <span style={{ fontSize:12, color:"#bbb" }}>→</span>
+              <input style={{ ...inp, width:"auto" }} type="date" value={claimFilterTo} onChange={e => { setClaimFilterTo(e.target.value); setClaimsPage(0); }} title="Incident date to" />
+            </div>
+
+            {claimsMissing ? null : (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Job #","Client","Trip","Type","Incident","Status","Claimed","Paid","Assigned","Days",""].map((h,i) => <th key={i} style={th}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {pageRows.length === 0 ? (
+                        <tr><td colSpan={11} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No claims in this filter. Report one with “+ New claim”.</td></tr>
+                      ) : pageRows.map(c => {
+                        const tMeta = claimTypeMeta(c.incident_type);
+                        const trip = c.trip_id ? tripById[c.trip_id] : null;
+                        const age = claimAge(c);
+                        return (
+                          <tr key={c.id} style={{ borderBottom:"1px solid #fafafa" }}>
+                            <td style={{ ...td, fontFamily:"monospace", fontWeight:700 }}>
+                              {c.job_number
+                                ? (() => { const j = jobByNumber[normJobNumber(c.job_number)]; return j
+                                    ? <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{c.job_number}</button>
+                                    : c.job_number; })()
+                                : "—"}
+                            </td>
+                            <td style={{ ...td, fontWeight:600 }}>{c.client_name || "—"}</td>
+                            <td style={{ ...td, fontFamily:"monospace", fontSize:12 }}>{trip ? (trip.trip_number || "#"+trip.id) : "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{tMeta.icon} {tMeta.l}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap" }}>{c.incident_date || "—"}</td>
+                            <td style={td}><ClaimBadge status={c.status} /></td>
+                            <td style={{ ...td, whiteSpace:"nowrap", fontWeight:600 }}>{c.claimed_amount != null ? "$"+Math.round(numv(c.claimed_amount)).toLocaleString() : "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap", color:"#7C3AED", fontWeight:600 }}>{c.paid_amount != null ? "$"+Math.round(numv(c.paid_amount)).toLocaleString() : "—"}</td>
+                            <td style={td}>{c.assigned_to || "—"}</td>
+                            <td style={{ ...td, whiteSpace:"nowrap", color: CLAIM_ACTIVE(c.status) && age > 14 ? "#A32D2D" : "#888" }}>{age != null ? `${age}d` : "—"}{!CLAIM_ACTIVE(c.status) && c.closed_date ? " ✓" : ""}</td>
+                            <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap" }}>
+                              <Btn onClick={() => openEditClaim(c)} style={{ padding:"4px 10px", fontSize:12 }}>Open</Btn>
+                              {can("claims","edit") && <Btn danger onClick={() => deleteClaim(c)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa" }}>
+                  <Pager page={pageCur} total={rows.length} onPage={setClaimsPage} unit="claim(s)" />
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+
       {/* ───────────────────────── SETTINGS ───────────────────────── */}
       {page === "settings" && (
         <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:560 }}>
@@ -8685,6 +10620,28 @@ export default function App() {
               {settingsNotice && <span style={{ fontSize:13, color: settingsNotice === "Saved." ? "#3B6D11" : "#b91c1c" }}>{settingsNotice}</span>}
               <span style={{ flex:1 }} />
               <Btn onClick={() => supabase.auth.signOut()}>Sign out</Btn>
+            </div>
+          </div>
+
+          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:14 }}>Change password</div>
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Current password</label>
+            <input type="password" autoComplete="current-password" value={pwForm.current} onChange={e => setPwForm(f => ({ ...f, current: e.target.value }))} placeholder="Current password"
+              style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box", marginBottom:16 }} />
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>New password</label>
+            <input type="password" autoComplete="new-password" value={pwForm.next} onChange={e => setPwForm(f => ({ ...f, next: e.target.value }))} placeholder="New password"
+              style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box", marginBottom:16 }} />
+
+            <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Confirm new password</label>
+            <input type="password" autoComplete="new-password" value={pwForm.confirm} onChange={e => setPwForm(f => ({ ...f, confirm: e.target.value }))} placeholder="Confirm new password"
+              onKeyDown={e => e.key === "Enter" && !pwSaving && pwForm.current && pwForm.next && pwForm.confirm && changeMyPassword()}
+              style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box" }} />
+
+            <div style={{ marginTop:20, display:"flex", alignItems:"center", gap:12 }}>
+              <Btn primary disabled={pwSaving || !pwForm.current || !pwForm.next || !pwForm.confirm} onClick={changeMyPassword}>{pwSaving ? "Saving…" : "Update password"}</Btn>
+              {pwNotice && <span style={{ fontSize:13, color: pwNotice.ok ? "#3B6D11" : "#b91c1c" }}>{pwNotice.text}</span>}
             </div>
           </div>
         </div>
@@ -8768,6 +10725,40 @@ export default function App() {
         );
       })()}
 
+      {/* ───────────────────────── EXPENSES ───────────────────────── */}
+      {page === "expenses" && (
+        <ExpensesPage
+          missing={expensesMissing} onShowSetup={() => setShowSetup(true)}
+          expenses={expenses} driversList={driversList} trucksList={trucksList} trips={trips} jobs={jobs}
+          payAccounts={payAccounts} payments={payments} paymentsMissing={paymentsMissing}
+          workDays={workDays} adjustments={adjustments} materialItems={materialItems} materialMovements={materialMovements}
+          can={can} today={today}
+          form={expenseForm} setForm={setExpenseForm} showModal={showExpenseModal} setShowModal={setShowExpenseModal}
+          editingId={editingExpenseId} saving={expenseSaving} uploading={expenseUploading}
+          onAdd={openAddExpense} onEdit={openEditExpense} onSave={saveExpense} onDelete={deleteExpense}
+          onSetStatus={setExpenseStatus} onSettle={settleExpense} onUploadReceipt={uploadExpenseReceipt}
+          onCycleWorkDay={cycleWorkDay}
+          adjForm={adjForm} setAdjForm={setAdjForm} showAdjModal={showAdjModal} setShowAdjModal={setShowAdjModal}
+          adjSaving={adjSaving} onAddAdjustment={openAddAdjustment} onSaveAdjustment={saveAdjustment} onDeleteAdjustment={deleteAdjustment}
+          materialItemForm={materialItemForm} setMaterialItemForm={setMaterialItemForm}
+          showMaterialItemModal={showMaterialItemModal} setShowMaterialItemModal={setShowMaterialItemModal}
+          editingMaterialItemId={editingMaterialItemId} materialSaving={materialSaving}
+          onAddMaterialItem={openAddMaterialItem} onEditMaterialItem={openEditMaterialItem}
+          onSaveMaterialItem={saveMaterialItem} onDeleteMaterialItem={deleteMaterialItem}
+          materialMoveForm={materialMoveForm} setMaterialMoveForm={setMaterialMoveForm}
+          showMaterialMoveModal={showMaterialMoveModal} setShowMaterialMoveModal={setShowMaterialMoveModal}
+          onAddMaterialMove={openAddMaterialMove} onSaveMaterialMove={saveMaterialMove} onDeleteMaterialMove={deleteMaterialMove}
+          setPayPhotoView={setPayPhotoView}
+          Btn={Btn} Modal={Modal}
+        />
+      )}
+
+      {/* ───────────────────────── BANCOS ───────────────────────── */}
+      {page === "bancos" && can("bancos", "view") && (
+        <BancosSection supabase={supabase} session={session} profile={profile}
+          payments={payments} expenses={expenses} can={can} Btn={Btn} Modal={Modal} />
+      )}
+
       {/* ───────────────────────── ANALYTICS ───────────────────────── */}
       {page === "analytics" && (
         <AnalyticsPage
@@ -8775,6 +10766,8 @@ export default function App() {
           payments={payments} jobExtras={jobExtras} sit={sit}
           urgentPayments={urgentPayments} faddStats={faddStats}
           brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
+          expenses={expenses} workDays={workDays} adjustments={adjustments} materialItems={materialItems}
+          materialMovements={materialMovements} expensesMissing={expensesMissing}
           lang={lang}
         />
       )}
@@ -9073,6 +11066,7 @@ export default function App() {
                         style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>
                         {g.job_number || "(ver)"}
                       </button>
+                      {!claimsMissing && can("claims","view") && <ClaimCountPill count={claimsByJob[normJobNumber(g.job_number)]} />}
                     </td>
                     <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
                     <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
@@ -9129,6 +11123,9 @@ export default function App() {
             )}
             {jobDetail.parts.some(p => p.date_out) && (
               <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Desentregar todo</Btn>
+            )}
+            {!jobSplitColMissing && jobDetail.parts.some(p => p.split_group) && (
+              <Btn disabled={tripBusy} onClick={() => mergeSplit(jobDetail.parts.find(p => p.split_group))}>✂️ {trAI("Merge portions", "Unir porciones")}</Btn>
             )}
             <Btn primary onClick={() => setJobDetailKey(null)}>Close</Btn>
           </>}>
@@ -9462,8 +11459,24 @@ export default function App() {
             items.sort((a, b) => a.sort.localeCompare(b.sort));
             const setJE = (fields) => setJobEventForm(f => ({ ...f, ...fields }));
             const meta = jobEventForm ? jobEventMeta(jobEventForm.event_type) : null;
+            const jobClaims = (!claimsMissing && can("claims","view") && jobDetail.job_number) ? claims.filter(cl => normJobNumber(cl.job_number) === normJobNumber(jobDetail.job_number)) : [];
             return (
               <>
+                {(jobClaims.length > 0 || (!claimsMissing && can("claims","create"))) && (
+                  <>
+                    <SectionLabel>Claims {jobClaims.length ? `(${jobClaims.length})` : ""}</SectionLabel>
+                    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                      {jobClaims.map(cl => (
+                        <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel="Ver claim →" />
+                      ))}
+                      {can("claims","create") && (
+                        <div>
+                          <Btn onClick={() => openAddClaim({ job_number: jobDetail.job_number || "", client_name: jobDetail.customer || "", trip_id: jobDetail.trip_id || "" })} style={{ padding:"4px 11px", fontSize:12 }}>⚠️ Report claim</Btn>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
                 <SectionLabel>Timeline {items.length ? `(${items.length})` : ""}</SectionLabel>
                 {jobEventsMissing && (
                   <div style={{ fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
@@ -9510,7 +11523,7 @@ export default function App() {
                       <Field label="Trip # (opcional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Historical ref." /></Field>
                       <Field label="Notes" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="What happened" /></Field>
                     </div>
-                    <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10 }}>
+                    <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10, flexWrap:"wrap" }}>
                       <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancel</Btn>
                       <Btn primary onClick={() => saveJobEvent(jobDetail.key, repId)} style={{ padding:"5px 12px", fontSize:12 }}>Save event</Btn>
                     </div>
@@ -9538,7 +11551,9 @@ export default function App() {
                       {delivered ? "Delivered" : "Active"}
                     </span>
                     <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
+                    {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
                     <span style={{ flex:1 }} />
+                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Dividir en dos camiones" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
                     {!delivered
                       ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
                       : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Desentregar</Btn>}
@@ -10138,8 +12153,141 @@ export default function App() {
         </Modal>
       )}
 
+      {showClaimModal && (() => {
+        const f = claimForm;
+        const set = (fields) => setClaimForm(prev => ({ ...prev, ...fields }));
+        const canEdit = can("claims","edit") || (!editingClaimId && can("claims","create"));
+        const rec = editingClaimId ? claims.find(c => c.id === editingClaimId) : null;
+        const attachments = Array.isArray(rec?.attachments) ? rec.attachments : [];
+        // Unique jobs for the job picker (newest first), narrowed by the search box.
+        const seen = new Set(); const jobOpts = [];
+        for (const j of jobs) { const k = j.job_number || ""; if (!k || seen.has(k)) continue; seen.add(k); jobOpts.push(j); }
+        const jq = claimJobSearch.trim().toLowerCase();
+        const jobOptsF = (jq ? jobOpts.filter(j => [j.job_number, j.customer].join(" ").toLowerCase().includes(jq)) : jobOpts).slice(0, 60);
+        const pickJob = (jn) => {
+          // Re-derive client/trip from the newly picked job so switching jobs
+          // never keeps the previous job's autofill. Clearing the job keeps
+          // whatever the user typed.
+          const j = jobOpts.find(x => x.job_number === jn);
+          if (!jn) { set({ job_number: "" }); return; }
+          set({ job_number: jn, client_name: j?.customer || f.client_name || "", trip_id: j?.trip_id ? String(j.trip_id) : "" });
+        };
+        const tm = claimTypeMeta(f.incident_type);
+        return (
+          <Modal title={editingClaimId ? `${tm.icon} Claim · ${f.job_number || "no job"}` : "⚠️ Report claim / incident"}
+            onClose={() => { setShowClaimModal(false); setEditingClaimId(null); }}
+            footer={<>
+              {editingClaimId && rec && can("claims","edit") && <Btn danger onClick={() => deleteClaim(rec)}>🗑 Delete claim</Btn>}
+              <Btn onClick={() => { setShowClaimModal(false); setEditingClaimId(null); }}>Close</Btn>
+              {canEdit && <Btn primary disabled={claimSaving} onClick={saveClaim}>{claimSaving ? "Saving..." : editingClaimId ? "Save changes" : "Create claim"}</Btn>}
+            </>}>
+            {editingClaimId && (
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+                <ClaimBadge status={f.status} />
+                <span style={{ fontSize:12.5, color:"#888" }}>{tm.icon} {tm.l}{f.client_name ? ` · ${f.client_name}` : ""}{f.incident_date ? ` · ${f.incident_date}` : ""}</span>
+              </div>
+            )}
+            <SectionLabel>Incident data</SectionLabel>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <Field label="Job">
+                <input style={{ ...inp, marginBottom:6 }} value={claimJobSearch} onChange={e => setClaimJobSearch(e.target.value)} placeholder="🔎 Search job # / client" disabled={!canEdit} />
+                <select style={inp} value={f.job_number} onChange={e => pickJob(e.target.value)} disabled={!canEdit}>
+                  <option value="">— No job linked —</option>
+                  {f.job_number && !jobOptsF.some(j => j.job_number === f.job_number) && <option value={f.job_number}>{f.job_number}</option>}
+                  {jobOptsF.map(j => <option key={j.id} value={j.job_number}>{j.job_number} · {j.customer || "—"}</option>)}
+                </select>
+              </Field>
+              <Field label="Trip (opcional)">
+                <select style={inp} value={f.trip_id} onChange={e => set({ trip_id: e.target.value })} disabled={!canEdit}>
+                  <option value="">— No trip —</option>
+                  {trips.map(t => <option key={t.id} value={t.id}>{t.trip_number || "#"+t.id}{t.departure_date ? ` · ${t.departure_date}` : ""}</option>)}
+                </select>
+              </Field>
+              <Field label="Client"><input style={inp} value={f.client_name} onChange={e => set({ client_name:e.target.value })} placeholder="Client name" disabled={!canEdit} /></Field>
+              <Field label="Incident date *"><input style={inp} type="date" value={f.incident_date} onChange={e => set({ incident_date:e.target.value })} disabled={!canEdit} /></Field>
+              <Field label="Incident type *">
+                <select style={inp} value={f.incident_type} onChange={e => set({ incident_type:e.target.value })} disabled={!canEdit}>
+                  {CLAIM_TYPES.map(t => <option key={t.v} value={t.v}>{t.icon} {t.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Assigned to">
+                <input style={inp} value={f.assigned_to} onChange={e => set({ assigned_to:e.target.value })} placeholder="Who follows this up" list="claim-assignees" disabled={!canEdit} />
+                <datalist id="claim-assignees">{employees.map(e2 => <option key={e2.id} value={e2.name} />)}</datalist>
+              </Field>
+              <Field label="Description *" full>
+                <textarea style={{ ...inp, minHeight:70, resize:"vertical", fontFamily:"inherit" }} value={f.description} onChange={e => set({ description:e.target.value })} placeholder="What happened, which items, where…" disabled={!canEdit} />
+              </Field>
+            </div>
+            <SectionLabel>Status & resolution</SectionLabel>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <Field label="Status">
+                <select style={inp} value={f.status} onChange={e => set({ status:e.target.value })} disabled={!canEdit}>
+                  {Object.entries(CLAIM_STATUS).map(([v,c]) => <option key={v} value={v}>{c.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Resolution">
+                <select style={inp} value={f.resolution_type} onChange={e => set({ resolution_type:e.target.value })} disabled={!canEdit}>
+                  <option value="">— Sin resolución —</option>
+                  {CLAIM_RESOLUTIONS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </Field>
+              <Field label="Claimed amount ($)"><input style={inp} type="number" min="0" step="0.01" value={f.claimed_amount} onChange={e => set({ claimed_amount:e.target.value })} placeholder="0.00" disabled={!canEdit} /></Field>
+              <Field label="Paid / settled ($)"><input style={inp} type="number" min="0" step="0.01" value={f.paid_amount} onChange={e => set({ paid_amount:e.target.value })} placeholder="0.00" disabled={!canEdit} /></Field>
+              <Field label="Closed date"><input style={inp} type="date" value={f.closed_date} onChange={e => set({ closed_date:e.target.value })} disabled={!canEdit} /></Field>
+            </div>
+            {editingClaimId ? (
+              <>
+                <SectionLabel>Evidence {attachments.length ? `(${attachments.length})` : ""}</SectionLabel>
+                {attachments.length > 0 && (
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))", gap:8, marginBottom:4 }}>
+                    {attachments.map((a, i) => {
+                      const isPdf = (a.url || "").toLowerCase().includes(".pdf");
+                      return (
+                        <div key={i} style={{ border:"1px solid #efefef", borderRadius:10, padding:6, background:"#fafafa", position:"relative" }}>
+                          <a href={a.url} target="_blank" rel="noreferrer" style={{ textDecoration:"none", color:"#185FA5", display:"block", textAlign:"center" }}>
+                            {isPdf ? <span style={{ fontSize:30 }}>📄</span> : <img src={a.url} alt="" style={{ width:"100%", height:64, objectFit:"cover", borderRadius:6 }} />}
+                            <div style={{ fontSize:10.5, marginTop:4, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{a.name || "file"}</div>
+                          </a>
+                          {canEdit && <button onClick={() => removeClaimAttachment(a)} title="Remove" style={{ position:"absolute", top:2, right:4, border:"none", background:"none", cursor:"pointer", color:"#bbb", fontSize:14 }}>×</button>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {canEdit && <PayPhotoBox onFile={uploadClaimFile} uploading={claimUploading} label="Add photo / document" />}
+
+                <SectionLabel>Follow-up {claimNotes.length ? `(${claimNotes.length})` : ""}</SectionLabel>
+                {canEdit && (
+                  <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                    <input style={inp} value={claimNoteInput} onChange={e => setClaimNoteInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") addClaimNote(); }} placeholder="Ej: se contactó al cliente, el seguro respondió…" />
+                    <Btn primary disabled={!claimNoteInput.trim()} onClick={addClaimNote} style={{ whiteSpace:"nowrap" }}>+ Add note</Btn>
+                  </div>
+                )}
+                {claimNotes.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No notes yet.</div>
+                  : <div style={{ display:"flex", flexDirection:"column" }}>
+                      {claimNotes.map((n, i) => (
+                        <div key={n.id} style={{ display:"flex", gap:10, padding:"8px 0", borderBottom: i < claimNotes.length-1 ? "1px solid #f4f4f4" : "none" }}>
+                          <div style={{ fontSize:14 }}>💬</div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:13 }}>{n.note}</div>
+                            <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{fmtTs(n.created_at)}{n.created_by ? ` · ${n.created_by}` : ""}</div>
+                          </div>
+                          {canEdit && <button onClick={() => deleteClaimNote(n)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
+                        </div>
+                      ))}
+                    </div>}
+                <AuditInfo rec={rec} />
+              </>
+            ) : (
+              <div style={{ fontSize:12, color:"#999", marginTop:12 }}>💡 Save the claim first to attach photos/documents and follow-up notes.</div>
+            )}
+          </Modal>
+        );
+      })()}
+
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
@@ -10184,6 +12332,8 @@ export default function App() {
             <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="ej: T-12" /></Field>
+            <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="ej: 250" /></Field>
+            <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="ej: 25 (opcional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
             <Field label="Status">
@@ -11238,7 +13388,7 @@ export default function App() {
         const addableSeen = new Set(); const addable = [];
         for (const j of jobs) {
           if (j.trip_id || j.date_out || j.status === "delivered" || j.status === "cancelled") continue;
-          const k = jobKey(j); if (addableSeen.has(k)) continue; addableSeen.add(k);
+          const k = tripUnitKey(j); if (addableSeen.has(k)) continue; addableSeen.add(k);
           addable.push(j);
         }
         const q = tripAddJobSearch.trim().toLowerCase();
@@ -11249,7 +13399,7 @@ export default function App() {
           <Modal title={`Trip ${t.trip_number || "#"+t.id}`} onClose={() => { setTripDetailId(null); setTripAction(null); setStorageDropJob(null); setTripWaLink(null); }}
             footer={<>
               {t.status === "loading" && <Btn onClick={() => setTripStatus(t, "in_transit")}>Depart (in transit)</Btn>}
-              {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Complete trip…</Btn>}
+              {TRIP_ACTIVE(t.status) && <Btn primary onClick={() => { setCompleteDropTarget({}); setTripCompleteModal({ trip: t }); }}>Complete trip…</Btn>}
               {TRIP_ACTIVE(t.status) && <Btn danger onClick={() => setTripStatus(t, "cancelled")}>Cancel trip</Btn>}
               <Btn onClick={() => { setTripDetailId(null); setTripAction(null); }}>Close</Btn>
             </>}>
@@ -11279,13 +13429,41 @@ export default function App() {
             {over > 0 && <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:8, padding:"8px 11px", fontSize:12.5, fontWeight:700, color:"#A32D2D", margin:"8px 0" }}>⚠️ Over capacity by {over.toLocaleString()} CF</div>}
 
             {/* Read-only delivery progress indicator (never changes trip status) */}
-            {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>📦 Delivered: <b style={{ color: c.allDelivered ? "#3B6D11" : "#111" }}>{c.delivered}/{c.count}</b>{c.delivered < c.count ? ` · ${c.count - c.delivered} pending` : ""}</div>}
+            {c.count > 0 && <div style={{ fontSize:12.5, color:"#666", margin:"6px 0" }}>
+              {c.deliveryCount > 0 && <>📦 Delivered: <b style={{ color: c.delivered === c.deliveryCount ? "#3B6D11" : "#111" }}>{c.delivered}/{c.deliveryCount}</b></>}
+              {c.relocCount > 0 && <>{c.deliveryCount > 0 ? " · " : ""}🔁 Relocated: <b style={{ color: c.relocDone === c.relocCount ? "#3B6D11" : "#111" }}>{c.relocDone}/{c.relocCount}</b></>}
+              {!c.allDelivered ? ` · ${(c.deliveryCount - c.delivered) + (c.relocCount - c.relocDone)} pending` : ""}
+            </div>}
+
+            {/* Claims on this trip (linked directly or through one of its jobs) */}
+            {!claimsMissing && can("claims","view") && (() => {
+              const tripJobNumbers = new Set(c.jobsIn.map(j => normJobNumber(j.job_number)).filter(Boolean));
+              const tripClaims = claims.filter(cl => cl.trip_id === t.id || tripJobNumbers.has(normJobNumber(cl.job_number)));
+              if (tripClaims.length === 0 && !can("claims","create")) return null;
+              const hasActive = tripClaims.some(cl => CLAIM_ACTIVE(cl.status));
+              return (
+                <div style={{ background: hasActive ? "#FCEBEB" : "#fafafa", border:`1px solid ${hasActive ? "#E24B4A" : "#efefef"}`, borderRadius:9, padding:"9px 12px", margin:"8px 0" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <b style={{ fontSize:12.5, color: hasActive ? "#A32D2D" : "#666" }}>⚠️ Claims{tripClaims.length ? ` (${tripClaims.length})` : ""}</b>
+                    <span style={{ flex:1 }} />
+                    {can("claims","create") && <Btn onClick={() => openAddClaim({ trip_id: t.id })} style={{ padding:"4px 10px", fontSize:11.5 }}>+ Report claim</Btn>}
+                  </div>
+                  {tripClaims.length > 0 && (
+                    <div style={{ display:"flex", flexDirection:"column", gap:4, marginTop:6 }}>
+                      {tripClaims.map(cl => (
+                        <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel={`${cl.job_number || "(sin job)"}${cl.client_name ? ` · ${cl.client_name}` : ""}`} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Non-blocking suggestion — trip stays as-is until the dispatcher acts */}
             {c.allDelivered && TRIP_ACTIVE(t.status) && (
               <div style={{ background:"#EAF3DE", border:"1px solid #639922", borderRadius:9, padding:"10px 12px", margin:"8px 0", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ All jobs delivered — mark trip as completed?</span>
-                <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget(""); setTripCompleteModal({ trip: t }); }}>Mark completed</Btn>
+                <span style={{ fontSize:12.5, color:"#3B6D11", flex:1 }}>✅ {c.relocCount > 0 ? "All stops done (deliveries + relocations)" : "All jobs delivered"} — mark trip as completed?</span>
+                <Btn primary style={{ padding:"5px 12px", fontSize:12 }} onClick={() => { setCompleteDropTarget({}); setTripCompleteModal({ trip: t }); }}>Mark completed</Btn>
               </div>
             )}
 
@@ -11363,7 +13541,8 @@ export default function App() {
                             {(j.storage_id || j.warehouse) && <span>📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</span>}
                           </div>
                         </div>
-                        <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Add</Btn>
+                        <Btn primary disabled={tripBusy} onClick={() => tripAddExistingJob(t, tripUnitKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Add</Btn>
+                        {!tripPurposeColMissing && <Btn disabled={tripBusy} onClick={() => tripAddExistingJob(t, tripUnitKey(j), "relocation")} title={trAI("Add as internal relocation — no delivery, no collection", "Agregar como reubicación interna — sin delivery, sin cobro")} style={{ padding:"4px 10px", fontSize:11 }}>🔁 {trAI("Relocate", "Reubicar")}</Btn>}
                       </div>
                     ))}
                 </div>
@@ -11382,7 +13561,8 @@ export default function App() {
                           <div><b style={{ fontFamily:"monospace" }}>{j.job_number || "(no #)"}</b> · {j.customer || "—"}</div>
                           <div style={{ color:"#888", marginTop:2 }}>{Math.round(effCf(j))} CF · 📦 {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "unit")}</div>
                         </div>
-                        <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, jobKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Load</Btn>
+                        <Btn primary disabled={tripBusy} onClick={() => tripPickupFromStorage(t, tripUnitKey(j))} style={{ padding:"4px 10px", fontSize:11 }}>Load</Btn>
+                        {!tripPurposeColMissing && <Btn disabled={tripBusy} onClick={() => tripPickupFromStorage(t, tripUnitKey(j), "relocation")} title={trAI("Load to relocate to another location — no delivery, no collection", "Cargar para reubicar en otra location — sin delivery, sin cobro")} style={{ padding:"4px 10px", fontSize:11 }}>🔁 {trAI("Relocate", "Reubicar")}</Btn>}
                       </div>
                     ))}
                 </div>
@@ -11469,8 +13649,14 @@ export default function App() {
                         );
                       }
                       const j = item.j;
+                      const reloc = isRelocation(j);
                       const delivered = !!j.date_out || j.status === "delivered";
-                      const dropped = !delivered && j.status === "in_storage";
+                      // A relocation stop is only "done" once it was actually dropped at the
+                      // destination (storage_drop event); in_storage without that event means
+                      // it's still waiting at its origin location.
+                      const relocDropped = reloc && events.some(e => e.event_type === "storage_drop" && e.job_id && jobRowIdsForUnit(tripUnitKey(j)).includes(e.job_id));
+                      const dropped = !delivered && j.status === "in_storage" && (!reloc || relocDropped);
+                      const relocAtOrigin = reloc && !delivered && j.status === "in_storage" && !relocDropped;
                       const dropLoc = j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage");
                       const fromTo = [j.pickup_state, j.delivery_state].filter(Boolean).join(" → ");
                       return (
@@ -11479,10 +13665,13 @@ export default function App() {
                             {handle}
                             {numBadge("#111", i + 1)}
                             <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                            {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
+                            {reloc && <span title={trAI("Internal move between locations — no delivery, no collection", "Movimiento interno entre locations — sin delivery, sin cobro")} style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>🔁 Relocation</span>}
                             <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
                             {fromTo && <span style={{ fontSize:11, color:"#888" }}>· {fromTo}</span>}
                             {delivered && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"2px 9px" }}>Delivered</span>}
-                            {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 Dropped in storage</span>}
+                            {dropped && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color: reloc ? "#3B6D11" : "#185FA5", background: reloc ? "#EAF3DE" : "#E7EFF8", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>{reloc ? `✅ Relocated · ${dropLoc}` : "📦 Dropped in storage"}</span>}
+                            {relocAtOrigin && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#854F0B", background:"#FEF3C7", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 At origin · {dropLoc}</span>}
                           </div>
                           <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
                             <span title={hasRealCf(j) ? `Real (est. ${Math.round(parseCf(j.volume))} CF)` : "Estimado del broker"}>
@@ -11492,7 +13681,14 @@ export default function App() {
                             {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                             {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                             <FaddBadge fadd={j.fadd} />
-                            {numv(j.bol_balance) > 0 && <span style={{ color:"#1A8A4E", fontWeight:600 }}>${numv(j.bol_balance).toLocaleString()}</span>}
+                            {!reloc && (() => {
+                              const out = jobOutstanding(j); const tot = jobToCollect(j) + extrasOwedFor(jobKey(j));
+                              if (tot <= 0) return null;
+                              return out > 0
+                                ? <span title={`Pendiente de cobrar (balance + extras · total $${Math.round(tot).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(out).toLocaleString()}</span>
+                                : <span title="Balance y extras cobrados por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
+                            })()}
+                            {reloc && jobToCollect(j) > 0 && <span title={trAI("Outstanding balance — NOT collected on this trip (relocation)", "Balance pendiente — NO se cobra en este trip (reubicación)")} style={{ color:"#999", textDecoration:"line-through" }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                             {(() => {
                               // A stop owned by a different driver than the trip's → show who.
                               const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
@@ -11503,9 +13699,11 @@ export default function App() {
                           </div>
                           {!delivered && !dropped && (
                             <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                              <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>
-                              {inTransit && <Btn disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: jobKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 Drop at storage</Btn>}
-                              <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: jobKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
+                              {!reloc && <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>}
+                              {relocAtOrigin && <Btn primary disabled={tripBusy} onClick={() => tripRelocLoad(t, j)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>🔼 {trAI("Load onto truck", "Cargar al camión")}</Btn>}
+                              {inTransit && !relocAtOrigin && <Btn primary={reloc} disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 {reloc ? trAI("Drop at destination", "Dejar en destino") : "Drop at storage"}</Btn>}
+                              <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: tripUnitKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
+                              {!jobSplitColMissing && !reloc && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
                             </div>
                           )}
                         </div>
@@ -11515,11 +13713,34 @@ export default function App() {
               </>);
             })()}
 
+            {/* internal equipment / materials riding this trip */}
+            {!equipmentMissing && (() => {
+              const cargo = equipmentItems.filter(i => i.trip_id === t.id);
+              if (!cargo.length) return null;
+              return (
+                <div style={{ marginTop:12 }}>
+                  <span style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em" }}>{trAI("Cargo / Equipment", "Carga / Equipo")} ({cargo.length})</span>
+                  <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:6 }}>
+                    {cargo.map(item => {
+                      const cat = equipmentCat(item.category);
+                      return (
+                        <div key={item.id} style={{ display:"flex", alignItems:"center", gap:8, border:"1px solid #f0f0f0", borderRadius:10, padding:"8px 11px", fontSize:12.5 }}>
+                          <span style={{ fontSize:11, fontWeight:700, color:cat.color, background:cat.color+"18", borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap" }}>{cat.icon} {trAI(cat.label, cat.es)}</span>
+                          <span style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}><b>{item.name || "—"}</b>{numv(item.quantity) > 1 ? ` ×${numv(item.quantity)}` : ""}</span>
+                          <Btn disabled={tripBusy} onClick={() => setEquipUnloadItem(item)} style={{ padding:"3px 9px", fontSize:11 }}>📤 {trAI("Unload", "Descargar")}</Btn>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginTop:12 }}>
               <span style={{ color:"#666" }}>Total: <b>{Math.round(c.totalCf).toLocaleString()} CF</b></span>
-              <span style={{ color:"#666" }}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalBol).toLocaleString()}</b></span>
+              <span style={{ color:"#666" }} title={`Total (balance + extras): $${Math.round(c.totalCollect).toLocaleString()} · ya cobrado: $${Math.round(c.totalCollect - c.totalOutstanding).toLocaleString()}`}>To collect: <b style={{ color:"#1A8A4E" }}>${Math.round(c.totalOutstanding).toLocaleString()}</b></span>
             </div>
-            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalBol)} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
+            <a href={tripManifestLink(t, truck?.name, driverNm, c.jobsIn, c.loadedCf, c.occPct, c.totalOutstanding, jobOutstanding, tripSequenceByTrip[t.id])} target="_blank" rel="noreferrer" style={{ textDecoration:"none", display:"block", marginTop:10 }}><Btn style={{ width:"100%", justifyContent:"center" }}>💬 Send manifest to driver</Btn></a>
 
             {/* event log */}
             <button onClick={() => setTripLogOpen(o => !o)} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", padding:"12px 0 6px", textAlign:"left", marginTop:8, borderTop:"1px solid #f0f0f0" }}>
@@ -11552,10 +13773,14 @@ export default function App() {
         const t = tripCompleteModal.trip;
         const c = tripCalc(t);
         const undelivered = c.jobsIn.filter(j => !(j.date_out || j.status === "delivered"));
+        // Jobs dropped at a storage mid-trip (including relocations already at their
+        // destination) have their location — don't ask again, just release them.
+        const alreadyStored = undelivered.filter(j => j.status === "in_storage" && (j.storage_id || j.warehouse));
+        const onTruck = undelivered.filter(j => !(j.status === "in_storage" && (j.storage_id || j.warehouse)));
         const deliveredJobs = c.jobsIn.filter(j => j.date_out || j.status === "delivered");
         const cfDelivered = deliveredJobs.reduce((s, j) => s + effCf(j), 0);
         const bolCollected = deliveredJobs.reduce((s, j) => s + numv(j.bol_collected), 0);
-        const bolPending = c.jobsIn.reduce((s, j) => s + Math.max(0, numv(j.bol_balance) - numv(j.bol_collected)), 0);
+        const bolPending = c.totalOutstanding;
         const dropTargets = [
           ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
           ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
@@ -11565,11 +13790,12 @@ export default function App() {
           <Modal title={`Complete trip ${t.trip_number || "#"+t.id}`} onClose={() => setTripCompleteModal(null)}
             footer={<>
               <Btn onClick={() => setTripCompleteModal(null)}>Cancel</Btn>
-              <Btn primary disabled={tripBusy || (undelivered.length > 0 && completeDropTarget === "")} onClick={() => completeTrip(t, undelivered.map(jobKey), completeDropTarget !== "" ? dropTargets[Number(completeDropTarget)] : null)}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
+              <Btn primary disabled={tripBusy || onTruck.some(j => (completeDropTarget[tripUnitKey(j)] ?? "") === "")} onClick={() => completeTrip(t, onTruck.map(j => ({ key: tripUnitKey(j), target: dropTargets[Number(completeDropTarget[tripUnitKey(j)])] })), alreadyStored.map(tripUnitKey))}>{tripBusy ? "Saving..." : "Mark completed"}</Btn>
             </>}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
               {[
-                { l:"Delivered jobs", v:`${deliveredJobs.length} / ${c.count}` },
+                { l:"Delivered jobs", v:`${deliveredJobs.length} / ${c.deliveryCount}` },
+                ...(c.relocCount > 0 ? [{ l:"Relocations", v:`${c.relocDone} / ${c.relocCount}` }] : []),
                 { l:"CF delivered", v:`${Math.round(cfDelivered).toLocaleString()} CF` },
                 { l:"BOL collected", v:`$${Math.round(bolCollected).toLocaleString()}` },
                 { l:"Outstanding balance", v:`$${Math.round(bolPending).toLocaleString()}` },
@@ -11581,22 +13807,110 @@ export default function App() {
                 </div>
               ))}
             </div>
-            {undelivered.length > 0 && (
+            {alreadyStored.length > 0 && (
+              <div style={{ background:"#F4F9EE", border:"1px solid #A8C686", borderRadius:9, padding:"11px 13px", marginBottom: onTruck.length > 0 ? 10 : 0 }}>
+                <div style={{ fontSize:12.5, color:"#3B6D11", fontWeight:600, marginBottom:6 }}>📦 {alreadyStored.length} job(s) already dropped at storage — they keep their location.</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                  {alreadyStored.map(j => (
+                    <div key={tripUnitKey(j)} style={{ fontSize:11.5, color:"#557A2B" }}>
+                      <b style={{ fontFamily:"monospace" }}>{j.job_number || j.customer || "job"}</b> · {j.warehouse ? `Warehouse ${j.warehouse}` : (storageById[j.storage_id]?.brand || "storage unit")}{isRelocation(j) ? ` · 🔁 ${trAI("relocation", "reubicación")}` : ""}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {onTruck.length > 0 && (
               <div style={{ background:"#FFF8F0", border:"1px solid #EF9F27", borderRadius:9, padding:"11px 13px" }}>
-                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:6 }}>⚠️ {undelivered.length} job(s) not delivered on the truck. Send to storage?</div>
-                <div style={{ fontSize:11.5, color:"#888", marginBottom:8 }}>{undelivered.map(j => j.job_number || j.customer).filter(Boolean).join(", ")}</div>
-                <select style={inp} value={completeDropTarget} onChange={e => setCompleteDropTarget(e.target.value)}>
-                  <option value="">— Choose storage / warehouse for the undelivered —</option>
-                  {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
-                </select>
+                <div style={{ fontSize:12.5, color:"#854F0B", fontWeight:600, marginBottom:8 }}>⚠️ {onTruck.length} job(s) not delivered on the truck. Choose a storage / warehouse for each one:</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                  {onTruck.map(j => {
+                    const k = tripUnitKey(j);
+                    return (
+                      <div key={k} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ fontSize:12, fontFamily:"monospace", fontWeight:700, flexShrink:0, minWidth:70 }}>{j.job_number || j.customer || "—"}{isRelocation(j) ? " 🔁" : ""}</span>
+                        <select style={{ ...inp, flex:1, minWidth:0 }} value={completeDropTarget[k] ?? ""} onChange={e => { const v = e.target.value; setCompleteDropTarget(m => ({ ...m, [k]: v })); }}>
+                          <option value="">— Choose storage / warehouse —</option>
+                          {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </Modal>
         );
       })()}
 
+      {/* Equipment: create / edit item */}
+      {showEquipmentModal && (
+        <Modal title={editingEquipmentId ? trAI("Edit item", "Editar item") : trAI("New equipment item", "Nuevo item de equipo")} onClose={() => setShowEquipmentModal(false)}
+          footer={<>
+            <Btn onClick={() => setShowEquipmentModal(false)}>{trAI("Cancel", "Cancelar")}</Btn>
+            <Btn primary disabled={equipmentSaving || !equipmentForm.name.trim()} onClick={saveEquipmentItem}>{equipmentSaving ? trAI("Saving…", "Guardando…") : trAI("Save", "Guardar")}</Btn>
+          </>}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <Field label={trAI("Name", "Nombre")} full><input style={inp} value={equipmentForm.name} onChange={e => setEquipmentForm(f => ({ ...f, name: e.target.value }))} placeholder={trAI("e.g. Moving pads", "ej: Pads de mudanza")} /></Field>
+            <Field label={trAI("Category", "Categoría")}>
+              <select style={inp} value={equipmentForm.category} onChange={e => setEquipmentForm(f => ({ ...f, category: e.target.value }))}>
+                {EQUIPMENT_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.icon} {trAI(c.label, c.es)}</option>)}
+              </select>
+            </Field>
+            <Field label={trAI("Quantity", "Cantidad")}><input style={inp} type="number" min="1" value={equipmentForm.quantity} onChange={e => setEquipmentForm(f => ({ ...f, quantity: e.target.value }))} /></Field>
+            <Field label="Location" full>
+              <select style={inp} value={equipmentForm.location} onChange={e => setEquipmentForm(f => ({ ...f, location: e.target.value }))}>
+                <option value="">{trAI("— Choose storage / warehouse —", "— Elegí storage / warehouse —")}</option>
+                {WAREHOUSES.map(w => <option key={"w:"+w} value={"w:"+w}>🏭 {w}</option>)}
+                {records.filter(r => r.space_type !== "warehouse").map(r => <option key={"u:"+r.id} value={"u:"+r.id}>{[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}`}</option>)}
+              </select>
+            </Field>
+            <Field label={trAI("Notes", "Notas")} full><input style={inp} value={equipmentForm.notes} onChange={e => setEquipmentForm(f => ({ ...f, notes: e.target.value }))} placeholder={trAI("Optional notes", "Notas opcionales")} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Equipment: pick an active trip to load the item onto */}
+      {equipLoadItem && (
+        <Modal title={`🚚 ${trAI("Load on trip", "Cargar a trip")} · ${equipLoadItem.name || ""}`} onClose={() => setEquipLoadItem(null)}
+          footer={<Btn onClick={() => setEquipLoadItem(null)}>{trAI("Cancel", "Cancelar")}</Btn>}>
+          <div style={{ fontSize:13, color:"#555", marginBottom:10 }}>{trAI("Choose an active trip — the item rides as internal cargo (no money, no delivery).", "Elegí un trip activo — el item viaja como carga interna (sin plata, sin delivery).")}</div>
+          <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:280, overflowY:"auto" }}>
+            {trips.filter(t => TRIP_ACTIVE(t.status)).map(t => (
+              <div key={t.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 12px", borderBottom:"1px solid #f6f6f6", fontSize:13 }}>
+                <TripBadge status={t.status} />
+                <b style={{ fontFamily:"monospace" }}>{t.trip_number || "#"+t.id}</b>
+                <span style={{ flex:1, color:"#666", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{[truckById[t.truck_id]?.name, driverById[t.driver_id]?.name].filter(Boolean).join(" · ")}</span>
+                <Btn primary onClick={() => equipmentLoadOnTrip(equipLoadItem, t.id)} style={{ padding:"4px 12px", fontSize:12 }}>{trAI("Load", "Cargar")}</Btn>
+              </div>
+            ))}
+            {!trips.some(t => TRIP_ACTIVE(t.status)) && <div style={{ padding:"14px", fontSize:12, color:"#bbb" }}>{trAI("No active trips.", "No hay trips activos.")}</div>}
+          </div>
+        </Modal>
+      )}
+
+      {/* Equipment: choose destination to unload the item */}
+      {equipUnloadItem && (() => {
+        const targets = [
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
+          ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
+        ];
+        return (
+          <Modal title={`📤 ${trAI("Unload", "Descargar")} · ${equipUnloadItem.name || ""}`} onClose={() => setEquipUnloadItem(null)}
+            footer={<Btn onClick={() => setEquipUnloadItem(null)}>{trAI("Cancel", "Cancelar")}</Btn>}>
+            <div style={{ fontSize:13, color:"#555", marginBottom:10 }}>{trAI("Choose where the item was unloaded — it becomes available at that location.", "Elegí dónde se descargó el item — queda disponible en esa location.")}</div>
+            <select id="equip-unload-sel" style={inp} defaultValue="">
+              <option value="">{trAI("— Choose storage / warehouse —", "— Elegí storage / warehouse —")}</option>
+              {targets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+            </select>
+            <div style={{ marginTop:12, textAlign:"right" }}>
+              <Btn primary onClick={() => { const sel = document.getElementById("equip-unload-sel"); const idx = sel?.value; if (idx === "" || idx == null) { window.alert(trAI("Choose a destination.", "Elegí un destino.")); return; } equipmentUnload(equipUnloadItem, targets[Number(idx)]); }}>{trAI("Confirm unload", "Confirmar descarga")}</Btn>
+            </div>
+          </Modal>
+        );
+      })()}
+
       {tripRouteModal && (
-        <TripRouteModal title={tripRouteModal.title} waypoints={tripRouteModal.waypoints} googleLink={tripRouteModal.googleLink} onClose={() => setTripRouteModal(null)} />
+        <TripRouteModal title={tripRouteModal.title} tripId={tripRouteModal.tripId} options={tripRouteModal.options} canPersist={!routeOverridesMissing} tr={trAI} onClose={() => setTripRouteModal(null)} />
       )}
 
       {addStopModal && (() => {
@@ -11628,25 +13942,150 @@ export default function App() {
 
       {dropModal && (() => {
         const dropTargets = [
-          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
-          ...WAREHOUSES.map(w => ({ kind:"warehouse", name:w, label:`🏭 ${w}` })),
+          ...records.filter(r => r.space_type !== "warehouse").map(r => ({ value:`u:${r.id}`, kind:"unit", id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
+          ...WAREHOUSES.map(w => ({ value:`w:${w}`, kind:"warehouse", name:w, label:`🏭 ${w}` })),
         ];
+        const resetDrop = () => { setDropModal(null); setDropSel(""); setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" }); };
+        // Quick-create a storage unit that isn't in the picklist yet, then auto-select it as the destination.
+        const createDropUnit = async () => {
+          const brand = dropNewUnit.brand.trim(), unit = dropNewUnit.unit.trim();
+          if (!brand || !unit) { showToast("Enter company and unit #"); return; }
+          const dup = findStorageDup(brand, unit, dropNewUnit.state);
+          if (dup) {
+            if (!window.confirm(`${dup.brand} Unit ${dup.unit}${dup.state ? ` in ${dup.state}` : ""} is already open in the system.\n\nUse the existing unit instead?`)) return;
+            setDropSel(`u:${dup.id}`); setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" });
+            return;
+          }
+          setDropCreatingBusy(true);
+          const payload = { brand, unit, state: dropNewUnit.state || null, size: dropNewUnit.size || null, situation: "Open", created_by: userEmail };
+          const { data, error } = await supabase.from("storages").insert([payload]).select().single();
+          setDropCreatingBusy(false);
+          if (error) { showToast(error.message); return; }
+          setRecords(r => r.some(x => x.id === data.id) ? r : [data, ...r]); // realtime may also add it
+          setDropSel(`u:${data.id}`); setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" });
+          showToast("Unit created");
+        };
         return (
-          <Modal title={`Dropped at storage · ${dropModal.label}`} onClose={() => setDropModal(null)}
+          <Modal title={`Dropped at storage · ${dropModal.label}`} onClose={resetDrop}
             footer={<>
-              <Btn onClick={() => setDropModal(null)}>Cancel</Btn>
+              <Btn onClick={resetDrop}>Cancel</Btn>
               <Btn primary disabled={tripBusy || dropSel === ""} onClick={async () => {
-                const dm = dropModal, tgt = dropTargets[Number(dropSel)];
+                const dm = dropModal, tgt = dropTargets.find(d => d.value === dropSel);
                 if (!tgt) return;
                 await tripDropAtStorage(dm.trip, dm.jobKey, tgt);
-                setDropModal(null); setDropSel("");
+                resetDrop();
               }}>{tripBusy ? "Saving…" : "Confirm drop"}</Btn>
             </>}>
             <div style={{ fontSize:13, color:"#555", marginBottom:10 }}>The job wasn't delivered to the final customer — choose the storage unit or warehouse where it was left. It'll leave the trip and go back to storage.</div>
             <select style={inp} value={dropSel} onChange={e => setDropSel(e.target.value)}>
               <option value="">— Choose destination —</option>
-              {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
+              {dropTargets.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
             </select>
+            {!dropCreating ? (
+              <button type="button" onClick={() => setDropCreating(true)}
+                style={{ marginTop:10, background:"none", border:"none", padding:0, color:"#2563eb", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                + Unit not on the list? Create it
+              </button>
+            ) : (
+              <div style={{ marginTop:12, padding:12, border:"1px solid #e5e7eb", borderRadius:10, background:"#fafafa" }}>
+                <div style={{ fontSize:12, fontWeight:700, color:"#555", marginBottom:8 }}>New storage unit</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <Field label="Company"><input style={inp} list="brands-list" value={dropNewUnit.brand} onChange={e => setDropNewUnit(f => ({ ...f, brand:e.target.value }))} placeholder="CubeSmart..." /></Field>
+                  <Field label="Unit #"><input style={inp} value={dropNewUnit.unit} onChange={e => setDropNewUnit(f => ({ ...f, unit:e.target.value }))} placeholder="G13" /></Field>
+                  <Field label="State"><input style={inp} list="states-list" value={dropNewUnit.state} onChange={e => setDropNewUnit(f => ({ ...f, state:e.target.value.toUpperCase() }))} placeholder="TN" /></Field>
+                  <Field label="Tamano"><input style={inp} list="sizes-list" value={dropNewUnit.size} onChange={e => setDropNewUnit(f => ({ ...f, size:e.target.value }))} placeholder="10x10" /></Field>
+                </div>
+                <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10, flexWrap:"wrap" }}>
+                  <Btn onClick={() => { setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" }); }}>Cancel</Btn>
+                  <Btn primary disabled={dropCreatingBusy || !dropNewUnit.brand.trim() || !dropNewUnit.unit.trim()} onClick={createDropUnit}>{dropCreatingBusy ? "Creating…" : "Create & select"}</Btn>
+                </div>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
+
+      {splitJobRow && (() => {
+        const total = effCf(splitJobRow);
+        const p = Number(splitCf);
+        const valid = isFinite(p) && p > 0 && p < total;
+        const remainder = valid ? total - p : total;
+        const closeSplit = () => { setSplitJobRow(null); setSplitCf(""); setSplitDest(""); };
+        // Where can the peeled portion go: any active trip except the source's own,
+        // plus a brand-new trip on any free truck.
+        const destTrips = trips.filter(t => TRIP_ACTIVE(t.status) && t.id !== splitJobRow.trip_id)
+          .map(t => { const c = tripCalc(t); return { t, free: c.cap > 0 ? Math.round(c.cap - c.loadedCf) : null }; });
+        // ...or it can stay behind at a storage unit / warehouse (in_storage, off any trip).
+        const splitUnits = records.filter(r => r.space_type !== "warehouse")
+          .map(r => ({ id: r.id, label: [r.brand, r.unit && "U" + r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` }));
+        // Free CF at the chosen destination (null = unknown capacity), for an overload hint.
+        let destFree = null;
+        if (splitDest.startsWith("trip:")) destFree = destTrips.find(d => d.t.id === Number(splitDest.slice(5)))?.free ?? null;
+        else if (splitDest.startsWith("truck:")) { const cap = numv(truckById[Number(splitDest.slice(6))]?.capacity_cf); destFree = cap > 0 ? cap : null; }
+        const overloads = valid && destFree != null && p > destFree;
+        return (
+          <Modal title={trAI("Split job across two trucks", "Dividir job en dos camiones")} onClose={closeSplit}
+            footer={<>
+              <Btn onClick={closeSplit}>{trAI("Cancel", "Cancelar")}</Btn>
+              <Btn primary disabled={tripBusy || !valid} onClick={() => splitJob(splitJobRow, p, splitDest)}>{tripBusy ? "…" : (splitDest.startsWith("truck:") ? trAI("Split & create trip", "Dividir y crear trip") : (splitDest.startsWith("unit:") || splitDest.startsWith("wh:")) ? trAI("Split & send to storage", "Dividir y mandar a storage") : trAI("Split", "Dividir"))}</Btn>
+            </>}>
+            <div style={{ fontSize:13, marginBottom:10 }}>
+              <b style={{ fontFamily:"monospace" }}>{splitJobRow.job_number || "(job)"}</b> · {splitJobRow.customer || "—"}
+              <div style={{ color:"#666", marginTop:4 }}>{trAI("Current load", "Carga actual")}: <b>{Math.round(total).toLocaleString()} CF</b>{hasRealCf(splitJobRow) ? " ✓real" : ` (${trAI("estimate", "estimado")})`}</div>
+            </div>
+            <Field label={trAI("CF to move to the second truck", "CF a mover al segundo camión")} full>
+              <input style={inp} type="number" min="1" max={Math.round(total) - 1} value={splitCf} onChange={e => setSplitCf(e.target.value)} autoFocus />
+            </Field>
+            <div style={{ fontSize:12.5, color: valid ? "#333" : "#A32D2D", marginTop:8 }}>
+              {valid
+                ? <>{trAI("Stays on this job", "Queda en este job")}: <b>{Math.round(remainder).toLocaleString()} CF</b> · {trAI("moves to new portion", "se mueve a la nueva porción")}: <b>{Math.round(p).toLocaleString()} CF</b></>
+                : trAI(`Enter a value between 1 and ${Math.round(total) - 1} CF.`, `Ingresá un valor entre 1 y ${Math.round(total) - 1} CF.`)}
+            </div>
+            <Field label={trAI("Send the new portion to", "Mandar la nueva porción a")} full>
+              <select style={inp} value={splitDest} onChange={e => setSplitDest(e.target.value)}>
+                <option value="">{trAI("— Leave unassigned (add later) —", "— Dejar sin asignar (agregar después) —")}</option>
+                {destTrips.length > 0 && (
+                  <optgroup label={trAI("Existing trips", "Trips existentes")}>
+                    {destTrips.map(({ t, free }) => (
+                      <option key={t.id} value={"trip:" + t.id}>
+                        {t.trip_number || "#" + t.id}{truckById[t.truck_id]?.name ? ` · ${truckById[t.truck_id].name}` : ""}{free != null ? ` · ${free.toLocaleString()} CF ${trAI("free", "libres")}` : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {freeTrucks.length > 0 && (
+                  <optgroup label={trAI("Create a new trip on", "Crear un trip nuevo en")}>
+                    {freeTrucks.map(tk => (
+                      <option key={tk.id} value={"truck:" + tk.id}>🆕 {tk.name || "Truck #" + tk.id} · {numv(tk.capacity_cf).toLocaleString()} CF</option>
+                    ))}
+                  </optgroup>
+                )}
+                {splitUnits.length > 0 && (
+                  <optgroup label={trAI("Storage units", "Storage units")}>
+                    {splitUnits.map(u => (
+                      <option key={u.id} value={"unit:" + u.id}>📦 {u.label}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {WAREHOUSES.length > 0 && (
+                  <optgroup label={trAI("Warehouses", "Warehouses")}>
+                    {WAREHOUSES.map(w => (
+                      <option key={w} value={"wh:" + w}>🏭 {w}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </Field>
+            {overloads && (
+              <div style={{ fontSize:11.5, color:"#A32D2D", marginTop:6 }}>
+                ⚠️ {trAI(`This portion (${Math.round(p).toLocaleString()} CF) is over the destination's ${destFree.toLocaleString()} CF free — it will be over capacity.`,
+                        `Esta porción (${Math.round(p).toLocaleString()} CF) supera los ${destFree.toLocaleString()} CF libres del destino — quedará sobre capacidad.`)}
+              </div>
+            )}
+            <div style={{ fontSize:11.5, color:"#888", marginTop:10 }}>
+              {trAI("The new portion keeps the same job number and is billed as one job. Leave it unassigned to add it from a trip's job picker later, or send it to a storage unit / warehouse to load it onto a trip later.",
+                    "La nueva porción mantiene el mismo número de job y se factura como uno solo. Dejala sin asignar para agregarla después desde el buscador de un trip, o mandala a un storage unit / warehouse para cargarla a un trip más adelante.")}
+            </div>
           </Modal>
         );
       })()}
@@ -11655,10 +14094,10 @@ export default function App() {
         // Live capacity as jobs are added (using the form's selected jobs).
         const cap = numv(trucksList.find(tk => tk.id === Number(tripForm.truck_id))?.capacity_cf);
         let loadCf = 0; const seen = new Set();
-        for (const j of jobs) { const k = jobKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += effCf(j); } }
+        for (const j of jobs) { const k = tripUnitKey(j); if (tripForm.job_keys.includes(k) && !seen.has(k)) { seen.add(k); loadCf += effCf(j); } }
         const remaining = cap > 0 ? cap - loadCf : null;
         const pct = cap > 0 ? Math.min(100, Math.round((loadCf / cap) * 100)) : 0;
-        const repFor = (k) => jobs.find(j => jobKey(j) === k);
+        const repFor = (k) => jobs.find(j => tripUnitKey(j) === k);
         return (
         <Modal title={editingTripId ? "Edit trip" : "New trip"} onClose={() => setShowTripModal(false)}
           footer={<>
@@ -11723,7 +14162,19 @@ export default function App() {
                 <div key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderBottom:"1px solid #f5f5f5", fontSize:13 }}>
                   <span style={{ width:20, height:20, borderRadius:"50%", background:"#111", color:"#fff", fontSize:10, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{i+1}</span>
                   <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
+                  {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                   <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
+                  {!tripPurposeColMissing && (() => {
+                    const isReloc = tripForm.purposes?.[k] === "relocation";
+                    return (
+                      <button onClick={() => setTripForm(f => ({ ...f, purposes: { ...f.purposes, [k]: isReloc ? "delivery" : "relocation" } }))}
+                        title={trAI("Toggle: delivery vs internal relocation (no delivery, no collection)", "Alternar: delivery vs reubicación interna (sin delivery, sin cobro)")}
+                        style={{ border:"none", cursor:"pointer", fontSize:10, fontWeight:700, borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap",
+                          background: isReloc ? "#E6F1FB" : "#EDE9FE", color: isReloc ? "#185FA5" : "#6D28D9" }}>
+                        {isReloc ? "🔁 Relocation" : "🚚 Delivery"}
+                      </button>
+                    );
+                  })()}
                   <span style={{ color:"#888" }}>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                   <FaddBadge fadd={j.fadd} />
                   <button onClick={() => tripMoveJob(i, -1)} disabled={i===0} style={{ border:"none", background:"none", cursor: i===0?"default":"pointer", color: i===0?"#ddd":"#888", fontSize:14 }}>↑</button>
@@ -11739,7 +14190,7 @@ export default function App() {
               const q = tripJobSearch.trim().toLowerCase();
               if (!q) return <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>Search for a job to add it to the trip.</div>;
               const seen2 = new Set(); const rows = [];
-              for (const j of jobs) { const k = jobKey(j); if (seen2.has(k)) continue; seen2.add(k);
+              for (const j of jobs) { const k = tripUnitKey(j); if (seen2.has(k)) continue; seen2.add(k);
                 const s = storageById[j.storage_id] || {};
                 const hay = [j.job_number, j.customer, j.driver, s.brand, s.unit].join(" ").toLowerCase();
                 if (!hay.includes(q)) continue;
@@ -11753,6 +14204,7 @@ export default function App() {
                   <label key={k} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked?"#f0fdf4":"#fff" }}>
                     <input type="checkbox" checked={checked} onChange={() => tripToggleJob(k)} />
                     <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
+                    {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                     <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                     <span style={{ color:"#888" }}>{Math.round(effCf(j))} CF{hasRealCf(j) ? " ✓" : ""}</span>
                     {otherTrip && TRIP_ACTIVE(otherTrip.status) && <span style={{ fontSize:10, color:"#C2410C" }} title="On another active trip — will move here">on {otherTrip.trip_number || "#"+otherTrip.id}</span>}
@@ -11767,8 +14219,8 @@ export default function App() {
       })()}
 
       {showTripAI && (() => {
-        const live = new Set(tripCandidateJobs.map(jobKey));
-        const repFor = (k) => jobs.find(j => jobKey(j) === k);
+        const live = new Set(tripCandidateJobs.map(tripUnitKey));
+        const repFor = (k) => jobs.find(j => tripUnitKey(j) === k);
         const dropSuggestion = (kind, idx) => setTripAIResult(r => ({ ...r, [kind]: r[kind].filter((_, i) => i !== idx) }));
         const SuggestionCard = ({ s, kind, idx }) => {
           const truck = kind === "addition" ? truckById[tripById[s.trip_id]?.truck_id] : truckById[s.truck_id];
@@ -11806,7 +14258,7 @@ export default function App() {
                   <span><b>Why this trip:</b> {s.reasoning}</span>
                 </div>
               )}
-              <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10 }}>
+              <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:10, flexWrap:"wrap" }}>
                 <Btn onClick={() => dropSuggestion(kind === "addition" ? "trip_additions" : "new_trips", idx)}>Dismiss</Btn>
                 <Btn primary onClick={() => applyTripSuggestion(s, kind)}>{kind === "addition" ? "Review & add" : "Review & create"}</Btn>
               </div>
@@ -12001,13 +14453,35 @@ export default function App() {
                   const holding = mine.filter(p => isPhysical(p.method) && p.received && !p.banked);
                   const heldTotal = holding.reduce((s, p) => s + p._net, 0);
                   const history = mine.filter(p => p.received).sort((a, b) => (b.received_date || b.payment_date || "").localeCompare(a.received_date || a.payment_date || ""));
+                  // Approved cash expenses not yet settled explain why less cash comes back;
+                  // the payments ledger itself is untouched (see driverCashReconciliation).
+                  const cashExp = expensesMissing ? [] : expenses.filter(e => e.driver_id === driverD.id && e.paid_from === "driver_cash" && e.status === "approved" && !e.settled);
+                  const cashExpTotal = cashExp.reduce((s, e) => s + numv(e.amount), 0);
+                  const expectedOnHand = heldTotal - cashExpTotal;
                   return (
                     <>
                       <SectionLabel>In circulation</SectionLabel>
-                      <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6, flexWrap:"wrap" }}>
                         <span>Tiene en mano: <b style={{ color: heldTotal > 0 ? "#E24B4A" : "#1A8A4E", fontSize:15 }}>${Math.round(heldTotal).toLocaleString()}</b></span>
                         {heldTotal > 0 && <span style={{ fontSize:11, color:"#888" }}>({holding.length} pago{holding.length !== 1 ? "s" : ""} sin depositar)</span>}
                       </div>
+                      {cashExpTotal > 0 && (
+                        <div style={{ background:"#fafafa", borderRadius:10, padding:"8px 12px", fontSize:12.5, marginBottom:8 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>Tiene en mano (pagos)</span><b>${Math.round(heldTotal).toLocaleString()}</b></div>
+                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>− gastos cash aprobados sin rendir</span><b style={{ color:"#C2410C" }}>−${Math.round(cashExpTotal).toLocaleString()}</b></div>
+                          <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #eee", marginTop:4, paddingTop:4 }}><span style={{ fontWeight:600 }}>= Debería entregar</span><b style={{ color: expectedOnHand < 0 ? "#E24B4A" : "#1A8A4E", fontSize:14 }}>${Math.round(expectedOnHand).toLocaleString()}</b></div>
+                          {cashExp.map(e => (
+                            <div key={e.id} style={{ display:"flex", alignItems:"center", gap:6, fontSize:11.5, color:"#666", padding:"3px 0" }}>
+                              <span>{e.expense_date || ""}</span>
+                              <ExpenseCatChip category={e.category} />
+                              <span>{e.vendor || ""}</span>
+                              <span style={{ flex:1 }} />
+                              <b>${Math.round(numv(e.amount)).toLocaleString()}</b>
+                              {can("expenses", "edit") && <button onClick={() => settleExpense(e)} title="Marcar rendido" style={{ background:"none", border:"none", cursor:"pointer", fontSize:12 }}>🤝</button>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <SectionLabel>Historial de pagos recibidos</SectionLabel>
                       {history.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos recibidos.</div>
                         : <div style={{ maxHeight:200, overflowY:"auto" }}>{history.map(p => (
@@ -12020,6 +14494,72 @@ export default function App() {
                               {p.banked ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5" }}>depositado {p.banked_date || ""}</span> : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C" }}>sin depositar</span>}
                             </div>
                           ))}</div>}
+                    </>
+                  );
+                })()}
+                {!expensesMissing && can("expenses", "view") && (() => {
+                  // Mini P&L for the current month: attributed revenue vs day pay + approved
+                  // expenses + extras commissions. Same math as the Analytics Driver P&L tab.
+                  const curMonth = monthOf(today());
+                  const range = { fromMonth: curMonth, toMonth: curMonth };
+                  const allGroups = [...dedupeJobs(jobs).values()];
+                  const monthGroups = allGroups.filter(g => monthOf(g.rep.pickup_date || g.dateIn || g.rep.created_at) === curMonth);
+                  const monthExtras = jobExtras.filter(e => e.driver_id === driverD.id && monthOf(e.created_at) === curMonth);
+                  const pnl = computeDriverPnl({ driversList: [driverD], groups: monthGroups, jobExtras: monthExtras, expenses, workDays, adjustments, range });
+                  const row = pnl.rows[0];
+                  const myExpenses = expenses.filter(e => e.driver_id === driverD.id && e.status !== "rejected")
+                    .sort((a, b) => (b.expense_date || "").localeCompare(a.expense_date || ""));
+                  const myOnHand = materialShortages({ items: materialItems, movements: materialMovements })
+                    .filter(s => s.driverId === driverD.id && s.onHand !== 0);
+                  return (
+                    <>
+                      <SectionLabel>P&L del mes (aprox.)</SectionLabel>
+                      {!row ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>Sin actividad este mes.</div> : (
+                        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(105px,1fr))", gap:8, marginBottom:8 }}>
+                          {[
+                            ["Revenue (atribuido)", row.revenue, "#185FA5"],
+                            ["Días × rate", -row.laborCost, "#C2410C"],
+                            ["Gastos aprobados", -row.expensesTotal, "#C2410C"],
+                            ["Comisiones", -row.commissions, "#C2410C"],
+                            ["Ajustes (bonos−desc.)", -row.adjustmentsNet, row.adjustmentsNet > 0 ? "#C2410C" : "#1A8A4E"],
+                            ["Neto", row.net, row.net >= 0 ? "#1A8A4E" : "#E24B4A"],
+                          ].map(([l, v, c]) => (
+                            <div key={l} style={{ background:"#fafafa", borderRadius:8, padding:"7px 9px" }}>
+                              <div style={{ fontSize:9.5, color:"#999", fontWeight:600 }}>{l}</div>
+                              <div style={{ fontSize:14, fontWeight:800, color:c }}>{(v < 0 ? "−$" : "$") + Math.abs(Math.round(v)).toLocaleString()}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {row && row.jobsCount > 1 && <div style={{ fontSize:10.5, color:"#bbb", marginBottom:6 }}>Revenue de jobs compartidos se divide en partes iguales entre drivers.</div>}
+                      {myOnHand.length > 0 && (
+                        <>
+                          <SectionLabel>Materiales en mano</SectionLabel>
+                          {myOnHand.map((s, i) => (
+                            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, padding:"4px 0", borderBottom:"1px solid #f4f4f4" }}>
+                              <span style={{ fontWeight:600 }}>{s.itemName}</span>
+                              <span style={{ flex:1 }} />
+                              <b style={{ color: s.onHand > 0 ? "#E24B4A" : "#185FA5" }}>{s.onHand} {s.unit}</b>
+                              <span style={{ fontSize:11, color:"#888" }}>(${Math.round(s.value).toLocaleString()})</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      <SectionLabel>Últimos gastos</SectionLabel>
+                      {myExpenses.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>Sin gastos registrados.</div> : (
+                        <div style={{ maxHeight:170, overflowY:"auto", marginBottom:4 }}>
+                          {myExpenses.slice(0, 25).map(e => (
+                            <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", borderBottom:"1px solid #f4f4f4", fontSize:12, flexWrap:"wrap" }}>
+                              <span style={{ color:"#888", whiteSpace:"nowrap" }}>{e.expense_date || (e.created_at || "").slice(0, 10)}</span>
+                              <ExpenseCatChip category={e.category} />
+                              <span style={{ color:"#666" }}>{e.vendor || ""}</span>
+                              <span style={{ flex:1 }} />
+                              <ExpenseStatusBadge status={e.status || "pending"} />
+                              <b>${Math.round(numv(e.amount)).toLocaleString()}</b>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </>
                   );
                 })()}
