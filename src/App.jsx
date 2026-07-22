@@ -10,12 +10,17 @@ import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, 
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { BancosSection } from "./bank.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
+import { createUndoManager } from "./undo.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://szkmktxziojzgfjkomua.supabase.co";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "sb_publishable_v2VNtyiQ_tTAAmEWDdHwYg_IJ-_IN-5";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// Session-scoped undo/redo over soft deletes + action_log (see src/undo.js).
+const undoMgr = createUndoManager(supabase);
+// Soft-deleted rows stay in the DB but never reach the normal views.
+const notDel = (r) => !r.deleted_at;
 
 // ── Lightweight EN→ES UI toggle ──────────────────────────────────────────────
 // The app source is English. When the user picks Spanish, a DOM pass swaps the
@@ -3055,6 +3060,92 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
   );
 }
 
+// ── Papelera / Historial ─────────────────────────────────────────────────────
+// Trash: soft-deleted rows per table, restorable with one click. History: the
+// latest action_log entries (who changed what, before/after).
+const TRASH_TABLES = [
+  ["storage_jobs", "Jobs", r => `${r.job_number || "(sin #)"} · ${r.customer || "(sin cliente)"}`],
+  ["payments", "Payments", r => `$${Math.round(numv(r.amount)).toLocaleString()} · ${r.payment_date || ""}`],
+  ["job_extras", "Extras", r => `${r.extra_type || "extra"} · $${Math.round(numv(r.amount)).toLocaleString()}`],
+  ["storages", "Storage units", r => `${r.brand || ""} ${r.unit || ""} ${r.state || ""}`.trim() || `#${r.id}`],
+  ["expenses", "Expenses", r => `${r.category || "expense"} · $${Math.round(numv(r.amount)).toLocaleString()} · ${r.expense_date || ""}`],
+  ["claims", "Claims", r => `${r.job_number || "(sin #)"} · ${r.incident_type || ""}`],
+  ["brokers", "Brokers", r => r.name || `#${r.id}`],
+  ["drivers", "Drivers", r => r.name || `#${r.id}`],
+  ["trucks", "Trucks", r => r.name || `#${r.id}`],
+  ["closing_sheets", "Closing sheets", r => `#${r.closing_sheet_number || r.id}`],
+  ["trips", "Trips", r => `${r.trip_number || r.id}`],
+  ["companies", "Companies", r => r.name || `#${r.id}`],
+  ["employees", "Employees", r => r.name || `#${r.id}`],
+];
+function TrashSection({ supabase, undoMgr, onRestored }) {
+  const [rows, setRows] = useState(null);
+  const [log, setLog] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [tab, setTab] = useState("trash");
+  const loadAll = useCallback(async () => {
+    setBusy(true); setErr(null);
+    const out = {};
+    for (const [t] of TRASH_TABLES) {
+      const { data, error } = await supabase.from(t).select("*").not("deleted_at", "is", null).order("deleted_at", { ascending: false }).limit(200);
+      if (error) { out[t] = []; if (/deleted_at/i.test(error.message || "")) setErr("La migración de soft delete todavía no corrió (scripts/setup-undo.mjs)."); }
+      else out[t] = data || [];
+    }
+    setRows(out);
+    const { data: lg } = await supabase.from("action_log").select("*").order("created_at", { ascending: false }).limit(150);
+    setLog(lg || []);
+    setBusy(false);
+  }, [supabase]);
+  useEffect(() => { loadAll(); }, [loadAll]);
+  async function restoreRow(table, label, r) {
+    const res = await undoMgr.restore(table, r.id);
+    if (res.error) { window.alert(res.error.message); return; }
+    undoMgr.record(`Restaurado: ${label}`, res.entries);
+    loadAll(); onRestored?.(table);
+  }
+  const card = { background:"#fff", border:"1px solid #eee", borderRadius:12, padding:16, marginBottom:16 };
+  const tabBtn = (id, lbl) => (
+    <button key={id} onClick={() => setTab(id)} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #e5e5e5", background: tab === id ? "#111" : "#fff", color: tab === id ? "#fff" : "#444", fontSize:13, fontWeight:600, cursor:"pointer" }}>{lbl}</button>
+  );
+  return (
+    <div>
+      <div style={{ display:"flex", gap:8, marginBottom:14 }}>{tabBtn("trash", "🗑️ Papelera")}{tabBtn("history", "🕒 Historial")}</div>
+      {err && <div style={{ ...card, borderColor:"#EF9F27", background:"#FAEEDA", color:"#854F0B", fontSize:13 }}>{err}</div>}
+      {busy && !rows && <div style={{ fontSize:13, color:"#999" }}>Cargando…</div>}
+      {tab === "trash" && rows && TRASH_TABLES.map(([t, lbl, fmt]) => (rows[t] || []).length > 0 && (
+        <div key={t} style={card}>
+          <div style={{ fontSize:14, fontWeight:700, marginBottom:10 }}>{lbl} <span style={{ color:"#999", fontWeight:500 }}>({rows[t].length})</span></div>
+          {rows[t].map(r => (
+            <div key={r.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:"1px solid #f5f5f5", fontSize:13 }}>
+              <span style={{ flex:1 }}>{fmt(r)}</span>
+              <span style={{ color:"#aaa", fontSize:12 }}>borrado {String(r.deleted_at).slice(0, 16).replace("T", " ")}</span>
+              <button onClick={() => restoreRow(t, fmt(r), r)} style={{ padding:"5px 12px", borderRadius:7, border:"1px solid #d8e8c8", background:"#EAF3DE", color:"#3B6D11", fontSize:12, fontWeight:700, cursor:"pointer" }}>↩ Restaurar</button>
+            </div>
+          ))}
+        </div>
+      ))}
+      {tab === "trash" && rows && !err && TRASH_TABLES.every(([t]) => !(rows[t] || []).length) && (
+        <div style={{ ...card, color:"#999", fontSize:13 }}>La papelera está vacía.</div>
+      )}
+      {tab === "history" && (
+        <div style={card}>
+          {!log.length && <div style={{ color:"#999", fontSize:13 }}>Sin actividad registrada todavía{err ? "" : " (o la tabla action_log no existe aún — corré scripts/setup-undo.mjs)"}.</div>}
+          {log.map(e => (
+            <div key={e.id} style={{ display:"flex", gap:10, alignItems:"baseline", padding:"6px 0", borderTop:"1px solid #f5f5f5", fontSize:12.5 }}>
+              <span style={{ color:"#aaa", whiteSpace:"nowrap" }}>{String(e.created_at).slice(0, 16).replace("T", " ")}</span>
+              <span style={{ fontWeight:700, minWidth:52, color: e.action === "delete" ? "#B91C1C" : e.action === "create" ? "#3B6D11" : "#444" }}>{e.action}</span>
+              <span style={{ color:"#777", minWidth:110 }}>{e.entity}{e.entity_id && e.entity_id !== "*" ? ` #${e.entity_id}` : ""}</span>
+              <span style={{ flex:1 }}>{e.label || ""}</span>
+              <span style={{ color:"#aaa" }}>{e.user_email || ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Left navigation for the Operations CRM.
 const NAV = [
   { section:"Operations", items:[
@@ -3087,6 +3178,7 @@ const NAV = [
     { id:"analytics", label:"Analytics", icon:"📊" },
     { id:"suggestions", label:"Suggestions", icon:"💡" },
     { id:"bol", label:"BOL", icon:"📄" },
+    { id:"trash", label:"Papelera / Historial", icon:"🗑️" },
     { id:"users", label:"Users", icon:"👤" },
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
@@ -3097,7 +3189,7 @@ const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
 function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAdmin = false }) {
   // Only show sections the user can view; the Users section is admin-only.
   const visibleNav = NAV
-    .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : it.id === "suggestions" ? true : can(it.id, "view")) }))
+    .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : (it.id === "suggestions" || it.id === "trash") ? true : can(it.id, "view")) }))
     .filter(group => group.items.length > 0);
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
@@ -3158,6 +3250,7 @@ const PAGE_META = {
   suggestions: { title:"Suggestions", sub:"Employee feedback and improvement ideas" },
   users:       { title:"Users", sub:"Team members, roles and permissions" },
   bol:         { title:"BOL", sub:"Bill of Lading templates and generation" },
+  trash:       { title:"Papelera / Historial", sub:"Registros borrados recuperables y log de cambios" },
   settings:    { title:"Settings", sub:"Operation settings" },
 };
 
@@ -3764,6 +3857,7 @@ export default function App() {
   const [claimNoteInput, setClaimNoteInput] = useState("");
   const [claimJobSearch, setClaimJobSearch] = useState(""); // job search inside the claim form
   const [toast, setToast] = useState(null);               // brief success notification
+  const [, setUndoTick] = useState(0);                    // re-render Undo/Redo buttons on stack changes
   const fileRef = useRef();
   const autoGenRef = useRef(false);
   const toastRef = useRef(null);
@@ -3843,18 +3937,18 @@ export default function App() {
   const loadData = useCallback(async () => {
     const { data, error } = await supabase.from("storages").select("*").order("date_opened", { ascending: false });
     if (error) { setError(error.message); setLoading(false); return; }
-    setRecords(data || []);
+    setRecords((data || []).filter(notDel));
     setLoading(false);
   }, []);
 
   const loadJobs = useCallback(async () => {
     const { data, error } = await supabase.from("storage_jobs").select("*").order("created_at", { ascending: false });
-    if (!error) setJobs(data || []);
+    if (!error) setJobs((data || []).filter(notDel));
   }, []);
 
   const loadBrokers = useCallback(async () => {
     const { data, error } = await supabase.from("brokers").select("*").order("name", { ascending: true });
-    if (!error) setBrokers(data || []);
+    if (!error) setBrokers((data || []).filter(notDel));
   }, []);
 
   const loadBilling = useCallback(async () => {
@@ -3864,21 +3958,21 @@ export default function App() {
 
   const loadDrivers = useCallback(async () => {
     const { data, error } = await supabase.from("drivers").select("*").order("name", { ascending: true });
-    if (!error) setDriversList(data || []);
+    if (!error) setDriversList((data || []).filter(notDel));
   }, []);
 
   const loadClosingSheets = useCallback(async () => {
     const { data, error } = await supabase.from("closing_sheets").select("*").order("created_at", { ascending: false });
-    if (!error) setClosingSheets(data || []);
+    if (!error) setClosingSheets((data || []).filter(notDel));
   }, []);
 
   const loadTrips = useCallback(async () => {
     const { data, error } = await supabase.from("trips").select("*").order("created_at", { ascending: false });
-    if (!error) setTrips(data || []);
+    if (!error) setTrips((data || []).filter(notDel));
   }, []);
   const loadTrucks = useCallback(async () => {
     const { data, error } = await supabase.from("trucks").select("*").order("name", { ascending: true });
-    if (!error) setTrucksList(data || []);
+    if (!error) setTrucksList((data || []).filter(notDel));
   }, []);
   const loadTripEvents = useCallback(async () => {
     const { data, error } = await supabase.from("trip_events").select("*").order("created_at", { ascending: true });
@@ -3886,68 +3980,68 @@ export default function App() {
   }, []);
   const loadTripStops = useCallback(async () => {
     const { data, error } = await supabase.from("trip_stops").select("*").order("stop_order", { ascending: true });
-    if (!error) setTripStops(data || []);
+    if (!error) setTripStops((data || []).filter(notDel));
   }, []);
   const loadEquipment = useCallback(async () => {
     const { data, error } = await supabase.from("equipment_items").select("*").order("created_at", { ascending: false });
-    if (!error) setEquipmentItems(data || []);
+    if (!error) setEquipmentItems((data || []).filter(notDel));
   }, []);
   const loadExpenses = useCallback(async () => {
     const { data, error } = await supabase.from("expenses").select("*").order("expense_date", { ascending: false });
-    if (!error) setExpenses(data || []);
+    if (!error) setExpenses((data || []).filter(notDel));
   }, []);
   const loadWorkDays = useCallback(async () => {
     const { data, error } = await supabase.from("driver_work_days").select("*").order("work_date", { ascending: false });
-    if (!error) setWorkDays(data || []);
+    if (!error) setWorkDays((data || []).filter(notDel));
   }, []);
   const loadAdjustments = useCallback(async () => {
     const { data, error } = await supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false });
-    if (!error) setAdjustments(data || []);
+    if (!error) setAdjustments((data || []).filter(notDel));
   }, []);
   const loadMaterialItems = useCallback(async () => {
     const { data, error } = await supabase.from("material_items").select("*").order("name", { ascending: true });
-    if (!error) setMaterialItems(data || []);
+    if (!error) setMaterialItems((data || []).filter(notDel));
   }, []);
   const loadMaterialMovements = useCallback(async () => {
     const { data, error } = await supabase.from("material_movements").select("*").order("created_at", { ascending: false });
-    if (!error) setMaterialMovements(data || []);
+    if (!error) setMaterialMovements((data || []).filter(notDel));
   }, []);
   const loadJobEvents = useCallback(async () => {
     const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
-    if (!error) setJobEvents(data || []);
+    if (!error) setJobEvents((data || []).filter(notDel));
   }, []);
   const loadExtras = useCallback(async () => {
     const { data, error } = await supabase.from("job_extras").select("*").order("created_at", { ascending: false });
-    if (!error) setJobExtras(data || []);
+    if (!error) setJobExtras((data || []).filter(notDel));
   }, []);
   const loadEmployees = useCallback(async () => {
     const { data, error } = await supabase.from("employees").select("*").order("name", { ascending: true });
-    if (!error) setEmployees(data || []);
+    if (!error) setEmployees((data || []).filter(notDel));
   }, []);
   const loadPayments = useCallback(async () => {
     const { data, error } = await supabase.from("payments").select("*").order("payment_date", { ascending: false });
-    if (!error) setPayments(data || []);
+    if (!error) setPayments((data || []).filter(notDel));
   }, []);
   const loadPayAccounts = useCallback(async () => {
     const { data, error } = await supabase.from("payment_accounts").select("*").order("name", { ascending: true });
-    if (!error) setPayAccounts(data || []);
+    if (!error) setPayAccounts((data || []).filter(notDel));
   }, []);
   const loadCompanies = useCallback(async () => {
     const { data, error } = await supabase.from("companies").select("*").order("name", { ascending: true });
-    if (!error) setCompanies(data || []);
+    if (!error) setCompanies((data || []).filter(notDel));
   }, []);
   const loadComplianceDocs = useCallback(async () => {
     const { data, error } = await supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true });
-    if (!error) setComplianceDocs(data || []);
+    if (!error) setComplianceDocs((data || []).filter(notDel));
   }, []);
   const loadClaims = useCallback(async () => {
     const { data, error } = await supabase.from("claims").select("*").order("created_at", { ascending: false });
-    if (!error) setClaims(data || []);
+    if (!error) setClaims((data || []).filter(notDel));
   }, []);
   const loadClaimNotes = useCallback(async (claimId) => {
     if (!claimId) { setClaimNotes([]); return; }
     const { data, error } = await supabase.from("claim_notes").select("*").eq("claim_id", claimId).order("created_at", { ascending: false });
-    if (!error) setClaimNotes(data || []);
+    if (!error) setClaimNotes((data || []).filter(notDel));
   }, []);
 
   // Ensure storage_jobs exists. With a publishable (anon) key DDL isn't possible
@@ -5815,12 +5909,16 @@ export default function App() {
   // Delete specific storage_jobs rows (a duplicate variant), cleaning up links.
   async function deleteJobRows(ids, label) {
     if (!ids || !ids.length) return;
-    if (!window.confirm(`Delete ${label || "these job rows"}? This action cannot be undone.`)) return;
-    if (!extrasMissing) await supabase.from("job_extras").delete().in("job_id", ids);
-    if (!paymentsMissing) await supabase.from("payments").delete().in("job_id", ids);
+    if (!window.confirm(`Delete ${label || "these job rows"}? You can undo this (Ctrl+Z / Papelera).`)) return;
+    const entries = [];
+    if (!extrasMissing) { const r = await undoMgr.softDelete("job_extras", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    if (!paymentsMissing) { const r = await undoMgr.softDelete("payments", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    for (const j of jobs) if (ids.includes(j.id) && j.closing_sheet_id != null) entries.push(undoMgr.updateEntry("storage_jobs", j, { closing_sheet_id: null }));
     await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids);
-    const { error } = await supabase.from("storage_jobs").delete().in("id", ids);
-    if (error) { window.alert(error.message); return; }
+    const del = await undoMgr.softDelete("storage_jobs", ids);
+    if (del.error) { window.alert(del.error.message); return; }
+    entries.push(...del.entries);
+    undoMgr.record(`Duplicado eliminado${label ? ` (${label})` : ""}`, entries);
     setJobs(prev => prev.filter(j => !ids.includes(j.id)));
     showToast("Duplicate record deleted");
     loadJobs(); if (!paymentsMissing) loadPayments(); if (!extrasMissing) loadExtras();
@@ -5874,8 +5972,15 @@ export default function App() {
     if (!paymentColMissing) payload.payment_due_date = form.payment_due_date || (form.date_opened ? addDaysStr(form.date_opened, 30) : null);
     // Driver who opens the unit — only if the column exists.
     if (!driverColMissing) payload.driver_id = form.driver_id ? Number(form.driver_id) : null;
-    if (editId) { await supabase.from("storages").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editId); }
-    else { await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]); }
+    if (editId) {
+      const prev = records.find(r => r.id === editId);
+      const patch = { ...payload, updated_by: userEmail, updated_at: new Date().toISOString() };
+      await supabase.from("storages").update(patch).eq("id", editId);
+      if (prev) undoMgr.record(`Unidad ${form.unit || editId} editada`, [undoMgr.updateEntry("storages", prev, patch)]);
+    } else {
+      const { data } = await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]).select("*").single();
+      if (data) undoMgr.record(`Unidad ${form.unit || ""} creada`.replace(/\s+/g, " ").trim(), [undoMgr.createEntry("storages", data)]);
+    }
     setSaving(false); setShowAdd(false);
   }
 
@@ -5976,17 +6081,71 @@ export default function App() {
     if (toastRef.current) clearTimeout(toastRef.current);
     toastRef.current = setTimeout(() => setToast(null), 2800);
   }
+  // Soft-delete rows and record them (plus any extra captured entries) as ONE
+  // undoable step. Alerts and returns false if the soft delete failed.
+  async function softDeleteAndRecord(table, ids, label, extra = []) {
+    const r = await undoMgr.softDelete(table, ids);
+    if (r.error) { window.alert(r.error.message); return false; }
+    undoMgr.record(label, [...extra.filter(Boolean), ...r.entries]);
+    return true;
+  }
+  // ── Undo / redo (session-scoped, Ctrl+Z / Ctrl+Y) ──
+  useEffect(() => undoMgr.subscribe(() => setUndoTick(t => t + 1)), []);
+  useEffect(() => { undoMgr.setUser(userEmail); }, [userEmail]);
+  const reloadTable = (t) => ({
+    storages: loadData, storage_jobs: loadJobs, payments: loadPayments, job_extras: loadExtras,
+    expenses: loadExpenses, claims: loadClaims, claim_notes: () => editingClaimId && loadClaimNotes(editingClaimId),
+    brokers: loadBrokers, drivers: loadDrivers, trucks: loadTrucks, companies: loadCompanies,
+    compliance_documents: loadComplianceDocs, closing_sheets: loadClosingSheets, equipment_items: loadEquipment,
+    employees: loadEmployees, material_items: loadMaterialItems, material_movements: loadMaterialMovements,
+    driver_work_days: loadWorkDays, driver_adjustments: loadAdjustments, trips: loadTrips,
+    trip_stops: loadTripStops, job_events: loadJobEvents, payment_accounts: loadPayAccounts,
+  }[t]);
+  async function doUndo() {
+    if (!undoMgr.canUndo()) { showToast("Nada para deshacer"); return; }
+    const res = await undoMgr.undo();
+    if (!res) return;
+    if (res.error) window.alert("Undo aplicado con errores: " + res.error.message);
+    res.tables.forEach(t => reloadTable(t)?.());
+    showToast(`Acción deshecha${res.label ? `: ${res.label}` : ""}`);
+  }
+  async function doRedo() {
+    if (!undoMgr.canRedo()) { showToast("Nada para rehacer"); return; }
+    const res = await undoMgr.redo();
+    if (!res) return;
+    if (res.error) window.alert("Redo aplicado con errores: " + res.error.message);
+    res.tables.forEach(t => reloadTable(t)?.());
+    showToast(`Acción rehecha${res.label ? `: ${res.label}` : ""}`);
+  }
+  // Global keyboard shortcuts. Skipped while typing in a field so the browser's
+  // native text undo keeps working inside inputs.
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = (e.key || "").toLowerCase();
+      if (k === "z" && !e.shiftKey) { e.preventDefault(); doUndo(); }
+      else if (k === "y" || (k === "z" && e.shiftKey)) { e.preventDefault(); doRedo(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   // Delete a whole job (all its rows) plus its extras/payments; unlink closing sheets.
   async function deleteJob(g) {
     const ids = (g.parts && g.parts.length ? g.parts.map(p => p.id) : jobs.filter(j => jobKey(j) === g.key).map(j => j.id));
     if (!ids.length) return;
-    if (!window.confirm(`Are you sure you want to delete job ${g.job_number || "(no #)"} — ${g.customer || "no client"}? This action cannot be undone.`)) return;
-    // Clean up related records first (FKs cascade for extras/billing, but be explicit).
-    if (!extrasMissing) await supabase.from("job_extras").delete().in("job_id", ids);
-    if (!paymentsMissing) await supabase.from("payments").delete().in("job_id", ids);
+    if (!window.confirm(`Are you sure you want to delete job ${g.job_number || "(no #)"} — ${g.customer || "no client"}? You can undo this (Ctrl+Z / Papelera).`)) return;
+    // Soft-delete related records first so a single Undo restores everything.
+    const entries = [];
+    if (!extrasMissing) { const r = await undoMgr.softDelete("job_extras", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    if (!paymentsMissing) { const r = await undoMgr.softDelete("payments", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    for (const j of jobs) if (ids.includes(j.id) && j.closing_sheet_id != null) entries.push(undoMgr.updateEntry("storage_jobs", j, { closing_sheet_id: null }));
     await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids);
-    const { error } = await supabase.from("storage_jobs").delete().in("id", ids);
-    if (error) { window.alert(error.message); return; }
+    const del = await undoMgr.softDelete("storage_jobs", ids);
+    if (del.error) { window.alert(del.error.message); return; }
+    entries.push(...del.entries);
+    undoMgr.record(`Job ${g.job_number || ""} eliminado`.replace(/\s+/g, " ").trim(), entries);
     // Instant UI update, then refresh related data.
     setJobs(prev => prev.filter(j => !ids.includes(j.id)));
     if (jobDetailKey === g.key) setJobDetailKey(null);
@@ -6122,21 +6281,31 @@ export default function App() {
     const prevBolCollected = numv((prevRows.find(p => !p.split_group) || prevRows[0])?.bol_collected);
 
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
+    const jobEntries = [];
     if (editingJobKey) {
       const current = jobs.filter(j => jobKey(j) === editingJobKey);
       const created = { ...fields, created_by: userEmail };
       let error = null;
       // Update job-level fields on every existing part first.
-      if (current.length) ({ error } = await supabase.from("storage_jobs").update({ ...fields, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", current.map(p => p.id)));
+      if (current.length) {
+        const patch = { ...fields, updated_by: userEmail, updated_at: new Date().toISOString() };
+        ({ error } = await supabase.from("storage_jobs").update(patch).in("id", current.map(p => p.id)));
+        if (!error) for (const p of current) jobEntries.push(undoMgr.updateEntry("storage_jobs", p, patch));
+      }
       if (!error) {
         if (!hasLoc) {
           // No storage selected: collapse the job to a single unassigned row.
           if (current.length) {
             await supabase.from("storage_jobs").update({ storage_id: null, warehouse: null }).eq("id", current[0].id);
+            jobEntries.push(undoMgr.updateEntry("storage_jobs", current[0], { storage_id: null, warehouse: null }));
             const rest = current.slice(1).map(p => p.id);
-            if (rest.length) ({ error } = await supabase.from("storage_jobs").delete().in("id", rest));
+            if (rest.length) {
+              const del = await undoMgr.softDelete("storage_jobs", rest);
+              error = del.error; jobEntries.push(...del.entries);
+            }
           } else {
-            ({ error } = await supabase.from("storage_jobs").insert([{ ...created, storage_id: null, warehouse: null }]));
+            const { data, error: insErr } = await supabase.from("storage_jobs").insert([{ ...created, storage_id: null, warehouse: null }]).select("*");
+            error = insErr; (data || []).forEach(r => jobEntries.push(undoMgr.createEntry("storage_jobs", r)));
           }
         } else {
           // Reconcile selected units/warehouses against existing parts.
@@ -6152,21 +6321,29 @@ export default function App() {
             ...jobForm.storage_ids.filter(id => !keptUnits.has(id)).map(sid => ({ ...created, storage_id: sid, warehouse: null })),
             ...jobForm.warehouses.filter(w => !keptWhs.has(w)).map(w => ({ ...created, storage_id: null, warehouse: w })),
           ];
-          if (toDelete.length) ({ error } = await supabase.from("storage_jobs").delete().in("id", toDelete));
-          if (!error && newRows.length) ({ error } = await supabase.from("storage_jobs").insert(newRows));
+          if (toDelete.length) {
+            const del = await undoMgr.softDelete("storage_jobs", toDelete);
+            error = del.error; jobEntries.push(...del.entries);
+          }
+          if (!error && newRows.length) {
+            const { data, error: insErr } = await supabase.from("storage_jobs").insert(newRows).select("*");
+            error = insErr; (data || []).forEach(r => jobEntries.push(undoMgr.createEntry("storage_jobs", r)));
+          }
         }
       }
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
+      undoMgr.record(`Job ${jobForm.job_number || ""} editado`.replace(/\s+/g, " ").trim(), jobEntries);
     } else {
       const created = { ...fields, created_by: userEmail };
       const rows = hasLoc ? [
         ...jobForm.storage_ids.map(sid => ({ ...created, storage_id: sid, warehouse: null })),
         ...jobForm.warehouses.map(w => ({ ...created, storage_id: null, warehouse: w })),
       ] : [{ ...created, storage_id: null, warehouse: null }];
-      const { error } = await supabase.from("storage_jobs").insert(rows);
+      const { data, error } = await supabase.from("storage_jobs").insert(rows).select("*");
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
+      undoMgr.record(`Job ${jobForm.job_number || ""} creado`.replace(/\s+/g, " ").trim(), (data || []).map(r => undoMgr.createEntry("storage_jobs", r)));
     }
     // Mirror the form's collected amount into Payments (concept "job"), same as
     // the "Record payment" flow, so both modules stay connected.
@@ -6204,14 +6381,20 @@ export default function App() {
     if (!brokerForm.name.trim()) return;
     setBrokerSaving(true);
     const payload = { name:brokerForm.name.trim(), contact_name:brokerForm.contact_name||null, contact_phone:brokerForm.contact_phone||null, contact_email:brokerForm.contact_email||null, notes:brokerForm.notes||null };
-    if (editingBrokerId) await supabase.from("brokers").update(payload).eq("id", editingBrokerId);
-    else await supabase.from("brokers").insert([payload]);
+    if (editingBrokerId) {
+      const prev = brokers.find(b => b.id === editingBrokerId);
+      await supabase.from("brokers").update(payload).eq("id", editingBrokerId);
+      if (prev) undoMgr.record(`Broker "${payload.name}" editado`, [undoMgr.updateEntry("brokers", prev, payload)]);
+    } else {
+      const { data } = await supabase.from("brokers").insert([payload]).select("*").single();
+      if (data) undoMgr.record(`Broker "${payload.name}" creado`, [undoMgr.createEntry("brokers", data)]);
+    }
     setBrokerSaving(false); setShowBrokerModal(false);
     loadBrokers();
   }
   async function deleteBroker(b) {
     if (!window.confirm(`Delete broker "${b.name}"? Los jobs asociados quedan sin broker.`)) return;
-    await supabase.from("brokers").delete().eq("id", b.id);
+    if (!(await softDeleteAndRecord("brokers", b.id, `Broker "${b.name}" eliminado`))) return;
     loadBrokers();
   }
 
@@ -6233,7 +6416,7 @@ export default function App() {
   }
   async function deleteDriver(d) {
     if (!window.confirm(`Delete driver "${d.name}"?`)) return;
-    await supabase.from("drivers").delete().eq("id", d.id);
+    if (!(await softDeleteAndRecord("drivers", d.id, `Driver "${d.name}" eliminado`))) return;
     loadDrivers();
   }
   function toggleJobDriver(id) {
@@ -6276,8 +6459,16 @@ export default function App() {
       receipt_url: f.receipt_url || null, notes: f.notes || null,
     };
     let error;
-    if (editingExpenseId) ({ error } = await supabase.from("expenses").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingExpenseId));
-    else ({ error } = await supabase.from("expenses").insert([{ ...payload, created_by: userEmail }]));
+    if (editingExpenseId) {
+      const prev = expenses.find(x => x.id === editingExpenseId);
+      const patch = { ...payload, updated_by: userEmail, updated_at: new Date().toISOString() };
+      ({ error } = await supabase.from("expenses").update(patch).eq("id", editingExpenseId));
+      if (!error && prev) undoMgr.record("Expense editado", [undoMgr.updateEntry("expenses", prev, patch)]);
+    } else {
+      const { data, error: insErr } = await supabase.from("expenses").insert([{ ...payload, created_by: userEmail }]).select("*").single();
+      error = insErr;
+      if (!error && data) undoMgr.record("Expense creado", [undoMgr.createEntry("expenses", data)]);
+    }
     setExpenseSaving(false);
     if (error) { window.alert(error.message); return; }
     setShowExpenseModal(false); setEditingExpenseId(null);
@@ -6285,8 +6476,7 @@ export default function App() {
   }
   async function deleteExpense(e) {
     if (!window.confirm(`Delete ${e.category || "expense"} de $${Math.round(numv(e.amount)).toLocaleString()}?`)) return;
-    const { error } = await supabase.from("expenses").delete().eq("id", e.id);
-    if (error) { window.alert(error.message); return; }
+    if (!(await softDeleteAndRecord("expenses", e.id, `Expense $${Math.round(numv(e.amount)).toLocaleString()} eliminado`))) return;
     loadExpenses();
   }
   async function setExpenseStatus(e, status) {
@@ -6342,8 +6532,7 @@ export default function App() {
     }
     if (next === null) {
       if (existing) {
-        const { error } = await supabase.from("driver_work_days").delete().eq("id", existing.id);
-        if (error) { window.alert(error.message); return; }
+        if (!(await softDeleteAndRecord("driver_work_days", existing.id, "Día de trabajo quitado"))) return;
       }
     } else {
       const payload = { day_type: next, hours: null, rate: hasDaily ? Number(driver.daily_rate) : null };
@@ -6376,8 +6565,7 @@ export default function App() {
   }
   async function deleteAdjustment(a) {
     if (!window.confirm(`Delete ${a.kind === "bonus" ? "compensación" : "descuento"} de $${Math.round(numv(a.amount)).toLocaleString()}?`)) return;
-    const { error } = await supabase.from("driver_adjustments").delete().eq("id", a.id);
-    if (error) { window.alert(error.message); return; }
+    if (!(await softDeleteAndRecord("driver_adjustments", a.id, "Ajuste de driver eliminado"))) return;
     loadAdjustments();
   }
 
@@ -6401,8 +6589,9 @@ export default function App() {
   }
   async function deleteMaterialItem(it) {
     if (!window.confirm(`Delete material "${it.name}"? Sus movimientos también se borran.`)) return;
-    const { error } = await supabase.from("material_items").delete().eq("id", it.id);
-    if (error) { window.alert(error.message); return; }
+    const mv = await undoMgr.softDelete("material_movements", [it.id], "item_id");
+    if (mv.error) { window.alert(mv.error.message); return; }
+    if (!(await softDeleteAndRecord("material_items", it.id, `Material "${it.name}" eliminado`, mv.entries))) return;
     loadMaterialItems(); loadMaterialMovements();
   }
   function openAddMaterialMove(prefill = {}) {
@@ -6433,8 +6622,7 @@ export default function App() {
   }
   async function deleteMaterialMove(mv) {
     if (!window.confirm("Delete este movimiento de material?")) return;
-    const { error } = await supabase.from("material_movements").delete().eq("id", mv.id);
-    if (error) { window.alert(error.message); return; }
+    if (!(await softDeleteAndRecord("material_movements", mv.id, "Movimiento de material eliminado"))) return;
     loadMaterialMovements();
   }
 
@@ -6501,8 +6689,10 @@ export default function App() {
   }
   async function deleteCs(s) {
     if (!window.confirm(`Delete closing sheet #${s.closing_sheet_number || s.id}? Jobs are left unassigned.`)) return;
+    const linked = jobs.filter(j => j.closing_sheet_id === s.id);
     await supabase.from("storage_jobs").update({ closing_sheet_id: null }).eq("closing_sheet_id", s.id);
-    await supabase.from("closing_sheets").delete().eq("id", s.id);
+    const extra = linked.map(j => undoMgr.updateEntry("storage_jobs", j, { closing_sheet_id: null }));
+    if (!(await softDeleteAndRecord("closing_sheets", s.id, `Closing sheet #${s.closing_sheet_number || s.id} eliminada`, extra))) return;
     setCsDetailId(null); loadClosingSheets(); loadJobs();
   }
   // Inline-edit a per-job settlement field (carrier_rate_per_cf, bol_balance, volume) on all its parts.
@@ -6547,7 +6737,8 @@ export default function App() {
   }
   async function deleteTruck(t) {
     if (!window.confirm(`Delete truck "${t.name}"?`)) return;
-    await supabase.from("trucks").delete().eq("id", t.id); loadTrucks();
+    if (!(await softDeleteAndRecord("trucks", t.id, `Truck "${t.name}" eliminado`))) return;
+    loadTrucks();
   }
 
   // ── Live-load: set a truck's manual / last-known position ──
@@ -6602,8 +6793,10 @@ export default function App() {
   }
   async function deleteCompany(c) {
     if (!window.confirm(`Delete company "${c.name}" y todos sus documentos?`)) return;
-    await supabase.from("compliance_documents").delete().eq("entity_type", "company").eq("entity_id", c.id);
-    await supabase.from("companies").delete().eq("id", c.id);
+    const docs = complianceDocs.filter(d => d.entity_type === "company" && d.entity_id === c.id).map(d => d.id);
+    const dr = docs.length ? await undoMgr.softDelete("compliance_documents", docs) : { entries: [] };
+    if (dr.error) { window.alert(dr.error.message); return; }
+    if (!(await softDeleteAndRecord("companies", c.id, `Company "${c.name}" eliminada`, dr.entries))) return;
     loadCompanies(); loadComplianceDocs();
   }
   function openAddDoc(prefill = {}) {
@@ -6635,7 +6828,8 @@ export default function App() {
   }
   async function deleteDoc(d) {
     if (!window.confirm(`Delete document "${docTypeLabel(d.document_type)}"?`)) return;
-    await supabase.from("compliance_documents").delete().eq("id", d.id); loadComplianceDocs();
+    if (!(await softDeleteAndRecord("compliance_documents", d.id, `Documento "${docTypeLabel(d.document_type)}" eliminado`))) return;
+    loadComplianceDocs();
   }
   // Upload a photo/PDF to the compliance-docs bucket. If `doc` has an id, attach to it;
   // otherwise stash the URL in the open doc form.
@@ -6701,10 +6895,14 @@ export default function App() {
       resolution_type: f.resolution_type || null, closed_date: closedDate,
     };
     let error = null, claimId = editingClaimId;
-    if (editingClaimId) ({ error } = await supabase.from("claims").update({ ...payload, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", editingClaimId));
-    else {
-      const { data, error: insErr } = await supabase.from("claims").insert([{ ...payload, created_by: userEmail }]).select("id").single();
+    if (editingClaimId) {
+      const patch = { ...payload, updated_by: userEmail, updated_at: new Date().toISOString() };
+      ({ error } = await supabase.from("claims").update(patch).eq("id", editingClaimId));
+      if (!error && prev) undoMgr.record(`Claim ${payload.job_number || claimId} editado`, [undoMgr.updateEntry("claims", prev, patch)]);
+    } else {
+      const { data, error: insErr } = await supabase.from("claims").insert([{ ...payload, created_by: userEmail }]).select("*").single();
       error = insErr; claimId = data?.id;
+      if (!error && data) undoMgr.record(`Claim ${payload.job_number || claimId} creado`, [undoMgr.createEntry("claims", data)]);
     }
     if (!error && prev && prev.status !== f.status) {
       const { error: nErr } = await supabase.from("claim_notes").insert([{ claim_id: claimId, note: `Status: ${CLAIM_STATUS[prev.status]?.l || prev.status} → ${CLAIM_STATUS[f.status]?.l || f.status}`, created_by: userEmail }]);
@@ -6727,8 +6925,9 @@ export default function App() {
   }
   async function deleteClaim(c) {
     if (!window.confirm(`Delete the claim for job ${c.job_number || "(sin #)"}? Its notes and links are removed too.`)) return;
-    const { error } = await supabase.from("claims").delete().eq("id", c.id);
-    if (error) { window.alert(error.message); return; }
+    const nr = await undoMgr.softDelete("claim_notes", [c.id], "claim_id");
+    if (nr.error) { window.alert(nr.error.message); return; }
+    if (!(await softDeleteAndRecord("claims", c.id, `Claim ${c.job_number || ""} eliminado`.replace(/\s+/g, " ").trim(), nr.entries))) return;
     setShowClaimModal(false); setEditingClaimId(null); loadClaims();
   }
   async function addClaimNote() {
@@ -6739,8 +6938,7 @@ export default function App() {
     setClaimNoteInput(""); loadClaimNotes(editingClaimId);
   }
   async function deleteClaimNote(n) {
-    const { error } = await supabase.from("claim_notes").delete().eq("id", n.id);
-    if (error) { window.alert(error.message); return; }
+    if (!(await softDeleteAndRecord("claim_notes", n.id, "Nota de claim eliminada"))) return;
     loadClaimNotes(editingClaimId);
   }
   // Read the claim's CURRENT attachments from the DB (not from possibly-stale
@@ -6937,8 +7135,10 @@ export default function App() {
   }
   async function deleteTrip(t) {
     if (!window.confirm(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`)) return;
-    await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }) }).eq("trip_id", t.id);
-    await supabase.from("trips").delete().eq("id", t.id);
+    const patch = { trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }) };
+    const extra = jobs.filter(j => j.trip_id === t.id).map(j => undoMgr.updateEntry("storage_jobs", j, patch));
+    await supabase.from("storage_jobs").update(patch).eq("trip_id", t.id);
+    if (!(await softDeleteAndRecord("trips", t.id, `Trip ${t.trip_number || t.id} eliminado`, extra))) return;
     loadTrips(); loadJobs();
   }
   // Persist a new stop order for a trip (array of jobKeys in the desired sequence).
@@ -6997,7 +7197,7 @@ export default function App() {
   }
   async function deleteCustomStop(s) {
     if (!window.confirm(trAI(`Delete the "${catLabel(s.category)}" stop?`, `¿Eliminar la parada "${catLabel(s.category)}"?`))) return;
-    await supabase.from("trip_stops").delete().eq("id", s.id);
+    if (!(await softDeleteAndRecord("trip_stops", s.id, `Parada "${catLabel(s.category)}" eliminada`))) return;
     loadTripStops();
   }
   // Mark one trip job delivered. A split portion delivers on its own (only its
@@ -7156,12 +7356,17 @@ export default function App() {
       "These portions are on different active trips. Merge them back into one job anyway?",
       "Estas porciones están en trips activos distintos. ¿Volver a unirlas en un solo job igual?"))) return;
     setTripBusy(true);
-    const { error } = await supabase.from("storage_jobs")
-      .update({ split_group: null, real_cf: totalCf, updated_by: userEmail, updated_at: new Date().toISOString() })
-      .eq("id", primary.id);
-    if (!error && others.length) await supabase.from("storage_jobs").delete().in("id", others.map(p => p.id));
+    const mergePatch = { split_group: null, real_cf: totalCf, updated_by: userEmail, updated_at: new Date().toISOString() };
+    const entries = [undoMgr.updateEntry("storage_jobs", primary, mergePatch)];
+    const { error } = await supabase.from("storage_jobs").update(mergePatch).eq("id", primary.id);
+    if (!error && others.length) {
+      const del = await undoMgr.softDelete("storage_jobs", others.map(p => p.id));
+      if (del.error) { setTripBusy(false); window.alert(del.error.message); return; }
+      entries.push(...del.entries);
+    }
     setTripBusy(false);
     if (error) { window.alert(error.message); return; }
+    undoMgr.record(`Porciones unidas (${totalCf} CF)`, entries);
     showToast(trAI(`Portions merged: ${totalCf} CF`, `Porciones unidas: ${totalCf} CF`));
     loadJobs();
   }
@@ -7313,7 +7518,7 @@ export default function App() {
   }
   async function deleteEquipmentItem(item) {
     if (!window.confirm(trAI(`Delete "${item.name || "this item"}"?`, `¿Eliminar "${item.name || "este item"}"?`))) return;
-    await supabase.from("equipment_items").delete().eq("id", item.id);
+    if (!(await softDeleteAndRecord("equipment_items", item.id, `Equipment "${item.name || item.id}" eliminado`))) return;
     loadEquipment();
   }
   // Load an equipment item onto an active trip (rides as internal cargo, no money).
@@ -7367,7 +7572,7 @@ export default function App() {
   }
   async function deleteJobEvent(ev) {
     if (!window.confirm("Delete this timeline event?")) return;
-    await supabase.from("job_events").delete().eq("id", ev.id);
+    if (!(await softDeleteAndRecord("job_events", ev.id, "Evento de timeline eliminado"))) return;
     loadJobEvents();
   }
 
@@ -7430,7 +7635,8 @@ export default function App() {
   async function activateExtra(jobId, driverId, type) {
     const gen = "driver_only";
     const d = commissionDefaults(type, gen);
-    await supabase.from("job_extras").insert([{ job_id: jobId, ...extraPayload({ extra_type:type, amount:"", generated_by:gen, driver_id:driverId, driver_commission_pct:d.driver, rep_commission_pct:d.rep, active:true }) }]);
+    const { data } = await supabase.from("job_extras").insert([{ job_id: jobId, ...extraPayload({ extra_type:type, amount:"", generated_by:gen, driver_id:driverId, driver_commission_pct:d.driver, rep_commission_pct:d.rep, active:true }) }]).select("*").single();
+    if (data) undoMgr.record("Extra creado", [undoMgr.createEntry("job_extras", data)]);
     loadExtras();
   }
   // Patch an existing extra; changing generated_by re-applies the default %s.
@@ -7441,11 +7647,14 @@ export default function App() {
       merged.driver_commission_pct = d.driver; merged.rep_commission_pct = d.rep;
       if (merged.generated_by === "driver_only") merged.rep_id = null;
     }
-    await supabase.from("job_extras").update(extraPayload(merged)).eq("id", extra.id);
+    const patch = extraPayload(merged);
+    await supabase.from("job_extras").update(patch).eq("id", extra.id);
+    undoMgr.record("Extra editado", [undoMgr.updateEntry("job_extras", extra, patch)]);
     loadExtras();
   }
   async function toggleExtraActive(extra, active) {
     await supabase.from("job_extras").update({ active }).eq("id", extra.id);
+    undoMgr.record(active ? "Extra activado" : "Extra desactivado", [undoMgr.updateEntry("job_extras", extra, { active })]);
     loadExtras();
   }
   async function deleteExtra(extra) {
@@ -7455,17 +7664,25 @@ export default function App() {
     if (linked.length) {
       const sum = linked.reduce((s, p) => s + paymentNet(p), 0);
       if (!window.confirm(`Este extra tiene ${linked.length} pago(s) asignados por $${Math.round(sum).toLocaleString()}. Se desactivará (deja de contar como cargo) conservando el historial de pagos. ¿Continuar?`)) return;
+      undoMgr.record("Extra desactivado", [undoMgr.updateEntry("job_extras", extra, { active: false })]);
       await supabase.from("job_extras").update({ active: false }).eq("id", extra.id);
       loadExtras();
       return;
     }
-    await supabase.from("job_extras").delete().eq("id", extra.id);
+    if (!(await softDeleteAndRecord("job_extras", extra.id, "Extra eliminado"))) return;
     loadExtras();
   }
   async function saveQuickExtra() {
     const q = quickExtra; if (!q || (!q.jobId && !q.id)) return;
-    if (q.id) await supabase.from("job_extras").update(extraPayload(q)).eq("id", q.id);
-    else await supabase.from("job_extras").insert([{ job_id: q.jobId, ...extraPayload(q) }]);
+    if (q.id) {
+      const prev = jobExtras.find(x => x.id === q.id);
+      const patch = extraPayload(q);
+      await supabase.from("job_extras").update(patch).eq("id", q.id);
+      if (prev) undoMgr.record("Extra editado", [undoMgr.updateEntry("job_extras", prev, patch)]);
+    } else {
+      const { data } = await supabase.from("job_extras").insert([{ job_id: q.jobId, ...extraPayload(q) }]).select("*").single();
+      if (data) undoMgr.record("Extra creado", [undoMgr.createEntry("job_extras", data)]);
+    }
     setQuickExtra(null); loadExtras();
   }
   // "+ Extra" from the Payments page: same modal, but the job is picked inside
@@ -7497,7 +7714,8 @@ export default function App() {
   }
   async function deleteEmployee(em) {
     if (!window.confirm(`Delete "${em.name}"?`)) return;
-    await supabase.from("employees").delete().eq("id", em.id); loadEmployees();
+    if (!(await softDeleteAndRecord("employees", em.id, `Empleado "${em.name}" eliminado`))) return;
+    loadEmployees();
   }
   // Per-driver export: build a plain-text payment summary, copy to clipboard.
   function driverExtrasReport(driverName, monthLabel, jobsData) {
@@ -7936,8 +8154,16 @@ export default function App() {
     setPaySaving(true);
     const payload = payPayload(f);
     let mainId = editingPayId, error = null;
-    if (editingPayId) ({ error } = await supabase.from("payments").update(payload).eq("id", editingPayId));
-    else { const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("id").single(); error = insErr; mainId = data?.id; }
+    const payEntries = [];
+    if (editingPayId) {
+      const prevPay = payments.find(p => p.id === editingPayId);
+      ({ error } = await supabase.from("payments").update(payload).eq("id", editingPayId));
+      if (!error && prevPay) payEntries.push(undoMgr.updateEntry("payments", prevPay, payload));
+    } else {
+      const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("*").single();
+      error = insErr; mainId = data?.id;
+      if (!error && data) payEntries.push(undoMgr.createEntry("payments", data));
+    }
     // Credit-card fee → keep a SEPARATE linked cc_fee payment record in sync.
     if (!error && !payColsMissing && mainId && f.concept !== "cc_fee") {
       const feeEnabled = f.method === "credit_card" && !!f.cc_fee_enabled;
@@ -7946,10 +8172,20 @@ export default function App() {
       if (feeEnabled && feeAmt > 0) {
         const d = payload.payment_date || today();
         const feePayload = { job_id: payload.job_id, payment_date: d, amount: feeAmt, concept: "cc_fee", method: "credit_card", received: true, received_date: payload.received_date || d, banked: true, banked_date: payload.banked_date || d, received_by: payload.received_by || null };
-        if (existingFeeId) await supabase.from("payments").update(feePayload).eq("id", existingFeeId);
-        else { const { data: fd } = await supabase.from("payments").insert([feePayload]).select("id").single(); if (fd?.id) await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId); }
+        if (existingFeeId) {
+          const prevFee = payments.find(p => p.id === existingFeeId);
+          await supabase.from("payments").update(feePayload).eq("id", existingFeeId);
+          if (prevFee) payEntries.push(undoMgr.updateEntry("payments", prevFee, feePayload));
+        } else {
+          const { data: fd } = await supabase.from("payments").insert([feePayload]).select("*").single();
+          if (fd?.id) {
+            payEntries.push(undoMgr.createEntry("payments", fd));
+            await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId);
+          }
+        }
       } else if (existingFeeId) {
-        await supabase.from("payments").delete().eq("id", existingFeeId);
+        const r = await undoMgr.softDelete("payments", existingFeeId);
+        if (!r.error) payEntries.push(...r.entries);
         await supabase.from("payments").update({ cc_fee_payment_id: null }).eq("id", mainId);
       }
     }
@@ -7963,6 +8199,7 @@ export default function App() {
     }
     setPaySaving(false);
     if (error) { window.alert(error.message); return; }
+    undoMgr.record(editingPayId ? "Pago editado" : "Pago registrado", payEntries);
     setShowPayModal(false); loadPayments(); loadJobs();
   }
   // Mirror a job's recorded collection into the payments table (concept = "job"),
@@ -7990,9 +8227,11 @@ export default function App() {
   }
   async function deletePaymentRow(p) {
     if (!window.confirm("Delete this payment?")) return;
-    if (p.cc_fee_payment_id) await supabase.from("payments").delete().eq("id", p.cc_fee_payment_id);
-    if (!extrasMissing && !splitMissing) await supabase.from("job_extras").delete().eq("payment_id", p.id);
-    await supabase.from("payments").delete().eq("id", p.id); loadPayments(); loadExtras();
+    const entries = [];
+    if (p.cc_fee_payment_id) { const r = await undoMgr.softDelete("payments", p.cc_fee_payment_id); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    if (!extrasMissing && !splitMissing) { const r = await undoMgr.softDelete("job_extras", [p.id], "payment_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    if (!(await softDeleteAndRecord("payments", p.id, "Pago eliminado", entries))) return;
+    loadPayments(); loadExtras();
   }
   // Delete every payment row in a split group (and any extras / cc-fee children linked to them).
   async function deleteSplitGroup(rows) {
@@ -8000,9 +8239,10 @@ export default function App() {
     if (!window.confirm(`Delete this split payment (${rows.length} lines)?`)) return;
     const ids = rows.map(r => r.id);
     const feeIds = rows.map(r => r.cc_fee_payment_id).filter(Boolean);
-    if (!extrasMissing && !splitMissing) await supabase.from("job_extras").delete().in("payment_id", ids);
-    if (feeIds.length) await supabase.from("payments").delete().in("id", feeIds);
-    await supabase.from("payments").delete().in("id", ids);
+    const entries = [];
+    if (!extrasMissing && !splitMissing) { const r = await undoMgr.softDelete("job_extras", ids, "payment_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    if (feeIds.length) { const r = await undoMgr.softDelete("payments", feeIds); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
+    if (!(await softDeleteAndRecord("payments", ids, `Pago dividido eliminado (${rows.length} líneas)`, entries))) return;
     loadPayments(); loadExtras();
   }
   async function togglePayReceived(p) {
@@ -8058,7 +8298,7 @@ export default function App() {
     // deactivated rather than deleted to keep history readable.
     if (payments.some(p => p.bank_account === a.name)) { window.alert("Esta cuenta está referenciada por pagos existentes. Desactivala en vez de borrarla."); return; }
     if (!window.confirm(`Delete account "${a.name}"?`)) return;
-    await supabase.from("payment_accounts").delete().eq("id", a.id);
+    if (!(await softDeleteAndRecord("payment_accounts", a.id, `Cuenta "${a.name}" eliminada`))) return;
     loadPayAccounts();
   }
   function requestDepositWa(person) {
@@ -8260,7 +8500,8 @@ export default function App() {
 
   async function deleteRecord(id) {
     if (!window.confirm("Delete this storage?")) return;
-    await supabase.from("storages").delete().eq("id", id);
+    const r = records.find(x => x.id === id);
+    if (!(await softDeleteAndRecord("storages", id, `Unidad ${r?.unit || id} eliminada`))) return;
     setDetailId(null);
   }
 
@@ -8359,6 +8600,10 @@ export default function App() {
           <div style={{ fontSize:13, color:"#999", marginTop:2 }}>{PAGE_META[page].sub}</div>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={doUndo} disabled={!undoMgr.canUndo()} title={undoMgr.canUndo() ? `Deshacer: ${undoMgr.peekUndoLabel() || ""} (Ctrl+Z)` : "Nada para deshacer (Ctrl+Z)"}
+            style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color: undoMgr.canUndo() ? "#111" : "#bbb", fontSize:13, fontWeight:600, cursor: undoMgr.canUndo() ? "pointer" : "default" }}>↶ Undo</button>
+          <button onClick={doRedo} disabled={!undoMgr.canRedo()} title={undoMgr.canRedo() ? `Rehacer: ${undoMgr.peekRedoLabel() || ""} (Ctrl+Y)` : "Nada para rehacer (Ctrl+Y)"}
+            style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color: undoMgr.canRedo() ? "#111" : "#bbb", fontSize:13, fontWeight:600, cursor: undoMgr.canRedo() ? "pointer" : "default" }}>↷ Redo</button>
           {(() => {
             // Per-section duplicate alert: shown top-right only when this section has duplicates.
             const dupSection = page === "jobs" ? "jobs" : page === "payments" ? "payments" : page === "storage" ? "storages" : null;
@@ -8391,6 +8636,8 @@ export default function App() {
           {(page === "dispatching" || page === "jobs" || page === "calendario" || page === "calendario_entregas") && (can("jobs","create") || can("dispatching","create") || can("calendario","create") || can("calendario_entregas","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
       </div>
+
+      {page === "trash" && <TrashSection supabase={supabase} undoMgr={undoMgr} onRestored={(t) => reloadTable(t)?.()} />}
 
       {dbSetupNeeded && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
