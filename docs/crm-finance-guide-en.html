@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Finance Guide — No Borders Moving CRM</title>
+<style>
+  @page { size: A4; margin: 14mm 13mm 15mm 13mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html,body { margin:0; padding:0; }
+  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color:#1a1a1a; font-size:11.2px; line-height:1.55; }
+  h1,h2,h3 { margin:0; letter-spacing:-0.02em; }
+  p { margin:0 0 8px; }
+  .muted { color:#888; }
+  a { color:#185FA5; text-decoration:none; }
+  .break { page-break-before: always; }
+  h1.sec, h3 { break-after: avoid; }
+  table.g { break-inside: auto; }
+  tr { break-inside: avoid; }
+  .avoid { break-inside: avoid; }
+  ul, ol { margin:4px 0 10px; padding-left:18px; }
+  li { margin-bottom:4px; }
+  .mono { font-family: ui-monospace, monospace; }
+
+  /* Cover */
+  .cover { page-break-after: always; height: 261mm; border-radius:20px; overflow:hidden;
+           background: linear-gradient(160deg,#0f2a1a 0%, #123a26 55%, #0c2618 100%); color:#fff; position:relative; padding:34mm 24mm; }
+  .cover .kicker { font-size:12px; font-weight:700; letter-spacing:0.22em; text-transform:uppercase; color:#8fd0a5; }
+  .cover h1 { font-size:52px; font-weight:800; margin:14px 0 6px; line-height:1.05; }
+  .cover .sub { font-size:19px; color:#cde5d4; font-weight:500; }
+  .cover .pill { display:inline-block; margin-top:30px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18);
+                 border-radius:30px; padding:9px 18px; font-size:13px; color:#e7f7ec; }
+  .cover .foot { position:absolute; left:24mm; right:24mm; bottom:26mm; display:flex; justify-content:space-between; align-items:flex-end;
+                 border-top:1px solid rgba(255,255,255,0.14); padding-top:16px; font-size:12px; color:#9fc8ab; }
+  .cover .mock { position:absolute; right:18mm; top:118mm; display:flex; gap:10px; opacity:0.96; }
+  .cover .chip { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:14px 16px; min-width:118px; }
+  .cover .chip .n { font-size:24px; font-weight:800; }
+  .cover .chip .l { font-size:11px; color:#9fc8ab; margin-top:2px; }
+
+  .sec { font-size:21px; font-weight:800; margin:24px 0 4px; }
+  .sec .num { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:9px;
+              background:#14532d; color:#fff; font-size:15px; margin-right:10px; vertical-align:middle; }
+  .lead { color:#666; margin:0 0 14px; font-size:12px; }
+
+  .note { background:#F0FAF3; border:1px solid #CBE8D4; border-left:4px solid #2F9E57; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .note b { color:#1D7A40; }
+  .info { background:#F1F7FD; border:1px solid #D6E6F5; border-left:4px solid #378ADD; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .info b { color:#185FA5; }
+  .warn { background:#FFF6E8; border:1px solid #F4DDB0; border-left:4px solid #EF9F27; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .danger { background:#FCEBEB; border:1px solid #F3C9C9; border-left:4px solid #E24B4A; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .danger b { color:#A32D2D; }
+
+  .flow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:10px 0; }
+  .fbox { border:1.5px solid #d8d8d8; border-radius:9px; padding:8px 12px; font-size:10.5px; font-weight:700; text-align:center; background:#fff; }
+  .farrow { color:#bbb; font-weight:800; }
+
+  table.g { width:100%; border-collapse:collapse; font-size:11px; margin-top:6px; }
+  table.g th { text-align:left; background:#14532d; color:#fff; padding:8px 11px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  table.g td { padding:8px 11px; border-bottom:1px solid #eee; vertical-align:top; }
+  table.g tr:nth-child(even) td { background:#fafafa; }
+  table.g td:first-child { font-weight:700; }
+
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .three { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+  .card { border:1px solid #ececec; border-radius:11px; padding:13px 15px; }
+  .card h3 { font-size:13px; margin-bottom:4px; }
+  .tag { display:inline-block; font-size:9px; font-weight:700; padding:2px 7px; border-radius:6px; }
+
+  .money { background:#0f2a1a; border-radius:12px; color:#fff; padding:16px 18px; }
+  .money h3 { color:#fff; }
+  .money .step { display:flex; gap:10px; align-items:flex-start; margin:8px 0; font-size:11px; color:#d5e8db; }
+  .money .step b { color:#fff; }
+  .money .n { flex-shrink:0; width:22px; height:22px; border-radius:50%; background:#2F9E57; color:#fff; font-weight:800; font-size:11px; display:inline-flex; align-items:center; justify-content:center; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="cover">
+  <div class="kicker">No Borders Moving &amp; Storage</div>
+  <h1>Finance<br>Guide</h1>
+  <div class="sub">How money moves through the Operations CRM</div>
+  <div class="pill">💰 Payments · Extras · Settlements · Billing · Expenses · Banks · Claims</div>
+
+  <div class="mock">
+    <div class="chip"><div class="n" style="color:#8fd0a5">$18.4k</div><div class="l">Received this month</div></div>
+    <div class="chip"><div class="n" style="color:#E88">$3.1k</div><div class="l">In circulation</div></div>
+    <div class="chip"><div class="n" style="color:#7FB2E6">$14.2k</div><div class="l">Deposited</div></div>
+  </div>
+
+  <div class="foot">
+    <div>Version 1.0 · July 2026 · Internal use</div>
+    <div>Every dollar accounted for, from job to bank 🏦</div>
+  </div>
+</div>
+
+<!-- ============ 1 THE MONEY MAP ============ -->
+<h1 class="sec"><span class="num">1</span>The money map — read this first</h1>
+<p class="lead">One page that explains the whole system. Everything else is detail.</p>
+
+<p>The CRM tracks money in <b>two parallel worlds</b>, and one module that ties them together:</p>
+
+<div class="two">
+  <div class="card avoid">
+    <h3>🧾 The operational world — what <i>should</i> happen</h3>
+    <p style="font-size:10.5px;margin:0">Jobs create <b>charges</b> (balances, extras, BOL, storage billing). <b>Payments</b> records every dollar collected against those charges, who physically holds it, and when it reached the bank. <b>Expenses</b> records every dollar spent (fuel, hotels, payroll, materials). These are <i>our</i> books.</p>
+  </div>
+  <div class="card avoid">
+    <h3>🏛️ The bank world — what <i>actually</i> happened</h3>
+    <p style="font-size:10.5px;margin:0"><b>Banks</b> is the real bank ledger: every movement imported from the bank statements, categorized by one person and <b>verified by a second one</b>, then rolled into the official <b>P&amp;L</b>. The bank never lies — this is the ground truth.</p>
+  </div>
+</div>
+
+<div class="note avoid"><b>🔗 Reconciliation is the bridge.</b> The Banks → Conciliación tab cross-checks both worlds: every deposit recorded in Payments should appear in the bank, every bank-paid expense should have its bank line, and every bank movement should have an operational explanation. When all three lists are empty, <b>"the numbers add up ✓"</b>. Anything left over is exactly where to look for missing records — or missing money.</p></div>
+
+<div class="money avoid">
+  <h3>💵 The life of one dollar (worked example)</h3>
+  <div class="step"><span class="n">1</span><span><b>A charge is born.</b> Job #2214 is created: $800 due at pickup, $1,200 at delivery. On the road the client adds packing → an <b>extra</b> of $200 is registered. Total expected: <b>$2,200</b>.</span></div>
+  <div class="step"><span class="n">2</span><span><b>It gets collected.</b> The driver collects $800 cash at pickup. Someone enters it in <b>Payments</b> (+ Payment): method cash, received by the driver — the system marks <b>who has the money</b>. It is now <b>in circulation</b>: received but not in the bank.</span></div>
+  <div class="step"><span class="n">3</span><span><b>It gets allocated.</b> At delivery the client pays $1,500 by Zelle. Using <b>"Assign to charges"</b> the payment is split: $1,200 to the delivery balance, $200 to the packing extra, $100 left <b>on account</b>. Zelle is digital → marked <b>deposited automatically</b>.</span></div>
+  <div class="step"><span class="n">4</span><span><b>It reaches the bank.</b> The driver deposits the $800 cash; in the <b>In circulation</b> view it's ticked and batch-deposited to "Chase Operations". Payments now shows: received $2,300 · in circulation $0 · deposited $2,300.</span></div>
+  <div class="step"><span class="n">5</span><span><b>The bank confirms it.</b> The statement is imported into <b>Banks</b> (screenshot or CSV). The $800 deposit and the $1,500 Zelle appear, get categorized ("Job"), and a <b>second person verifies</b> them. Reconciliation matches them against Payments — no discrepancies.</span></div>
+  <div class="step"><span class="n">6</span><span><b>It becomes profit.</b> The verified inflows land in the <b>P&amp;L</b> as Revenue; the driver's pay for the day (Expenses → Días trabajados), his commission on the extra, and the fuel he bought flow in as costs. Revenue − costs = what the company actually made on the job.</span></div>
+</div>
+
+<h3 style="margin-top:14px">Who does what (typical roles)</h3>
+<table class="g">
+  <tr><th>Person</th><th>Daily job in the money flow</th></tr>
+  <tr><td>Dispatcher / back office</td><td>Enters payments as they're collected, allocates them to charges, sends WhatsApp deposit requests, keeps balances up to date on jobs.</td></tr>
+  <tr><td>Driver</td><td>Collects at pickup/delivery, holds cash/checks until deposited, hands in receipts for road expenses, returns unspent driver-cash.</td></tr>
+  <tr><td>Finance / bookkeeper</td><td>Approves expenses, runs the weekly pay grid, imports bank statements, categorizes movements, watches reconciliation, reads the P&amp;L.</td></tr>
+  <tr><td>Second reviewer (any teammate)</td><td>Verifies bank movements categorized by someone else — the <b>double check</b>. The verifier must always be a different person.</td></tr>
+  <tr><td>Manager / admin</td><td>Watches the red alerts (cash 7+ days undeposited, overdue billing, open claims), settles broker closing sheets, triages claims.</td></tr>
+</table>
+
+<!-- ============ 2 WHERE MONEY IS BORN ============ -->
+<h1 class="sec"><span class="num">2</span>Where money is born: the four kinds of charges</h1>
+<p class="lead">Every dollar the company expects to collect starts as one of these four charges. Payments are always applied <i>against</i> a charge.</p>
+
+<table class="g">
+  <tr><th>Charge</th><th>Where it's created</th><th>What it is</th></tr>
+  <tr><td>💼 Job balances</td><td>Job form — "Balance to collect at pickup" and "Balance to collect at delivery"</td><td>The base price of the move, split into what's due at each end. Shown on Dispatching as <b>Bal. pickup / Bal. delivery</b> and included in every trip's "To collect".</td></tr>
+  <tr><td>📄 BOL balance</td><td>Job form, Carrier/BOL section (broker deliveries)</td><td>What the client owes on a broker delivery per the Bill of Lading (rate per CF × volume + services). Collected at the door; feeds the broker's closing sheet.</td></tr>
+  <tr><td>➕ Extras</td><td>Extras section (per job), the Extras page, or on the fly while allocating a payment</td><td>Additional charges: extra CF, shuttle, long carry, stairs, packing, flight charge, other. Each carries a <b>driver/rep commission</b> (section 4).</td></tr>
+  <tr><td>🧾 Storage billing</td><td>Job form, "Storage billing" section</td><td>A recurring monthly fee for keeping the client's goods. The system generates each 30-day charge automatically (section 6).</td></tr>
+</table>
+
+<div class="info avoid"><b>Where do I see what a job still owes?</b> Open the job (tap the Job #) → <b>Payments section</b>: expected / collected / outstanding, per-extra status, CC fees, and any money sitting "on account". The same outstanding number drives the Dispatching labels — <span class="tag" style="background:#FDE3CF;color:#C2410C">Outstanding</span> while active, <span class="tag" style="background:#FCEBEB;color:#A32D2D">Not collected</span> once delivered (that one is the top-priority red flag: the goods are gone and the money isn't in).</div>
+
+<!-- ============ 3 PAYMENTS ============ -->
+<h1 class="sec break"><span class="num">3</span>Payments — collections, circulation, deposits 💰</h1>
+<p class="lead">The heart of finance: every dollar received, who physically holds it, and whether it reached the bank.</p>
+
+<h3>The three states of a collected dollar</h3>
+<div class="flow">
+  <span class="fbox" style="border-color:#EF9F27;color:#92600B">Pending<br><span style="font-weight:500;font-size:9px">charge exists, not paid</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#E24B4A;color:#A32D2D">Received / In circulation<br><span style="font-weight:500;font-size:9px">someone holds it physically</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#2F9E57;color:#1D7A40">Deposited (banked)<br><span style="font-weight:500;font-size:9px">it's in the bank account</span></span>
+</div>
+
+<div class="danger avoid"><b>💳 The golden rule of methods.</b> <b>Digital</b> payments (Zelle, Venmo, credit card, wire, PayPal, Cash App, Apple Pay) go straight to <b>deposited</b> — the money lands in an account by itself. <b>Physical</b> payments (cash, checks, money orders) stay <b>in circulation</b> — a person is literally carrying that money — until someone marks them deposited. Circulation is where money gets lost; that's why the module watches it so hard.</div>
+
+<h3>Entering a payment (+ Payment)</h3>
+<ul>
+  <li><b>Job</b> (search by number or client) · date · <b>amount</b> · <b>concept</b>: Job / Extra / CC Fee / Storage / <b>On account</b> / Other · optional <b>discount + reason</b> (net = amount − discount) · <b>stage</b> (at pickup / at delivery / other).</li>
+  <li><b>Method-specific fields:</b>
+    <ul>
+      <li><b>Check</b> — type (cashier's / personal / official), <b>serial number with live duplicate warning</b> (catches the same check entered twice), bank/issuer, date, memo, and a <b>photo of the check</b>.</li>
+      <li><b>Money order</b> — type (USPS / Western Union / MoneyGram / other), serial (also dup-checked), office, purchaser, and a photo.</li>
+      <li><b>Credit card</b> — tick <b>"Charge CC fee to client"</b> (3% default): the system computes the total to collect and creates the separate <b>CC Fee</b> payment automatically.</li>
+    </ul>
+  </li>
+  <li><b>Received by</b> (person + date). For physical methods: <b>"Who has the money?"</b> — auto-filled with the job's driver — and, if already deposited, the date and <b>bank account</b>.</li>
+</ul>
+
+<h3>Allocation — "Assign to charges" ✂️ (the most important habit)</h3>
+<p>A client rarely pays charge by charge — they hand over one amount. Allocation is how one payment gets <b>split across the job's charges</b> so every charge shows its true remaining balance:</p>
+<ul>
+  <li>Tick <b>"✂️ Assign to charges (split)"</b> in the payment modal. One line appears per charge: the <b>job balance</b> and each <b>pending extra</b>, each showing <b>"Pending: $X"</b>.</li>
+  <li>Type an amount per line — the system proposes a sensible split automatically (job balance first, then extras oldest-first) and shows the <b>remainder per charge</b> live. Overpaying a line is allowed (flagged), but the lines can never exceed the payment total.</li>
+  <li>Anything you don't assign stays <b>"On account"</b> — received but not applied. It shows on the job as <b>"A cuenta (sin imputar)"</b> with an <b>Assign</b> button; use it later to apply that money to charges (the modal reopens with the amount locked and the split pre-spread over what's still owed).</li>
+  <li><b>+ New extra / another line</b> creates a brand-new charge on the spot (choosing the concept — extra CF, shuttle, long carry…) and it immediately enters the commission system.</li>
+</ul>
+<div class="info avoid"><b>Why it matters:</b> without allocation, a job can look "paid" in total while a $200 extra is actually unpaid (and its commission unpayable), or look unpaid while money sits on account. Allocation keeps <b>every charge's remaining balance</b> true — which is what the Dispatching labels, the trip "To collect", and the commissions all read.</div>
+
+<h3>In circulation — the anti-loss view</h3>
+<ul>
+  <li>The <b>In circulation</b> tab groups undeposited money <b>by the person holding it</b>: total on hand, breakdown (cash / checks / money orders), and each payment with the <b>days held</b>.</li>
+  <li><b>💬 Request deposit</b> — one click opens WhatsApp with the list of what they're holding and a request to deposit by end of week.</li>
+  <li><b>Batch deposit</b> — tick items (or Select all), pick the <b>bank account</b> and date, hit <b>✓ Deposit N · $total</b>: all of them are marked banked in one shot, with the account recorded (that's what reconciliation will match against the statement).</li>
+  <li>The <b>red alert</b> on top of Payments lists everything received but <b>not deposited for 7+ days</b> — that list should be empty. Chase it daily.</li>
+</ul>
+
+<h3>Reading the numbers</h3>
+<ul>
+  <li><b>Metrics:</b> Expected this month · Received (green) · <b>In circulation</b> (red — all undeposited money regardless of month) · Deposited (blue) · Pending collection (orange) · CC fees (purple). Note: In circulation ≠ Received − Deposited, because it includes older months' cash still out there.</li>
+  <li><b>Weekly cash flow</b> (bottom): expected / received / in circulation / deposited for the current week, plus the <b>projection</b> if everything in circulation were deposited.</li>
+  <li><b>🔎 Job verdict:</b> search a job number and a banner answers "does this job have payments?" — ✅ with count/total/received, 🚫 "No payments recorded", or ⚠️ no such job.</li>
+</ul>
+<div class="note avoid"><b>🔄 One entry, never two.</b> Recording a BOL collection in <b>Settlements</b> (or on the job's Carrier Settlement section) automatically creates/updates the matching payment in Payments — and vice versa. Money is entered <b>once</b>, wherever it's most convenient.</div>
+
+<!-- ============ 4 EXTRAS ============ -->
+<h1 class="sec break"><span class="num">4</span>Extras &amp; Commissions ➕</h1>
+<p class="lead">Extras are additional charges on a job; a slice goes to whoever generated them.</p>
+
+<ul>
+  <li><b>The 7 types:</b> Extra CF · Shuttle · Long carry · Stairs · Packing · Flight charge · Other.</li>
+  <li><b>Registering one:</b> from the job detail (<b>+ Add extra</b>), from the Extras page (each job shows the 7 types as tickable rows), or automatically when a payment split creates a new extra line.</li>
+  <li>Each extra records: <b>amount</b>, the <b>driver</b> who generated it (defaults to the job's driver), <b>"generated by"</b> (Driver only / Driver + Rep / Rep only), the <b>rep</b> if involved, and the commission percentages — <b>auto-filled by the rules below, editable</b> per case.</li>
+</ul>
+
+<table class="g avoid">
+  <tr><th>Extra type</th><th>Driver only</th><th>Driver + Rep</th><th>Rep only</th></tr>
+  <tr><td>Extra CF / Packing / Flight / Other</td><td>Driver 10%</td><td>Driver 7% / Rep 3%</td><td>Rep 10%</td></tr>
+  <tr><td>Long carry / Stairs</td><td colspan="3">Always driver 50% — the company keeps the other 50%</td></tr>
+  <tr><td>Shuttle</td><td>Driver 10%</td><td>Driver 7% / Rep 3%</td><td>Rep 5%</td></tr>
+</table>
+
+<ul style="margin-top:10px">
+  <li><b>The Extras page</b> has two tabs — 🧑‍✈️ <b>Drivers</b> and 👤 <b>Reps / Back office</b> — each grouping extras by person, with month metrics on top: total extras, driver commission (green), rep commission (blue), and <b>what's left for the company</b> (amber).</li>
+  <li>Under each person: a <b>TOTAL</b> row and a yellow <b>COMMISSION</b> row (Excel-style), with <b>📋 Copy</b> and <b>🖨️ PDF</b> buttons to send each driver/rep their commission summary.</li>
+  <li>Each rep has a <b>profile</b> (tap the name): commission per month and full extra history.</li>
+</ul>
+<div class="warn avoid"><b>⚠️ An extra only pays commission when it's collected.</b> Keep extras allocated (section 3) — an unpaid extra shows as pending on the job and in the driver's summary, and unallocated "on account" money doesn't count toward it.</div>
+
+<!-- ============ 5 SETTLEMENTS ============ -->
+<h1 class="sec"><span class="num">5</span>Settlements — broker closing sheets 📑</h1>
+<p class="lead">For broker deliveries: the running account between us and each broker.</p>
+
+<ul>
+  <li>A <b>closing sheet</b> groups a broker's jobs. For each job it tracks: CF delivered, the <b>carrier fee</b> (what the broker pays us to deliver — auto-computed), the <b>BOL balance</b> and what was <b>collected at the door</b>, pads, and costs.</li>
+  <li>The sheet's bottom line is the <b>net settlement</b>: collected BOL money is ours to keep against the carrier fee — the net says <b>who owes whom</b> (broker → us, or us → broker).</li>
+  <li><b>Workflow tabs:</b> Open (still accumulating jobs) → Settled (paid out) → Disputed. Jobs are <b>linked from the job detail</b> (Carrier Settlement section), where you can also move a job to another open sheet or a new one.</li>
+  <li><b>Record payment</b> on a job's BOL (amount, method, date) — synced automatically with Payments (never entered twice). The collection status badge shows Collected / Partial / Pending.</li>
+  <li><b>Export to PDF</b> — the closing sheet formatted for sending to the broker.</li>
+</ul>
+<div class="info avoid"><b>Watch for:</b> the orange <span class="tag" style="background:#FDE3CF;color:#C2410C">Collection pending</span> label on Dispatching — a broker delivery already delivered whose BOL isn't fully collected. That's money at the door that didn't come back.</div>
+
+<!-- ============ 6 STORAGE BILLING ============ -->
+<h1 class="sec break"><span class="num">6</span>Storage Billing — recurring monthly revenue 🧾</h1>
+<p class="lead">Clients who keep goods in storage pay a monthly fee. The system runs the cycle by itself.</p>
+<ul>
+  <li><b>Setup (once per job):</b> in the job form, tick <b>"Bill this client for storage"</b>, set the <b>monthly rate</b>, and choose whether the <b>first month is free</b> — the start date computes itself from the date the goods came in.</li>
+  <li><b>Every 30 days</b> the system generates the charge automatically and marks it <b>overdue</b> when unpaid past the due date. No one has to remember.</li>
+  <li><b>The Billing page:</b> metrics (total pending, overdue, due this week, collected this month) and tabs (All / Pending / Overdue / Paid). Per charge: <b>Mark paid</b> and a <b>💬 Reminder</b> — a pre-written WhatsApp to the client.</li>
+  <li>Overdue storage billing also appears in the Dispatching metrics bar (<b>Billing overdue</b>, red) so it's never out of sight.</li>
+</ul>
+
+<!-- ============ 7 EXPENSES ============ -->
+<h1 class="sec"><span class="num">7</span>Expenses — spend, driver cash &amp; the weekly payroll 💸</h1>
+<p class="lead">The outflow side: what the operation spends, and what each driver earns and owes.</p>
+
+<h3>7.1 Expenses with approval (Gastos tab)</h3>
+<ul>
+  <li><b>+ Expense:</b> date, <b>category</b> (Fuel ⛽ / Hotel 🏨 / Materials 📦 / Tolls 🛣️ / Maintenance 🔧 / Meals 🍔 / Other), amount, vendor, optional driver / truck / trip / job #, and — always — the <b>receipt photo or PDF</b>. Fuel expenses add gallons, odometer and IFTA state, with $/gallon computed.</li>
+  <li><b>Paid with</b> is the key field: <b>Bank account</b> (pick which — reconciliation will look for it on the statement), <b>Company card</b>, <b>Other</b>, or <b>Driver cash (from collections)</b> — see below.</li>
+  <li><b>Approval flow:</b> every expense starts <b>Pending</b>; someone with edit rights hits <b>✅ Approve</b> or <b>❌ Reject</b>. Only <b>approved</b> expenses count in P&amp;L and Driver P&amp;L math.</li>
+</ul>
+<div class="danger avoid"><b>💵 Driver cash — the loop that must close.</b> When a driver pays fuel or tolls out of the <b>cash he collected from clients</b>, record the expense as "paid with driver cash". The system keeps the reconciliation live: <b>cash on hand − unsettled expenses = what he should hand in</b>. When he hands in the remainder, hit <b>🤝 "settled"</b> on those rows. The "Driver cash not settled" tile on top tells you how much collected money is currently being spent on the road instead of deposited — keep it near zero.</div>
+
+<h3>7.2 Días trabajados — the weekly pay grid 📆</h3>
+<ul>
+  <li><b>The pay week runs Wednesday → Tuesday and is paid the following Wednesday.</b> Navigate weeks with ← / → ; the blue pill shows the payout date.</li>
+  <li>One row per driver, one cell per day. <b>Click a cell to cycle:</b> empty → <b>✓ full day</b> (pays the daily rate) → <b>½ half day</b> (half the rate) → <b>hourly</b> (asks the hours; pays hours × hourly rate) → empty.</li>
+  <li><b>Rates live on the driver record</b> (Daily rate $/day, Hourly rate $/hour). The rate is <b>frozen the moment you mark the day</b> — a later raise never rewrites weeks already recorded. A driver with no rate shows "no rate set" in red: fix that first.</li>
+  <li><b>+ Adjustment (fuck-up / bonus):</b> a <b>deduction</b> (client's mirror broken, no-show, missing material…) lowers that week's pay; a <b>bonus</b> raises it. Always entered as a positive amount + type + reason + optional job #. The week's adjustments are listed under the grid, and the driver's row shows Days · Pay · Adjustments · <b>Week total</b>.</li>
+  <li>The bottom row — <b>"Total to pay on Wed DD/MM"</b> — is the payroll number for the whole team. That payment then shows up in Banks as Salaries when it hits the statement.</li>
+</ul>
+
+<h3>7.3 Materials 📦</h3>
+<ul>
+  <li>A <b>catalog</b> of supplies (pads, boxes, shrink wrap…) with unit costs, and a <b>movement log</b>: Purchase (into stock) / <b>Issue</b> (handed to a driver) / <b>Return</b> / <b>Consume</b> (used on a job) / Adjust.</li>
+  <li>The <b>"On hand per driver"</b> panel computes issued − returned − consumed: a red balance is material the driver still owes back, <b>valued in dollars</b>. Chase it like cash.</li>
+</ul>
+
+<div class="note avoid"><b>📊 Driver P&amp;L — what each driver really earns you.</b> Per driver and month: revenue attributed from his jobs − labor (work days × frozen rates) − approved expenses − commissions ± adjustments = <b>net and margin</b>. Visible in Analytics and in the driver's profile. This is why marking days, approving expenses and allocating extras matters — they're the inputs.</div>
+
+<!-- ============ 8 BANKS ============ -->
+<h1 class="sec"><span class="num">8</span>Banks — real ledger, double check, P&amp;L 🏛️</h1>
+<p class="lead">Everything above is what we <i>say</i> happened. Banks is what the bank <i>says</i> happened — and the bank wins.</p>
+
+<h3>8.1 The lifecycle of a bank movement</h3>
+<div class="flow">
+  <span class="fbox">Imported<br><span style="font-weight:500;font-size:9px">Sin revisar</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#EF9F27;color:#92600B">Categorized<br><span style="font-weight:500;font-size:9px">by person A</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#2F9E57;color:#1D7A40">Verified ✔<br><span style="font-weight:500;font-size:9px">by person B — never A</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#378ADD;color:#185FA5">Counted in P&amp;L</span>
+</div>
+<div class="danger avoid"><b>👀 The double check is the anti-fraud control.</b> The person who verifies a movement <b>must be different</b> from the person who categorized it — the system physically blocks self-verification. Editing an already-verified movement <b>reopens</b> the double check. No single person can quietly decide what a bank movement "was".</div>
+
+<h3>8.2 Getting movements in (⬆ Importar)</h3>
+<table class="g">
+  <tr><th>Method</th><th>How it works</th><th>Lands as</th></tr>
+  <tr><td>📸 Screenshot (AI)</td><td>Upload homebanking screenshots; the AI extracts every line (date, description, amount, direction, suggested category with confidence) into a <b>"Review before importing"</b> table you confirm. The screenshot itself is stored as evidence.</td><td>Sin revisar</td></tr>
+  <tr><td>📄 Bank CSV</td><td>Upload the bank's CSV export, map the columns (date / description / amount, or debit + credit), extract, review, confirm. AI suggests categories in batch.</td><td>Sin revisar</td></tr>
+  <tr><td>🗂️ CSV maestro</td><td>The bookkeeper's master export with an <span class="mono">account_name</span> column: rows route to each account automatically (names must match exactly), thousands at a time, with a preview of per-account counts and totals.</td><td><b>Verified directly</b> (already categorized)</td></tr>
+  <tr><td>＋ Manual</td><td>One-off entries (a single wire, a correction): account, in/out, dates, amount, category, description, method, reference, counterparty. </td><td>Sin revisar (same double check)</td></tr>
+</table>
+<div class="info avoid"><b>No duplicates, ever:</b> every import is deduplicated by account + date + amount + description — re-uploading the same statement is harmless. And the <b>Bandeja</b> organizes everything in 📁 month folders with a red badge for what's still unreviewed; inside, pages of 100 with server-side filters (status, account, direction, category, text search) so totals always reflect the whole ledger.</div>
+
+<h3>8.3 Accounts &amp; categories</h3>
+<ul>
+  <li><b>Cuentas:</b> each bank account with opening balance and a <b>computed balance</b> (opening + all non-ignored movements). If the computed balance doesn't match homebanking, <b>imports are missing</b> — that's the tell.</li>
+  <li><b>Categorías:</b> the chart of accounts — the same categories as the bookkeeper's Bank Flows Excel (Job, Refund, Hotels, Fuel, Salaries, Toll, Truck Repair, Storage, Fees, Taxes, Broker, Marketing, Transfer Between Accounts…), each with a direction and a <b>P&amp;L group</b> (Cost of Revenues / Production / Structure / Sales &amp; Marketing / Broker / CapEx). Renaming a category updates all its movements; deactivating hides it without touching history.</li>
+</ul>
+
+<h3>8.4 Conciliación — does it all add up?</h3>
+<ul>
+  <li>Matches bank lines against <b>Payments</b> (deposits: amount + date within tolerance) and <b>Expenses</b> (bank-paid). Internal transfers are excluded.</li>
+  <li>Three discrepancy lists, each an action item:
+    <ul>
+      <li><b>Bank money with no backing</b> — a movement with no operational record. Investigate: unrecorded income, an expense nobody logged… or worse.</li>
+      <li><b>Deposit that never hit the bank</b> — a payment marked deposited that the statement doesn't show. Where is it?</li>
+      <li><b>Expense with no bank line</b> — recorded as bank-paid but absent from the statement (or that period isn't imported yet).</li>
+    </ul>
+  </li>
+  <li>Green summary — <b>"the numbers add up ✓"</b> — is the goal state every week.</li>
+</ul>
+
+<h3>8.5 The P&amp;L — the company's real income statement</h3>
+<ul>
+  <li>Classic layout, <b>months as columns</b>, expenses in red parentheses: <b>Revenue → (Cost of Revenues) → GROSS PROFIT → (Production) → (Structure) → (Sales &amp; Marketing) → (Broker) → (CapEx) → NET PROFIT</b>, with margin % tiles on top.</li>
+  <li><b>"Verified only" is on by default</b> — the P&amp;L is built exclusively on double-checked data.</li>
+  <li><b>Excluded on purpose:</b> transfers between accounts, and <b>Financing / Financing-Loan / Financing-Capital / Credit Card Payment</b> — they move cash but are not income or operating expense, so they'd distort profitability.</li>
+</ul>
+
+<!-- ============ 9 CLAIMS ============ -->
+<h1 class="sec break"><span class="num">9</span>Claims &amp; Incidents — money at risk ⚠️</h1>
+<p class="lead">Every incident is a potential payout. Track it from report to resolution, with the dollars attached.</p>
+<ul>
+  <li><b>Report</b> with + New claim (or from the job/trip detail, pre-filled): incident date, type (💥 Damage / 🚨 Theft / 🔍 Missing items / 📭 Incomplete delivery / 😠 Complaint / 📝 Other), assignee, description.</li>
+  <li><b>The two money fields:</b> <b>Claimed $</b> (what the client demands) vs <b>Paid / settled $</b> (what it actually cost us), plus the resolution: paid to client / denied / covered by insurance / discount applied.</li>
+  <li><b>Workflow:</b> Open → Investigating → Resolved (or Denied). Attach <b>evidence</b> (photos/PDFs) and keep the <b>follow-up log</b> — every status change is logged automatically. Active claims older than 14 days turn red.</li>
+  <li>Top metrics: open, investigating, resolved this year, <b>total claimed vs total paid</b>, average days to close. Claim payouts should reappear in Banks under the "Claims" category — another reconciliation point.</li>
+  <li>If a driver caused the damage, the corresponding <b>deduction</b> is entered in Expenses → + Adjustment, linked to the job — so the cost lands on his week and his P&amp;L, not just the company's.</li>
+</ul>
+
+<!-- ============ 10 ROUTINES ============ -->
+<h1 class="sec"><span class="num">10</span>The finance routines — daily, weekly, monthly ✅</h1>
+
+<div class="three">
+  <div class="card avoid">
+    <h3>☀️ Every day</h3>
+    <ul style="margin-bottom:0;font-size:10.5px">
+      <li>Enter every collection in <b>Payments</b> the day it happens, allocated to its charges.</li>
+      <li>Chase the <b>red alert</b>: nothing 7+ days in circulation.</li>
+      <li>Check Dispatching for <span class="tag" style="background:#FCEBEB;color:#A32D2D">Not collected</span> and <span class="tag" style="background:#FDE3CF;color:#C2410C">Collection pending</span> labels.</li>
+      <li>Log road expenses with receipts; approve or reject what's pending.</li>
+    </ul>
+  </div>
+  <div class="card avoid">
+    <h3>📆 Every week</h3>
+    <ul style="margin-bottom:0;font-size:10.5px">
+      <li>Complete the <b>work-days grid</b> and adjustments; pay Wednesday's total.</li>
+      <li><b>Batch-deposit</b> what's in circulation; settle driver cash 🤝.</li>
+      <li>Import the week's <b>bank movements</b>; categorize; get them verified by a second person.</li>
+      <li>Open <b>Conciliación</b> — drive the three lists to zero.</li>
+    </ul>
+  </div>
+  <div class="card avoid">
+    <h3>🗓️ Every month</h3>
+    <ul style="margin-bottom:0;font-size:10.5px">
+      <li>Review <b>Storage Billing</b> overdue and send reminders.</li>
+      <li>Settle broker <b>closing sheets</b>; export PDFs.</li>
+      <li>Send drivers/reps their <b>commission PDFs</b>.</li>
+      <li>Read the <b>P&amp;L</b> (verified only) and the Analytics alerts — negative-margin units, AR aging, vacancy bleed.</li>
+    </ul>
+  </div>
+</div>
+
+<h3 style="margin-top:16px">Finance glossary</h3>
+<table class="g">
+  <tr><th>Term</th><th>Meaning</th></tr>
+  <tr><td>Charge</td><td>Anything the company expects to collect: job balance, BOL balance, extra, storage billing cycle.</td></tr>
+  <tr><td>Balance (pickup / delivery)</td><td>The part of the job price due at each end of the move.</td></tr>
+  <tr><td>BOL balance</td><td>What the client owes on a broker delivery per the Bill of Lading.</td></tr>
+  <tr><td>Allocation / Assign</td><td>Splitting one payment across a job's charges, line by line.</td></tr>
+  <tr><td>On account</td><td>Money received but not yet applied to any charge. Apply it with "Assign".</td></tr>
+  <tr><td>In circulation</td><td>Collected physical money (cash/checks/MOs) someone holds that isn't in the bank yet.</td></tr>
+  <tr><td>Banked / Deposited</td><td>Money that reached a bank account (digital methods get there automatically).</td></tr>
+  <tr><td>CC fee</td><td>The card surcharge (3% default) charged to the client, tracked as its own payment.</td></tr>
+  <tr><td>Commission</td><td>The driver's/rep's share of an extra, per the rules table (10% / 7+3 / 50%…).</td></tr>
+  <tr><td>Carrier fee</td><td>What a broker pays us for delivering their job — the credit side of a closing sheet.</td></tr>
+  <tr><td>Net settlement</td><td>A closing sheet's bottom line: who owes whom, after BOL collected vs carrier fee.</td></tr>
+  <tr><td>Driver cash</td><td>Client money a driver spends on the road; must be "settled" (🤝) when he hands in the rest.</td></tr>
+  <tr><td>Pay week</td><td>Wednesday → Tuesday, paid the following Wednesday. Rates freeze when the day is marked.</td></tr>
+  <tr><td>Adjustment</td><td>A deduction (fuck-up, damage) or bonus applied to a driver's weekly pay.</td></tr>
+  <tr><td>Double check</td><td>Banks rule: the verifier of a movement must differ from its categorizer.</td></tr>
+  <tr><td>Reconciliation</td><td>Matching the bank ledger against Payments and Expenses until no discrepancies remain.</td></tr>
+  <tr><td>P&amp;L</td><td>The income statement built from verified bank movements, by month, financing excluded.</td></tr>
+  <tr><td>Driver P&amp;L</td><td>Per-driver profitability: his revenue − labor − expenses − commissions ± adjustments.</td></tr>
+  <tr><td>Claim</td><td>An incident with money attached: claimed $ vs paid $, tracked to resolution.</td></tr>
+</table>
+
+<p style="margin-top:18px;color:#888">Questions? Ask the manager — or in the <span class="mono">general</span> channel in Chats. Keep the circulation at zero and the reconciliation green. 💚</p>
+
+</body>
+</html>
