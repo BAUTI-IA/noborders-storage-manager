@@ -147,7 +147,7 @@
   <div class="kicker">No Borders Moving &amp; Storage</div>
   <h1>Operations<br>CRM</h1>
   <div class="sub">User manual for the team</div>
-  <div class="pill">📘 Dispatching · Storage · Trips · Payments · BOL · Chats</div>
+  <div class="pill">📘 Dispatching · Trips · Payments · Expenses · Banks · BOL · Chats</div>
 
   <div class="mock">
     <div class="chip"><div class="n" style="color:#7FB2E6">4</div><div class="l">Pickups today</div></div>
@@ -156,7 +156,7 @@
   </div>
 
   <div class="foot">
-    <div>Version 2.0 · July 2026 · Internal use</div>
+    <div>Version 2.1 · July 2026 · Internal use</div>
     <div>Everything updates live, no reloading 🚚</div>
   </div>
 </div>
@@ -181,26 +181,30 @@
       <li><b>3.</b> Dispatching — the daily board</li>
       <li><b>4.</b> Creating and editing a job · Real CF</li>
       <li><b>5.</b> Storage — units and warehouses</li>
-      <li><b>6.</b> Calendar</li>
+      <li><b>6.</b> Calendars — Pickup &amp; Delivery</li>
       <li><b>7.</b> Chats — the internal messenger</li>
       <li><b>8.</b> Storage Billing</li>
       <li><b>9.</b> Brokers &amp; Clients</li>
       <li><b>10.</b> Settlements (closing sheets)</li>
+      <li><b>11.</b> Extras &amp; Commissions</li>
+      <li><b>12.</b> Trips / Live Load · AI · Split · Handoff</li>
     </ul>
   </div>
   <div class="card avoid">
     <h3>&nbsp;</h3>
     <ul style="margin-bottom:0">
-      <li><b>11.</b> Extras &amp; Commissions</li>
-      <li><b>12.</b> Trips / Live Load · AI · Handoff</li>
       <li><b>13.</b> Payments — money, circulation and deposits</li>
-      <li><b>14.</b> Drivers &amp; Trucks</li>
-      <li><b>15.</b> BOL — generate and sign</li>
-      <li><b>16.</b> Legal &amp; Compliance</li>
-      <li><b>17.</b> Analytics</li>
-      <li><b>18.</b> Users &amp; Settings</li>
-      <li><b>19.</b> Deleting a job</li>
-      <li><b>20.</b> Golden rules &amp; glossary</li>
+      <li><b>14.</b> Expenses — spend, work days &amp; weekly pay</li>
+      <li><b>15.</b> Banks — the real bank ledger</li>
+      <li><b>16.</b> Claims &amp; Incidents</li>
+      <li><b>17.</b> Drivers, Trucks &amp; Equipment</li>
+      <li><b>18.</b> BOL — generate and sign</li>
+      <li><b>19.</b> Legal &amp; Compliance</li>
+      <li><b>20.</b> Analytics</li>
+      <li><b>21.</b> Suggestions</li>
+      <li><b>22.</b> Users &amp; Settings</li>
+      <li><b>23.</b> Deleting a job</li>
+      <li><b>24.</b> Golden rules &amp; glossary</li>
     </ul>
   </div>
 </div>
@@ -219,7 +223,7 @@
 <h1 class="sec"><span class="num">2</span>The left-hand menu</h1>
 <p class="lead">Everything is navigated from the sidebar, split into four blocks.</p>
 
-<div class="shot" style="zoom:0.88">
+<div class="shot" style="zoom:0.78">
   <div class="bar"><span class="tl" style="background:#f87171"></span><span class="tl" style="background:#fbbf24"></span><span class="tl" style="background:#34d399"></span><span class="url">noborders-crm.app</span></div>
   <div class="app">
     <div class="side">
@@ -227,7 +231,8 @@
       <div class="grp">
         <div class="glabel">Operations</div>
         <div class="item on"><span class="ico">🚚</span>Dispatching<span class="badge">3</span></div>
-        <div class="item"><span class="ico">📅</span>Calendar</div>
+        <div class="item"><span class="ico">📅</span>Pickup Calendar</div>
+        <div class="item"><span class="ico">📦</span>Delivery Calendar</div>
         <div class="item"><span class="ico">🏬</span>Storage</div>
         <div class="item"><span class="ico">💼</span>Jobs</div>
         <div class="item"><span class="ico">💬</span>Chats<span class="badge">5</span></div>
@@ -237,14 +242,19 @@
         <div class="item"><span class="ico">📑</span>Settlements</div>
         <div class="item"><span class="ico">➕</span>Extras</div>
         <div class="item"><span class="ico">💰</span>Payments</div>
+        <div class="item"><span class="ico">💸</span>Expenses</div>
+        <div class="item"><span class="ico">🏛️</span>Bancos</div>
+        <div class="item"><span class="ico">⚠️</span>Claims &amp; Incidents<span class="badge">2</span></div>
         <div class="item"><span class="ico">👥</span>Clients</div>
         <div class="glabel">Fleet</div>
         <div class="item"><span class="ico">🪪</span>Drivers</div>
         <div class="item"><span class="ico">🚛</span>Trucks</div>
         <div class="item"><span class="ico">🛣️</span>Trips / Live Load<span class="badge">2</span></div>
+        <div class="item"><span class="ico">🧰</span>Equipment</div>
         <div class="glabel">Business</div>
         <div class="item"><span class="ico">📋</span>Legal &amp; Compliance<span class="badge">1</span></div>
         <div class="item"><span class="ico">📊</span>Analytics</div>
+        <div class="item"><span class="ico">💡</span>Suggestions</div>
         <div class="item"><span class="ico">📄</span>BOL</div>
         <div class="item"><span class="ico">👤</span>Users</div>
         <div class="item"><span class="ico">⚙️</span>Settings</div>
@@ -270,10 +280,10 @@
 
 <table class="g">
   <tr><th>Block</th><th>Modules</th></tr>
-  <tr><td>OPERATIONS</td><td>🚚 <b>Dispatching</b> (the daily board) · 📅 <b>Calendar</b> · 🏬 <b>Storage</b> · 💼 <b>Jobs</b> · 💬 <b>Chats</b> (internal messenger)</td></tr>
-  <tr><td>FINANZAS</td><td>🏦 <b>Brokers</b> · 🧾 <b>Storage Billing</b> (monthly storage) · 📑 <b>Settlements</b> (closing sheets) · ➕ <b>Extras</b> and commissions · 💰 <b>Payments</b> (all the money) · 👥 <b>Clients</b></td></tr>
-  <tr><td>FLEET</td><td>🪪 <b>Drivers</b> · 🚛 <b>Trucks</b> · 🛣️ <b>Trips / Live Load</b> (trips, map and AI)</td></tr>
-  <tr><td>BUSINESS</td><td>📋 <b>Legal &amp; Compliance</b> (documents and expirations) · 📊 <b>Analytics</b> · 📄 <b>BOL</b> (generate and sign) · 👤 <b>Users</b> (admins only) · ⚙️ <b>Settings</b></td></tr>
+  <tr><td>OPERATIONS</td><td>🚚 <b>Dispatching</b> (the daily board) · 📅 <b>Pickup Calendar</b> · 📦 <b>Delivery Calendar</b> · 🏬 <b>Storage</b> · 💼 <b>Jobs</b> · 💬 <b>Chats</b> (internal messenger)</td></tr>
+  <tr><td>FINANZAS</td><td>🏦 <b>Brokers</b> · 🧾 <b>Storage Billing</b> · 📑 <b>Settlements</b> · ➕ <b>Extras</b> and commissions · 💰 <b>Payments</b> (all the money) · 💸 <b>Expenses</b> (spend, work days, weekly pay) · 🏛️ <b>Bancos</b> (the real bank ledger) · ⚠️ <b>Claims &amp; Incidents</b> · 👥 <b>Clients</b></td></tr>
+  <tr><td>FLEET</td><td>🪪 <b>Drivers</b> · 🚛 <b>Trucks</b> · 🛣️ <b>Trips / Live Load</b> (trips, map and AI) · 🧰 <b>Equipment</b> (pads, dollies, tools)</td></tr>
+  <tr><td>BUSINESS</td><td>📋 <b>Legal &amp; Compliance</b> (documents and expirations) · 📊 <b>Analytics</b> · 💡 <b>Suggestions</b> (idea box) · 📄 <b>BOL</b> (generate and sign) · 👤 <b>Users</b> (admins only) · ⚙️ <b>Settings</b></td></tr>
 </table>
 
 <!-- ============ 3 DISPATCHING ============ -->
@@ -342,7 +352,7 @@
       <li><b>🗺️ Route</b> — Google Maps from the storage to the client.</li>
       <li><b>💬 WhatsApp</b> — pre-built message with all the job data; if the job is on a trip it sends the <b>full trip manifest</b>.</li>
       <li><b>→ Advance</b> — moves the job to the next stage (the button tells you which one).</li>
-      <li><b>🗑 Delete</b> — deletes the job (see section 19).</li>
+      <li><b>🗑 Delete</b> — deletes the job (see section 23).</li>
     </ul>
   </div>
   <div class="card avoid">
@@ -421,10 +431,17 @@
 
 <div class="note avoid"><b>📲 Import from WhatsApp.</b> Paste the group message (or upload the exported chat .zip) → <b>Preview</b> → the system detects each storage's name, company, size, address, unit # and gate code → untick what you don't want → <b>Import</b>.</div>
 
-<!-- ============ 6 CALENDAR ============ -->
-<h1 class="sec"><span class="num">6</span>Calendar</h1>
-<p class="lead">Pickups and deliveries in week or month view.</p>
-<p>Each event is colored by the job's <b>Calendar status</b> and can be tapped to open the job. Great for seeing the week's workload at a glance. From the job detail you manage whether it's on the calendar and its date.</p>
+<!-- ============ 6 CALENDARS ============ -->
+<h1 class="sec"><span class="num">6</span>Calendars — Pickup &amp; Delivery 📅📦</h1>
+<p class="lead">Two calendars with the same week/month view: one indexed by pickup date, one by delivery date.</p>
+<div class="two">
+  <div class="card avoid"><h3>📅 Pickup Calendar</h3>
+    <p style="font-size:10.5px;margin:0">The scheduled <b>pickups</b>. Each event is colored by the job's <b>Calendar status</b> (Active green · On hold yellow · Cancelled red · Long haul purple · Delivered blue) and opens the job on tap. Add jobs with the day cell's <b>+</b> or the <b>➕ Add existing job</b> button.</p>
+  </div>
+  <div class="card avoid"><h3>📦 Delivery Calendar</h3>
+    <p style="font-size:10.5px;margin:0">The scheduled <b>deliveries</b> (including broker deliveries, tagged "· Broker"). Same controls, plus the amber <b>"Entregas por agendar"</b> panel: jobs picked up / in storage with <b>no delivery date yet</b>, sorted by FADD urgency — pick a date and hit <b>Agendar</b>, one click and it's scheduled.</p>
+  </div>
+</div>
 
 <!-- ============ 7 CHATS ============ -->
 <h1 class="sec"><span class="num">7</span>Chats — the internal messenger 💬</h1>
@@ -433,19 +450,20 @@
   <div class="card avoid">
     <h3>Conversations</h3>
     <ul style="margin-bottom:0">
-      <li><b>Groups</b> (e.g. <span class="mono">general</span>, <span class="mono">dispatch</span>) — visible to the whole team.</li>
-      <li><b>Direct messages (DM)</b> — private between two people.</li>
-      <li><b>New conversation:</b> <b>✏️</b> button → search for the person or create a named group.</li>
+      <li><b>Team-wide groups</b> (e.g. <span class="mono">general</span>) — visible to everyone.</li>
+      <li><b>Private groups</b> — tick <b>2+ people</b> in the New chat modal and only those members (plus you) see it. Name it if you want.</li>
+      <li><b>Direct messages (DM)</b> — tick 1 person.</li>
+      <li><b>New chat:</b> the round <b>+</b> button at the top of the inbox.</li>
       <li><b>Active now:</b> the strip on top shows who's online (green dot); tap an avatar to message them.</li>
     </ul>
   </div>
   <div class="card avoid">
     <h3>Daily use</h3>
     <ul style="margin-bottom:0">
+      <li><b>Read receipts:</b> under your last message — ✓ Sent · ✓✓ Delivered (blue) · <b>Seen</b> with the reader's avatar (in groups: "👁 Seen by …").</li>
+      <li><b>Last connection:</b> a DM's header shows "Active now" or "Last seen 5m/3h/2d".</li>
       <li><b>Unread:</b> blue counter per chat + total on the Chats badge in the menu. Opening a chat marks it read.</li>
-      <li><b>Enter</b> sends · <b>Shift+Enter</b> makes a new line.</li>
-      <li>You can <b>delete your own messages</b> (✕ on hover). The <span class="mono">general</span> channel can't be deleted.</li>
-      <li>It's a <b>text</b> chat (no attachments or mentions for now).</li>
+      <li><b>Enter</b> sends · <b>Shift+Enter</b> makes a new line. You can <b>delete your own messages</b> (✕ on hover); <span class="mono">general</span> can't be deleted.</li>
     </ul>
   </div>
 </div>
@@ -523,7 +541,7 @@
 <div class="two">
   <div class="card avoid">
     <h3 style="font-size:12px">Job stops</h3>
-    <p style="font-size:10.5px;margin:0">Job, client, route, CF (<span style="color:#1A8A4E;font-weight:700">✓real</span>/<span class="muted">est.</span> + ✏️ Real CF button), sticker, lot, FADD and BOL balance. Actions: <b>✅ Mark delivered</b>, <b>📦 Drop at storage</b> (in transit) and <b>🔄 Handoff</b>.</p>
+    <p style="font-size:10.5px;margin:0">Job, client, route, CF (<span style="color:#1A8A4E;font-weight:700">✓real</span>/<span class="muted">est.</span> + ✏️ Real CF button), sticker, lot, FADD and balance. Actions: <b>✅ Mark delivered</b>, <b>📦 Drop at storage</b> (in transit), <b>✂️ Split</b> and <b>🔄 Handoff</b>. "To collect" is what's actually <b>left</b>: pickup + delivery + BOL balances <b>plus unpaid extras</b>, minus what's collected.</p>
   </div>
   <div class="card avoid">
     <h3 style="font-size:12px">Custom stops (no job)</h3>
@@ -532,12 +550,23 @@
 </div>
 <p style="margin-top:8px"><b>Reordering:</b> drag by the <b>⠿</b> handle — on drop, the whole sequence (jobs + custom) renumbers 1..N.</p>
 
+<div class="note avoid"><b>✂️ Split a job across two trucks.</b> When a load doesn't fit, hit <b>✂️ Split</b> on the job's row: enter the <b>CF to move</b> and choose where the second portion goes — another active trip, a <b>new trip on a free truck</b>, a <b>storage unit / warehouse</b>, or leave it unassigned. Same job number, billed as one job (the new portion's balances are zeroed so money is never double-counted). Split portions carry a ✂️ badge.</div>
+
+<div class="two" style="margin-top:10px">
+  <div class="card avoid"><h3>🗺️ Route modal (editable route)</h3>
+    <p style="font-size:10.5px;margin:0"><b>View route</b> lists every candidate stop with a <b>checkbox</b> (each job's storage/warehouse/pickup origin, the deliveries and the custom stops). Untick what doesn't apply and <b>reorder with ↑/↓</b> — the map, the stop numbers and the Google Maps link recompute live, and the selection is saved per trip.</p>
+  </div>
+  <div class="card avoid"><h3>🔁 Internal relocations (no charge)</h3>
+    <p style="font-size:10.5px;margin:0">A job can ride the truck as a <b>relocation</b> — an internal move between locations. It collects <b>nothing</b>: excluded from "To collect" and flagged on the manifest as <b>"RELOCATION — DO NOT COLLECT"</b>. It's done once dropped at its destination.</p>
+  </div>
+</div>
+
 <h3>Manage Loads (the trip detail)</h3>
 <ul>
-  <li><b>➕ Add job</b> (add an existing job) · <b>🔼 Load from storage</b> (put a stored job on the truck) · <b>🆕 Unplanned pickup</b> (create a direct job already on the trip) · <b>📦 Drop at storage</b> (drop a job at a unit/warehouse mid-trip).</li>
+  <li><b>➕ Add job</b> (add an existing job) · <b>🔼 Load from storage</b> (put a stored job on the truck) · <b>🆕 Unplanned pickup</b> (create a direct job already on the trip) · <b>📦 Drop at storage</b> (drop a job at a unit/warehouse mid-trip — and if the unit isn't on the list, <b>"+ Create it"</b> right there, inline).</li>
   <li>After every change, a green banner offers <b>📲 Send update</b> to the driver via WhatsApp.</li>
   <li><b>Trip log:</b> every event on the trip (who and when).</li>
-  <li>When everything is delivered you'll see <b>"✅ All jobs delivered — mark trip as completed?"</b>; if jobs remain when completing, you choose which storage they go to.</li>
+  <li><b>Complete trip…</b> shows a summary (delivered, CF, BOL collected, outstanding) — jobs already dropped mid-trip <b>keep their location</b>, and for each job still on the truck you pick its storage/warehouse (one dropdown per job) before completing. It warns if equipment is still aboard.</li>
 </ul>
 
 <div class="note avoid"><b>🔄 Driver handoff.</b> To pass a job (or the whole trip) to another driver: <b>🔄 Handoff</b> button → what's handed off, to whom, the <b>reason</b> (better for this delivery / truck change / availability / other) and a note. The new driver becomes the job's <b>primary</b> — cash on hand and commissions follow them. It's logged on the trip log and the stop shows a 🧑‍✈️ tag with their name.</div>
@@ -547,7 +576,7 @@
     <p style="font-size:10.5px;margin:0">US map with each truck's last known location: <span style="color:#3B6D11;font-weight:700">green moving</span>, <span style="color:#A32D2D;font-weight:700">red stopped</span>, grey no data. Truck list with last-update time and an <b>Update location</b> link.</p>
   </div>
   <div class="card avoid"><h3>💬 Manifest via WhatsApp</h3>
-    <p style="font-size:10.5px;margin:0"><b>Send manifest to driver</b> builds the full message: trip, truck, driver, departure, total load and % of capacity, total to collect and the numbered stop list with address, FADD, CF, sticker, lot and balance.</p>
+    <p style="font-size:10.5px;margin:0"><b>Send manifest to driver</b> builds the full message: trip, truck, driver, departure, total load and % of capacity, total to collect and the numbered stop list — <b>custom stops included</b> (marked "extra stop — nothing to collect") — with address, FADD, CF, sticker, lot and balance.</p>
   </div>
 </div>
 
@@ -589,20 +618,84 @@
   </div>
 </div>
 <div class="note" style="margin-top:10px"><b>🔄 Sync:</b> recording a collection in <b>Settlements</b> creates/updates the payment in <b>Payments</b>, and vice versa. From the job detail, the Payments section offers <b>"+ Add payment"</b> pre-filled with the balance and the driver.</div>
+<div class="note"><b>🔎 "Does this job have payments?"</b> Search a job number in the Payments search box and a <b>verdict banner</b> answers straight away: ✅ green with count, total and received if it has payments, 🚫 red <b>"No payments recorded"</b> if it exists but has none (with a <b>+ Payment</b> shortcut), or an amber warning if no job matches that number.</div>
 
-<!-- ============ 14 DRIVERS & TRUCKS ============ -->
-<h1 class="sec break"><span class="num">14</span>Drivers &amp; Trucks</h1>
-<div class="two">
+<!-- ============ 14 EXPENSES ============ -->
+<h1 class="sec break"><span class="num">14</span>Expenses — spend, work days &amp; weekly pay 💸</h1>
+<p class="lead">Everything a driver costs the company: road spend, days worked (and the weekly payroll), and moving materials. Three tabs: <b>💸 Gastos</b> · <b>📆 Días trabajados</b> · <b>📦 Materiales</b>.</p>
+
+<h3>💸 Gastos (expenses)</h3>
+<ul>
+  <li><b>Tiles:</b> approved spend this month · pending approval · <b>driver cash not settled</b> · filtered total. Filters by driver, category, payment source, status and date range.</li>
+  <li><b>+ Expense:</b> date, <b>category</b> (Fuel ⛽ / Hotel 🏨 / Materials 📦 / Tolls 🛣️ / Maintenance 🔧 / Meals 🍔 / Other), amount, vendor, optional driver / truck / trip / job #, <b>paid with</b> (bank account — picking the account —, <b>driver cash from collections</b>, company card, other), a <b>receipt photo/PDF</b>, and notes. Fuel adds gallons, odometer and IFTA state with automatic $/gallon.</li>
+  <li><b>Approval flow:</b> pending rows get <b>✅ Approve / ❌ Reject</b>; approved driver-cash rows get <b>🤝 "settled"</b> when the driver hands over the rest of the cash. The driver-cash hint shows: on hand − unsettled spend = what they should hand in.</li>
+</ul>
+
+<h3>📆 Días trabajados (weekly pay, Wed → Tue, paid the next Wednesday)</h3>
+<ul>
+  <li>One row per driver, one cell per day. <b>Clicking a cell cycles:</b> empty → <b>✓ full day</b> (daily rate) → <b>½ half day</b> (half the rate) → <b>hourly</b> (asks the hours × hourly rate) → empty. The rate is <b>frozen when you mark the day</b> — changing a driver's rate later never rewrites past weeks.</li>
+  <li>Right-hand columns per driver: Days · Pay · Adjustments · <b>Week total</b>, plus a bottom row "Total to pay on Wed DD/MM" for the whole team.</li>
+  <li><b>+ Ajuste (fuck-up / bonus):</b> a <b>deduction</b> (damage, no-show…) lowers the week's pay; a <b>bonus</b> raises it. Each has date, amount, optional job # and a reason, listed under the grid.</li>
+</ul>
+
+<h3>📦 Materiales</h3>
+<p>The materials ledger: a <b>catalog</b> (+ Material: name, unit, unit cost), <b>movements</b> (+ Movimiento: purchase / issue to driver / return / consume on a job / adjust) and the <b>"En mano por driver"</b> panel — issued − returned − consumed — showing what each driver still holds (a red balance is material they owe back, valued in $).</p>
+
+<div class="note avoid"><b>📊 Driver P&amp;L:</b> work days, adjustments and approved expenses flow into each driver's profit &amp; loss (revenue from their jobs − labor − approved expenses − commissions ± adjustments), visible in Analytics and in the driver's profile.</div>
+
+<!-- ============ 15 BANKS ============ -->
+<h1 class="sec break"><span class="num">15</span>Banks — the real bank ledger 🏛️</h1>
+<p class="lead">What the bank <b>actually</b> did, movement by movement — imported, categorized, verified by a second person, reconciled against the operation, and turned into a P&amp;L. Tabs: <b>Bandeja · Cuentas · Categorías · Conciliación · P&amp;L</b>.</p>
+
+<h3>Bandeja (the inbox)</h3>
+<ul>
+  <li><b>📁 One folder per month</b> (movements, inflows, outflows, and a red badge with what's still unreviewed). Inside: a paginated table (100 per page) with server-side filters by status, account, direction, category and text.</li>
+  <li><b>Lifecycle of a movement:</b> imported as <b>Sin revisar</b> → someone picks a category and hits <b>Categorizar</b> → a <b>different person</b> hits <b>✔ Verificar</b>. Unreviewed rows show the AI's guess ("🤖 suggests: … NN%"). Rows can be <b>🚫 ignored</b> (bank artifacts) or reopened; <b>editing a verified movement reopens the double check</b>.</li>
+</ul>
+<div class="note avoid"><b>👀 Double check:</b> whoever verifies must be a <b>different person</b> than whoever categorized — two sets of eyes on every dollar before it counts in the P&amp;L.</div>
+
+<h3>Importing (⬆ Importar)</h3>
+<ul>
+  <li><b>📸 Screenshot (AI):</b> upload homebanking screenshots — the AI extracts every line (date, description, amount, direction, suggested category) into a <b>"Review before importing"</b> table you confirm. The screenshot is kept as evidence.</li>
+  <li><b>📄 Bank CSV:</b> upload the bank's CSV, map the columns (date, description, amount or debit/credit), extract and confirm.</li>
+  <li><b>CSV maestro:</b> if the CSV has an <span class="mono">account_name</span> column, master mode kicks in — thousands of rows routed to their accounts at once, and since they come already categorized they land <b>directly as Verified</b>.</li>
+  <li><b>No duplicates:</b> re-uploading the same statement never creates duplicates. <b>＋ Manual movement</b> exists for one-offs (and goes through the same double check).</li>
+</ul>
+
+<h3>The other tabs</h3>
+<ul>
+  <li><b>Cuentas:</b> the bank accounts with their <b>computed balance</b> (opening balance + movements) — if it doesn't match the bank, imports are missing.</li>
+  <li><b>Categorías:</b> the editable chart of accounts (same categories as the bookkeeper's Excel). Renaming cascades to all movements; deactivating hides without touching history.</li>
+  <li><b>Conciliación:</b> cross-checks the bank against <b>Payments</b> (deposits) and <b>Expenses</b> (bank-paid). Three lists to investigate: <b>bank money with no operational backing</b>, deposits that never hit the bank, and expenses with no bank line. Green "the numbers add up ✓" when clean.</li>
+  <li><b>P&amp;L:</b> classic income statement, months as columns: Revenue → (Cost of Revenues) → <b>Gross profit</b> → (Production / Structure / Sales &amp; Marketing / Broker / CapEx) → <b>Net profit</b>. "Verified only" is on by default; transfers between accounts and <b>Financing / Loan / Capital / Credit Card Payment are excluded</b> (they move cash but aren't income or expense).</li>
+</ul>
+
+<!-- ============ 16 CLAIMS ============ -->
+<h1 class="sec break"><span class="num">16</span>Claims &amp; Incidents ⚠️</h1>
+<p class="lead">The register of things that went wrong — damage, theft, missing items, incomplete deliveries, complaints — tracked from report to resolution.</p>
+<ul>
+  <li><b>Report it</b> with <b>+ New claim</b>, or straight from the <b>job detail</b> ("⚠️ Report claim") or the <b>trip detail</b> — job, client and trip come pre-filled. Fields: incident date, <b>type</b> (💥 Damage / 🚨 Theft / 🔍 Missing items / 📭 Incomplete delivery / 😠 Complaint / 📝 Other), who it's <b>assigned to</b>, and the description.</li>
+  <li><b>Workflow:</b> <span class="tag" style="background:#FCEBEB;color:#A32D2D">Open</span> → <span class="tag" style="background:#FEF3C7;color:#92760B">Investigating</span> → <span class="tag" style="background:#EAF3DE;color:#3B6D11">Resolved</span> (or <span class="tag" style="background:#f1f1f1;color:#888">Denied</span>), with <b>claimed $</b> vs <b>paid/settled $</b>, resolution (paid to client / denied / covered by insurance / discount) and closed date.</li>
+  <li><b>Evidence &amp; follow-up:</b> attach photos/PDFs and keep a note log ("contacted the client…") — every status change is logged automatically.</li>
+  <li>Jobs and trips with active claims show a red <b>⚠ n</b> pill; the sidebar badge counts open + investigating. The <b>Days</b> column turns red when an active claim passes 14 days. Metrics on top: open, investigating, resolved this year, total claimed, total paid, average days to close.</li>
+</ul>
+
+<!-- ============ 17 DRIVERS, TRUCKS & EQUIPMENT ============ -->
+<h1 class="sec break"><span class="num">17</span>Drivers, Trucks &amp; Equipment</h1>
+<div class="three">
   <div class="card avoid"><h3>🪪 Drivers</h3>
     <p style="font-size:11px;margin:0">Added automatically as you assign them. Each driver's <b>profile</b> shows: money <b>in circulation</b> (undeposited cash/checks/money orders), payment and deposit history, and job history.</p>
   </div>
   <div class="card avoid"><h3>🚛 Trucks</h3>
     <p style="font-size:11px;margin:0">The fleet: name, plate and <b>capacity in CF</b>. If the truck is on a trip you see its <b>current occupancy</b> live.</p>
   </div>
+  <div class="card avoid"><h3>🧰 Equipment</h3>
+    <p style="font-size:11px;margin:0">The company's own cargo — pads, dollies, straps, tools — living at a unit/warehouse. <b>🚚 Load on trip</b> rides it as internal cargo (no money, no delivery); <b>📤 Unload</b> drops it at its new location. Status: Available / In transit.</p>
+  </div>
 </div>
 
-<!-- ============ 15 BOL ============ -->
-<h1 class="sec"><span class="num">15</span>BOL — generate and sign 📄</h1>
+<!-- ============ 18 BOL ============ -->
+<h1 class="sec"><span class="num">18</span>BOL — generate and sign 📄</h1>
 <p class="lead">Generates each job's Bill of Lading on top of each company's real PDF, and handles the client's signature via DocuSign.</p>
 
 <h3>Templates (set up once per company)</h3>
@@ -643,8 +736,8 @@
 
 <div class="note avoid"><b>📁 Documents:</b> the legal archive of every BOL — folders <b>per broker</b> (+ "All BOLs" and "No broker"), search by client / job / company, and per BOL: <b>View</b>, <b>Reopen</b> (back into the generator), sign and <b>Delete</b> (with confirmation).</div>
 
-<!-- ============ 16 COMPLIANCE ============ -->
-<h1 class="sec break"><span class="num">16</span>Legal &amp; Compliance 📋</h1>
+<!-- ============ 19 COMPLIANCE ============ -->
+<h1 class="sec break"><span class="num">19</span>Legal &amp; Compliance 📋</h1>
 <p class="lead">Legal documents for Companies (your LLCs/carriers), Trucks and Drivers, with expiration tracking.</p>
 <ul>
   <li><b>Metrics:</b> active companies · expired documents (red) · expiring in 30 days (amber) · up to date (green). The menu's red badge counts what's expired or expiring in ≤7 days, and a red banner lists the urgent items.</li>
@@ -665,8 +758,8 @@
   </div>
 </div>
 
-<!-- ============ 17 ANALYTICS ============ -->
-<h1 class="sec"><span class="num">17</span>Analytics — the business dashboard 📊</h1>
+<!-- ============ 20 ANALYTICS ============ -->
+<h1 class="sec"><span class="num">20</span>Analytics — the business dashboard 📊</h1>
 <p class="lead">At the top: period (This month / 3M / 6M / 12M / YTD / All) and state &amp; broker filters — also triggered by clicking the map or the bars.</p>
 <div class="two">
   <div class="card avoid"><h3>Overview</h3>
@@ -683,24 +776,33 @@
   </div>
 </div>
 
-<!-- ============ 18 USERS & SETTINGS ============ -->
-<h1 class="sec break"><span class="num">18</span>Users &amp; Settings</h1>
+<!-- ============ 21 SUGGESTIONS ============ -->
+<h1 class="sec break"><span class="num">21</span>Suggestions — the idea box 💡</h1>
+<p class="lead">Everyone can post ideas, vote on them, and see management's reply.</p>
+<ul>
+  <li><b>Post:</b> write your idea, pick a category (Operations / Dispatching / Storage / Billing / Payments / CRM · System / Team / Other), optionally tick <b>"Post without my name"</b>, and <b>Send suggestion</b>.</li>
+  <li><b>Vote 👍</b> on any card (click again to unvote). Sort by <b>Most recent</b> or <b>Most voted</b>.</li>
+  <li><b>Statuses:</b> New (blue) · In review (amber) · Implemented (green) · Rejected (red). Admins set the status and can post a highlighted <b>management reply</b> everyone sees.</li>
+</ul>
+
+<!-- ============ 22 USERS & SETTINGS ============ -->
+<h1 class="sec"><span class="num">22</span>Users &amp; Settings</h1>
 <div class="two">
   <div class="card avoid"><h3>👤 Users (admins only)</h3>
-    <p style="font-size:11px;margin:0">Invite users by email with the <b>Admin</b> role (full access) or <b>Member</b> with <b>per-section</b> permissions (view / edit / create, with "Select all" / "Clear"). Edit, <b>activate/deactivate</b>, send a <b>password reset</b> and delete deactivated accounts.</p>
+    <p style="font-size:11px;margin:0">Invite users by email with the <b>Admin</b> role (full access) or <b>Member</b> with <b>per-section</b> permissions (view / edit / create, with "Select all" / "Clear"). Edit, <b>activate/deactivate</b>, send a <b>password reset</b> and delete deactivated accounts. Invitations work even if the admin service is down — the invitee always gets an email to set their password.</p>
   </div>
   <div class="card avoid"><h3>⚙️ Settings</h3>
-    <p style="font-size:11px;margin:0">Your account: <b>name</b>, <b>language</b> (🇺🇸 English / 🇪🇸 Español — switches the whole app instantly) and sign out.</p>
+    <p style="font-size:11px;margin:0">Your account: <b>name</b>, <b>language</b> (🇺🇸 English / 🇪🇸 Español — switches the whole app instantly) and sign out. Plus <b>Change password</b>: current password + new one (min. 8 characters), re-authenticated for safety.</p>
   </div>
 </div>
 
-<!-- ============ 19 DELETE ============ -->
-<h1 class="sec"><span class="num">19</span>Deleting a job 🗑</h1>
+<!-- ============ 23 DELETE ============ -->
+<h1 class="sec"><span class="num">23</span>Deleting a job 🗑</h1>
 <p>You can delete a job from the <b>job detail</b>, the <b>Jobs</b> list or <b>Dispatching</b> (🗑 icon). It always asks for <b>confirmation</b>. Confirming deletes the job and <b>cleans up everything related</b> (extras, payments, unlinks it from the closing sheet).</p>
 <div class="warn"><b>⚠️ It cannot be undone.</b> Before confirming, make sure it's the right job.</div>
 
-<!-- ============ 20 GOLDEN RULES ============ -->
-<h1 class="sec"><span class="num">20</span>Golden rules &amp; glossary</h1>
+<!-- ============ 24 GOLDEN RULES ============ -->
+<h1 class="sec"><span class="num">24</span>Golden rules &amp; glossary</h1>
 
 <div class="card avoid" style="background:#0f172a;border-color:#0f172a;color:#fff">
   <h3 style="color:#fff;margin-bottom:8px">🎯 The daily rules</h3>
@@ -710,6 +812,7 @@
     <li><b style="color:#fff">Measure the real CF</b> when the truck loads — units, warehouses and trucks compute occupancy with it.</li>
     <li>Notify the driver with the <b style="color:#fff">💬 WhatsApp</b> button (job or trip manifest) and <b style="color:#fff">advance the status</b> as soon as each stage happens.</li>
     <li>Generate the <b style="color:#fff">BOL from the job</b> and send the pickup signature before loading.</li>
+    <li>Log every road expense with its <b style="color:#fff">receipt</b> in Expenses, and report incidents in <b style="color:#fff">Claims</b> the same day.</li>
     <li>If the <b style="color:#fff">Compliance</b> badge is red, papers are expired or about to expire.</li>
   </ul>
 </div>
@@ -727,7 +830,13 @@
   <tr><td>Extra</td><td>An additional job charge (shuttle, long carry, packing…), with driver/rep commission.</td></tr>
   <tr><td>Trip / Live Load</td><td>A truck's trip with several jobs and its live load.</td></tr>
   <tr><td>Custom stop</td><td>A trip stop that isn't a job: fuel, inspection, rest…</td></tr>
+  <tr><td>Split load</td><td>One job divided across two trucks/trips (✂️) — same job number, billed once.</td></tr>
+  <tr><td>Relocation</td><td>An internal move riding a trip — collects nothing ("DO NOT COLLECT").</td></tr>
   <tr><td>Handoff</td><td>Passing a job (or trip) from one driver to another, with a reason and history.</td></tr>
+  <tr><td>Equipment</td><td>Company cargo (pads, dollies, tools) tracked between locations and trips.</td></tr>
+  <tr><td>Claim</td><td>A reported incident (damage, theft, missing items…) tracked to resolution.</td></tr>
+  <tr><td>Double check</td><td>In Banks, the verifier must be a different person than the categorizer.</td></tr>
+  <tr><td>Pay week</td><td>Wednesday → Tuesday, paid the following Wednesday (Días trabajados).</td></tr>
   <tr><td>In circulation</td><td>Collected money someone still holds and hasn't deposited.</td></tr>
   <tr><td>On account</td><td>A received payment not yet applied to any charge. Applied with "Assign".</td></tr>
   <tr><td>Allocate / Assign</td><td>Splitting a payment across the job balance and the extras, line by line.</td></tr>
