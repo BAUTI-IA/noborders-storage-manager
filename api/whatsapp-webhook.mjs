@@ -10,7 +10,8 @@
 // (TWILIO_AUTH_TOKEN) plus the WHATSAPP_ALLOWED_NUMBERS whitelist.
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
-import { verifyTwilioSignature, twimlReply, normalizePhone } from "../lib/twilio.mjs";
+import { waitUntil } from "@vercel/functions";
+import { verifyTwilioSignature, twimlReply, normalizePhone, sendWhatsApp } from "../lib/twilio.mjs";
 
 export const config = { api: { bodyParser: false } }; // raw body: the signature covers the exact form params
 export const maxDuration = 300;
@@ -218,36 +219,17 @@ async function handleQuery(intent) {
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
+// Twilio cuts webhooks off at ~15s and the Claude extraction can exceed that,
+// so the handler ACKs immediately with empty TwiML and does the real work in
+// the background (waitUntil keeps the function alive after the response); the
+// answer is delivered via the Twilio REST API instead of a TwiML reply.
 function sendTwiml(res, text) {
   res.setHeader("Content-Type", "text/xml");
   res.status(200).send(twimlReply(text ? String(text).slice(0, REPLY_MAX + 100) : ""));
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") { res.status(405).end(); return; }
-  if (!admin || !process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "server not configured" }); return; }
-
-  const raw = await new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-  const params = new URLSearchParams(raw.toString("utf8"));
-
-  // Signature over the exact public URL Twilio was configured with (APP_URL,
-  // never req.headers — those are attacker-controlled).
-  const url = `${(process.env.APP_URL || "").replace(/\/+$/, "")}/api/whatsapp-webhook`;
-  if (!verifyTwilioSignature(process.env.TWILIO_AUTH_TOKEN, req.headers["x-twilio-signature"], url, params)) {
-    res.status(401).json({ error: "bad signature" }); return;
-  }
-
-  const phone = normalizePhone(params.get("From"));
-  const text = (params.get("Body") || "").trim();
-  const allowed = (process.env.WHATSAPP_ALLOWED_NUMBERS || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (!phone || !allowed.includes(phone)) { sendTwiml(res, ""); return; } // unknown sender → silent
-  if (!text) { sendTwiml(res, ""); return; }
-
+async function processMessage(phone, text) {
+  let reply;
   try {
     const { data: convo } = await admin.from("wa_conversations").select("*").eq("phone", phone).maybeSingle();
     const history = Array.isArray(convo?.history) ? convo.history : [];
@@ -277,10 +259,38 @@ export default async function handler(req, res) {
       updated_at: new Date().toISOString(),
     }, { onConflict: "phone" });
 
-    sendTwiml(res, out.reply);
+    reply = out.reply;
   } catch (e) {
     console.error("whatsapp-webhook:", e);
-    // 200 + message: a non-2xx would make Twilio retry the same message.
-    sendTwiml(res, "⚠️ Hubo un error procesando el mensaje. Intentá de nuevo en un momento.");
+    reply = "⚠️ Hubo un error procesando el mensaje. Intentá de nuevo en un momento.";
   }
+  await sendWhatsApp(phone, String(reply).slice(0, REPLY_MAX + 100));
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") { res.status(405).end(); return; }
+  if (!admin || !process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "server not configured" }); return; }
+
+  const raw = await new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+  const params = new URLSearchParams(raw.toString("utf8"));
+
+  // Signature over the exact public URL Twilio was configured with (APP_URL,
+  // never req.headers — those are attacker-controlled).
+  const url = `${(process.env.APP_URL || "").replace(/\/+$/, "")}/api/whatsapp-webhook`;
+  if (!verifyTwilioSignature(process.env.TWILIO_AUTH_TOKEN, req.headers["x-twilio-signature"], url, params)) {
+    res.status(401).json({ error: "bad signature" }); return;
+  }
+
+  const phone = normalizePhone(params.get("From"));
+  const text = (params.get("Body") || "").trim();
+  const allowed = (process.env.WHATSAPP_ALLOWED_NUMBERS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!phone || !allowed.includes(phone) || !text) { sendTwiml(res, ""); return; } // unknown sender / empty → silent
+
+  waitUntil(processMessage(phone, text).catch((e) => console.error("whatsapp-webhook bg:", e)));
+  sendTwiml(res, ""); // ACK now; the real answer arrives via the REST API
 }

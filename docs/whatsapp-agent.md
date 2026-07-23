@@ -20,6 +20,8 @@ Twilio recibe tu mensaje de WhatsApp y lo reenvía a `api/whatsapp-webhook.mjs` 
    ```
 2. **Variables de entorno en Vercel** (además de las existentes `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`, `APP_URL`):
    - `TWILIO_AUTH_TOKEN` — Auth Token de la cuenta Twilio (verifica la firma de cada request; sin él, la verificación se saltea — solo para dev).
+   - `TWILIO_ACCOUNT_SID` — Account SID de Twilio (empieza con `AC...`). Necesario para enviar las respuestas por la API REST.
+   - `TWILIO_WHATSAPP_FROM` — número emisor con prefijo, ej. sandbox: `whatsapp:+14155238886`.
    - `WHATSAPP_ALLOWED_NUMBERS` — números habilitados en E.164, separados por coma: `+5491122334455,+13055551234`. Cualquier otro número se ignora en silencio.
 3. **Twilio**: creá una cuenta en twilio.com → Messaging → *Try it out* → *Send a WhatsApp message* (sandbox). Uníte al sandbox desde tu teléfono (mandando el código "join xxx-yyy" al número del sandbox) y configurá **"When a message comes in"** = `https://TU-APP.vercel.app/api/whatsapp-webhook` (POST).
 4. Guardá el número del sandbox como contacto y escribile.
@@ -31,4 +33,4 @@ Cuando el flujo esté probado, se puede pasar del sandbox a un número de WhatsA
 - El agente resuelve fechas relativas ("el viernes", "esta semana") con timezone America/New_York.
 - "se entrega el X" → `delivery_date`; solo usa `fadd` si decís "FADD" o "primera fecha disponible".
 - Si un número de job existe en varias filas (varias ubicaciones de storage), la actualización se aplica a todas, igual que el formulario de edición de la app.
-- Twilio corta el webhook a ~15 s. Si la extracción tardara más seguido, el escape es responder TwiML vacío y mandar la respuesta por la API REST de Twilio (requeriría `TWILIO_ACCOUNT_SID` y `TWILIO_WHATSAPP_FROM`).
+- Twilio corta el webhook a ~15 s, y la extracción con IA puede tardar más. Por eso el webhook responde al instante (TwiML vacío) y la respuesta real llega después por la API REST de Twilio (`sendWhatsApp` en `lib/twilio.mjs`), procesando en segundo plano con `waitUntil`.
