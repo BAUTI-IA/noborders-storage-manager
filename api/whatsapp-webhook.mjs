@@ -288,8 +288,12 @@ export default async function handler(req, res) {
 
   const phone = normalizePhone(params.get("From"));
   const text = (params.get("Body") || "").trim();
-  const allowed = (process.env.WHATSAPP_ALLOWED_NUMBERS || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (!phone || !allowed.includes(phone) || !text) { sendTwiml(res, ""); return; } // unknown sender / empty → silent
+  // WHATSAPP_ALLOWED_NUMBERS: comma-separated E.164 whitelist, or "*" to allow
+  // any sender (the Twilio signature still gates who can call the webhook).
+  const rawAllowed = (process.env.WHATSAPP_ALLOWED_NUMBERS || "").trim();
+  const allowed = rawAllowed.split(",").map((s) => s.trim()).filter(Boolean);
+  const isAllowed = rawAllowed === "*" || allowed.includes(phone);
+  if (!phone || !isAllowed || !text) { sendTwiml(res, ""); return; } // unknown sender / empty → silent
 
   waitUntil(processMessage(phone, text).catch((e) => console.error("whatsapp-webhook bg:", e)));
   sendTwiml(res, ""); // ACK now; the real answer arrives via the REST API
