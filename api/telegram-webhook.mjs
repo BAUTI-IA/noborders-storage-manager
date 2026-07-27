@@ -49,7 +49,7 @@ export default async function handler(req, res) {
 
   // /start greeting without burning an AI call
   if (/^\/start\b/.test(text)) {
-    waitUntil(sendTelegram(chatId, "¡Hola! Soy el agente del CRM de No Borders Moving 🚚\n\nContame en lenguaje natural, por ejemplo:\n• \"Tenemos un job del cliente García, pickup el 28 en Miami, entrega en Orlando\"\n• \"El job 1234 se entrega el viernes\"\n• \"¿Qué entregas hay esta semana?\"\n\nAntes de cargar algo al CRM siempre te muestro lo que entendí y confirmás con \"sí\".").catch((e) => console.error("telegram-webhook bg:", e)));
+    waitUntil(sendTelegram(chatId, "¡Hola! Soy el agente del CRM de No Borders Moving 🚚\n\nPuedo:\n📦 Cargar jobs: \"Tenemos un job del cliente García, pickup el 28 en Miami, entrega en Orlando\"\n✏️ Actualizar: \"El job 1234 se entrega el viernes\"\n🔎 Consultar CUALQUIER dato del CRM: \"¿Qué entregas hay esta semana?\", \"¿Cuánto facturamos este mes?\", \"¿Qué camiones están en ruta?\", \"¿Balances pendientes de cobro?\"\n\nAntes de cargar algo al CRM siempre te muestro lo que entendí y confirmás con \"sí\".").catch((e) => console.error("telegram-webhook bg:", e)));
     res.status(200).json({ ok: true }); return;
   }
 

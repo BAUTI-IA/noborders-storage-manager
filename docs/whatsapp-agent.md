@@ -4,7 +4,7 @@ Le escribís al agente por WhatsApp en lenguaje natural y él carga, actualiza o
 
 - **Crear**: "Tenemos un job del cliente García, pickup el 25 de julio en Miami FL, entrega en Orlando, FADD 1 de agosto, estimate 4500"
 - **Actualizar**: "El job 1234 se entrega el viernes" / "Poné el job 1234 en depósito"
-- **Consultar**: "¿Qué entregas hay esta semana?" / "¿Cómo está el job de García?"
+- **Consultar cualquier dato del CRM** (operativo, financiero, flota, usuarios): "¿Qué entregas hay esta semana?", "¿Cuánto facturamos este mes?", "¿Qué camiones están en ruta?", "¿Cuánto le debemos al broker X?". El agente investiga la base con SQL de solo lectura (función `agent_query`, creada por `scripts/setup-agent-query.mjs`: solo SELECT, transacción read-only, máx. 200 filas; los chats internos y el estado del agente quedan excluidos).
 
 Antes de escribir en el CRM siempre te muestra lo que entendió y espera tu **"sí"** (o "no" para cancelar). Si algo está mal, respondé con la corrección ("no, la entrega es el sábado") y re-propone.
 
