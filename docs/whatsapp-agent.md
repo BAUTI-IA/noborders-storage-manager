@@ -8,6 +8,8 @@ Le escribís al agente por WhatsApp en lenguaje natural y él carga, actualiza o
 
 Antes de escribir en el CRM siempre te muestra lo que entendió y espera tu **"sí"** (o "no" para cancelar). Si algo está mal, respondé con la corrección ("no, la entrega es el sábado") y re-propone.
 
+**Audios**: también entiende notas de voz (Telegram y WhatsApp). Las transcribe con OpenAI Whisper (requiere `OPENAI_API_KEY` en Vercel; ~US$0.006/min), responde "🎤 Escuché: ..." con la transcripción y sigue el flujo normal.
+
 ## Cómo funciona
 
 Twilio recibe tu mensaje de WhatsApp y lo reenvía a `api/whatsapp-webhook.mjs` (Vercel). Ahí Claude extrae la intención y los campos, el código valida todo y responde por el mismo canal. El borrador pendiente de confirmación se guarda en la tabla `wa_conversations` (una fila por teléfono).

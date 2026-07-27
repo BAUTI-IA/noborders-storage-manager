@@ -8,6 +8,7 @@
 // TELEGRAM_ALLOWED_USERS whitelist.
 import { waitUntil } from "@vercel/functions";
 import { admin, handleIncoming } from "../lib/agent.mjs";
+import { transcribeAudio } from "../lib/transcribe.mjs";
 
 export const maxDuration = 300;
 
@@ -19,6 +20,38 @@ async function sendTelegram(chatId, text) {
     body: JSON.stringify({ chat_id: chatId, text }),
   });
   if (!res.ok) throw new Error(`Telegram send failed ${res.status}: ${await res.text()}`);
+}
+
+// Voice note / audio file → text, via Telegram's file API + Whisper.
+async function transcribeTelegramAudio(fileId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const meta = await fetch(`https://api.telegram.org/bot${token}/getFile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_id: fileId }),
+  }).then((r) => r.json());
+  if (!meta.ok) throw new Error(`Telegram getFile: ${JSON.stringify(meta)}`);
+  const filePath = meta.result.file_path;
+  const audio = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
+  if (!audio.ok) throw new Error(`Telegram file download ${audio.status}`);
+  const buffer = Buffer.from(await audio.arrayBuffer());
+  return transcribeAudio(buffer, filePath.split("/").pop() || "audio.ogg");
+}
+
+// Full voice pipeline: transcribe, echo what was heard, then run the agent.
+async function processVoice(chatId, fileId) {
+  let text;
+  try {
+    text = await transcribeTelegramAudio(fileId);
+  } catch (e) {
+    console.error("telegram voice:", e);
+    await sendTelegram(chatId, "⚠️ No pude procesar el audio. " + (process.env.OPENAI_API_KEY ? "Probá de nuevo o mandalo por texto." : "Falta configurar la transcripción (OPENAI_API_KEY)."));
+    return;
+  }
+  if (!text) { await sendTelegram(chatId, "🎤 No se escucha nada en el audio. ¿Probás de nuevo?"); return; }
+  await sendTelegram(chatId, `🎤 Escuché: «${text}»`);
+  const reply = await handleIncoming(`tg:${chatId}`, text);
+  await sendTelegram(chatId, reply);
 }
 
 export default async function handler(req, res) {
@@ -36,6 +69,8 @@ export default async function handler(req, res) {
   const msg = req.body?.message;
   const chatId = msg?.chat?.id;
   const text = (msg?.text || "").trim();
+  // Voice note (voice), audio file (audio) or round video note (video_note — has an audio track Whisper can read)
+  const audioFileId = msg?.voice?.file_id || msg?.audio?.file_id || msg?.video_note?.file_id || null;
   const username = (msg?.from?.username || "").toLowerCase();
   const userId = String(msg?.from?.id || "");
 
@@ -45,7 +80,12 @@ export default async function handler(req, res) {
   const allowed = rawAllowed.split(",").map((s) => s.trim().toLowerCase().replace(/^@/, "")).filter(Boolean);
   const isAllowed = rawAllowed === "*" || allowed.includes(username) || allowed.includes(userId);
 
-  if (!chatId || !text || !isAllowed) { res.status(200).json({ ok: true }); return; } // silent
+  if (!chatId || !isAllowed || (!text && !audioFileId)) { res.status(200).json({ ok: true }); return; } // silent
+
+  if (audioFileId) {
+    waitUntil(processVoice(chatId, audioFileId).catch((e) => console.error("telegram-webhook voice bg:", e)));
+    res.status(200).json({ ok: true }); return;
+  }
 
   // /start greeting without burning an AI call
   if (/^\/start\b/.test(text)) {

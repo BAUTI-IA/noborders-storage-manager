@@ -9,6 +9,7 @@
 import { waitUntil } from "@vercel/functions";
 import { verifyTwilioSignature, twimlReply, normalizePhone, sendWhatsApp } from "../lib/twilio.mjs";
 import { admin, handleIncoming, REPLY_MAX } from "../lib/agent.mjs";
+import { transcribeAudio } from "../lib/transcribe.mjs";
 
 export const config = { api: { bodyParser: false } }; // raw body: the signature covers the exact form params
 export const maxDuration = 300;
@@ -43,17 +44,37 @@ export default async function handler(req, res) {
 
   const phone = normalizePhone(params.get("From"));
   const text = (params.get("Body") || "").trim();
+  // Inbound WhatsApp voice note: Twilio delivers it as media (audio/ogg URL).
+  const mediaUrl = Number(params.get("NumMedia") || 0) > 0 && (params.get("MediaContentType0") || "").startsWith("audio/")
+    ? params.get("MediaUrl0")
+    : null;
   // WHATSAPP_ALLOWED_NUMBERS: comma-separated E.164 whitelist, or "*" to allow
   // any sender (the Twilio signature still gates who can call the webhook).
   const rawAllowed = (process.env.WHATSAPP_ALLOWED_NUMBERS || "").trim();
   const allowed = rawAllowed.split(",").map((s) => s.trim()).filter(Boolean);
   const isAllowed = rawAllowed === "*" || allowed.includes(phone);
-  if (!phone || !isAllowed || !text) { sendTwiml(res, ""); return; } // unknown sender / empty → silent
+  if (!phone || !isAllowed || (!text && !mediaUrl)) { sendTwiml(res, ""); return; } // unknown sender / empty → silent
 
-  waitUntil(
-    handleIncoming(phone, text)
-      .then((reply) => sendWhatsApp(phone, reply))
-      .catch((e) => console.error("whatsapp-webhook bg:", e))
-  );
+  waitUntil(processIncoming(phone, text, mediaUrl).catch((e) => console.error("whatsapp-webhook bg:", e)));
   sendTwiml(res, ""); // ACK now; the real answer arrives via the REST API
+}
+
+async function processIncoming(phone, text, mediaUrl) {
+  if (!text && mediaUrl) {
+    try {
+      // Twilio media URLs require basic auth with the account credentials.
+      const auth = "Basic " + Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString("base64");
+      const audio = await fetch(mediaUrl, { headers: { Authorization: auth } });
+      if (!audio.ok) throw new Error(`media download ${audio.status}`);
+      text = await transcribeAudio(Buffer.from(await audio.arrayBuffer()), "audio.ogg");
+      if (!text) { await sendWhatsApp(phone, "🎤 No se escucha nada en el audio. ¿Probás de nuevo?"); return; }
+      await sendWhatsApp(phone, `🎤 Escuché: «${text}»`);
+    } catch (e) {
+      console.error("whatsapp voice:", e);
+      await sendWhatsApp(phone, "⚠️ No pude procesar el audio. Probá de nuevo o mandalo por texto.");
+      return;
+    }
+  }
+  const reply = await handleIncoming(phone, text);
+  await sendWhatsApp(phone, reply);
 }
