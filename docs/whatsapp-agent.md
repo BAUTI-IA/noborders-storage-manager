@@ -1,4 +1,4 @@
-# Agente de IA por WhatsApp
+# Agente de IA por WhatsApp / Telegram
 
 Le escribís al agente por WhatsApp en lenguaje natural y él carga, actualiza o consulta jobs del CRM. Ejemplos:
 
@@ -27,6 +27,20 @@ Twilio recibe tu mensaje de WhatsApp y lo reenvía a `api/whatsapp-webhook.mjs` 
 4. Guardá el número del sandbox como contacto y escribile.
 
 Cuando el flujo esté probado, se puede pasar del sandbox a un número de WhatsApp propio comprado en Twilio (requiere aprobar un perfil de WhatsApp Business con Meta; Twilio guía el trámite). El webhook es el mismo.
+
+## Canal Telegram (alternativa sin Twilio/Meta)
+
+El mismo agente atiende por Telegram (`api/telegram-webhook.mjs`; el cerebro compartido vive en `lib/agent.mjs`). Setup:
+
+1. En Telegram, hablarle a **@BotFather** → `/newbot` → nombre y username del bot → copia el **token** (`123456:ABC...`).
+2. Variables en Vercel: `TELEGRAM_BOT_TOKEN` (el token), `TELEGRAM_WEBHOOK_SECRET` (un string aleatorio inventado), `TELEGRAM_ALLOWED_USERS` (@usernames o IDs numéricos separados por coma, o `*` para cualquiera). Redeploy.
+3. Registrar el webhook:
+   ```
+   TELEGRAM_BOT_TOKEN=... TELEGRAM_WEBHOOK_SECRET=... APP_URL=https://TU-APP.vercel.app node scripts/setup-telegram-webhook.mjs
+   ```
+4. Buscar el bot en Telegram y escribirle. `/start` muestra la ayuda.
+
+Las conversaciones de Telegram se guardan en `wa_conversations` con clave `tg:<chat_id>`.
 
 ## Notas
 
