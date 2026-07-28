@@ -21,7 +21,10 @@ async function sendTelegram(chatId, text) {
 
 export default async function handler(req, res) {
   const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+  // Auth: the Vercel Cron sends the Bearer header; humans testing from a
+  // browser can pass ?secret=... instead.
+  const provided = req.headers.authorization === `Bearer ${secret}` || req.query?.secret === secret;
+  if (secret && !provided) {
     res.status(401).json({ error: "unauthorized" }); return;
   }
   if (!admin || !process.env.ANTHROPIC_API_KEY || !process.env.TELEGRAM_BOT_TOKEN) {
