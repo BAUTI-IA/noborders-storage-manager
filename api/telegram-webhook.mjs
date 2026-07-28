@@ -82,6 +82,16 @@ export default async function handler(req, res) {
 
   if (!chatId || !isAllowed || (!text && !audioFileId)) { res.status(200).json({ ok: true }); return; } // silent
 
+  // /chatid works everywhere (incl. groups) — it's how the daily-brief group id
+  // is discovered. In groups that's ALL the bot reacts to, so it doesn't butt
+  // into normal team conversation; the agent itself is DM-only.
+  const isGroup = ["group", "supergroup"].includes(msg?.chat?.type);
+  if (/^\/chatid(@\w+)?\b/.test(text)) {
+    waitUntil(sendTelegram(chatId, `Chat ID: ${chatId}`).catch((e) => console.error("telegram-webhook bg:", e)));
+    res.status(200).json({ ok: true }); return;
+  }
+  if (isGroup) { res.status(200).json({ ok: true }); return; }
+
   if (audioFileId) {
     waitUntil(processVoice(chatId, audioFileId).catch((e) => console.error("telegram-webhook voice bg:", e)));
     res.status(200).json({ ok: true }); return;

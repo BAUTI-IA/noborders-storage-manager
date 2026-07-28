@@ -44,6 +44,18 @@ El mismo agente atiende por Telegram (`api/telegram-webhook.mjs`; el cerebro com
 
 Las conversaciones de Telegram se guardan en `wa_conversations` con clave `tg:<chat_id>`.
 
+## Brief diario al grupo del equipo
+
+Cada mañana (12:00 UTC ≈ 8:00 Miami en verano, 7:00 en invierno) un Vercel Cron ejecuta `api/daily-brief.mjs`, que arma con `lib/brief.mjs` un resumen operativo/financiero — agenda del día, cobros pendientes priorizados, fugas de storage billing, FADD críticos, claims — y lo manda al grupo de Telegram.
+
+Setup:
+1. Crear un grupo de Telegram y agregar al bot como miembro.
+2. En el grupo, mandar `/chatid@ElBot` → responde el Chat ID (número negativo).
+3. Variables en Vercel: `TELEGRAM_BRIEF_CHAT_ID` (ese ID) y `CRON_SECRET` (string aleatorio que autentica el cron). Redeploy.
+4. Probar sin enviar: `GET /api/daily-brief?dry=1` con header `Authorization: Bearer <CRON_SECRET>` devuelve el brief como JSON.
+
+En grupos el bot solo responde a `/chatid` — la conversación normal del grupo no lo activa; el agente completo funciona por chat privado.
+
 ## Notas
 
 - El agente resuelve fechas relativas ("el viernes", "esta semana") con timezone America/New_York.
