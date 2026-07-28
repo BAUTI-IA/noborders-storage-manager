@@ -49,7 +49,7 @@ async function processVoice(chatId, fileId) {
     return;
   }
   if (!text) { await sendTelegram(chatId, "🎤 No se escucha nada en el audio. ¿Probás de nuevo?"); return; }
-  await sendTelegram(chatId, `🎤 Escuché: «${text}»`);
+  await sendTelegram(chatId, `🎤 «${text}»`); // language-neutral echo of the transcript
   const reply = await handleIncoming(`tg:${chatId}`, text);
   await sendTelegram(chatId, reply);
 }

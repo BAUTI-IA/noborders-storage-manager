@@ -68,7 +68,7 @@ async function processIncoming(phone, text, mediaUrl) {
       if (!audio.ok) throw new Error(`media download ${audio.status}`);
       text = await transcribeAudio(Buffer.from(await audio.arrayBuffer()), "audio.ogg");
       if (!text) { await sendWhatsApp(phone, "🎤 No se escucha nada en el audio. ¿Probás de nuevo?"); return; }
-      await sendWhatsApp(phone, `🎤 Escuché: «${text}»`);
+      await sendWhatsApp(phone, `🎤 «${text}»`); // language-neutral echo of the transcript
     } catch (e) {
       console.error("whatsapp voice:", e);
       await sendWhatsApp(phone, "⚠️ No pude procesar el audio. Probá de nuevo o mandalo por texto.");
