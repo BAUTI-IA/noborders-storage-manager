@@ -46,7 +46,9 @@ Las conversaciones de Telegram se guardan en `wa_conversations` con clave `tg:<c
 
 ## Brief diario al grupo del equipo
 
-Cada mañana (12:00 UTC ≈ 8:00 Miami en verano, 7:00 en invierno) un Vercel Cron ejecuta `api/daily-brief.mjs`, que arma con `lib/brief.mjs` un resumen operativo/financiero — agenda del día, cobros pendientes priorizados, fugas de storage billing, FADD críticos, claims — y lo manda al grupo de Telegram.
+Cada mañana (12:00 UTC ≈ 8:00 Miami en verano, 7:00 en invierno) un Vercel Cron ejecuta `api/daily-brief.mjs`, que arma con `lib/brief.mjs` un resumen operativo/financiero — agenda del día, cobros, fugas de storage billing, FADD críticos, claims — y lo manda al grupo de Telegram.
+
+Los cobros usan la fórmula real del CRM (`jobOutstanding`): balances + extras **menos pagos registrados como recibidos** — separando "deuda real" de "balances sin depurar" (viejos, probablemente cobrados y no descargados). Cada envío real guarda una foto en `brief_snapshots` (migración: `scripts/setup-brief-snapshots.mjs`) para mostrar deltas vs ayer, e incluye mensajes de cobro en inglés listos para reenviar a los top deudores.
 
 Setup:
 1. Crear un grupo de Telegram y agregar al bot como miembro.
