@@ -2,6 +2,7 @@
 // UI only: state, Supabase calls and handlers live in App.jsx (same split as analytics.jsx).
 // Shared Btn/Modal components arrive as props to avoid a circular import with App.jsx.
 import { useMemo, useState } from "react";
+import { tr } from "./i18n.js";
 import { numv, monthOf, driverCashReconciliation, materialShortages, payWeekStart, payWeekDays, addDaysISO, workDayPay } from "./analyticsData.js";
 
 // Form/constant definitions live here (exported) so App.jsx state and this UI share one copy.
@@ -86,7 +87,7 @@ function ReceiptBox({ url, onFile, uploading, onView }) {
       <span style={fieldLabel}>Receipt (foto / PDF)</span>
       <div onClick={() => document.getElementById("expense-receipt-input")?.click()}
         style={{ border:"2px dashed #ddd", borderRadius:10, padding: url ? "8px" : "14px", textAlign:"center", background:"#fafafa", cursor:"pointer", fontSize:12, color:"#888" }}>
-        {uploading ? "Subiendo…" : url ? (
+        {uploading ? "Uploading…" : url ? (
           <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
             {isPdf ? <span style={{ fontSize:28 }}>📄</span> : <img src={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} onClick={e => { e.stopPropagation(); onView(url); }} />}
             <span style={{ color:"#185FA5" }}>Replace file</span>
@@ -205,13 +206,13 @@ export function ExpensesPage(props) {
       <datalist id="expense-jobs-list">{jobNumbers.map(n => <option key={n} value={n} />)}</datalist>
       {missing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <span>Para Expenses (gastos + días trabajados + materiales), corré el SQL de setup una vez en Supabase.</span>
+          <span>For Expenses (expenses + worked days + materials), run the setup SQL once in Supabase.</span>
           <button onClick={onShowSetup} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
         </div>
       )}
 
       <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
-        {[["gastos","💸 Gastos"],["dias","📆 Días trabajados"],["materiales","📦 Materiales"]].map(([v, l]) => (
+        {[["gastos","💸 Expenses"],["dias","📆 Worked days"],["materiales","📦 Materials"]].map(([v, l]) => (
           <button key={v} onClick={() => setTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: tab===v?"#fff":"none", color: tab===v?"#111":"#888", fontWeight: tab===v?600:400, boxShadow: tab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
         ))}
       </div>
@@ -227,21 +228,21 @@ export function ExpensesPage(props) {
           </div>
 
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
-            <input style={{ ...inp, width:"auto", minWidth:200, flex:1, maxWidth:300 }} value={fSearch} onChange={e => setFSearch(e.target.value)} placeholder="🔎 Vendor, job #, notas…" />
+            <input style={{ ...inp, width:"auto", minWidth:200, flex:1, maxWidth:300 }} value={fSearch} onChange={e => setFSearch(e.target.value)} placeholder="🔎 Vendor, job #, notes…" />
             <select value={fDriver} onChange={e => setFDriver(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
-              <option value="">Todos los drivers</option>
+              <option value="">All drivers</option>
               {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
             <select value={fCategory} onChange={e => setFCategory(e.target.value)} style={{ ...inp, width:"auto", minWidth:130 }}>
-              <option value="">Todas las categorías</option>
+              <option value="">All categories</option>
               {EXPENSE_CATEGORIES.map(c => <option key={c.v} value={c.v}>{c.icon} {c.l}</option>)}
             </select>
             <select value={fPaidFrom} onChange={e => setFPaidFrom(e.target.value)} style={{ ...inp, width:"auto", minWidth:130 }}>
-              <option value="">Toda fuente de pago</option>
+              <option value="">All payment sources</option>
               {PAID_FROM_OPTIONS.map(p => <option key={p.v} value={p.v}>{p.icon} {p.l}</option>)}
             </select>
             <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={{ ...inp, width:"auto", minWidth:110 }}>
-              <option value="">Todo estado</option>
+              <option value="">All statuses</option>
               {Object.entries(EXPENSE_STATUS).map(([v, c]) => <option key={v} value={v}>{c.l}</option>)}
             </select>
             <input style={{ ...inp, width:"auto" }} type="date" value={fFrom} onChange={e => setFFrom(e.target.value)} title="Desde" />
@@ -253,11 +254,11 @@ export function ExpensesPage(props) {
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Fecha","Categoría","Vendor","Monto","Driver","Fuente","Links","Recibo","Estado",""].map((h, i) => <th key={i} style={th}>{h}</th>)}
+                  {["Fecha","Category","Vendor","Monto","Driver","Fuente","Links","Recibo","Estado",""].map((h, i) => <th key={i} style={th}>{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={10} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No hay gastos en este filtro. Cargá uno con “+ Expense”.</td></tr>
+                    <tr><td colSpan={10} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No expenses in this filter. Add one with “+ Expense”.</td></tr>
                   ) : filtered.map(e => {
                     const pf = paidFromMeta(e.paid_from);
                     const trip = e.trip_id ? tripById[e.trip_id] : null;
@@ -272,7 +273,7 @@ export function ExpensesPage(props) {
                           {pf.icon} <span style={{ fontSize:11.5 }}>{e.paid_from === "bank" ? (e.bank_account || pf.l) : pf.l}</span>
                           {e.paid_from === "driver_cash" && (e.settled
                             ? <span style={{ fontSize:10, fontWeight:700, color:"#185FA5", marginLeft:5 }}>rendido {e.settled_date || ""}</span>
-                            : <span style={{ fontSize:10, fontWeight:700, color:"#C2410C", marginLeft:5 }}>sin rendir</span>)}
+                            : <span style={{ fontSize:10, fontWeight:700, color:"#C2410C", marginLeft:5 }}>unsettled</span>)}
                         </td>
                         <td style={{ ...td, fontSize:11.5, color:"#666", whiteSpace:"nowrap" }}>
                           {[trip && (trip.trip_number || `trip #${trip.id}`), e.job_number, e.truck_id && (truckById[e.truck_id]?.name || `truck #${e.truck_id}`)].filter(Boolean).join(" · ") || "—"}
@@ -293,7 +294,7 @@ export function ExpensesPage(props) {
                             </>
                           )}
                           {canEdit && e.paid_from === "driver_cash" && e.status === "approved" && !e.settled && (
-                            <button onClick={() => onSettle(e)} title="Marcar rendido (el driver entregó el resto del cash)" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>🤝</button>
+                            <button onClick={() => onSettle(e)} title="Mark settled (the driver handed over the rest of the cash)" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>🤝</button>
                           )}
                           {canEdit && <button onClick={() => onEdit(e)} title="Editar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>✏️</button>}
                           {canEdit && <button onClick={() => onDelete(e)} title="Borrar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>🗑️</button>}
@@ -313,14 +314,14 @@ export function ExpensesPage(props) {
         <>
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, flexWrap:"wrap" }}>
             <Btn onClick={() => setWeekStart(addDaysISO(weekStart, -7))}>←</Btn>
-            <span style={{ fontWeight:700, fontSize:14, textAlign:"center" }}>Mié {fmtShort(weekStart)} → Mar {fmtShort(weekEnd)}</span>
+            <span style={{ fontWeight:700, fontSize:14, textAlign:"center" }}>Wed {fmtShort(weekStart)} → Tue {fmtShort(weekEnd)}</span>
             <Btn onClick={() => setWeekStart(addDaysISO(weekStart, 7))}>→</Btn>
             {weekStart !== payWeekStart(today()) && <Btn onClick={() => setWeekStart(payWeekStart(today()))}>Hoy</Btn>}
-            <span style={{ fontSize:11, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"3px 10px" }}>se paga mié {fmtShort(addDaysISO(weekStart, 7))}</span>
-            {canCreate && <Btn onClick={() => onAddAdjustment()} style={{ marginLeft:"auto" }}>+ Ajuste (fuck-up / bono)</Btn>}
+            <span style={{ fontSize:11, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"3px 10px" }}>paid on Wed {fmtShort(addDaysISO(weekStart, 7))}</span>
+            {canCreate && <Btn onClick={() => onAddAdjustment()} style={{ marginLeft:"auto" }}>+ Adjustment (fuck-up / bonus)</Btn>}
           </div>
           <div style={{ fontSize:11.5, color:"#999", marginBottom:10 }}>
-            Click en un día cicla: vacío → día completo (✓) → medio día (½) → por hora (pide horas) → vacío. La tarifa se congela al marcar — cambiar el rate del driver no reescribe semanas ya cargadas.
+            Clicking a day cycles: empty → full day (✓) → half day (½) → hourly (asks hours) → empty. The rate freezes when marked — changing the driver's rate doesn't rewrite weeks already logged.
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", marginBottom:14 }}>
             <div style={{ overflowX:"auto" }}>
@@ -328,14 +329,14 @@ export function ExpensesPage(props) {
                 <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
                   <th style={{ ...th, position:"sticky", left:0, background:"#fafafa", zIndex:1 }}>Driver</th>
                   {wdDays.map(d => <th key={d} style={{ ...th, padding:"9px 6px", textAlign:"center" }}>{dayHeader(d)}</th>)}
-                  <th style={{ ...th, textAlign:"right" }}>Días</th>
+                  <th style={{ ...th, textAlign:"right" }}>Days</th>
                   <th style={{ ...th, textAlign:"right" }}>Pago</th>
                   <th style={{ ...th, textAlign:"right" }}>Ajustes</th>
-                  <th style={{ ...th, textAlign:"right" }}>Total semana</th>
+                  <th style={{ ...th, textAlign:"right" }}>Week total</th>
                 </tr></thead>
                 <tbody>
                   {activeDrivers.length === 0 ? (
-                    <tr><td colSpan={wdDays.length + 5} style={{ padding:"30px", textAlign:"center", color:"#bbb" }}>No hay drivers activos.</td></tr>
+                    <tr><td colSpan={wdDays.length + 5} style={{ padding:"30px", textAlign:"center", color:"#bbb" }}>No active drivers.</td></tr>
                   ) : activeDrivers.map(d => {
                     const rows = wdDays.map(day => wdByDriverDate[d.id + "|" + day]);
                     const worked = rows.filter(Boolean);
@@ -350,7 +351,7 @@ export function ExpensesPage(props) {
                       <tr key={d.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ ...td, fontWeight:600, whiteSpace:"nowrap", position:"sticky", left:0, background:"#fff", zIndex:1 }}>
                           {d.name}
-                          <div style={{ fontSize:10, color: rateLabel ? "#999" : "#E24B4A", fontWeight:500 }}>{rateLabel || "sin rate cargado"}</div>
+                          <div style={{ fontSize:10, color: rateLabel ? "#999" : "#E24B4A", fontWeight:500 }}>{rateLabel || "no rate set"}</div>
                         </td>
                         {wdDays.map((day, i) => {
                           const w = rows[i];
@@ -359,7 +360,7 @@ export function ExpensesPage(props) {
                           return (
                             <td key={day} style={{ padding:3, textAlign:"center" }}>
                               <button onClick={() => canEdit && onCycleWorkDay(d, day)} disabled={!canEdit}
-                                title={w ? `${t === "full" ? "Día completo" : t === "half" ? "Medio día" : `${numv(w.hours)} horas`} · ${fmt$(workDayPay(w, d))}` : "No trabajó (click para marcar)"}
+                                title={w ? `${t === "full" ? tr("Full day", "Día completo") : t === "half" ? tr("Half day", "Medio día") : `${numv(w.hours)} ${tr("hours", "horas")}`} · ${fmt$(workDayPay(w, d))}` : tr("Didn't work (click to mark)", "No trabajó (click para marcar)")}
                                 style={{ minWidth:30, height:26, borderRadius:6, border:"1px solid " + (w ? (t === "hourly" ? "#7C3AED" : "#639922") : "#eee"), background: w ? (t === "hourly" ? "#EDE9FE" : t === "half" ? "#FEF9C3" : "#EAF3DE") : "#fff", cursor: canEdit ? "pointer" : "default", fontSize:11, color: w ? (t === "hourly" ? "#6D28D9" : "#3B6D11") : "#ddd", fontWeight:700, padding:"0 5px" }}>
                                 {label}
                               </button>
@@ -380,7 +381,7 @@ export function ExpensesPage(props) {
                     const totAdj = weekAdjustments.reduce((s, a) => s + (a.kind === "bonus" ? numv(a.amount) : -numv(a.amount)), 0);
                     return (
                       <tr style={{ borderTop:"2px solid #eee", fontWeight:800, background:"#fafafa" }}>
-                        <td style={{ ...td, position:"sticky", left:0, background:"#fafafa" }}>Total a pagar el mié {fmtShort(addDaysISO(weekStart, 7))}</td>
+                        <td style={{ ...td, position:"sticky", left:0, background:"#fafafa" }}>Total to pay on Wed {fmtShort(addDaysISO(weekStart, 7))}</td>
                         <td colSpan={wdDays.length + 1} />
                         <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap" }}>{fmt$(totPay)}</td>
                         <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap", color: totAdj < 0 ? "#E24B4A" : "#1A8A4E" }}>{totAdj !== 0 ? fmt$(totAdj) : "—"}</td>
@@ -395,8 +396,8 @@ export function ExpensesPage(props) {
 
           {/* Ajustes de la semana */}
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16 }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Ajustes de la semana (descuentos por fuck-ups / compensaciones)</div>
-            {weekAdjustments.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>Sin ajustes esta semana.</div> : weekAdjustments.map(a => {
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Week adjustments (deductions for fuck-ups / compensations)</div>
+            {weekAdjustments.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>No adjustments this week.</div> : weekAdjustments.map(a => {
               const k = ADJUSTMENT_KINDS.find(x => x.v === a.kind) || ADJUSTMENT_KINDS[0];
               return (
                 <div key={a.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f4f4f4", fontSize:12.5, flexWrap:"wrap" }}>
@@ -419,19 +420,19 @@ export function ExpensesPage(props) {
       {tab === "materiales" && !missing && (
         <>
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
-            {canCreate && <Btn primary onClick={() => onAddMaterialMove()}>+ Movimiento</Btn>}
+            {canCreate && <Btn primary onClick={() => onAddMaterialMove()}>+ Movement</Btn>}
             {canCreate && <Btn onClick={onAddMaterialItem}>+ Material</Btn>}
           </div>
 
           {/* En mano por driver (faltantes potenciales) */}
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16, marginBottom:14 }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>En mano por driver (entregado − devuelto − consumido)</div>
+            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>On hand per driver (issued − returned − consumed)</div>
             {shortages.filter(s => s.onHand !== 0).length === 0 ? (
-              <div style={{ fontSize:12.5, color:"#bbb" }}>Nadie tiene materiales pendientes de devolver.</div>
+              <div style={{ fontSize:12.5, color:"#bbb" }}>Nobody has materials pending return.</div>
             ) : (
               <div style={{ overflowX:"auto" }}>
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5 }}>
-                  <thead><tr style={{ borderBottom:"1px solid #efefef" }}>{["Driver","Material","Entregado","Devuelto","Consumido","En mano","Valor"].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{ borderBottom:"1px solid #efefef" }}>{["Driver","Material","Entregado","Devuelto","Consumido","On hand","Valor"].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
                   <tbody>
                     {shortages.filter(s => s.onHand !== 0).map((s, i) => (
                       <tr key={i} style={{ borderBottom:"1px solid #fafafa" }}>
@@ -453,8 +454,8 @@ export function ExpensesPage(props) {
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(340px,1fr))", gap:14 }}>
             {/* Catálogo */}
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Catálogo</div>
-              {materialItems.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>Sin materiales. Agregá pads, boxes, shrink wrap…</div> : (
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Catalog</div>
+              {materialItems.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>No materials. Add pads, boxes, shrink wrap…</div> : (
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5 }}>
                   <thead><tr style={{ borderBottom:"1px solid #efefef" }}>{["Material","Unidad","Costo",""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
                   <tbody>
@@ -476,8 +477,8 @@ export function ExpensesPage(props) {
 
             {/* Movimientos */}
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Últimos movimientos</div>
-              {materialMovements.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>Sin movimientos todavía.</div> : (
+              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Latest movements</div>
+              {materialMovements.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>No movements yet.</div> : (
                 <div style={{ maxHeight:420, overflowY:"auto" }}>
                   {materialMovements.slice(0, 100).map(mv => {
                     const it = materialItems.find(i => i.id === mv.item_id);
@@ -503,11 +504,11 @@ export function ExpensesPage(props) {
 
       {/* ── Modal: gasto ── */}
       {showModal && (
-        <Modal title={editingId ? "Edit expense" : "Nuevo gasto"} onClose={() => setShowModal(false)}
+        <Modal title={editingId ? "Edit expense" : "New expense"} onClose={() => setShowModal(false)}
           footer={<><Btn onClick={() => setShowModal(false)}>Cancel</Btn><Btn primary disabled={saving || uploading} onClick={onSave}>{saving ? "Saving…" : "Save expense"}</Btn></>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 14px" }}>
             <Field label="Fecha"><input type="date" style={inp} value={form.expense_date} onChange={e => setF({ expense_date: e.target.value })} /></Field>
-            <Field label="Categoría">
+            <Field label="Category">
               <select style={inp} value={form.category} onChange={e => setF({ category: e.target.value })}>
                 {EXPENSE_CATEGORIES.map(c => <option key={c.v} value={c.v}>{c.icon} {c.l}</option>)}
               </select>
@@ -516,24 +517,24 @@ export function ExpensesPage(props) {
             <Field label="Vendor / lugar"><input style={inp} value={form.vendor} onChange={e => setF({ vendor: e.target.value })} placeholder="Pilot, Home Depot, Motel 6…" /></Field>
             <Field label="Driver">
               <select style={inp} value={form.driver_id} onChange={e => setF({ driver_id: e.target.value })}>
-                <option value="">(sin driver)</option>
+                <option value="">(no driver)</option>
                 {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </Field>
             <Field label="Truck">
               <select style={inp} value={form.truck_id} onChange={e => setF({ truck_id: e.target.value })}>
-                <option value="">(sin truck)</option>
+                <option value="">(no truck)</option>
                 {trucksList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </Field>
             <Field label="Trip">
               <select style={inp} value={form.trip_id} onChange={e => setF({ trip_id: e.target.value })}>
-                <option value="">(sin trip)</option>
+                <option value="">(no trip)</option>
                 {trips.map(t => <option key={t.id} value={t.id}>{t.trip_number || `#${t.id}`}</option>)}
               </select>
             </Field>
             <Field label="Job #">
-              <input style={inp} list="expense-jobs-list" value={form.job_number} onChange={e => setF({ job_number: e.target.value })} placeholder="(opcional)" />
+              <input style={inp} list="expense-jobs-list" value={form.job_number} onChange={e => setF({ job_number: e.target.value })} placeholder="(optional)" />
             </Field>
             <Field label="Pagado con">
               <select style={inp} value={form.paid_from} onChange={e => setF({ paid_from: e.target.value })}>
@@ -543,7 +544,7 @@ export function ExpensesPage(props) {
             {form.paid_from === "bank" && (
               <Field label="Cuenta">
                 <select style={inp} value={form.bank_account} onChange={e => setF({ bank_account: e.target.value })}>
-                  <option value="">(elegir cuenta)</option>
+                  <option value="">(choose account)</option>
                   {payAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
                 </select>
               </Field>
@@ -559,10 +560,10 @@ export function ExpensesPage(props) {
 
           {form.paid_from === "driver_cash" && (
             <div style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:10, padding:"9px 12px", fontSize:12, color:"#854F0B", marginBottom:10 }}>
-              💵 Este gasto sale del cash que el driver cobró de clientes: al aprobarlo, baja lo que ese driver debería entregar.
+              💵 This expense comes out of the cash the driver collected from clients: approving it lowers what that driver should hand over.
               {cashHint && (
                 <div style={{ marginTop:4, fontWeight:600 }}>
-                  Tiene en mano {fmt$(cashHint.held)} − gastos sin rendir {fmt$(cashHint.approvedCashExpenses)} = debería entregar <span style={{ color: cashHint.expectedOnHand < 0 ? "#E24B4A" : "#3B6D11" }}>{fmt$(cashHint.expectedOnHand)}</span>
+                  Holds {fmt$(cashHint.held)} − unsettled expenses {fmt$(cashHint.approvedCashExpenses)} = should hand over <span style={{ color: cashHint.expectedOnHand < 0 ? "#E24B4A" : "#3B6D11" }}>{fmt$(cashHint.expectedOnHand)}</span>
                 </div>
               )}
             </div>
@@ -574,7 +575,7 @@ export function ExpensesPage(props) {
               <Field label="Odómetro (mi)"><input type="number" min="0" style={inp} value={form.odometer} onChange={e => setF({ odometer: e.target.value })} /></Field>
               <Field label="Estado (IFTA)"><input style={inp} maxLength={2} value={form.fuel_state} onChange={e => setF({ fuel_state: e.target.value.toUpperCase() })} placeholder="FL" /></Field>
               {numv(form.gallons) > 0 && numv(form.amount) > 0 && (
-                <div style={{ gridColumn:"1 / -1", fontSize:11.5, color:"#888", paddingBottom:8 }}>≈ ${(numv(form.amount) / numv(form.gallons)).toFixed(2)}/galón</div>
+                <div style={{ gridColumn:"1 / -1", fontSize:11.5, color:"#888", paddingBottom:8 }}>≈ ${(numv(form.amount) / numv(form.gallons)).toFixed(2)}/gallon</div>
               )}
             </div>
           )}
@@ -589,12 +590,12 @@ export function ExpensesPage(props) {
 
       {/* ── Modal: ajuste de pago (fuck-up / compensación) ── */}
       {showAdjModal && (
-        <Modal title="Ajuste de pago del driver" onClose={() => setShowAdjModal(false)}
+        <Modal title="Driver pay adjustment" onClose={() => setShowAdjModal(false)}
           footer={<><Btn onClick={() => setShowAdjModal(false)}>Cancel</Btn><Btn primary disabled={adjSaving} onClick={onSaveAdjustment}>{adjSaving ? "Saving…" : "Save"}</Btn></>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 14px" }}>
             <Field label="Driver">
               <select style={inp} value={adjForm.driver_id} onChange={e => setAdjForm(f => ({ ...f, driver_id: e.target.value }))}>
-                <option value="">(elegir)</option>
+                <option value="">(choose)</option>
                 {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </Field>
@@ -609,20 +610,20 @@ export function ExpensesPage(props) {
               <input style={inp} list="expense-jobs-list" value={adjForm.job_number} onChange={e => setAdjForm(f => ({ ...f, job_number: e.target.value }))} />
             </Field>
           </div>
-          <Field label="Motivo"><input style={inp} value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))} placeholder="Rompió un espejo del cliente, llegó tarde al pickup, bonus por trip largo…" /></Field>
+          <Field label="Motivo"><input style={inp} value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))} placeholder="Broke a client's mirror, was late to the pickup, bonus for a long trip…" /></Field>
           <div style={{ background:"#fafafa", borderRadius:10, padding:"8px 12px", fontSize:11.5, color:"#888" }}>
-            El descuento le baja el pago de la semana (y el costo del driver en el P&L); la compensación se lo sube.
+            The deduction lowers the week's pay (and the driver cost in the P&L); the compensation raises it.
           </div>
         </Modal>
       )}
 
       {/* ── Modal: material (catálogo) ── */}
       {showMaterialItemModal && (
-        <Modal title={editingMaterialItemId ? "Edit material" : "Nuevo material"} onClose={() => setShowMaterialItemModal(false)}
+        <Modal title={editingMaterialItemId ? "Edit material" : "New material"} onClose={() => setShowMaterialItemModal(false)}
           footer={<><Btn onClick={() => setShowMaterialItemModal(false)}>Cancel</Btn><Btn primary disabled={materialSaving} onClick={onSaveMaterialItem}>{materialSaving ? "Saving…" : "Save"}</Btn></>}>
           <Field label="Nombre"><input style={inp} value={materialItemForm.name} onChange={e => setMaterialItemForm(f => ({ ...f, name: e.target.value }))} placeholder="Moving pads, shrink wrap, boxes M…" /></Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"0 14px" }}>
-            <Field label="Categoría"><input style={inp} value={materialItemForm.category} onChange={e => setMaterialItemForm(f => ({ ...f, category: e.target.value }))} placeholder="packing, protección…" /></Field>
+            <Field label="Category"><input style={inp} value={materialItemForm.category} onChange={e => setMaterialItemForm(f => ({ ...f, category: e.target.value }))} placeholder="packing, protection…" /></Field>
             <Field label="Unidad"><input style={inp} value={materialItemForm.unit} onChange={e => setMaterialItemForm(f => ({ ...f, unit: e.target.value }))} placeholder="unit, roll, box…" /></Field>
             <Field label="Costo unitario ($)"><input type="number" min="0" step="0.01" style={inp} value={materialItemForm.unit_cost} onChange={e => setMaterialItemForm(f => ({ ...f, unit_cost: e.target.value }))} /></Field>
           </div>
@@ -635,12 +636,12 @@ export function ExpensesPage(props) {
 
       {/* ── Modal: movimiento de material ── */}
       {showMaterialMoveModal && (
-        <Modal title="Movimiento de material" onClose={() => setShowMaterialMoveModal(false)}
+        <Modal title="Material movement" onClose={() => setShowMaterialMoveModal(false)}
           footer={<><Btn onClick={() => setShowMaterialMoveModal(false)}>Cancel</Btn><Btn primary disabled={materialSaving} onClick={onSaveMaterialMove}>{materialSaving ? "Saving…" : "Save"}</Btn></>}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 14px" }}>
             <Field label="Material">
               <select style={inp} value={materialMoveForm.item_id} onChange={e => setMaterialMoveForm(f => ({ ...f, item_id: e.target.value }))}>
-                <option value="">(elegir)</option>
+                <option value="">(choose)</option>
                 {materialItems.filter(i => i.active !== false).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
               </select>
             </Field>
@@ -653,20 +654,20 @@ export function ExpensesPage(props) {
             <Field label="Fecha"><input type="date" style={inp} value={materialMoveForm.movement_date} onChange={e => setMaterialMoveForm(f => ({ ...f, movement_date: e.target.value }))} /></Field>
             <Field label="Driver">
               <select style={inp} value={materialMoveForm.driver_id} onChange={e => setMaterialMoveForm(f => ({ ...f, driver_id: e.target.value }))}>
-                <option value="">(sin driver)</option>
+                <option value="">(no driver)</option>
                 {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </Field>
             <Field label="Trip">
               <select style={inp} value={materialMoveForm.trip_id} onChange={e => setMaterialMoveForm(f => ({ ...f, trip_id: e.target.value }))}>
-                <option value="">(sin trip)</option>
+                <option value="">(no trip)</option>
                 {trips.map(t => <option key={t.id} value={t.id}>{t.trip_number || `#${t.id}`}</option>)}
               </select>
             </Field>
             <Field label="Job #">
-              <input style={inp} list="expense-jobs-list" value={materialMoveForm.job_number} onChange={e => setMaterialMoveForm(f => ({ ...f, job_number: e.target.value }))} placeholder="(para consume)" />
+              <input style={inp} list="expense-jobs-list" value={materialMoveForm.job_number} onChange={e => setMaterialMoveForm(f => ({ ...f, job_number: e.target.value }))} placeholder="(for consume)" />
             </Field>
-            <Field label="Costo unitario ($, opcional)"><input type="number" min="0" step="0.01" style={inp} value={materialMoveForm.unit_cost} onChange={e => setMaterialMoveForm(f => ({ ...f, unit_cost: e.target.value }))} placeholder="usa el del catálogo" /></Field>
+            <Field label="Costo unitario ($, opcional)"><input type="number" min="0" step="0.01" style={inp} value={materialMoveForm.unit_cost} onChange={e => setMaterialMoveForm(f => ({ ...f, unit_cost: e.target.value }))} placeholder="uses catalog cost" /></Field>
           </div>
           <Field label="Notas"><input style={inp} value={materialMoveForm.notes} onChange={e => setMaterialMoveForm(f => ({ ...f, notes: e.target.value }))} /></Field>
         </Modal>
