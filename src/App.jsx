@@ -13616,7 +13616,7 @@ export default function App() {
           if (!brand || !unit) { showToast("Enter company and unit #"); return; }
           const dup = findStorageDup(brand, unit, dropNewUnit.state);
           if (dup) {
-            if (!window.confirm(`${dup.brand} Unit ${dup.unit}${dup.state ? ` in ${dup.state}` : ""} is already open in the system.\n\nUse the existing unit instead?`)) return;
+            if (!window.confirm(`${dup.brand} Unit ${dup.unit}${dup.state ? ` in ${dup.state}` : ""} ${tr("is already open in the system.\n\nUse the existing unit instead?", "ya está abierta en el sistema.\n\n¿Usar la unidad existente?")}`)) return;
             setDropSel(`u:${dup.id}`); setDropCreating(false); setDropNewUnit({ brand:"", unit:"", state:"", size:"" });
             return;
           }
