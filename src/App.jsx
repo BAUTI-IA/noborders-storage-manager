@@ -3186,7 +3186,7 @@ const NAV = [
 
 // Flat list of every CRM section id (drives the permissions grid + page fallback).
 const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
-function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAdmin = false }) {
+function Sidebar({ page, setPage, onSignOut, can = () => true, isAdmin = false }) {
   // Only show sections the user can view; the Users section is admin-only.
   const visibleNav = NAV
     .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : (it.id === "suggestions" || it.id === "trash") ? true : can(it.id, "view")) }))
@@ -3203,15 +3203,11 @@ function Sidebar({ page, setPage, onSignOut, badges = {}, can = () => true, isAd
             <div style={{ fontSize:10, fontWeight:600, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.07em", padding:"6px 10px 4px" }}>{group.section}</div>
             {group.items.map(it => {
               const active = page === it.id;
-              const badge = badges[it.id] || 0;
               return (
                 <button key={it.id} onClick={() => setPage(it.id)}
                   style={{ width:"100%", display:"flex", alignItems:"center", gap:9, padding:"8px 10px", borderRadius:8, border:"none", cursor:"pointer", fontSize:13.5, fontWeight: active?600:500, textAlign:"left", marginBottom:2, background: active?"#111":"transparent", color: active?"#fff":"#444" }}>
                   <span style={{ fontSize:14 }}>{it.icon}</span>
                   <span style={{ flex:1 }}>{it.label}</span>
-                  {badge > 0 && (
-                    <span style={{ background: active?"#fff":"#E24B4A", color: active?"#111":"#fff", fontSize:10, fontWeight:700, borderRadius:10, padding:"1px 6px" }}>{badge}</span>
-                  )}
                 </button>
               );
             })}
@@ -5349,14 +5345,6 @@ export default function App() {
     return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [jobs]);
 
-  // Sidebar alert badges.
-  const sidebarBadges = useMemo(() => ({
-    dispatching: faddStats.overdue,
-    calendario_entregas: deliveryToSchedule,
-    billing: billingOverdueCount,
-    storage: urgentPayments,
-  }), [faddStats.overdue, deliveryToSchedule, billingOverdueCount, urgentPayments]);
-
   // ── Carrier settlements derived data ──
   const sheetById = useMemo(() => { const m = {}; for (const s of closingSheets) m[s.id] = s; return m; }, [closingSheets]);
   // Distinct-by-job storage_jobs rows assigned to each closing sheet.
@@ -5575,7 +5563,7 @@ export default function App() {
     return out;
   }, [trips, tripCalc, truckById]);
 
-  // ── Legal & Compliance derived data (declared before sidebarBadgesPlus, which reads it) ──
+  // ── Legal & Compliance derived data ──
   const companyById = useMemo(() => { const m = {}; for (const c of companies) m[c.id] = c; return m; }, [companies]);
   // Display name for a doc's entity (company/truck/driver).
   const entityName = useCallback((type, id) => {
@@ -5667,7 +5655,6 @@ export default function App() {
     return { open, investigating, resolvedYtd, claimed, paid, avgClose: closed ? Math.round(closeDays / closed) : null };
   }, [claims]);
 
-  const sidebarBadgesPlus = useMemo(() => ({ ...sidebarBadges, settlements: settlementMetrics.openCount || 0, trips: tripMetrics.activeCount || 0, compliance: complianceAlerts.length || 0, claims: claimsActive.length || 0, messages: chatUnread || 0 }), [sidebarBadges, settlementMetrics.openCount, tripMetrics.activeCount, complianceAlerts.length, claimsActive.length, chatUnread]);
 
   // Team-chat unread badge while the Messages section is closed. Realtime rows
   // respect RLS, so only channels visible to this user arrive here. When the
@@ -8585,7 +8572,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} badges={sidebarBadgesPlus} can={can} isAdmin={isAdmin} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} can={can} isAdmin={isAdmin} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
