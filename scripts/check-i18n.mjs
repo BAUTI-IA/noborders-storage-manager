@@ -45,11 +45,13 @@ const looksSpanish = (s) =>
   /[áéíóúñÁÉÍÓÚÑ¿¡]/.test(s) ||
   /\b(sin|elegí|cargá|corré|buscá|agregá|creá|falta|borrar|cuenta|nueva|nuevo|pendiente|cobro|pago|mes|semana|hoy|categoría|gastos|papelera|historial|bandeja|conciliación|ingresos|egresos|deberia|debería)\b/i.test(s);
 
-// Whitelist: strings that read the same in both languages or are intentional
-// proper nouns — never reported. Keep this SHORT; prefer dictionary entries.
+// Whitelist: strings that read the same in both languages, proper nouns, or
+// checker noise — never reported. The long list lives in scripts/i18n-ignore.json
+// (exact-match, reviewed by hand); keep hardcoded additions SHORT.
 const SAME_IN_BOTH = new Set(
   ["No Borders Moving", "Operations CRM", "OK", "Zelle", "Cash", "Check", "Total", "Supabase", "CSV", "PDF"].map((s) => s.toLowerCase())
 );
+const IGNORE = new Set(JSON.parse(readFileSync(join(ROOT, "scripts", "i18n-ignore.json"), "utf8")));
 
 // ── AST walk ─────────────────────────────────────────────────────────────────
 function walk(node, fn, parents = []) {
@@ -70,21 +72,32 @@ const ATTRS = new Set(["placeholder", "title", "aria-label", "alt"]);
 function extract(file, src) {
   const ast = parse(src, { sourceType: "module", plugins: ["jsx"] });
   const found = new Map(); // text -> {kind, line}
-  const add = (raw, kind, line) => {
+  // Ranges covered by tr(en, es) / trAI(en, es) / t(en) calls — those strings
+  // are already language-aware, so literals inside them are not "missing".
+  const trRanges = [];
+  walk(ast.program, (node) => {
+    if (node.type !== "CallExpression") return;
+    const c = node.callee;
+    const name = c?.type === "Identifier" ? c.name : c?.type === "MemberExpression" && c.property?.type === "Identifier" ? c.property.name : null;
+    if (name === "tr" || name === "trAI" || name === "t") trRanges.push([node.start, node.end]);
+  });
+  const inTr = (node) => trRanges.some(([s, e]) => node.start >= s && node.end <= e);
+  const add = (raw, kind, line, node) => {
     const t = raw.replace(/\s+/g, " ").trim();
-    if (ignorable(t) || SAME_IN_BOTH.has(t.toLowerCase())) return;
+    if (ignorable(t) || SAME_IN_BOTH.has(t.toLowerCase()) || IGNORE.has(t)) return;
+    if (node && inTr(node)) return;
     if (!found.has(t)) found.set(t, { kind, line });
   };
   walk(ast.program, (node, parents) => {
     const parent = parents[parents.length - 1];
-    if (node.type === "JSXText") add(node.value, "jsx", node.loc.start.line);
+    if (node.type === "JSXText") add(node.value, "jsx", node.loc.start.line, node);
     // <input placeholder="..." title="...">
     if (node.type === "JSXAttribute" && node.name?.name && ATTRS.has(node.name.name)) {
-      if (node.value?.type === "StringLiteral") add(node.value.value, "attr:" + node.name.name, node.loc.start.line);
+      if (node.value?.type === "StringLiteral") add(node.value.value, "attr:" + node.name.name, node.loc.start.line, node.value);
       // {cond ? "a" : "b"} inside attr
       if (node.value?.type === "JSXExpressionContainer") {
         walk(node.value, (n2) => {
-          if (n2.type === "StringLiteral") add(n2.value, "attr:" + node.name.name, n2.loc.start.line);
+          if (n2.type === "StringLiteral") add(n2.value, "attr:" + node.name.name, n2.loc.start.line, n2);
         });
       }
     }
@@ -94,7 +107,7 @@ function extract(file, src) {
       const inAttr = parents.some((p) => p.type === "JSXAttribute");
       const isCompare = parent.type === "BinaryExpression" || parent.type === "SwitchCase";
       const isProp = parent.type === "ObjectProperty" || parent.type === "MemberExpression" || parent.type === "CallExpression" && !inChildren;
-      if (inChildren && !inAttr && !isCompare && !isProp) add(node.value, "jsx-expr", node.loc.start.line);
+      if (inChildren && !inAttr && !isCompare && !isProp) add(node.value, "jsx-expr", node.loc.start.line, node);
     }
     // alert("...") / window.confirm(`...`)
     if (node.type === "CallExpression") {
@@ -102,8 +115,8 @@ function extract(file, src) {
       const name = callee?.type === "Identifier" ? callee.name : callee?.type === "MemberExpression" && callee.property?.type === "Identifier" ? callee.property.name : null;
       if (name && DIALOG_CALLEES.has(name)) {
         const arg = node.arguments[0];
-        if (arg?.type === "StringLiteral") add(arg.value, "dialog", arg.loc.start.line);
-        if (arg?.type === "TemplateLiteral") arg.quasis.forEach((q) => hasLetter(q.value.cooked || "") && add(q.value.cooked, "dialog-template", q.loc.start.line));
+        if (arg?.type === "StringLiteral") add(arg.value, "dialog", arg.loc.start.line, arg);
+        if (arg?.type === "TemplateLiteral") arg.quasis.forEach((q) => hasLetter(q.value.cooked || "") && add(q.value.cooked, "dialog-template", q.loc.start.line, q));
       }
     }
   });
