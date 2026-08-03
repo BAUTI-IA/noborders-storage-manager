@@ -8,6 +8,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
 } from "recharts";
 import { UsMarginMap } from "./usMap.jsx";
+import { tr } from "./i18n.js";
 import {
   parseCf, effCf, rangeFromPreset, previousRange, buildFilterCtx,
   computeStoragePnl, computeMetrics, computeRevenueSplit, monthlyRevenueSeries,
@@ -103,7 +104,7 @@ function KpiTile({ label, value, delta, goodUp = true, spark, sparkColor = C.azu
           </span>
         )}
       </div>
-      {delta != null && !isFinite(delta.pct) && <span style={{ fontSize: 10.5, color: "#bbb" }}>sin período anterior</span>}
+      {delta != null && !isFinite(delta.pct) && <span style={{ fontSize: 10.5, color: "#bbb" }}>no previous period</span>}
       {spark && spark.some(d => d.v) && (
         <div style={{ height: 36, marginTop: 2 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -380,15 +381,15 @@ export function AnalyticsPage({
         {PRESETS.map(([v, l]) => <button key={v} style={pill(preset === v)} onClick={() => setPreset(v)}>{l}</button>)}
         <span style={{ width: 1, height: 22, background: "#eee", margin: "0 4px" }} />
         <select style={sel} value={stateF} onChange={e => setStateF(e.target.value)}>
-          <option value="">Todos los estados</option>
+          <option value="">All states</option>
           {stateOpts.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
         <select style={sel} value={brokerF} onChange={e => setBrokerF(e.target.value)}>
-          <option value="">Todos los brokers</option>
+          <option value="">All brokers</option>
           {brokerOpts.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
         {(stateF || brokerF) && (
-          <button style={{ ...sel, cursor: "pointer", color: C.rojo, fontWeight: 600 }} onClick={() => { setStateF(""); setBrokerF(""); }}>✕ limpiar</button>
+          <button style={{ ...sel, cursor: "pointer", color: C.rojo, fontWeight: 600 }} onClick={() => { setStateF(""); setBrokerF(""); }}>✕ clear</button>
         )}
       </div>
 
@@ -416,8 +417,8 @@ export function AnalyticsPage({
           <div style={grid2}>
             <div style={card}>
               <Title>Alertas</Title>
-              <div style={sub}>Dónde estás perdiendo plata hoy</div>
-              {alerts.length === 0 && <Empty>Sin alertas — todo en orden ✓</Empty>}
+              <div style={sub}>Where you're losing money today</div>
+              {alerts.length === 0 && <Empty>No alerts — all good ✓</Empty>}
               {alerts.map((a, i) => (
                 <div key={i} onClick={() => a.go && setTab(a.go)}
                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, marginBottom: 6, background: "#fafafa", cursor: a.go ? "pointer" : "default", fontSize: 12.5 }}>
@@ -429,8 +430,8 @@ export function AnalyticsPage({
             </div>
 
             <div style={card}>
-              <Title>Cobrado por mes</Title>
-              <div style={sub}>{paymentsMissing ? "Aproximado desde los jobs (sin tabla de pagos)" : "Pagos netos de descuento: recibidos vs pendientes"}</div>
+              <Title>Collected by month</Title>
+              <div style={sub}>{paymentsMissing ? "Approximated from jobs (no payments table)" : "Payments net of discount: received vs pending"}</div>
               <LegendRow items={[["Cobrado", C.verde], ["Pendiente", C.ambar]]} />
               <div style={{ height: 210 }}>
                 <ResponsiveContainer>
@@ -449,8 +450,8 @@ export function AnalyticsPage({
 
           <div style={grid2}>
             <div style={card}>
-              <Title>Jobs nuevos vs entregados</Title>
-              <div style={sub}>Flujo de la operación por mes</div>
+              <Title>New vs delivered jobs</Title>
+              <div style={sub}>Operation flow by month</div>
               <LegendRow items={[["Nuevos", C.azul], ["Entregados", C.gris]]} />
               <div style={{ height: 210 }}>
                 <ResponsiveContainer>
@@ -467,11 +468,11 @@ export function AnalyticsPage({
             </div>
 
             <div style={card}>
-              <Title>Ocupación de unidades</Title>
-              <div style={sub}>Unidades con carga adentro vs unidades alquiladas (últimos 12 meses; excluye cerradas)</div>
+              <Title>Unit occupancy</Title>
+              <div style={sub}>Units with cargo inside vs rented units (last 12 months; excludes closed)</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
                 <span style={{ fontSize: 24, fontWeight: 700 }}>{pnl.rows.length ? Math.round(pnl.rows.filter(r => r.occupied).length / pnl.rows.length * 100) : 0}%</span>
-                <span style={{ fontSize: 12, color: "#999" }}>{pnl.rows.filter(r => r.occupied).length} de {pnl.rows.length} unidades ocupadas hoy</span>
+                <span style={{ fontSize: 12, color: "#999" }}>{pnl.rows.filter(r => r.occupied).length} of {pnl.rows.length} units occupied today</span>
               </div>
               <div style={{ height: 170 }}>
                 <ResponsiveContainer>
@@ -545,7 +546,7 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
     Comisiones: Math.round(r.commissions),
   }));
 
-  if (expensesMissing) return <Empty>Falta correr el setup de Expenses (SQL) para ver el P&L por driver.</Empty>;
+  if (expensesMissing) return <Empty>Run the Expenses setup (SQL) to see the P&L per driver.</Empty>;
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 14 }}>
@@ -557,27 +558,27 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
 
       <div style={grid2Static}>
         <div style={card}>
-          <Title>P&L por driver</Title>
-          <div style={sub}>Revenue de jobs compartidos dividido en partes iguales entre drivers — aproximado. Solo gastos aprobados.</div>
-          {rows.length === 0 ? <Empty>Sin actividad de drivers en el período.</Empty> : (
+          <Title>P&L per driver</Title>
+          <div style={sub}>Revenue from shared jobs split equally between drivers — approximate. Approved expenses only.</div>
+          {rows.length === 0 ? <Empty>No driver activity in the period.</Empty> : (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                 <thead><tr style={{ borderBottom: "1px solid #efefef" }}>
-                  {["Driver", "Jobs", "Revenue", "Días", "Días × rate", "Gastos", "Comisiones", "Ajustes", "Neto", "Margen"].map((h, i) => (
+                  {["Driver", "Jobs", "Revenue", "Days", "Days × rate", "Expenses", "Commissions", "Adjustments", "Net", "Margin"].map((h, i) => (
                     <th key={i} style={{ padding: "8px 8px", textAlign: i === 0 ? "left" : "right", fontWeight: 600, fontSize: 10.5, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
                   {rows.map(r => (
                     <tr key={r.driverId} style={{ borderBottom: "1px solid #fafafa" }}>
-                      <td style={{ padding: "8px", fontWeight: 600 }}>{r.name}{r.pendingTotal > 0 && <span title="gastos pendientes de aprobar" style={{ fontSize: 10, color: "#C2410C", marginLeft: 5 }}>+{fmtK(r.pendingTotal)} pend.</span>}</td>
+                      <td style={{ padding: "8px", fontWeight: 600 }}>{r.name}{r.pendingTotal > 0 && <span title="expenses pending approval" style={{ fontSize: 10, color: "#C2410C", marginLeft: 5 }}>+{fmtK(r.pendingTotal)} pending</span>}</td>
                       <td style={{ padding: "8px", textAlign: "right" }}>{r.jobsCount}</td>
                       <td style={{ padding: "8px", textAlign: "right", fontWeight: 600 }}>{fmtM(r.revenue)}</td>
                       <td style={{ padding: "8px", textAlign: "right" }}>{r.workedDays}</td>
                       <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.laborCost)}</td>
                       <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.expensesTotal)}</td>
                       <td style={{ padding: "8px", textAlign: "right" }}>{fmtM(r.commissions)}</td>
-                      <td style={{ padding: "8px", textAlign: "right", color: r.adjustmentsNet > 0 ? C.rojo : r.adjustmentsNet < 0 ? C.verde : "#888" }} title="bonos − descuentos por fuck-ups">{r.adjustmentsNet !== 0 ? fmtM(r.adjustmentsNet) : "—"}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: r.adjustmentsNet > 0 ? C.rojo : r.adjustmentsNet < 0 ? C.verde : "#888" }} title="bonuses − deductions for fuck-ups">{r.adjustmentsNet !== 0 ? fmtM(r.adjustmentsNet) : "—"}</td>
                       <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: r.net >= 0 ? C.verde : C.rojo }}>{fmtM(r.net)}</td>
                       <td style={{ padding: "8px", textAlign: "right", color: "#888" }}>{r.margin == null ? "—" : Math.round(r.margin * 100) + "%"}</td>
                     </tr>
@@ -601,8 +602,8 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
         </div>
 
         <div style={card}>
-          <Title>Revenue vs costo por driver</Title>
-          <div style={sub}>El costo se apila: días × rate + gastos + comisiones</div>
+          <Title>Revenue vs cost per driver</Title>
+          <div style={sub}>Cost stacks up: days × rate + expenses + commissions</div>
           <LegendRow items={[["Revenue", C.verde], ["Días × rate", C.azul], ["Gastos", C.naranja], ["Comisiones", C.violeta]]} />
           <div style={{ height: 250 }}>
             <ResponsiveContainer>
@@ -623,10 +624,10 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
 
       <div style={grid2Static}>
         <div style={card}>
-          <Title chip={fuel.medianPpg ? `mediana $${fuel.medianPpg.toFixed(2)}/gal` : null}>Señales de fuel</Title>
-          <div style={sub}>Cargas con precio/galón fuera de rango (&gt;1.5× o &lt;0.5× la mediana) — posible robo o carga mal registrada</div>
-          {fuel.fillsWithGallons === 0 ? <Empty>Cargá galones en los gastos de fuel para activar esta señal.</Empty>
-            : fuel.outliers.length === 0 ? <Empty>Sin outliers de precio/galón ✓</Empty>
+          <Title chip={fuel.medianPpg ? `mediana $${fuel.medianPpg.toFixed(2)}/gal` : null}>Fuel signals</Title>
+          <div style={sub}>Fill-ups with price/gallon out of range (&gt;1.5× or &lt;0.5× the median) — possible theft or a mis-logged fill-up</div>
+          {fuel.fillsWithGallons === 0 ? <Empty>Enter gallons in fuel expenses to enable this signal.</Empty>
+            : fuel.outliers.length === 0 ? <Empty>No price/gallon outliers ✓</Empty>
             : fuel.outliers.map(o => (
               <div key={o.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, background: "#FCEBEB", marginBottom: 6, fontSize: 12.5 }}>
                 <span>⛽</span>
@@ -637,7 +638,7 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
             ))}
           {fuel.costPerMile.length > 0 && (
             <>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.06em", margin: "12px 0 6px" }}>$/milla entre cargas (odómetro)</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.06em", margin: "12px 0 6px" }}>$/mile between fill-ups (odometer)</div>
               {fuel.costPerMile.slice(0, 6).map((c, i) => (
                 <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "#555", padding: "3px 0" }}>
                   <span style={{ flex: 1 }}>Truck #{c.truckId} · {c.from || "?"} → {c.to || "?"}</span>

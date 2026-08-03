@@ -11,6 +11,7 @@ import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./us
 import { BancosSection } from "./bank.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
+import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -22,589 +23,6 @@ const undoMgr = createUndoManager(supabase);
 // Soft-deleted rows stay in the DB but never reach the normal views.
 const notDel = (r) => !r.deleted_at;
 
-// ── Lightweight EN→ES UI toggle ──────────────────────────────────────────────
-// The app source is English. When the user picks Spanish, a DOM pass swaps the
-// known UI strings in place (text nodes + placeholder/title), reverting on EN.
-const I18N_ES = {
-  "(choose a unit)": "(elegí una unidad)",
-  "(no #)": "(sin #)",
-  "(no client)": "(sin cliente)",
-  "+ Add": "+ Agregar",
-  "+ Add job": "+ Agregar job",
-  "+ Add to this unit": "+ Agregar a esta unidad",
-  "+ Job to a unit": "+ Job a una unidad",
-  "+ Job to unit": "+ Job a unidad",
-  "AI metrics and recommendations": "Métricas y recomendaciones con IA",
-  "Account": "Cuenta",
-  "Actions": "Acciones",
-  "Chats": "Chats",
-  "Team conversations and direct messages": "Conversaciones del equipo y mensajes directos",
-  "Active now": "En línea",
-  "Offline": "Desconectado",
-  "New chat": "Nuevo chat",
-  "Search chats…": "Buscar chats…",
-  "Search people…": "Buscar personas…",
-  "People": "Personas",
-  "Say hi 👋": "Saludá 👋",
-  "You: ": "Vos: ",
-  "No messages yet": "Todavía no hay mensajes",
-  "No messages yet. Say hi! 👋": "Todavía no hay mensajes. ¡Saludá! 👋",
-  "No chats yet — tap + to start one.": "Todavía no hay chats — tocá + para empezar uno.",
-  "Pick a chat to start messaging": "Elegí un chat para empezar a conversar",
-  "Group chat · visible to the whole team": "Chat grupal · visible para todo el equipo",
-  "Pick one person for a direct message, or several for a private group.": "Elegí una persona para un mensaje directo, o varias para un grupo privado.",
-  "Group name (optional)": "Nombre del grupo (opcional)",
-  "Select people": "Elegí personas",
-  "Private group": "Grupo privado",
-  "Cancel": "Cancelar",
-  "To create private groups with selected members, run this SQL once in Supabase (SQL Editor):": "Para crear grupos privados con miembros elegidos, corré este SQL una vez en Supabase (SQL Editor):",
-  "I ran it — dismiss": "Ya lo corrí — cerrar",
-  "No teammates found.": "No se encontraron compañeros.",
-  "Delete message": "Borrar mensaje",
-  "Delete group": "Borrar grupo",
-  "Seen": "Visto",
-  "Seen by": "Visto por",
-  "Delivered": "Entregado",
-  "Sent": "Enviado",
-  "Last seen": "Últ. vez",
-  "To enable read receipts and last connection, run this SQL once in Supabase (SQL Editor):": "Para activar los recibos de lectura y la última conexión, corré este SQL una vez en Supabase (SQL Editor):",
-  "Send": "Enviar",
-  "One-time setup needed": "Se necesita una configuración única",
-  "I ran it — retry": "Ya lo corrí — reintentar",
-  "Employee feedback and improvement ideas": "Feedback del equipo e ideas de mejora",
-  "💡 Share a suggestion": "💡 Compartí una sugerencia",
-  "Tell us what's working, what isn't, and what you'd change — ideas here go straight to management.": "Contanos qué funciona, qué no, y qué cambiarías — las ideas llegan directo a la gerencia.",
-  "Your idea or feedback… e.g. 'The pickup calendar should show the driver's phone'": "Tu idea o feedback… ej: 'El calendario de pickups debería mostrar el teléfono del driver'",
-  "Post without my name": "Publicar sin mi nombre",
-  "Send suggestion": "Enviar sugerencia",
-  "Sending…": "Enviando…",
-  "Write your suggestion first.": "Escribí tu sugerencia primero.",
-  "In review": "En revisión",
-  "Implemented": "Implementada",
-  "Rejected": "Rechazada",
-  "Most recent": "Más recientes",
-  "Most voted": "Más votadas",
-  "No suggestions yet": "Todavía no hay sugerencias",
-  "No suggestions in this status": "No hay sugerencias en este estado",
-  "Be the first — every idea helps us improve.": "Sé el primero — cada idea nos ayuda a mejorar.",
-  "Anonymous": "Anónimo",
-  "(you)": "(vos)",
-  "Management reply:": "Respuesta de la gerencia:",
-  "Reply": "Responder",
-  "Edit reply": "Editar respuesta",
-  "Save reply": "Guardar respuesta",
-  "Reply to the team about this suggestion…": "Respondele al equipo sobre esta sugerencia…",
-  "Vote for this": "Votar esta sugerencia",
-  "Remove my vote": "Quitar mi voto",
-  "Active": "Activo",
-  "Active companies": "Empresas activas",
-  "Active jobs": "Jobs activos",
-  "Add": "Agregar",
-  "Add at least one line with an amount.": "Agregá al menos una línea con monto.",
-  "Add drivers in the Drivers section to multi-assign": "Cargá drivers en la sección Drivers para multi-asignar",
-  "Add extra": "Agregar extra",
-  "Add job": "Agregar job",
-  "Add to the unit": "Agregar a la unidad",
-  "Adding...": "Agregando...",
-  "Address": "Direccion",
-  "Address or reference visible in the list": "Dirección o referencia visible en la lista",
-  "All": "Todos",
-  "All documents": "Todos los documentos",
-  "All jobs with full detail": "Todos los trabajos con detalle completo",
-  "All months": "Todos los meses",
-  "Amount": "Monto",
-  "Amount ($)": "Monto ($)",
-  "Amount ($) *": "Monto ($) *",
-  "Amount collected ($)": "Monto cobrado ($)",
-  "Analyze with AI": "Analizar con IA",
-  "Assign commission": "Asignar comisión",
-  "BOL balance to collect": "BOL balance a cobrar",
-  "BOL balance to collect from client ($)": "BOL balance a cobrar al cliente ($)",
-  "BOL collected": "BOL cobrado",
-  "BOL collected ($)": "BOL cobrado ($)",
-  "BOL collection pending": "Cobro BOL pendiente",
-  "BOL in transit": "BOL en tránsito",
-  "Back": "Volver",
-  "Bank account": "Cuenta bancaria",
-  "Basic info": "Información básica",
-  "Broker owes us": "Broker nos debe",
-  "Broker-delivery closing sheets": "Closing sheets de broker deliveries",
-  "Brokers and outstanding balances": "Brokers y balances pendientes",
-  "Brown": "Marrón",
-  "CC fees collected": "CC fees cobrados",
-  "CF delivered": "CF entregados",
-  "CF in transit": "CF en tránsito",
-  "Calendar": "Calendario",
-  "Cancel": "Cancelar",
-  "Cancelled": "Cancelado",
-  "Cash": "Cash",
-  "Change password": "Cambiar contraseña",
-  "Check": "Check",
-  "Choose a destination.": "Elegí un destino.",
-  "Choose a unit first": "Elegí una unidad primero",
-  "Choose or type (CubeSmart...)": "Elegí o escribí (CubeSmart...)",
-  "Choose who the document belongs to.": "Elegí a quién pertenece el documento.",
-  "City": "Ciudad",
-  "Client": "Cliente",
-  "Client *": "Cliente *",
-  "Client billing": "Billing al cliente",
-  "Client email": "Email del cliente",
-  "Client name": "Nombre del cliente",
-  "Client phone": "Teléfono del cliente",
-  "Client storage billing (optional)": "Storage billing al cliente (opcional)",
-  "Client storage collection": "Cobro de storage a clientes",
-  "Clients": "Clientes",
-  "Clients and their jobs": "Clientes y sus trabajos",
-  "Close": "Cerrar",
-  "Closed": "Cerrado",
-  "Closing sheet notes...": "Notas del closing sheet...",
-  "Collected": "Cobrado",
-  "Collected this month": "Cobrado este mes",
-  "Collected via split payment": "Cobrado vía pago dividido",
-  "Collection": "Cobro",
-  "Collection date": "Fecha de cobro",
-  "Collection notes (e.g. split cash + zelle)": "Notas del cobro (ej: split cash + zelle)",
-  "Collections, cash in circulation and deposits": "Cobros, efectivo en circulación y depósitos",
-  "Commission": "Comisión",
-  "Commission assigned": "Comisión asignada",
-  "Commission pending": "Comisión pendiente",
-  "Companies, documents and expirations": "Empresas, documentos y vencimientos",
-  "Company": "Empresa",
-  "Completed": "Completado",
-  "Concept": "Concepto",
-  "Confirm": "Confirmar",
-  "Confirm new password": "Confirmar nueva contraseña",
-  "Contact": "Contacto",
-  "Copy the summary:": "Copiá el resumen:",
-  "Create": "Crear",
-  "Create account": "Crear cuenta",
-  "Create new": "Crear nuevo",
-  "Create payment": "Crear pago",
-  "Create pickup": "Crear pick up",
-  "Create split payments": "Crear pagos divididos",
-  "Create trip": "Crear trip",
-  "Create your account to sign in": "Crea tu cuenta para acceder",
-  "Current password": "Contraseña actual",
-  "Current password is incorrect.": "La contraseña actual es incorrecta.",
-  "Database": "Base de datos",
-  "Database setup": "Configuración de base de datos",
-  "Date": "Fecha",
-  "Date *": "Fecha *",
-  "Days in storage": "Días en storage",
-  "Delete": "Eliminar",
-  "Delete job": "Eliminar job",
-  "Delete split": "Eliminar split",
-  "Delete this payment?": "¿Eliminar este pago?",
-  "Delete this storage?": "Eliminar este storage?",
-  "Delete this timeline event?": "¿Eliminar este evento del timeline?",
-  "Delivered": "Entregado",
-  "Delivered jobs": "Jobs entregados",
-  "Delivered today": "Entregados hoy",
-  "Delivery address": "Dirección delivery",
-  "Delivery balance ($)": "Balance en delivery ($)",
-  "Delivery state": "Delivery estado",
-  "Dep. date": "Fecha dep.",
-  "Departure": "Salida",
-  "Deposit date": "Fecha depósito",
-  "Deposited": "Depositado",
-  "Deposited this month": "Depositado este mes",
-  "Deposited this week": "Depositado esta semana",
-  "Description": "Descripción",
-  "Discount": "Descuento",
-  "Discount reason": "Razón del descuento",
-  "Dismiss": "Descartar",
-  "Doc type": "Tipo doc",
-  "Document type": "Tipo de documento",
-  "Drag or tap to upload photo/PDF (jpg, png, heic, pdf)": "Arrastrá o tocá para subir foto/PDF (jpg, png, heic, pdf)",
-  "Drag to reorder": "Arrastrá para reordenar",
-  "Driver (who dropped it off)": "Driver (quién lo dejó)",
-  "Driver + Rep": "Driver + Rep",
-  "Driver commission": "Comisión driver",
-  "Driver commissions": "Comisiones driver",
-  "Driver name": "Nombre del chofer",
-  "Driver only": "Solo driver",
-  "Due date": "Fecha de vencimiento",
-  "Duplicate record deleted": "Registro duplicado eliminado",
-  "Duplicate review": "Revisión de duplicados",
-  "Duration": "Duración",
-  "Edit": "Editar",
-  "Edit Extra CF": "Editar Extra CF",
-  "Edit broker": "Editar broker",
-  "Edit closing sheet": "Editar closing sheet",
-  "Edit company": "Editar empresa",
-  "Edit document": "Editar documento",
-  "Edit driver": "Editar driver",
-  "Edit extra": "Editar extra",
-  "Edit job": "Editar job",
-  "Edit payment": "Editar pago",
-  "Edit trip": "Editar trip",
-  "Edit truck": "Editar camión",
-  "Edit unit": "Editar unidad",
-  "Empty": "Vacio",
-  "Entity": "Entidad",
-  "Entity type": "Tipo de entidad",
-  "Error connecting to the AI. Try again.": "Error al conectar con la IA. Intenta de nuevo.",
-  "Event type *": "Tipo de evento *",
-  "Expected this month": "Esperado este mes",
-  "Expired": "Vencido",
-  "Expiring in 30 days": "Vencen en 30 días",
-  "Expiring soon": "Por vencer",
-  "Expiry": "Vencimiento",
-  "Extras & Commissions": "Extras & Comisiones",
-  "Extras per job and driver/rep commissions": "Extras por job y comisiones de driver/rep",
-  "Fill in at least job, client or driver.": "Completá al menos job, cliente o driver.",
-  "First month free?": "¿Primer mes gratis?",
-  "For the company": "Para la empresa",
-  "Generated by": "Generado por",
-  "Gross (collected + extras)": "Bruto (cobrado + extras)",
-  "Historical ref.": "Ref. histórica",
-  "In circulation": "En circulación",
-  "In circulation (not deposited)": "En circulación (sin depositar)",
-  "In circulation (total)": "En circulación (total)",
-  "In storage": "En storage",
-  "In transit": "En tránsito",
-  "Issue date": "Fecha de emisión",
-  "Issued": "Emisión",
-  "Issuer": "Emisor",
-  "Job type *": "Tipo de job *",
-  "Jobs in units": "Jobs en unidades",
-  "Jobs with the same number": "Jobs con mismo número",
-  "Label / address": "Etiqueta / dirección",
-  "Live load per truck": "Carga en vivo por camión",
-  "Load": "Cargar",
-  "Loading": "Cargando",
-  "Loading...": "Cargando...",
-  "Location": "Ubicación",
-  "Method": "Método",
-  "Missing coordinates (search an address or enter lat/lng).": "Faltan las coordenadas (buscá una dirección o cargá lat/lng).",
-  "Month": "Mes",
-  "Name": "Nombre",
-  "Name / number *": "Nombre / número *",
-  "Net": "Neto",
-  "Net result": "Resultado neto",
-  "Net to company": "Neto para la empresa",
-  "New": "Nuevo",
-  "New broker": "Nuevo broker",
-  "New closing sheet": "Nuevo closing sheet",
-  "New company": "Nueva empresa",
-  "New document": "Nuevo documento",
-  "New driver": "Nuevo driver",
-  "New job": "Nuevo job",
-  "New password": "Nueva contraseña",
-  "New payment": "Nuevo pago",
-  "New trip": "Nuevo trip",
-  "New truck": "Nuevo camión",
-  "New unit": "Nueva unidad",
-  "No": "No",
-  "No FADD": "Sin FADD",
-  "No active trip": "Sin viaje activo",
-  "No active trips. Create one with “+ Trip”.": "Sin trips activos. Creá uno con “+ Trip”.",
-  "No billing records.": "Sin registros de billing.",
-  "No brokers added.": "Sin brokers cargados.",
-  "No closing sheets. Create one with “+ Closing sheet”.": "Sin closing sheets. Creá uno con “+ Closing sheet”.",
-  "No data": "Sin datos",
-  "No date": "Sin fecha",
-  "No delivered jobs": "Sin jobs entregados",
-  "No driver for today": "Sin driver para hoy",
-  "No drivers. Add one with “+ Driver”.": "Sin drivers. Agregá uno con “+ Driver”.",
-  "No expiry": "Sin vencimiento",
-  "No fuel surcharge": "Sin fuel surcharge",
-  "No jobs in this status.": "Sin jobs en este estado.",
-  "No name": "Sin nombre",
-  "No results.": "Sin resultados.",
-  "No trip assigned": "Sin trip asignado",
-  "No trips.": "Sin trips.",
-  "No trucks. Add one with “+ Truck”.": "Sin camiones. Agregá uno con “+ Camión”.",
-  "No. / policy / certificate": "N° / póliza / certificado",
-  "Notes": "Notas",
-  "Occupancy": "Ocupación",
-  "Occupied units": "Unidades ocupadas",
-  "On another active trip — will move here": "En otro trip activo — se moverá a este",
-  "On hold": "En espera",
-  "On the gross amount": "Sobre el monto bruto",
-  "Open": "Abrir",
-  "Open closing sheets": "Closing sheets abiertos",
-  "Open date": "Fecha de apertura",
-  "Operation drivers": "Choferes de la operación",
-  "Operation settings": "Configuración de la operación",
-  "Other fees description": "Descripción other fees",
-  "Out for delivery": "En entrega",
-  "Outstanding BOL collections": "Cobros BOL pendientes",
-  "Outstanding balance": "Balance pendiente",
-  "Owes us": "Nos debe",
-  "Pads missing (auto)": "Pads faltantes (auto)",
-  "Pads outstanding ($)": "Pads pendientes ($)",
-  "Pads received from broker": "Pads recibidos del broker",
-  "Pads returned (post-delivery)": "Pads devueltos (post-delivery)",
-  "Password must be at least 8 characters.": "La contraseña debe tener al menos 8 caracteres.",
-  "Password updated.": "Contraseña actualizada.",
-  "Passwords do not match.": "Las contraseñas no coinciden.",
-  "Payment date": "Fecha de pago",
-  "Payment due date": "Vencimiento de pago",
-  "Payment method": "Método de pago",
-  "Payment stage": "Etapa del pago",
-  "Pending": "Pendiente",
-  "Pending collection": "Pendiente de cobro",
-  "Period": "Período",
-  "Phone": "Teléfono",
-  "Photo": "Foto",
-  "Photo / file": "Foto / archivo",
-  "Physical units and occupancy": "Unidades físicas y ocupación",
-  "Pick up + Delivery (same day)": "Pick up + Delivery (mismo día)",
-  "Picked up": "Levantado",
-  "Pickup & delivery dispatch": "Despacho de pickups y deliveries",
-  "Pickup address": "Dirección pickup",
-  "Pickup balance ($)": "Balance en pickup ($)",
-  "Pickup state": "Pickup estado",
-  "Projection if everything is deposited": "Proyección si se deposita todo",
-  "Reason": "Motivo",
-  "Received": "Recibido",
-  "Received by": "Recibido por",
-  "Received date": "Fecha recibido",
-  "Received this month": "Recibido este mes",
-  "Received this week": "Recibido esta semana",
-  "Record collection (BOL)": "Registrar cobro (BOL)",
-  "Remitter (who bought it)": "Remitter (quién compró)",
-  "Remove line": "Quitar línea",
-  "Rep commissions": "Comisiones rep",
-  "Rep only": "Solo rep",
-  "Replace file": "Reemplazar archivo",
-  "Review possible duplicates": "Revisar posibles duplicados",
-  "Run the SQL to enable billing.": "Corré el SQL para activar billing.",
-  "Run the SQL to enable settlements.": "Corré el SQL para activar settlements.",
-  "Run the setup SQL to enable brokers.": "Corré el SQL de configuración para activar brokers.",
-  "Run the setup SQL to enable drivers.": "Corré el SQL de configuración para activar drivers.",
-  "Run the setup SQL to enable trucks.": "Corré el SQL de configuración para activar camiones.",
-  "Sat": "Sáb",
-  "Save": "Guardar",
-  "Save changes": "Guardar cambios",
-  "Save collection": "Guardar cobro",
-  "Save commission": "Guardar comisión",
-  "Save event": "Guardar evento",
-  "Save extra": "Guardar extra",
-  "Save job": "Guardar job",
-  "Save location": "Guardar ubicación",
-  "Saving...": "Guardando...",
-  "Scheduled": "Programados",
-  "Scheduled pickups": "Pick ups programados",
-  "Search": "Buscar",
-  "Search by address / city": "Buscar por dirección / ciudad",
-  "Search by job # or client…": "Buscar por job # o cliente…",
-  "Search by job #, client, driver, company, unit...": "Buscar por job #, cliente, driver, empresa, unidad...",
-  "Search by job #, client, driver, pickup, delivery...": "Buscar por job #, cliente, driver, pickup, delivery...",
-  "Search by job #, client, driver, zip, location...": "Buscar por job #, cliente, driver, zip, ubicación...",
-  "Search company, location, zip, unit...": "Buscar empresa, ubicación, zip, unidad...",
-  "Search for a job to add it.": "Buscá un job para agregarlo.",
-  "Search job # / client / storage to add...": "Buscar job # / cliente / storage para agregar...",
-  "Search job # or client to add...": "Buscar job # o cliente para agregar...",
-  "Search job # or client…": "Buscar job # o cliente…",
-  "Select": "Seleccionar",
-  "Select a job to record the extras and their commissions.": "Seleccioná un job para poder registrar los extras y sus comisiones.",
-  "Sign in": "Iniciar sesión",
-  "Sign in to continue": "Iniciá sesión para continuar",
-  "Sign out": "Salir",
-  "Skip": "Saltar",
-  "Status": "Estado",
-  "Sticker color": "Color del sticker",
-  "Sticker unassigned": "Sticker sin asignar",
-  "That job is already in that unit": "Ese job ya está en esa unidad",
-  "That job is already in this unit.": "Ese job ya está en esta unidad.",
-  "To collect": "A cobrar",
-  "Today": "Hoy",
-  "Total amount ($) *": "Monto total ($) *",
-  "Total collected": "Total cobrado",
-  "Total outstanding": "Total pendiente",
-  "Total to collect": "Total a cobrar",
-  "Truck": "Camión",
-  "Truck fleet": "Flota de camiones",
-  "Type": "Tipo",
-  "Type an address to search.": "Escribí una dirección para buscar.",
-  "US states": "Estados USA",
-  "Unit": "Unidad",
-  "Unit #": "Unidad #",
-  "Unit capacity": "Capacidad de la unidad",
-  "Unit status": "Estado de la unidad",
-  "Units": "Unidades",
-  "Up to date": "Al día",
-  "Update password": "Actualizar contraseña",
-  "User": "Usuario",
-  "View": "Ver",
-  "We owe": "Le debemos",
-  "We owe brokers": "Le debemos a brokers",
-  "Wed": "Mié",
-  "Week": "Semana",
-  "What happened": "Qué pasó",
-  "Where it's stored": "Dónde está guardado",
-  "Who has it": "Quién tiene",
-  "Who has the money?": "¿Quién tiene el dinero?",
-  "With fuel surcharge": "Con fuel surcharge",
-  "Without fuel surcharge": "Sin fuel surcharge",
-  "Yes": "Sí",
-  "client@email.com": "cliente@email.com",
-  "just now": "recién",
-  "legal@company.com": "legal@empresa.com",
-  "no broker": "sin broker",
-  "no client": "sin cliente",
-  "no month": "ningún mes",
-  "no truck": "sin camión",
-  "not updated": "sin actualizar",
-  "records": "registros",
-  "unit": "unidad",
-  "units": "unidades",
-  "· 1st month free": "· 1er mes gratis",
-  "— Unassigned —": "— Sin asignar —",
-  "+ New job": "+ Nuevo job",
-  "+ Payment": "+ Pago",
-  "+ Truck": "+ Camión",
-  "+ New broker": "+ Nuevo broker",
-  "+ Company": "+ Empresa",
-  "+ Document": "+ Documento",
-  "+ Closing sheet": "+ Closing sheet",
-  "+ Trip": "+ Trip",
-  "+ Add payment": "+ Agregar pago",
-  "+ Add event": "+ Agregar evento",
-  "+ Add extra": "+ Agregar extra",
-  "Reps / Employees": "Reps / Empleados",
-  "Mark all delivered": "Mark all delivered",
-  "Send manifest to driver": "Enviar manifest al driver",
-  "Request deposit": "Pedir depósito",
-  "Crear pago": "Crear pago",
-  "Create payment": "Crear pago",
-  "Create split payments": "Crear pagos divididos",
-  "New payment": "Nuevo pago",
-  "Edit payment": "Editar pago",
-  "Save collection": "Guardar cobro",
-  "Mark as in transit": "Salir (en tránsito)",
-  "Depart (in transit)": "Salir (en tránsito)",
-  "Complete trip…": "Completar trip…",
-  "Cancel trip": "Cancelar trip",
-  "Mark completed": "Marcar completado",
-  "Mark as In Transit": "Marcar en tránsito",
-  "Mark as Loading": "Marcar cargando",
-  "Mark as Completed": "Marcar completado",
-  "Reopen (mark as In Transit)": "Reabrir (marcar en tránsito)",
-  "Reopen (mark as Loading)": "Reabrir (marcar cargando)",
-  "Cancel Trip": "Cancelar trip",
-  "New trips start as Loading": "Los trips nuevos empiezan en Cargando",
-  "✨ Suggest trips (AI)": "✨ Sugerir trips (IA)",
-  "AI trip suggestions": "Sugerencias de trips (IA)",
-  "Why this trip:": "Por qué este trip:",
-  "no longer available": "ya no disponible",
-  "Review & create": "Revisar y crear",
-  "Review & add": "Revisar y agregar",
-  "New suggestions": "Nuevas sugerencias",
-  "AI recommendations": "Recomendaciones con IA",
-  "Automatic analysis of your storage operation": "Análisis automático de tu operación de storage",
-  "Analyze with AI": "Analizar con IA",
-  "Analyzing...": "Analizando...",
-  "Manage": "Gestionar",
-  "Add job to trip": "Agregar job al trip",
-  "Unplanned pickup": "Pickup no previsto",
-  "No jobs available.": "Sin jobs disponibles.",
-  "No jobs on this trip.": "Sin jobs en este trip.",
-  "Today": "Hoy",
-  "➕ Add existing job": "➕ Agregar job existente",
-  "Add existing job to calendar": "Agregar job existente al calendario",
-  "Pickup Calendar": "Calendario de Pickups",
-  "Delivery Calendar": "Calendario de Entregas",
-  "Scheduled deliveries": "Entregas programadas",
-  "Add existing job to delivery calendar": "Agregar job existente al calendario de entregas",
-  "Delivery date": "Fecha de delivery",
-  "Only jobs without a delivery date are listed. Pick a date above, then click a job to put it on the calendar.": "Solo se listan jobs sin fecha de delivery. Elegí una fecha arriba y hacé clic en un job para ponerlo en el calendario.",
-  "No matching jobs without a delivery date.": "No hay jobs sin fecha de delivery que coincidan.",
-  "No jobs pending a delivery date.": "No hay jobs pendientes de fecha de delivery.",
-  "Add to calendar": "Agregar al calendario",
-  "Edit pickup date": "Editar fecha de pickup",
-  "Remove from calendar": "Quitar del calendario",
-  "Pickup date from": "Fecha de pickup desde",
-  "Pickup date to (optional)": "Fecha de pickup hasta (opcional)",
-  "Pickup date": "Fecha de pickup",
-  "Pickup date saved": "Fecha de pickup guardada",
-  "Removed from calendar": "Quitado del calendario",
-  "🆕 Create new job on this day": "🆕 Crear job nuevo en este día",
-  "📋 Add an existing job to this day": "📋 Agregar un job existente a este día",
-  "Search": "Buscar",
-  "Add event": "Agregar evento",
-  "Save event": "Guardar evento",
-  "Delete job": "Eliminar job",
-  "Total": "Total",
-  "Expected": "Esperado",
-  "Collected (job)": "Cobrado (job)",
-  "Storage Billing": "Storage Billing",
-  "Add billing": "Activar billing",
-  "+ Add billing": "+ Activar billing",
-  "Mark as paid": "Marcar pagado",
-  "Send reminder": "Enviar recordatorio",
-  "Edit rate": "Editar tarifa",
-  "Activate billing for a job": "Activar billing para un job",
-  "No active storage billing clients": "Sin clientes de storage billing activos",
-  "Active storage clients": "Clientes de storage activos",
-  "Outstanding this month": "Pendiente este mes",
-  "Due this week": "Vence esta semana",
-  "Collected this month": "Cobrado este mes",
-  "Overdue": "Vencido",
-  "Activate storage billing": "Activar storage billing",
-  "Edit storage billing": "Editar storage billing",
-  "Monthly rate ($)": "Tarifa mensual ($)",
-  "Billing start date": "Fecha de inicio de billing",
-  "First month free": "Primer mes gratis",
-  "1st month free": "1er mes gratis",
-  "Optional notes": "Notas opcionales",
-  "Activate billing": "Activar billing",
-  "Billing start:": "Inicio de billing:",
-  "Current period:": "Período actual:",
-  "Amount due this period:": "Monto de este período:",
-  "Search by job # or client name…": "Buscar por job # o cliente…",
-  "Billing records for each 30-day period are generated automatically.": "Los registros de cada período de 30 días se generan automáticamente."
-};
-const i18nCache = new WeakMap();   // text node -> original English value
-function i18nApply() {
-  const dict = I18N_ES;
-  if (!document.body) return;
-  const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-  const nodes = []; let n;
-  while ((n = tw.nextNode())) nodes.push(n);
-  for (const t of nodes) {
-    const pn = t.parentNode; if (!pn) continue;
-    const tag = pn.nodeName;
-    if (tag === "SCRIPT" || tag === "STYLE" || tag === "TEXTAREA") continue;
-    // Never rewrite text inside SVG (charts/maps): Recharts re-renders on every
-    // hover and the swap would fight React's reconciliation.
-    if (pn.ownerSVGElement || tag === "svg" || tag === "text" || tag === "tspan") continue;
-    const raw = t.nodeValue; const key = raw.trim();
-    if (!key) continue;
-    const tr = dict[key];
-    if (tr && tr !== key) {
-      if (!i18nCache.has(t)) i18nCache.set(t, raw);
-      const lead = raw.match(/^\s*/)[0], trail = raw.match(/\s*$/)[0];
-      t.nodeValue = lead + tr + trail;
-    }
-  }
-  document.querySelectorAll("[placeholder],[title]").forEach(el => {
-    for (const attr of ["placeholder", "title"]) {
-      if (!el.hasAttribute(attr)) continue;
-      const v = el.getAttribute(attr), key = (v || "").trim(), tr = dict[key];
-      if (tr && tr !== key) {
-        const ck = "__i18n_" + attr;
-        if (!el[ck]) el[ck] = v;
-        el.setAttribute(attr, tr);
-      }
-    }
-  });
-}
-function i18nRestore() {
-  if (!document.body) return;
-  const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-  const nodes = []; let n;
-  while ((n = tw.nextNode())) nodes.push(n);
-  for (const t of nodes) { if (i18nCache.has(t)) { t.nodeValue = i18nCache.get(t); i18nCache.delete(t); } }
-  document.querySelectorAll("[placeholder],[title]").forEach(el => {
-    for (const attr of ["placeholder", "title"]) {
-      const ck = "__i18n_" + attr;
-      if (el[ck]) { el.setAttribute(attr, el[ck]); el[ck] = null; }
-    }
-  });
-}
 
 // One physical storage = one row in `storages`. Jobs that pass through a unit are
 // tracked as history in `storage_jobs`. Multiple jobs can be active at once.
@@ -1180,7 +598,7 @@ function ScheduleDeliveryRow({ cand, onSchedule, onOpen }) {
     : [cand.delivery_city, cand.delivery_state].filter(Boolean).join(", ");
   return (
     <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderBottom:"1px solid #f6f6f6", fontSize:12.5, flexWrap:"wrap" }}>
-      <button onClick={() => onOpen(cand.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:12.5 }}>{cand.job_number || "(sin #)"}</button>
+      <button onClick={() => onOpen(cand.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:12.5 }}>{cand.job_number || "(no #)"}</button>
       <span style={{ color:"#555", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:180 }}>{cand.customer || "—"}</span>
       {cand.job_type === "broker_delivery" && <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Broker</span>}
       <FaddBadge fadd={cand.fadd} />
@@ -3110,7 +2528,7 @@ function TrashSection({ supabase, undoMgr, onRestored }) {
   );
   return (
     <div>
-      <div style={{ display:"flex", gap:8, marginBottom:14 }}>{tabBtn("trash", "🗑️ Papelera")}{tabBtn("history", "🕒 Historial")}</div>
+      <div style={{ display:"flex", gap:8, marginBottom:14 }}>{tabBtn("trash", "🗑️ Trash")}{tabBtn("history", "🕒 History")}</div>
       {err && <div style={{ ...card, borderColor:"#EF9F27", background:"#FAEEDA", color:"#854F0B", fontSize:13 }}>{err}</div>}
       {busy && !rows && <div style={{ fontSize:13, color:"#999" }}>Cargando…</div>}
       {tab === "trash" && rows && TRASH_TABLES.map(([t, lbl, fmt]) => (rows[t] || []).length > 0 && (
@@ -3126,11 +2544,11 @@ function TrashSection({ supabase, undoMgr, onRestored }) {
         </div>
       ))}
       {tab === "trash" && rows && !err && TRASH_TABLES.every(([t]) => !(rows[t] || []).length) && (
-        <div style={{ ...card, color:"#999", fontSize:13 }}>La papelera está vacía.</div>
+        <div style={{ ...card, color:"#999", fontSize:13 }}>The trash is empty.</div>
       )}
       {tab === "history" && (
         <div style={card}>
-          {!log.length && <div style={{ color:"#999", fontSize:13 }}>Sin actividad registrada todavía{err ? "" : " (o la tabla action_log no existe aún — corré scripts/setup-undo.mjs)"}.</div>}
+          {!log.length && <div style={{ color:"#999", fontSize:13 }}>No activity recorded yet{err ? "" : " (or the action_log table doesn't exist yet — run scripts/setup-undo.mjs)"}.</div>}
           {log.map(e => (
             <div key={e.id} style={{ display:"flex", gap:10, alignItems:"baseline", padding:"6px 0", borderTop:"1px solid #f5f5f5", fontSize:12.5 }}>
               <span style={{ color:"#aaa", whiteSpace:"nowrap" }}>{String(e.created_at).slice(0, 16).replace("T", " ")}</span>
@@ -3425,7 +2843,7 @@ function UsersSection({ session }) {
   }
 
   async function removeUser(u) {
-    if (!window.confirm(`Delete ${u.email}? This permanently removes the account.`)) return;
+    if (!window.confirm(tr(`Delete ${u.email}? This permanently removes the account.`, `¿Eliminar ${u.email}? Esto borra la cuenta de forma permanente.`))) return;
     setBusy(true); setError(null); setNotice(null);
     try { await api("delete", { id: u.id }); setNotice("User deleted."); await load(); }
     catch (e) { setError(e.message); }
@@ -5895,7 +5313,7 @@ export default function App() {
   // Delete specific storage_jobs rows (a duplicate variant), cleaning up links.
   async function deleteJobRows(ids, label) {
     if (!ids || !ids.length) return;
-    if (!window.confirm(`Delete ${label || "these job rows"}? You can undo this (Ctrl+Z / Papelera).`)) return;
+    if (!window.confirm(tr(`Delete ${label || "these job rows"}? You can undo this (Ctrl+Z / Trash).`, `¿Eliminar ${label || "estas filas de job"}? Podés deshacerlo (Ctrl+Z / Papelera).`))) return;
     const entries = [];
     if (!extrasMissing) { const r = await undoMgr.softDelete("job_extras", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
     if (!paymentsMissing) { const r = await undoMgr.softDelete("payments", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
@@ -5931,6 +5349,7 @@ export default function App() {
   // Apply / revert the Spanish UI overlay whenever the language changes.
   useEffect(() => {
     try { localStorage.setItem("lang", lang); } catch { /* ignore */ }
+    setI18nLang(lang); // keep tr()/t() (dialogs, toasts, non-DOM strings) in sync
     if (lang !== "es") { i18nRestore(); return; }
     let scheduled = false; let obs;
     const OPTS = { childList: true, subtree: true, characterData: true };
@@ -5950,7 +5369,7 @@ export default function App() {
     // New unit duplicating an existing open unit → block with confirmation.
     if (!editId) {
       const dup = findStorageDup(form.brand, form.unit, form.state);
-      if (dup && !window.confirm(`${dup.brand} Unit ${dup.unit}${dup.state ? ` en ${dup.state}` : ""} is already open in the system.\n\nAre you sure you want to create a duplicate?`)) return;
+      if (dup && !window.confirm(tr(`${dup.brand} Unit ${dup.unit}${dup.state ? ` in ${dup.state}` : ""} is already open in the system.\n\nAre you sure you want to create a duplicate?`, `${dup.brand} Unit ${dup.unit}${dup.state ? ` en ${dup.state}` : ""} ya está abierta en el sistema.\n\n¿Seguro que querés crear un duplicado?`))) return;
     }
     setSaving(true);
     const payload = { brand:form.brand||null, state:form.state||null, zip:form.zip||null, address:form.address||null, unit:form.unit||null, size:form.size||null, gate_code:form.gate_code||null, lock:form.lock||null, email:form.email||null, account:form.account||null, phone:form.phone||null, situation:form.situation, monthly_cost:form.monthly_cost ? parseFloat(form.monthly_cost) : null, card_on_file:form.card_on_file||null, date_opened:form.date_opened||null };
@@ -6121,7 +5540,7 @@ export default function App() {
   async function deleteJob(g) {
     const ids = (g.parts && g.parts.length ? g.parts.map(p => p.id) : jobs.filter(j => jobKey(j) === g.key).map(j => j.id));
     if (!ids.length) return;
-    if (!window.confirm(`Are you sure you want to delete job ${g.job_number || "(no #)"} — ${g.customer || "no client"}? You can undo this (Ctrl+Z / Papelera).`)) return;
+    if (!window.confirm(tr(`Are you sure you want to delete job ${g.job_number || "(no #)"} — ${g.customer || "no client"}? You can undo this (Ctrl+Z / Trash).`, `¿Seguro que querés eliminar el job ${g.job_number || "(sin #)"} — ${g.customer || "sin cliente"}? Podés deshacerlo (Ctrl+Z / Papelera).`))) return;
     // Soft-delete related records first so a single Undo restores everything.
     const entries = [];
     if (!extrasMissing) { const r = await undoMgr.softDelete("job_extras", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
@@ -6379,7 +5798,7 @@ export default function App() {
     loadBrokers();
   }
   async function deleteBroker(b) {
-    if (!window.confirm(`Delete broker "${b.name}"? Los jobs asociados quedan sin broker.`)) return;
+    if (!window.confirm(tr(`Delete broker "${b.name}"? Associated jobs are left without a broker.`, `¿Eliminar el broker "${b.name}"? Los jobs asociados quedan sin broker.`))) return;
     if (!(await softDeleteAndRecord("brokers", b.id, `Broker "${b.name}" eliminado`))) return;
     loadBrokers();
   }
@@ -6401,7 +5820,7 @@ export default function App() {
     loadDrivers();
   }
   async function deleteDriver(d) {
-    if (!window.confirm(`Delete driver "${d.name}"?`)) return;
+    if (!window.confirm(tr(`Delete driver "${d.name}"?`, `¿Eliminar el driver "${d.name}"?`))) return;
     if (!(await softDeleteAndRecord("drivers", d.id, `Driver "${d.name}" eliminado`))) return;
     loadDrivers();
   }
@@ -6428,8 +5847,8 @@ export default function App() {
   }
   async function saveExpense() {
     const f = expenseForm;
-    if (f.amount === "" || isNaN(Number(f.amount))) { window.alert("Ingresá el monto del gasto."); return; }
-    if (f.paid_from === "driver_cash" && !f.driver_id) { window.alert("Un gasto pagado con cash del driver necesita el driver."); return; }
+    if (f.amount === "" || isNaN(Number(f.amount))) { window.alert(tr("Enter the expense amount.", "Ingresá el monto del gasto.")); return; }
+    if (f.paid_from === "driver_cash" && !f.driver_id) { window.alert(tr("An expense paid with driver cash needs the driver.", "Un gasto pagado con cash del driver necesita el driver.")); return; }
     setExpenseSaving(true);
     const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
     const jobNumber = (f.job_number || "").trim();
@@ -6461,7 +5880,7 @@ export default function App() {
     loadExpenses();
   }
   async function deleteExpense(e) {
-    if (!window.confirm(`Delete ${e.category || "expense"} de $${Math.round(numv(e.amount)).toLocaleString()}?`)) return;
+    if (!window.confirm(tr(`Delete ${e.category || "expense"} of $${Math.round(numv(e.amount)).toLocaleString()}?`, `¿Eliminar ${e.category || "gasto"} de $${Math.round(numv(e.amount)).toLocaleString()}?`))) return;
     if (!(await softDeleteAndRecord("expenses", e.id, `Expense $${Math.round(numv(e.amount)).toLocaleString()} eliminado`))) return;
     loadExpenses();
   }
@@ -6537,8 +5956,8 @@ export default function App() {
   }
   async function saveAdjustment() {
     const f = adjForm;
-    if (!f.driver_id) { window.alert("Elegí el driver."); return; }
-    if (f.amount === "" || isNaN(Number(f.amount)) || Number(f.amount) <= 0) { window.alert("Ingresá el monto (positivo)."); return; }
+    if (!f.driver_id) { window.alert(tr("Pick the driver.", "Elegí el driver.")); return; }
+    if (f.amount === "" || isNaN(Number(f.amount)) || Number(f.amount) <= 0) { window.alert(tr("Enter a positive amount.", "Ingresá el monto (positivo).")); return; }
     setAdjSaving(true);
     const { error } = await supabase.from("driver_adjustments").insert([{
       driver_id: Number(f.driver_id), adj_date: f.adj_date || null, kind: f.kind || "deduction",
@@ -6574,7 +5993,7 @@ export default function App() {
     setShowMaterialItemModal(false); loadMaterialItems();
   }
   async function deleteMaterialItem(it) {
-    if (!window.confirm(`Delete material "${it.name}"? Sus movimientos también se borran.`)) return;
+    if (!window.confirm(tr(`Delete material "${it.name}"? Its movements are deleted too.`, `¿Eliminar el material "${it.name}"? Sus movimientos también se borran.`))) return;
     const mv = await undoMgr.softDelete("material_movements", [it.id], "item_id");
     if (mv.error) { window.alert(mv.error.message); return; }
     if (!(await softDeleteAndRecord("material_items", it.id, `Material "${it.name}" eliminado`, mv.entries))) return;
@@ -6586,9 +6005,9 @@ export default function App() {
   }
   async function saveMaterialMove() {
     const f = materialMoveForm;
-    if (!f.item_id) { window.alert("Elegí el material."); return; }
-    if (f.quantity === "" || isNaN(Number(f.quantity)) || Number(f.quantity) === 0) { window.alert("Ingresá la cantidad."); return; }
-    if (["issue", "return", "consume"].includes(f.movement_type) && !f.driver_id) { window.alert("Este movimiento necesita el driver."); return; }
+    if (!f.item_id) { window.alert(tr("Pick the material.", "Elegí el material.")); return; }
+    if (f.quantity === "" || isNaN(Number(f.quantity)) || Number(f.quantity) === 0) { window.alert(tr("Enter the quantity.", "Ingresá la cantidad.")); return; }
+    if (["issue", "return", "consume"].includes(f.movement_type) && !f.driver_id) { window.alert(tr("This movement needs the driver.", "Este movimiento necesita el driver.")); return; }
     setMaterialSaving(true);
     const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
     const item = materialItems.find(i => i.id === Number(f.item_id));
@@ -6607,7 +6026,7 @@ export default function App() {
     setShowMaterialMoveModal(false); loadMaterialMovements();
   }
   async function deleteMaterialMove(mv) {
-    if (!window.confirm("Delete este movimiento de material?")) return;
+    if (!window.confirm(tr("Delete this material movement?", "¿Eliminar este movimiento de material?"))) return;
     if (!(await softDeleteAndRecord("material_movements", mv.id, "Movimiento de material eliminado"))) return;
     loadMaterialMovements();
   }
@@ -6674,7 +6093,7 @@ export default function App() {
     loadClosingSheets();
   }
   async function deleteCs(s) {
-    if (!window.confirm(`Delete closing sheet #${s.closing_sheet_number || s.id}? Jobs are left unassigned.`)) return;
+    if (!window.confirm(tr(`Delete closing sheet #${s.closing_sheet_number || s.id}? Jobs are left unassigned.`, `¿Eliminar el closing sheet #${s.closing_sheet_number || s.id}? Los jobs quedan sin asignar.`))) return;
     const linked = jobs.filter(j => j.closing_sheet_id === s.id);
     await supabase.from("storage_jobs").update({ closing_sheet_id: null }).eq("closing_sheet_id", s.id);
     const extra = linked.map(j => undoMgr.updateEntry("storage_jobs", j, { closing_sheet_id: null }));
@@ -6722,7 +6141,7 @@ export default function App() {
     setShowTruckModal(false); loadTrucks();
   }
   async function deleteTruck(t) {
-    if (!window.confirm(`Delete truck "${t.name}"?`)) return;
+    if (!window.confirm(tr(`Delete truck "${t.name}"?`, `¿Eliminar el camión "${t.name}"?`))) return;
     if (!(await softDeleteAndRecord("trucks", t.id, `Truck "${t.name}" eliminado`))) return;
     loadTrucks();
   }
@@ -6778,7 +6197,7 @@ export default function App() {
     setShowCompanyModal(false); loadCompanies();
   }
   async function deleteCompany(c) {
-    if (!window.confirm(`Delete company "${c.name}" y todos sus documentos?`)) return;
+    if (!window.confirm(tr(`Delete company "${c.name}" and all its documents?`, `¿Eliminar la empresa "${c.name}" y todos sus documentos?`))) return;
     const docs = complianceDocs.filter(d => d.entity_type === "company" && d.entity_id === c.id).map(d => d.id);
     const dr = docs.length ? await undoMgr.softDelete("compliance_documents", docs) : { entries: [] };
     if (dr.error) { window.alert(dr.error.message); return; }
@@ -6813,7 +6232,7 @@ export default function App() {
     setShowDocModal(false); loadComplianceDocs();
   }
   async function deleteDoc(d) {
-    if (!window.confirm(`Delete document "${docTypeLabel(d.document_type)}"?`)) return;
+    if (!window.confirm(tr(`Delete document "${docTypeLabel(d.document_type)}"?`, `¿Eliminar el documento "${docTypeLabel(d.document_type)}"?`))) return;
     if (!(await softDeleteAndRecord("compliance_documents", d.id, `Documento "${docTypeLabel(d.document_type)}" eliminado`))) return;
     loadComplianceDocs();
   }
@@ -6866,7 +6285,7 @@ export default function App() {
   }
   async function saveClaim() {
     const f = claimForm;
-    if (!f.incident_type || !f.description.trim()) { window.alert("Complete the incident type and description."); return; }
+    if (!f.incident_type || !f.description.trim()) { window.alert(tr("Complete the incident type and description.", "Completá el tipo de incidente y la descripción.")); return; }
     setClaimSaving(true);
     const prev = editingClaimId ? claims.find(c => c.id === editingClaimId) : null;
     // Closing statuses auto-stamp the closed date so "days to close" always
@@ -6910,7 +6329,7 @@ export default function App() {
     }
   }
   async function deleteClaim(c) {
-    if (!window.confirm(`Delete the claim for job ${c.job_number || "(sin #)"}? Its notes and links are removed too.`)) return;
+    if (!window.confirm(tr(`Delete the claim for job ${c.job_number || "(no #)"}? Its notes and links are removed too.`, `¿Eliminar el claim del job ${c.job_number || "(sin #)"}? Sus notas y links también se borran.`))) return;
     const nr = await undoMgr.softDelete("claim_notes", [c.id], "claim_id");
     if (nr.error) { window.alert(nr.error.message); return; }
     if (!(await softDeleteAndRecord("claims", c.id, `Claim ${c.job_number || ""} eliminado`.replace(/\s+/g, " ").trim(), nr.entries))) return;
@@ -6953,7 +6372,7 @@ export default function App() {
     setClaimUploading(false);
   }
   async function removeClaimAttachment(att) {
-    if (!editingClaimId || !window.confirm(`Remove attachment "${att.name || "file"}"?`)) return;
+    if (!editingClaimId || !window.confirm(tr(`Remove attachment "${att.name || "file"}"?`, `¿Quitar el adjunto "${att.name || "archivo"}"?`))) return;
     await mutateClaimAttachments(editingClaimId, (cur) => cur.filter(a => a.url !== att.url));
   }
 
@@ -7107,7 +6526,7 @@ export default function App() {
   // Manual trip status change — always dispatcher-initiated and confirmed.
   async function setTripStatus(t, status) {
     const label = (TRIP_STATUS[status]?.l) || status;
-    if (!window.confirm(`Change the status of trip ${t.trip_number || "#"+t.id} to "${label}"?`)) return;
+    if (!window.confirm(tr(`Change the status of trip ${t.trip_number || "#"+t.id} to "${label}"?`, `¿Cambiar el estado del trip ${t.trip_number || "#"+t.id} a "${label}"?`))) return;
     await supabase.from("trips").update({ status }).eq("id", t.id); loadTrips();
   }
   // Manual trip status change from the edit form — applies immediately on button
@@ -7120,7 +6539,7 @@ export default function App() {
     loadTrips();
   }
   async function deleteTrip(t) {
-    if (!window.confirm(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`)) return;
+    if (!window.confirm(tr(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`, `¿Eliminar el trip ${t.trip_number || t.id}? Los jobs quedan sin trip.`))) return;
     const patch = { trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }) };
     const extra = jobs.filter(j => j.trip_id === t.id).map(j => undoMgr.updateEntry("storage_jobs", j, patch));
     await supabase.from("storage_jobs").update(patch).eq("trip_id", t.id);
@@ -7226,7 +6645,7 @@ export default function App() {
     const toId = Number(toDriverId);
     const cur = Array.isArray(rows[0].driver_ids) ? rows[0].driver_ids.map(Number) : [];
     const fromId = cur[0] ?? null;
-    if (fromId === toId) { window.alert("El job ya está a cargo de ese driver."); return; }
+    if (fromId === toId) { window.alert(tr("The job is already handled by that driver.", "El job ya está a cargo de ese driver.")); return; }
     const driver_ids = [toId, ...cur.filter(id => id !== toId && id !== fromId)];
     const names = driver_ids.map(id => driverById[id]?.name).filter(Boolean);
     setTripBusy(true);
@@ -7250,10 +6669,10 @@ export default function App() {
     // job updates all its unit rows.
     const ids = jobRowIdsForUnit(tripUnitKey(j));
     const cur = hasRealCf(j) ? String(Math.round(Number(j.real_cf))) : "";
-    const v = window.prompt(`CF real medido para ${j.job_number || j.customer || "el job"} (estimado: ${Math.round(parseCf(j.volume))} CF).\nVacío = volver al estimado.`, cur);
+    const v = window.prompt(tr(`Real measured CF for ${j.job_number || j.customer || "the job"} (estimated: ${Math.round(parseCf(j.volume))} CF).\nEmpty = back to the estimate.`, `CF real medido para ${j.job_number || j.customer || "el job"} (estimado: ${Math.round(parseCf(j.volume))} CF).\nVacío = volver al estimado.`), cur);
     if (v === null) return;
     const val = v.trim() === "" ? null : Number(v.trim());
-    if (val !== null && (!isFinite(val) || val < 0)) { window.alert("Número inválido."); return; }
+    if (val !== null && (!isFinite(val) || val < 0)) { window.alert(tr("Invalid number.", "Número inválido.")); return; }
     await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
     await loadJobs();
     showToast(val === null ? "Real CF borrado — vuelve al estimado" : `Real CF: ${Math.round(val).toLocaleString()} CF`);
@@ -7359,7 +6778,7 @@ export default function App() {
   // Hand the whole trip (truck swap case) to another driver.
   async function handoffTrip(trip, toDriverId, reason, note) {
     const toId = Number(toDriverId);
-    if (!toId || toId === Number(trip.driver_id)) { window.alert("Elegí un driver distinto al actual."); return; }
+    if (!toId || toId === Number(trip.driver_id)) { window.alert(tr("Pick a driver other than the current one.", "Elegí un driver distinto al actual.")); return; }
     setTripBusy(true);
     await supabase.from("trips").update({ driver_id: toId }).eq("id", trip.id);
     const fromNm = driverById[trip.driver_id]?.name || "—";
@@ -7547,7 +6966,7 @@ export default function App() {
     // Optional status alignment (never forced).
     if (meta.status) {
       const ids = jobs.filter(j => jobKey(j) === jobKeyStr).map(j => j.id);
-      if (ids.length && window.confirm(`Update the job status to "${statusMeta(meta.status).l}"?`)) {
+      if (ids.length && window.confirm(tr(`Update the job status to "${statusMeta(meta.status).l}"?`, `¿Actualizar el estado del job a "${statusMeta(meta.status).l}"?`))) {
         const patch = { status: meta.status, updated_by: userEmail, updated_at: new Date().toISOString() };
         if (meta.status === "delivered") patch.date_out = f.event_date || today();
         await supabase.from("storage_jobs").update(patch).in("id", ids);
@@ -7649,7 +7068,7 @@ export default function App() {
     const linked = payments.filter(p => (p.job_extra_id != null && Number(p.job_extra_id) === Number(extra.id)) || (p.job_extra_id == null && p.concept === "extra" && extra.payment_id != null && Number(extra.payment_id) === Number(p.id)));
     if (linked.length) {
       const sum = linked.reduce((s, p) => s + paymentNet(p), 0);
-      if (!window.confirm(`Este extra tiene ${linked.length} pago(s) asignados por $${Math.round(sum).toLocaleString()}. Se desactivará (deja de contar como cargo) conservando el historial de pagos. ¿Continuar?`)) return;
+      if (!window.confirm(tr(`This extra has ${linked.length} payment(s) assigned for $${Math.round(sum).toLocaleString()}. It will be deactivated (no longer counts as a charge) keeping the payment history. Continue?`, `Este extra tiene ${linked.length} pago(s) asignados por $${Math.round(sum).toLocaleString()}. Se desactivará (deja de contar como cargo) conservando el historial de pagos. ¿Continuar?`))) return;
       undoMgr.record("Extra desactivado", [undoMgr.updateEntry("job_extras", extra, { active: false })]);
       await supabase.from("job_extras").update({ active: false }).eq("id", extra.id);
       loadExtras();
@@ -7699,7 +7118,7 @@ export default function App() {
     setEmpSaving(false); setEmpForm(EMPTY_EMPLOYEE); loadEmployees();
   }
   async function deleteEmployee(em) {
-    if (!window.confirm(`Delete "${em.name}"?`)) return;
+    if (!window.confirm(tr(`Delete "${em.name}"?`, `¿Eliminar a "${em.name}"?`))) return;
     if (!(await softDeleteAndRecord("employees", em.id, `Empleado "${em.name}" eliminado`))) return;
     loadEmployees();
   }
@@ -7719,8 +7138,8 @@ export default function App() {
   }
   async function copyDriverExtras(driverName, monthLabel, jobsData) {
     const txt = driverExtrasReport(driverName, monthLabel, jobsData);
-    try { await navigator.clipboard.writeText(txt); window.alert("Summary copied to clipboard."); }
-    catch { window.prompt("Copy the summary:", txt); }
+    try { await navigator.clipboard.writeText(txt); window.alert(tr("Summary copied to clipboard.", "Resumen copiado al portapapeles.")); }
+    catch { window.prompt(tr("Copy the summary:", "Copiá el resumen:"), txt); }
   }
   function printDriverExtras(driverName, monthLabel, jobsData) {
     let totAmt = 0, totComm = 0;
@@ -7754,8 +7173,8 @@ export default function App() {
   }
   async function copyRepExtras(repName, monthLabel, jobsData) {
     const txt = repExtrasReport(repName, monthLabel, jobsData);
-    try { await navigator.clipboard.writeText(txt); window.alert("Summary copied to clipboard."); }
-    catch { window.prompt("Copy the summary:", txt); }
+    try { await navigator.clipboard.writeText(txt); window.alert(tr("Summary copied to clipboard.", "Resumen copiado al portapapeles.")); }
+    catch { window.prompt(tr("Copy the summary:", "Copiá el resumen:"), txt); }
   }
   function printRepExtras(repName, monthLabel, jobsData) {
     let totAmt = 0, totComm = 0;
@@ -7948,7 +7367,7 @@ export default function App() {
     const total = numv(f.amount);
     const splitTotal = lines.reduce((s, l) => s + numv(l.amount), 0);
     if (!lines.length) { window.alert("Add at least one line with an amount."); return; }
-    if (Math.abs(splitTotal - total) > 0.01) { window.alert(`El total de las divisiones ($${splitTotal.toLocaleString()}) no coincide con el monto ingresado ($${total.toLocaleString()}).`); return; }
+    if (Math.abs(splitTotal - total) > 0.01) { window.alert(tr(`The split lines total ($${splitTotal.toLocaleString()}) doesn't match the entered amount ($${total.toLocaleString()}).`, `El total de las divisiones ($${splitTotal.toLocaleString()}) no coincide con el monto ingresado ($${total.toLocaleString()}).`)); return; }
     const hasExtra = lines.some(l => splitConcept(l.concept).extra);
     if (hasExtra && !f.job_id) { window.alert("Select a job to record the extras and their commissions."); return; }
     setPaySaving(true);
@@ -7998,7 +7417,7 @@ export default function App() {
     if (createdExtras.length) {
       const toAssign = [];
       for (const e of createdExtras) {
-        if (window.confirm(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`)) toAssign.push(e);
+        if (window.confirm(tr(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`, `Se registró ${extraTypeLabel(e.extra_type)} por $${Math.round(numv(e.amount)).toLocaleString()}. ¿Asignar la comisión ahora?`))) toAssign.push(e);
       }
       if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
     }
@@ -8075,7 +7494,7 @@ export default function App() {
     if (createdExtras.length) {
       const toAssign = [];
       for (const e of createdExtras) {
-        if (window.confirm(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`)) toAssign.push(e);
+        if (window.confirm(tr(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`, `Se registró ${extraTypeLabel(e.extra_type)} por $${Math.round(numv(e.amount)).toLocaleString()}. ¿Asignar la comisión ahora?`))) toAssign.push(e);
       }
       if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
     }
@@ -8087,7 +7506,7 @@ export default function App() {
     const p = reallocPay; if (!p) return;
     const { rows, unassigned, error: allocErr } = serializeAllocLines(payForm.alloc_lines, numv(p.amount));
     if (allocErr) { window.alert(allocErr); return; }
-    if (!rows.length) { window.alert("Asigná al menos un monto a un cargo."); return; }
+    if (!rows.length) { window.alert(tr("Assign at least one amount to a charge.", "Asigná al menos un monto a un cargo.")); return; }
     setPaySaving(true);
     const lineFields = (l) => l.kind === "job" ? { concept: "job", extra_type: null, job_extra_id: null }
       : l.kind === "extra" ? { concept: "extra", extra_type: l.extra_type || null, job_extra_id: l.job_extra_id || null }
@@ -8132,7 +7551,7 @@ export default function App() {
     if (reallocPay) { await saveReallocation(); return; }
     // Duplicate check / money-order serial → block with an explicit confirmation.
     const serialDup = f.method === "check" ? findCheckSerialDup(f.check_serial) : f.method === "money_order" ? findMoSerialDup(f.mo_serial) : null;
-    if (serialDup && !window.confirm(`Number ${serialDup.serial} was already recorded ($${Math.round(serialDup.amount).toLocaleString()} on ${serialDup.date}, job ${serialDup.job_number}).\n\nThis serial number is already in the system. Are you sure you want to save a duplicate?`)) return;
+    if (serialDup && !window.confirm(tr(`Number ${serialDup.serial} was already recorded ($${Math.round(serialDup.amount).toLocaleString()} on ${serialDup.date}, job ${serialDup.job_number}).\n\nThis serial number is already in the system. Are you sure you want to save a duplicate?`, `El número ${serialDup.serial} ya fue registrado ($${Math.round(serialDup.amount).toLocaleString()} el ${serialDup.date}, job ${serialDup.job_number}).\n\nEste número de serie ya está en el sistema. ¿Seguro que querés guardar un duplicado?`))) return;
     if (f.split_enabled && !editingPayId && !splitMissing) {
       if (!allocMissing && f.job_id && Array.isArray(f.alloc_lines)) { await saveAllocatedPayment(f); return; }
       await saveSplitPayment(f); return;
@@ -8222,7 +7641,7 @@ export default function App() {
   // Delete every payment row in a split group (and any extras / cc-fee children linked to them).
   async function deleteSplitGroup(rows) {
     if (!rows.length) return;
-    if (!window.confirm(`Delete this split payment (${rows.length} lines)?`)) return;
+    if (!window.confirm(tr(`Delete this split payment (${rows.length} lines)?`, `¿Eliminar este pago dividido (${rows.length} líneas)?`))) return;
     const ids = rows.map(r => r.id);
     const feeIds = rows.map(r => r.cc_fee_payment_id).filter(Boolean);
     const entries = [];
@@ -8282,8 +7701,8 @@ export default function App() {
   async function deletePayAccount(a) {
     // Payments reference the account by name (text), so accounts in use are
     // deactivated rather than deleted to keep history readable.
-    if (payments.some(p => p.bank_account === a.name)) { window.alert("Esta cuenta está referenciada por pagos existentes. Desactivala en vez de borrarla."); return; }
-    if (!window.confirm(`Delete account "${a.name}"?`)) return;
+    if (payments.some(p => p.bank_account === a.name)) { window.alert(tr("This account is referenced by existing payments. Deactivate it instead of deleting it.", "Esta cuenta está referenciada por pagos existentes. Desactivala en vez de borrarla.")); return; }
+    if (!window.confirm(tr(`Delete account "${a.name}"?`, `¿Eliminar la cuenta "${a.name}"?`))) return;
     if (!(await softDeleteAndRecord("payment_accounts", a.id, `Cuenta "${a.name}" eliminada`))) return;
     loadPayAccounts();
   }
@@ -8395,7 +7814,7 @@ export default function App() {
   }
   async function saveBilling() {
     const f = billingForm;
-    if (!f.jobKey) { window.alert("Pick a job first."); return; }
+    if (!f.jobKey) { window.alert(tr("Pick a job first.", "Elegí un job primero.")); return; }
     setBillingSaving(true);
     const ids = jobs.filter(j => jobKey(j) === f.jobKey).map(j => j.id);
     const start = f.billing_start_date || defaultBillingStart(jobs.find(j => j.id === ids[0]) || {});
@@ -8609,7 +8028,7 @@ export default function App() {
               : 0;
             if (n === 0) return null;
             return (
-              <button onClick={() => setShowAlertsModal(true)} title="Ver alertas de esta sección" style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #F3C9C9", background:"#FCEBEB", color:"#A32D2D", fontSize:13, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6 }}>
+              <button onClick={() => setShowAlertsModal(true)} title="View this section's alerts" style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #F3C9C9", background:"#FCEBEB", color:"#A32D2D", fontSize:13, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6 }}>
                 ⚠️ {n} alert{n === 1 ? "" : "s"}
               </button>
             );
@@ -8640,7 +8059,7 @@ export default function App() {
 
       {dbSetupNeeded && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <span>El historial de jobs por unidad necesita crear la tabla <strong>storage_jobs</strong> una sola vez.</span>
+          <span>Per-unit job history needs the <strong>storage_jobs</strong> table created once.</span>
           <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver instrucciones</button>
         </div>
       )}
@@ -8661,7 +8080,7 @@ export default function App() {
 
       {driverColMissing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B" }}>
-          Para asignar el driver que abre cada unit, agregá la columna una vez en Supabase (SQL Editor):
+          To assign the driver who opens each unit, add the column once in Supabase (SQL Editor):
           <code style={{ display:"block", marginTop:6, fontFamily:"monospace", fontSize:12 }}>alter table public.storages add column if not exists driver_id bigint;</code>
         </div>
       )}
@@ -8736,7 +8155,7 @@ export default function App() {
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"],["no_delivery","Sin delivery"]].map(([t,l]) => (
+            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"],["no_delivery","No delivery"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -9042,7 +8461,7 @@ export default function App() {
               <div style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:10, marginBottom:14, overflow:"hidden" }}>
                 <div onClick={() => setDcalPanelOpen(o => !o)} style={{ padding:"10px 14px", cursor:"pointer", display:"flex", alignItems:"center", gap:8, background:"#FFF9EE" }}>
                   <span style={{ fontSize:13, fontWeight:700, color:"#854F0B" }}>📋 Entregas por agendar ({deliveryCandidates.length})</span>
-                  {deliveryToSchedule > 0 && <span style={{ fontSize:10.5, fontWeight:700, background:"#E24B4A", color:"#fff", borderRadius:10, padding:"1px 7px" }}>{deliveryToSchedule} con FADD ≤ 7 días</span>}
+                  {deliveryToSchedule > 0 && <span style={{ fontSize:10.5, fontWeight:700, background:"#E24B4A", color:"#fff", borderRadius:10, padding:"1px 7px" }}>{deliveryToSchedule} with FADD ≤ 7 days</span>}
                   <span style={{ flex:1 }} />
                   <span style={{ color:"#B58B3D", fontSize:12 }}>{dcalPanelOpen ? "▾ ocultar" : "▸ mostrar"}</span>
                 </div>
@@ -9055,7 +8474,7 @@ export default function App() {
                     ))}
                     {deliveryCandidates.length > 10 && (
                       <div style={{ padding:"8px 14px", fontSize:11.5, color:"#999" }}>
-                        +{deliveryCandidates.length - 10} más — <button onClick={() => openDcalAddExisting("")} style={{ border:"none", background:"none", color:"#185FA5", cursor:"pointer", padding:0, fontSize:11.5, textDecoration:"underline" }}>buscar con “Add existing job”</button>
+                        +{deliveryCandidates.length - 10} more — <button onClick={() => openDcalAddExisting("")} style={{ border:"none", background:"none", color:"#185FA5", cursor:"pointer", padding:0, fontSize:11.5, textDecoration:"underline" }}>search with “Add existing job”</button>
                       </div>
                     )}
                   </>
@@ -10146,7 +9565,7 @@ export default function App() {
             ) : extrasMissing ? null : driversList.length === 0 ? (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No drivers yet. Add drivers and assign them to jobs.</div>
             ) : sections.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>Sin extras para {exMonth ? monthLabel : "no month"} with these filters.</div>
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No extras for {exMonth ? monthLabel : "no month"} with these filters.</div>
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
                 {sections.map(sec => {
@@ -10280,7 +9699,7 @@ export default function App() {
             <td style={td2}>{p.bank_account || "—"}</td>
             <td style={{ ...td2, whiteSpace:"nowrap" }}>
               {p.concept === "on_account" && p.job_id && !allocMissing && can("payments","edit") && (
-                <button onClick={() => openReallocatePayment(p)} title="Imputar este pago a cuenta contra los cargos del job" style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"2px 8px", cursor:"pointer", marginRight:4 }}>Asignar</button>
+                <button onClick={() => openReallocatePayment(p)} title="Allocate this on-account payment against the job charges" style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"2px 8px", cursor:"pointer", marginRight:4 }}>Asignar</button>
               )}
               <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
               <button onClick={() => deletePaymentRow(p)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
@@ -10356,7 +9775,7 @@ export default function App() {
             {/* Search verdict: does each matching job have payments loaded or not? */}
             {pq && searchedJobs.length === 0 && (
               <div style={{ background:"#FEF9C3", border:"1px solid #FACC15", borderRadius:10, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#854D0E" }}>
-                ⚠️ Ningún job coincide con “{paySearch.trim()}”. Revisá el número de job.
+                ⚠️ No job matches “{paySearch.trim()}”. Check the job number.
               </div>
             )}
             {searchedJobs.map(g => {
@@ -10372,11 +9791,11 @@ export default function App() {
                   <span style={{ color:"#555" }}>{g.customer || "—"}</span>
                   {g.status === "cancelled" && <StatusBadge status={g.status} />}
                   {has ? (
-                    <span style={{ color:"#1A8A4E", fontWeight:700 }}>{pays.length} pago(s) · ${Math.round(totalNet).toLocaleString()}{receivedNet !== totalNet ? ` (recibido $${Math.round(receivedNet).toLocaleString()})` : ""}</span>
+                    <span style={{ color:"#1A8A4E", fontWeight:700 }}>{pays.length} payment(s) · ${Math.round(totalNet).toLocaleString()}{receivedNet !== totalNet ? ` (recibido $${Math.round(receivedNet).toLocaleString()})` : ""}</span>
                   ) : (
-                    <span style={{ color:"#A32D2D", fontWeight:700 }}>Sin pagos cargados</span>
+                    <span style={{ color:"#A32D2D", fontWeight:700 }}>No payments entered</span>
                   )}
-                  {expected > 0 && <span style={{ color:"#777" }}>Esperado ${Math.round(expected).toLocaleString()} · Pendiente ${Math.max(0, Math.round(expected - receivedNet)).toLocaleString()}</span>}
+                  {expected > 0 && <span style={{ color:"#777" }}>Expected ${Math.round(expected).toLocaleString()} · Pending ${Math.max(0, Math.round(expected - receivedNet)).toLocaleString()}</span>}
                   <span style={{ flex:1 }} />
                   {can("payments","create") && !paymentsMissing && (
                     <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={() => openAddPayment({ job_id: g.repId })}>+ Payment</Btn>
@@ -10454,7 +9873,7 @@ export default function App() {
                     </tr></thead>
                     <tbody>
                       {rows.length === 0 ? (
-                        <tr><td colSpan={20} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin pagos en este filtro.</td></tr>
+                        <tr><td colSpan={20} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No payments in this filter.</td></tr>
                       ) : displayItems.flatMap(it => {
                         if (it.type === "single") return [renderPayRow(it.p)];
                         const rep = it.rep, open = expandedSplits.has(it.group);
@@ -10638,7 +10057,7 @@ export default function App() {
                       </tr></thead>
                       <tbody>
                         {allRows.length === 0 ? (
-                          <tr><td colSpan={9} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>Sin documentos en este filtro.</td></tr>
+                          <tr><td colSpan={9} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No documents in this filter.</td></tr>
                         ) : allRows.map(({ d, st, days, name }) => (
                           <tr key={d.id} style={{ borderBottom:"1px solid #fafafa" }}>
                             <td style={td}><span style={{ fontSize:10.5, fontWeight:700, color:"#555", background:"#f1f1f1", borderRadius:20, padding:"1px 8px" }}>{ENTITY_LABELS[d.entity_type] || d.entity_type}</span></td>
@@ -10804,7 +10223,7 @@ export default function App() {
 
             <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Display language</label>
             <div style={{ display:"flex", gap:8 }}>
-              {[["en","🇺🇸 English"],["es","🇪🇸 Español"]].map(([lc,lbl]) => (
+              {[["en","🇺🇸 English"],["es","🇪🇸 Spanish"]].map(([lc,lbl]) => (
                 <button key={lc} onClick={() => setLang(lc)}
                   style={{ padding:"8px 16px", borderRadius:8, border:"1px solid #eee", cursor:"pointer", fontSize:13, fontWeight:600, background: lang===lc ? "#111" : "#fff", color: lang===lc ? "#fff" : "#666" }}>{lbl}</button>
               ))}
@@ -11201,7 +10620,7 @@ export default function App() {
               </thead>
               <tbody>
                 {unitRows.length === 0 ? (
-                  <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>Sin unidades</td></tr>
+                  <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>No units</td></tr>
                 ) : unitRows.slice(listPage*PAGE_SIZE, (listPage+1)*PAGE_SIZE).map(r => {
                   const n = activeJobsByStorage[r.id] || 0;
                   const cap = r.total_capacity_cf != null ? Number(r.total_capacity_cf) : null;
@@ -11371,7 +10790,7 @@ export default function App() {
           <EditRow label="Broker">
             <select value={jobDetail.broker_id || ""} onChange={e => set("broker_id")(e.target.value ? Number(e.target.value) : "")}
               style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
-              <option value="">— Sin broker —</option>
+              <option value="">— No broker —</option>
               {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </EditRow>
@@ -11494,7 +10913,7 @@ export default function App() {
               <>
                 <SectionLabel>Extras {exs.length ? `(${exs.length})` : ""}</SectionLabel>
                 {exs.length === 0
-                  ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin extras en este job.</div>
+                  ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No extras on this job.</div>
                   : exs.map(e => (
                       <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
                         <span style={{ fontWeight:600 }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</span>
@@ -11503,7 +10922,7 @@ export default function App() {
                           const c = chargeOf(e);
                           if (!c) return null;
                           return c.remaining > 0.01
-                            ? <span style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>Pendiente ${Math.round(c.remaining).toLocaleString()}</span>
+                            ? <span style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>Pending ${Math.round(c.remaining).toLocaleString()}</span>
                             : <span style={{ fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 8px" }}>Pagado</span>;
                         })()}
                         <span style={{ fontSize:11, color:"#888" }}>{genByLabel(e.generated_by)}</span>
@@ -11580,14 +10999,14 @@ export default function App() {
                     const first = onAcc.find(p => p.job_id && !allocMissing);
                     return (
                       <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, marginTop:6, color:"#854F0B" }}>
-                        <span>A cuenta (sin imputar): <b>${Math.round(onAccSum).toLocaleString()}</b></span>
+                        <span>On account (unallocated): <b>${Math.round(onAccSum).toLocaleString()}</b></span>
                         {first && can("payments","edit") && <button onClick={() => openReallocatePayment(first)} style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"1px 8px", cursor:"pointer" }}>Asignar</button>}
                       </div>
                     );
                   })()}
                   {(() => {
                     const un = paymentsMissing ? 0 : chargeStateByJobKey(jobDetail.key).unattributedExtraCollected;
-                    return un > 0.01 ? <div style={{ fontSize:11, marginTop:4, color:"#999" }}>${Math.round(un).toLocaleString()} cobrados de extras sin asignar a un extra específico (histórico).</div> : null;
+                    return un > 0.01 ? <div style={{ fontSize:11, marginTop:4, color:"#999" }}>${Math.round(un).toLocaleString()} collected from extras not assigned to a specific extra (historical).</div> : null;
                   })()}
                   {totalBrokerShare > 0 && (
                     <div style={{ marginTop:6, paddingTop:6, borderTop:"1px solid #eee", fontSize:12.5 }}>
@@ -11606,7 +11025,7 @@ export default function App() {
                     <span style={{ color: totalOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
                   </div>
                 </div>
-                {ps.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos registrados.</div>
+                {ps.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments recorded.</div>
                   : ps.map(p => (
                       <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
                         <ConceptBadge concept={p.concept} />
@@ -11625,7 +11044,7 @@ export default function App() {
                       </div>
                     ))}
                 <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: jobOutstanding > 0 ? String(Math.round(jobOutstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add pago</Btn>
+                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: jobOutstanding > 0 ? String(Math.round(jobOutstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add payment</Btn>
                 </div>
               </>
             );
@@ -11812,7 +11231,7 @@ export default function App() {
 
           <SectionLabel>Payment</SectionLabel>
           <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, alignItems:"center" }}>
-            <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Vencimiento de pago</span>
+            <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Payment due date</span>
             <span style={{ fontWeight:500 }}>{fmtDateLocal(paymentDueDate(detail)) || "—"}</span>
             <span style={{ flex:1 }} />
             <PaymentBadge record={detail} situation={sit(detail)} />
@@ -11845,7 +11264,7 @@ export default function App() {
             <Btn onClick={() => setShowAdd(false)}>Cancel</Btn>
             <Btn primary disabled={saving} onClick={saveForm}>{saving ? "Saving..." : "Save"}</Btn>
           </>}>
-          <p style={{ fontSize:12, color:"#999", margin:"0 0 12px" }}>Datos fijos de la unidad. Los clientes y jobs se cargan aparte en el historial.</p>
+          <p style={{ fontSize:12, color:"#999", margin:"0 0 12px" }}>Fixed unit data. Clients and jobs are entered separately in the history.</p>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Company"><input style={inp} list="brands-list" value={form.brand} onChange={e => setForm(f => ({...f, brand:e.target.value}))} placeholder="Choose or type (CubeSmart...)" /></Field>
             <Field label="Status"><input style={inp} list="states-list" value={form.state} onChange={e => setForm(f => ({...f, state:e.target.value.toUpperCase()}))} placeholder="TN" /></Field>
@@ -11863,7 +11282,7 @@ export default function App() {
             {!driverColMissing && (
               <Field label="Driver que abre la unit">
                 <select style={inp} value={form.driver_id} onChange={e => setForm(f => ({...f, driver_id:e.target.value}))}>
-                  <option value="">— Sin asignar —</option>
+                  <option value="">— Unassigned —</option>
                   {driversList.filter(d => d.active !== false || String(d.id) === String(form.driver_id)).map(d => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
@@ -12018,7 +11437,7 @@ export default function App() {
                   </Field>
                   <Field label="Broker">
                     <select style={inp} value={jobForm.broker_id} onChange={u("broker_id")}>
-                      <option value="">— Sin broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      <option value="">— No broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
                   </Field>
                   <Field label="Client *"><input style={inp} value={jobForm.customer} onChange={u("customer")} placeholder="Client name" /></Field>
@@ -12039,7 +11458,7 @@ export default function App() {
                     ); })()}
                     {calStatusMissing && (
                       <div style={{ fontSize:11, color:"#A35200", marginTop:4 }}>
-                        Falta la columna <code>calendar_status</code> en la base. <button type="button" onClick={() => setShowSetup(true)} style={{ background:"none", border:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0, fontSize:11 }}>Ver SQL</button> para activarla.
+                        Missing column <code>calendar_status</code> in the database. <button type="button" onClick={() => setShowSetup(true)} style={{ background:"none", border:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0, fontSize:11 }}>Ver SQL</button> para activarla.
                       </div>
                     )}
                   </Field>
@@ -12096,7 +11515,7 @@ export default function App() {
               <FormSection title="Load / Carga">
                 <div style={fgrid}>
                   <Field label="Volumen (CF) — estimado broker"><input style={inp} value={jobForm.volume} onChange={u("volume")} placeholder="ej: 1200" /></Field>
-                  {!realCfMissing && <Field label="Real CF (medido al cargar)"><input style={inp} type="number" value={jobForm.real_cf ?? ""} onChange={u("real_cf")} placeholder="vacío = usa el estimado" /></Field>}
+                  {!realCfMissing && <Field label="Real CF (medido al cargar)"><input style={inp} type="number" value={jobForm.real_cf ?? ""} onChange={u("real_cf")} placeholder="empty = uses the estimate" /></Field>}
                   <Field label="Sticker color">
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
@@ -12165,7 +11584,7 @@ export default function App() {
                   {!settlementsMissing && (
                     <Field label="Closing sheet" full>
                       <select style={inp} value={jobForm.closing_sheet_id === "" || jobForm.closing_sheet_id == null ? "" : String(jobForm.closing_sheet_id)} onChange={e => setJobForm(f => ({...f, closing_sheet_id: e.target.value === "" ? "" : (e.target.value === "__new__" ? "__new__" : Number(e.target.value))}))}>
-                        <option value="">— Sin closing sheet —</option>
+                        <option value="">— No closing sheet —</option>
                         {(() => { const cur = jobForm.closing_sheet_id; const linked = cur && cur !== "__new__" ? closingSheets.find(s => s.id === Number(cur)) : null; return (linked && linked.status !== "open") ? <option value={String(linked.id)}>#{linked.closing_sheet_number || linked.id} ({linked.status})</option> : null; })()}
                         {closingSheets.filter(s => s.status === "open").map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "no broker"}</option>)}
                         <option value="__new__">➕ Create new closing sheet</option>
@@ -12422,7 +11841,7 @@ export default function App() {
               </Field>
               <Field label="Resolution">
                 <select style={inp} value={f.resolution_type} onChange={e => set({ resolution_type:e.target.value })} disabled={!canEdit}>
-                  <option value="">— Sin resolución —</option>
+                  <option value="">— No resolution —</option>
                   {CLAIM_RESOLUTIONS.map(([v,l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </Field>
@@ -12455,7 +11874,7 @@ export default function App() {
                 {canEdit && (
                   <div style={{ display:"flex", gap:8, marginBottom:8 }}>
                     <input style={inp} value={claimNoteInput} onChange={e => setClaimNoteInput(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter") addClaimNote(); }} placeholder="Ej: se contactó al cliente, el seguro respondió…" />
+                      onKeyDown={e => { if (e.key === "Enter") addClaimNote(); }} placeholder="E.g.: client was contacted, insurance replied…" />
                     <Btn primary disabled={!claimNoteInput.trim()} onClick={addClaimNote} style={{ whiteSpace:"nowrap" }}>+ Add note</Btn>
                   </div>
                 )}
@@ -12808,7 +12227,7 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  <SectionLabel>Historial de extras ({history.length})</SectionLabel>
+                  <SectionLabel>Extras history ({history.length})</SectionLabel>
                   <div style={{ maxHeight:200, overflowY:"auto" }}>
                     {history.map(({ e, g, mo }) => (
                       <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, padding:"4px 0", borderBottom:"1px solid #eef2f6", flexWrap:"wrap" }}>
@@ -14568,7 +13987,7 @@ export default function App() {
             <Field label="Load date"><input style={inp} type="date" value={csForm.load_date} onChange={e => setCsForm(f => ({...f, load_date:e.target.value}))} /></Field>
             <Field label="Broker">
               <select style={inp} value={csForm.broker_id} onChange={e => setCsForm(f => ({...f, broker_id:e.target.value}))}>
-                <option value="">— Sin broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                <option value="">— No broker —</option>{brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
             </Field>
             <Field label="Driver">
