@@ -7,7 +7,8 @@
     "preview": "vite preview",
     "i18n:check": "node scripts/check-i18n.mjs",
     "guide:update": "node scripts/update-guide.mjs",
-    "guide:pdf": "node scripts/render-guide-pdf.mjs"
+    "guide:pdf": "node scripts/render-guide-pdf.mjs",
+    "test:jobcalc": "node scripts/test-jobcalc-data.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

@@ -4,6 +4,7 @@ import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simpl
 import { BolSection } from "./bol.jsx";
 import { MessagesSection } from "./messages.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
+import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, materialShortages, computeDriverPnl } from "./analyticsData.js";
 import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
@@ -2572,6 +2573,7 @@ const NAV = [
     { id:"calendario_entregas", label:"Delivery Calendar", icon:"📦" },
     { id:"storage", label:"Storage", icon:"🏬" },
     { id:"jobs", label:"Jobs", icon:"💼" },
+    { id:"jobcalc", label:"Job Calculator", icon:"🧮" },
     { id:"messages", label:"Chats", icon:"💬" },
   ]},
   { section:"Finance", items:[
@@ -2645,6 +2647,7 @@ const PAGE_META = {
   calendario_entregas: { title:"Delivery Calendar", sub:"Scheduled deliveries" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
+  jobcalc:     { title:"Job Calculator", sub:"Take it or leave it: broker price against real cost per truck-day" },
   messages:    { title:"Chats", sub:"Team conversations and direct messages" },
   brokers:     { title:"Brokers", sub:"Brokers and outstanding balances" },
   billing:     { title:"Storage Billing", sub:"Monthly storage billing for clients" },
@@ -8121,6 +8124,9 @@ export default function App() {
 
       {/* ───────────────────────── SUGGESTIONS (employee feedback) ───────────────────────── */}
       {page === "suggestions" && <SuggestionsSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} />}
+
+      {/* ───────────────────────── JOB CALCULATOR (take it or leave it) ───────────────────────── */}
+      {page === "jobcalc" && can("jobcalc","view") && <JobCalcSection supabase={supabase} session={session} profile={profile} can={can} isAdmin={isAdmin} Btn={Btn} Modal={Modal} />}
 
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
