@@ -2482,12 +2482,12 @@ function JobHistory({ storageId, jobs, allJobs = [], userEmail, dbReady, onSetup
 // Trash: soft-deleted rows per table, restorable with one click. History: the
 // latest action_log entries (who changed what, before/after).
 const TRASH_TABLES = [
-  ["storage_jobs", "Jobs", r => `${r.job_number || "(sin #)"} · ${r.customer || "(sin cliente)"}`],
+  ["storage_jobs", "Jobs", r => `${r.job_number || t("(no #)")} · ${r.customer || t("(no client)")}`],
   ["payments", "Payments", r => `$${Math.round(numv(r.amount)).toLocaleString()} · ${r.payment_date || ""}`],
   ["job_extras", "Extras", r => `${r.extra_type || "extra"} · $${Math.round(numv(r.amount)).toLocaleString()}`],
   ["storages", "Storage units", r => `${r.brand || ""} ${r.unit || ""} ${r.state || ""}`.trim() || `#${r.id}`],
   ["expenses", "Expenses", r => `${r.category || "expense"} · $${Math.round(numv(r.amount)).toLocaleString()} · ${r.expense_date || ""}`],
-  ["claims", "Claims", r => `${r.job_number || "(sin #)"} · ${r.incident_type || ""}`],
+  ["claims", "Claims", r => `${r.job_number || t("(no #)")} · ${r.incident_type || ""}`],
   ["brokers", "Brokers", r => r.name || `#${r.id}`],
   ["drivers", "Drivers", r => r.name || `#${r.id}`],
   ["trucks", "Trucks", r => r.name || `#${r.id}`],
@@ -5969,7 +5969,7 @@ export default function App() {
     setShowAdjModal(false); loadAdjustments();
   }
   async function deleteAdjustment(a) {
-    if (!window.confirm(`Delete ${a.kind === "bonus" ? "compensación" : "descuento"} de $${Math.round(numv(a.amount)).toLocaleString()}?`)) return;
+    if (!window.confirm(tr(`Delete ${a.kind === "bonus" ? "bonus" : "deduction"} of $${Math.round(numv(a.amount)).toLocaleString()}?`, `¿Eliminar ${a.kind === "bonus" ? "compensación" : "descuento"} de $${Math.round(numv(a.amount)).toLocaleString()}?`))) return;
     if (!(await softDeleteAndRecord("driver_adjustments", a.id, "Ajuste de driver eliminado"))) return;
     loadAdjustments();
   }
@@ -8470,7 +8470,7 @@ export default function App() {
                     {deliveryCandidates.slice(0, 10).map(c => (
                       <ScheduleDeliveryRow key={c.key} cand={c}
                         onOpen={setJobDetailKey}
-                        onSchedule={(cand, date) => { setJobDelivery(cand.ids, date); showToast(`Entrega de ${cand.job_number || "job"} agendada para ${date}`.replace(/\s+/g, " ").trim()); }} />
+                        onSchedule={(cand, date) => { setJobDelivery(cand.ids, date); showToast(tr(`Delivery of ${cand.job_number || "job"} scheduled for ${date}`, `Entrega de ${cand.job_number || "job"} agendada para ${date}`).replace(/\s+/g, " ").trim()); }} />
                     ))}
                     {deliveryCandidates.length > 10 && (
                       <div style={{ padding:"8px 14px", fontSize:11.5, color:"#999" }}>
@@ -9278,7 +9278,7 @@ export default function App() {
                       <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />En movimiento</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
-                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />Sin datos</span>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
                         <span style={{ marginLeft:"auto", color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
                       </div>
                     </div>
@@ -9787,7 +9787,7 @@ export default function App() {
               return (
                 <div key={g.key} style={{ background: has ? "#F0FAF4" : "#FCEBEB", border:`1px solid ${has ? "#CDEBD8" : "#E24B4A"}`, borderRadius:10, padding:"10px 14px", marginBottom:10, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:12.5 }}>
                   <span style={{ fontSize:15 }}>{has ? "✅" : "🚫"}</span>
-                  <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:13 }}>{g.job_number || "(sin #)"}</button>
+                  <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:13 }}>{g.job_number || "(no #)"}</button>
                   <span style={{ color:"#555" }}>{g.customer || "—"}</span>
                   {g.status === "cancelled" && <StatusBadge status={g.status} />}
                   {has ? (
@@ -10042,7 +10042,7 @@ export default function App() {
                   </select>
                   <select value={docFilterStatus} onChange={e => setDocFilterStatus(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
                     <option value="">All states</option>
-                    <option value="expired">Expired</option><option value="expiring_soon">Expiring soon</option><option value="active">Up to date</option><option value="none">Sin fecha</option>
+                    <option value="expired">Expired</option><option value="expiring_soon">Expiring soon</option><option value="active">Up to date</option><option value="none">No date</option>
                   </select>
                   <select value={docFilterDays} onChange={e => setDocFilterDays(e.target.value)} style={{ ...inp, width:"auto", minWidth:150 }}>
                     <option value="">Cualquier vencimiento</option>
@@ -11458,7 +11458,7 @@ export default function App() {
                     ); })()}
                     {calStatusMissing && (
                       <div style={{ fontSize:11, color:"#A35200", marginTop:4 }}>
-                        Missing column <code>calendar_status</code> in the database. <button type="button" onClick={() => setShowSetup(true)} style={{ background:"none", border:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0, fontSize:11 }}>Ver SQL</button> para activarla.
+                        Missing column <code>calendar_status</code> in the database. <button type="button" onClick={() => setShowSetup(true)} style={{ background:"none", border:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0, fontSize:11 }}>View SQL</button> to enable it.
                       </div>
                     )}
                   </Field>
@@ -12069,7 +12069,7 @@ export default function App() {
               <select style={inp} value={locForm.status} onChange={e => setLocForm(f => ({...f, status:e.target.value}))}>
                 <option value="moving">En movimiento</option>
                 <option value="stopped">Detenido</option>
-                <option value="unknown">Sin datos</option>
+                <option value="unknown">No data</option>
               </select>
             </Field>
           </div>
@@ -12453,7 +12453,7 @@ export default function App() {
         const saveDisabled = paySaving || (reallocPay ? (!allocState || !!allocState.error || !allocState.rows.length)
           : (payForm.amount === "" || (allocOn ? !!allocState.error : (splitOn && (!splitMatches || splitLines.every(l => l.amount === ""))))));
         return (
-          <Modal title={reallocPay ? "Asignar pago a cuenta" : editingPayId ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); }}
+          <Modal title={reallocPay ? "Assign on-account payment" : editingPayId ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); }}
             footer={<>
               <Btn onClick={() => { setShowPayModal(false); setReallocPay(null); }}>Cancel</Btn>
               <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : (reallocPay ? "Asignar" : editingPayId ? "Save changes" : splitOn ? (allocOn ? "Create payment" : "Create split payments") : "Create payment")}</Btn>
@@ -12528,7 +12528,7 @@ export default function App() {
                 )}
                 {allocOn && (
                   <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
-                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Repartí el pago entre el balance del job y los extras pendientes. Lo que no asignes queda <b>a cuenta</b>.</div>
+                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Split the payment between the job balance and the pending extras. Whatever you don't assign stays <b>on account</b>.</div>
                     {allocLines.map((l, i) => {
                       const entered = numv(l.amount);
                       const after = Math.max(0, l.remaining - entered);
@@ -12541,7 +12541,7 @@ export default function App() {
                                 {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
                               </select>
                             ) : l.label}</div>
-                            {l.kind !== "custom" && <div style={{ fontSize:10.5, color:"#888" }}>Pendiente: ${l.remaining.toLocaleString(undefined,{maximumFractionDigits:2})}</div>}
+                            {l.kind !== "custom" && <div style={{ fontSize:10.5, color:"#888" }}>Pending: ${l.remaining.toLocaleString(undefined,{maximumFractionDigits:2})}</div>}
                           </div>
                           <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchAlloc(i, { amount: e.target.value })} placeholder="$" />
                           {l.kind !== "custom" && (
@@ -12558,12 +12558,12 @@ export default function App() {
                         </div>
                       );
                     })}
-                    <button onClick={() => setF({ alloc_lines: [...allocLines, { kind:"custom", concept:"packing", amount:"", notes:"", touched:true }] })} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Nuevo extra / otra línea</button>
+                    <button onClick={() => setF({ alloc_lines: [...allocLines, { kind:"custom", concept:"packing", amount:"", notes:"", touched:true }] })} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ New extra / another line</button>
                     {(() => {
                       const st = allocState || { unassigned: 0, error: null };
                       return (
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
-                          <span style={{ color:"#666" }}>Sin asignar (a cuenta): <b style={{ color: st.error ? "#E24B4A" : st.unassigned > 0 ? "#92760B" : "#1A8A4E" }}>${(st.error ? 0 : st.unassigned).toLocaleString(undefined,{maximumFractionDigits:2})}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${allocTotal.toLocaleString(undefined,{maximumFractionDigits:2})}</span></span>
+                          <span style={{ color:"#666" }}>Unassigned (on account): <b style={{ color: st.error ? "#E24B4A" : st.unassigned > 0 ? "#92760B" : "#1A8A4E" }}>${(st.error ? 0 : st.unassigned).toLocaleString(undefined,{maximumFractionDigits:2})}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${allocTotal.toLocaleString(undefined,{maximumFractionDigits:2})}</span></span>
                           {st.error ? <span style={{ color:"#E24B4A" }}>✗ {st.error}</span> : <span style={{ color:"#1A8A4E" }}>✓</span>}
                         </div>
                       );
@@ -12625,7 +12625,7 @@ export default function App() {
                       <Field label="Check number (serial)">
                         <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
                         <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
-                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} on {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="From (titular)"><input style={inp} value={payForm.check_from} onChange={e => setF({ check_from:e.target.value })} placeholder="Account holder" /></Field>
@@ -12640,7 +12640,7 @@ export default function App() {
                       <Field label="Check number (serial)">
                         <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
                         <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
-                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} el {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} on {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="Transaction number"><input style={inp} value={payForm.check_transaction_number} onChange={e => setF({ check_transaction_number:e.target.value })} placeholder="Transaction #" /></Field>
@@ -12674,7 +12674,7 @@ export default function App() {
                       <Field label="Serial number">
                         <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
                         <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
-                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} on {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
@@ -12687,7 +12687,7 @@ export default function App() {
                       <Field label="Serial number">
                         <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
                         <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
-                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} el {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver pago</a></>}</span>}
+                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} on {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
                         </DupHint>
                       </Field>
                       <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
@@ -12723,7 +12723,7 @@ export default function App() {
                         <div style={{ display:"flex", justifyContent:"space-between" }}><span>+ CC fee ({pct}%)</span><b style={{ color:"#854F0B" }}>${fee.toLocaleString(undefined, { maximumFractionDigits:2 })}</b></div>
                         <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #f0e0c0", marginTop:5, paddingTop:5, fontWeight:800 }}><span>Total to collect</span><span style={{ color:"#1A8A4E" }}>${(amt + fee).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></div>
                       </div>
-                      <div style={{ fontSize:11, color:"#999", marginTop:6 }}>Se crea un pago separado con concepto <b>CC Fee</b> al guardar.</div>
+                      <div style={{ fontSize:11, color:"#999", marginTop:6 }}>A separate payment with concept <b>CC Fee</b> is created on save.</div>
                     </>
                   )}
                 </div>
@@ -12793,7 +12793,7 @@ export default function App() {
             {accountFormOpen && <Btn primary disabled={accountSaving || !accountForm.name.trim()} onClick={savePayAccount}>{accountSaving ? "Saving..." : (editingAccountId ? "Save changes" : "Add account")}</Btn>}
           </>}>
           {payAccounts.length === 0
-            ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0 10px" }}>Sin cuentas todavía.</div>
+            ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0 10px" }}>No accounts yet.</div>
             : payAccounts.map(a => (
                 <div key={a.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap", opacity: a.active === false ? 0.55 : 1 }}>
                   <span style={{ fontWeight:600 }}>{a.name}</span>
@@ -13155,9 +13155,9 @@ export default function App() {
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
                     <Field label="Qué se traspasa">
                       <select style={inp} value={hf.jobKey} onChange={e => setH({ jobKey: e.target.value })}>
-                        <option value="">Trip completo (cambio de camión)</option>
+                        <option value="">Full trip (truck change)</option>
                         {c.jobsIn.filter(j => !(j.date_out || j.status === "delivered")).map(j => (
-                          <option key={j.id} value={jobKey(j)}>Job {j.job_number || "(sin #)"} · {j.customer || "—"}</option>
+                          <option key={j.id} value={jobKey(j)}>Job {j.job_number || "(no #)"} · {j.customer || "—"}</option>
                         ))}
                       </select>
                     </Field>
@@ -13357,7 +13357,7 @@ export default function App() {
                               // A stop owned by a different driver than the trip's → show who.
                               const jd = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || "";
                               return jd && jd !== driverNm
-                                ? <span title="Este job está a cargo de otro driver (handoff)" style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>🧑‍✈️ {jd}</span>
+                                ? <span title="This job is handled by another driver (handoff)" style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>🧑‍✈️ {jd}</span>
                                 : null;
                             })()}
                           </div>
@@ -14127,13 +14127,13 @@ export default function App() {
                       <SectionLabel>In circulation</SectionLabel>
                       <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6, flexWrap:"wrap" }}>
                         <span>Tiene en mano: <b style={{ color: heldTotal > 0 ? "#E24B4A" : "#1A8A4E", fontSize:15 }}>${Math.round(heldTotal).toLocaleString()}</b></span>
-                        {heldTotal > 0 && <span style={{ fontSize:11, color:"#888" }}>({holding.length} pago{holding.length !== 1 ? "s" : ""} sin depositar)</span>}
+                        {heldTotal > 0 && <span style={{ fontSize:11, color:"#888" }}>{tr(`(${holding.length} payment${holding.length !== 1 ? "s" : ""} not deposited)`, `(${holding.length} pago${holding.length !== 1 ? "s" : ""} sin depositar)`)}</span>}
                       </div>
                       {cashExpTotal > 0 && (
                         <div style={{ background:"#fafafa", borderRadius:10, padding:"8px 12px", fontSize:12.5, marginBottom:8 }}>
                           <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>Tiene en mano (pagos)</span><b>${Math.round(heldTotal).toLocaleString()}</b></div>
-                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>− gastos cash aprobados sin rendir</span><b style={{ color:"#C2410C" }}>−${Math.round(cashExpTotal).toLocaleString()}</b></div>
-                          <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #eee", marginTop:4, paddingTop:4 }}><span style={{ fontWeight:600 }}>= Debería entregar</span><b style={{ color: expectedOnHand < 0 ? "#E24B4A" : "#1A8A4E", fontSize:14 }}>${Math.round(expectedOnHand).toLocaleString()}</b></div>
+                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>− approved cash expenses not settled</span><b style={{ color:"#C2410C" }}>−${Math.round(cashExpTotal).toLocaleString()}</b></div>
+                          <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #eee", marginTop:4, paddingTop:4 }}><span style={{ fontWeight:600 }}>= Should hand over</span><b style={{ color: expectedOnHand < 0 ? "#E24B4A" : "#1A8A4E", fontSize:14 }}>${Math.round(expectedOnHand).toLocaleString()}</b></div>
                           {cashExp.map(e => (
                             <div key={e.id} style={{ display:"flex", alignItems:"center", gap:6, fontSize:11.5, color:"#666", padding:"3px 0" }}>
                               <span>{e.expense_date || ""}</span>
@@ -14146,8 +14146,8 @@ export default function App() {
                           ))}
                         </div>
                       )}
-                      <SectionLabel>Historial de pagos recibidos</SectionLabel>
-                      {history.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>Sin pagos recibidos.</div>
+                      <SectionLabel>Received payments history</SectionLabel>
+                      {history.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments received.</div>
                         : <div style={{ maxHeight:200, overflowY:"auto" }}>{history.map(p => (
                             <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f4f4f4", fontSize:12.5, flexWrap:"wrap" }}>
                               <button onClick={() => { setDriverDetailId(null); if (p._key) setJobDetailKey(p._key); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
@@ -14155,7 +14155,7 @@ export default function App() {
                               <b>${p._net.toLocaleString()}</b>
                               <span style={{ color:"#888" }}>recibido {p.received_date || p.payment_date || "—"}</span>
                               <span style={{ flex:1 }} />
-                              {p.banked ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5" }}>depositado {p.banked_date || ""}</span> : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C" }}>sin depositar</span>}
+                              {p.banked ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5" }}>deposited {p.banked_date || ""}</span> : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C" }}>not deposited</span>}
                             </div>
                           ))}</div>}
                     </>
@@ -14177,13 +14177,13 @@ export default function App() {
                     .filter(s => s.driverId === driverD.id && s.onHand !== 0);
                   return (
                     <>
-                      <SectionLabel>P&L del mes (aprox.)</SectionLabel>
-                      {!row ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>Sin actividad este mes.</div> : (
+                      <SectionLabel>Month P&L (approx.)</SectionLabel>
+                      {!row ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>No activity this month.</div> : (
                         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(105px,1fr))", gap:8, marginBottom:8 }}>
                           {[
                             ["Revenue (atribuido)", row.revenue, "#185FA5"],
-                            ["Días × rate", -row.laborCost, "#C2410C"],
-                            ["Gastos aprobados", -row.expensesTotal, "#C2410C"],
+                            ["Days × rate", -row.laborCost, "#C2410C"],
+                            ["Approved expenses", -row.expensesTotal, "#C2410C"],
                             ["Comisiones", -row.commissions, "#C2410C"],
                             ["Ajustes (bonos−desc.)", -row.adjustmentsNet, row.adjustmentsNet > 0 ? "#C2410C" : "#1A8A4E"],
                             ["Neto", row.net, row.net >= 0 ? "#1A8A4E" : "#E24B4A"],
@@ -14209,8 +14209,8 @@ export default function App() {
                           ))}
                         </>
                       )}
-                      <SectionLabel>Últimos gastos</SectionLabel>
-                      {myExpenses.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>Sin gastos registrados.</div> : (
+                      <SectionLabel>Recent expenses</SectionLabel>
+                      {myExpenses.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>No expenses recorded.</div> : (
                         <div style={{ maxHeight:170, overflowY:"auto", marginBottom:4 }}>
                           {myExpenses.slice(0, 25).map(e => (
                             <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", borderBottom:"1px solid #f4f4f4", fontSize:12, flexWrap:"wrap" }}>
@@ -14227,7 +14227,7 @@ export default function App() {
                     </>
                   );
                 })()}
-                <SectionLabel>Historial de jobs</SectionLabel>
+                <SectionLabel>Job history</SectionLabel>
                 <JobsPanel predicate={j => (Array.isArray(j.driver_ids) && j.driver_ids.includes(driverD.id)) || (j.driver && driverD.name && j.driver.includes(driverD.name))} />
               </Modal>
             )}

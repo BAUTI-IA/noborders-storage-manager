@@ -651,9 +651,9 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
         </div>
 
         <div style={card}>
-          <Title>Materiales sin devolver</Title>
-          <div style={sub}>Entregado − devuelto − consumido por driver: lo que falta rendir (valor al costo)</div>
-          {shortages.length === 0 ? <Empty>Nadie debe materiales ✓</Empty> : shortages.map((s, i) => (
+          <Title>Materials not returned</Title>
+          <div style={sub}>Handed out − returned − consumed per driver: what's still unaccounted for (value at cost)</div>
+          {shortages.length === 0 ? <Empty>Nobody owes materials ✓</Empty> : shortages.map((s, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: "#fafafa", marginBottom: 5, fontSize: 12.5 }}>
               <span>📦</span>
               <span style={{ fontWeight: 600 }}>{driverName(s.driverId)}</span>
@@ -706,21 +706,21 @@ function StorageTab({ pnl, byState, metrics, stateF, setStateF, occup }) {
 
       {metrics.missingCost > 0 && (
         <div style={{ background: "#FFF6E8", border: "1px solid #F4DDB0", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#854F0B", marginBottom: 14 }}>
-          ⚠ {metrics.missingCost} unidad{metrics.missingCost === 1 ? "" : "es"} sin costo mensual cargado — el total que pagás está incompleto. Abrí cada storage y cargá su <b>Monthly cost</b>.
+          ⚠ {metrics.missingCost} {metrics.missingCost === 1 ? "unit" : "units"} with no monthly cost entered — the total you pay is incomplete. Open each storage and enter its <b>Monthly cost</b>.
         </div>
       )}
 
       <div style={grid2}>
         <div style={card}>
-          <Title chip="hoy">Margen por estado</Title>
-          <div style={sub}>Rojo pierde plata, verde gana. Click en un estado para filtrar todo el dashboard.</div>
+          <Title chip="hoy">Margin by state</Title>
+          <div style={sub}>Red loses money, green wins. Click a state to filter the whole dashboard.</div>
           <UsMarginMap stats={byState} selected={stateF} onSelect={setStateF} />
         </div>
 
         <div style={card}>
-          <Title chip="hoy">Margen por empresa</Title>
-          <div style={sub}>Con qué cadenas de storage ganás o perdés (peor primero)</div>
-          {brandRows.length === 0 ? <Empty>Sin datos de costo</Empty> : (
+          <Title chip="hoy">Margin by company</Title>
+          <div style={sub}>Which storage chains you win or lose with (worst first)</div>
+          {brandRows.length === 0 ? <Empty>No cost data</Empty> : (
             <div style={{ height: Math.max(180, brandRows.length * 34) }}>
               <ResponsiveContainer>
                 <BarChart data={brandRows} layout="vertical" margin={{ top: 0, right: 12, bottom: 0, left: 0 }}>
@@ -741,14 +741,14 @@ function StorageTab({ pnl, byState, metrics, stateF, setStateF, occup }) {
 
       <div style={grid2}>
         <div style={card}>
-          <Title chip="hoy">Costo mensual por empresa</Title>
-          <div style={sub}>Cuánto le pagás a cada cadena de storages</div>
+          <Title chip="hoy">Monthly cost by company</Title>
+          <div style={sub}>How much you pay each storage chain</div>
           {(() => {
             const rows = topN(
               Object.values(pnl.rows.reduce((acc, r) => { if (!r.pay) return acc; const b = (acc[r.brand] = acc[r.brand] || { label: r.brand, pay: 0 }); b.pay += r.pay; return acc; }, {}))
                 .sort((a, b) => b.pay - a.pay),
               7, "pay");
-            if (!rows.length) return <Empty>Cargá costos para ver este gráfico</Empty>;
+            if (!rows.length) return <Empty>Enter costs to see this chart</Empty>;
             return (
               <div style={{ height: Math.max(160, rows.length * 34) }}>
                 <ResponsiveContainer>
@@ -768,18 +768,18 @@ function StorageTab({ pnl, byState, metrics, stateF, setStateF, occup }) {
         </div>
 
         <div style={card}>
-          <Title chip="hoy">Sangría de vacantes</Title>
-          <div style={sub}>Unidades alquiladas sin carga adentro — plata que sale sin entrar nada</div>
-          {vacant.length === 0 ? <Empty>Sin unidades vacías ✓</Empty> : (
+          <Title chip="hoy">Vacancy bleed</Title>
+          <div style={sub}>Rented units with no cargo inside — money going out with nothing coming in</div>
+          {vacant.length === 0 ? <Empty>No vacant units ✓</Empty> : (
             <>
               <div style={{ fontSize: 24, fontWeight: 700, color: C.rojo, marginBottom: 10 }}>
-                {fmtM(vacant.reduce((s, r) => s + r.pay, 0))}<span style={{ fontSize: 13, color: "#999", fontWeight: 500 }}>/mes en {vacant.length} unidades</span>
+                {fmtM(vacant.reduce((s, r) => s + r.pay, 0))}<span style={{ fontSize: 13, color: "#999", fontWeight: 500 }}>/mo in {vacant.length} units</span>
               </div>
               <div style={{ maxHeight: 220, overflowY: "auto" }}>
                 {vacant.map(r => (
                   <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid #f7f7f7" }}>
                     <span style={{ color: "#333" }}>{r.name}</span>
-                    <span style={{ color: C.rojo, fontWeight: 600 }}>{r.hasCost ? fmtM(r.pay) + "/mes" : "sin costo ⚠"}</span>
+                    <span style={{ color: C.rojo, fontWeight: 600 }}>{r.hasCost ? fmtM(r.pay) + tr("/mo", "/mes") : "no cost ⚠"}</span>
                   </div>
                 ))}
               </div>
@@ -790,11 +790,11 @@ function StorageTab({ pnl, byState, metrics, stateF, setStateF, occup }) {
 
       <div style={{ ...card, marginBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
-          <Title chip="hoy">Storage P&L — costo real vs ingreso</Title>
-          <input value={q} onChange={e => { setQ(e.target.value); setPg(0); }} placeholder="Buscar unidad..."
+          <Title chip="hoy">Storage P&L — real cost vs income</Title>
+          <input value={q} onChange={e => { setQ(e.target.value); setPg(0); }} placeholder="Search unit..."
             style={{ marginLeft: "auto", fontSize: 12.5, padding: "6px 10px", borderRadius: 8, border: "1px solid #e5e5e5", width: 180 }} />
         </div>
-        <div style={sub}>Cada unidad alquilada (aunque esté vacía) contra lo que cobrás por mes. Si un job ocupa varias unidades, su tarifa se prorratea. Click en una fila para ver sus jobs.</div>
+        <div style={sub}>Every rented unit (even if vacant) against what you charge per month. If a job takes several units, its rate is prorated. Click a row to see its jobs.</div>
         <div style={{ maxHeight: 420, overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
@@ -813,7 +813,7 @@ function StorageTab({ pnl, byState, metrics, stateF, setStateF, occup }) {
             </tbody>
             <tfoot>
               <tr>
-                <td style={{ padding: 8, fontWeight: 700, borderTop: "2px solid #eee" }}>Total ({pnl.rows.length} unidades)</td>
+                <td style={{ padding: 8, fontWeight: 700, borderTop: "2px solid #eee" }}>Total ({pnl.rows.length} units)</td>
                 <td style={{ borderTop: "2px solid #eee" }} />
                 <td style={{ padding: 8, textAlign: "right", fontWeight: 700, color: C.naranja, borderTop: "2px solid #eee" }}>{fmtM(pnl.totals.pay)}</td>
                 <td style={{ padding: 8, textAlign: "right", fontWeight: 700, color: C.verde, borderTop: "2px solid #eee" }}>{fmtM(pnl.totals.income)}</td>
@@ -837,10 +837,10 @@ function RowPnl({ r, expanded, onToggle }) {
         <td style={td({ fontWeight: 500 })}>{r.name}</td>
         <td style={td()}>
           <span style={{ fontSize: 10.5, fontWeight: 600, padding: "1px 7px", borderRadius: 20, background: r.occupied ? "#EAF3DE" : "#FEF3C7", color: r.occupied ? "#3B6D11" : "#92760B" }}>
-            {r.occupied ? "Ocupada" : "Vacía"}
+            {r.occupied ? "Occupied" : "Vacant"}
           </span>
         </td>
-        <td style={td({ textAlign: "right", color: C.naranja })}>{r.hasCost ? fmtM(r.pay) : <span style={{ color: "#b45309", fontWeight: 600 }}>sin costo ⚠</span>}</td>
+        <td style={td({ textAlign: "right", color: C.naranja })}>{r.hasCost ? fmtM(r.pay) : <span style={{ color: "#b45309", fontWeight: 600 }}>no cost ⚠</span>}</td>
         <td style={td({ textAlign: "right", color: C.verde })}>{fmtM(r.income)}</td>
         <td style={td({ textAlign: "right", fontWeight: 700, color: r.margin < 0 ? C.rojo : C.verde })}>{fmtM(r.margin)}</td>
       </tr>
@@ -848,14 +848,14 @@ function RowPnl({ r, expanded, onToggle }) {
         <tr>
           <td colSpan={5} style={{ padding: "4px 8px 10px 20px", background: "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
             {r.jobs.length === 0 ? (
-              <span style={{ fontSize: 12, color: "#999" }}>Sin jobs activos en esta unidad.</span>
+              <span style={{ fontSize: 12, color: "#999" }}>No active jobs in this unit.</span>
             ) : r.jobs.map(j => (
               <div key={j.id} style={{ display: "flex", gap: 12, fontSize: 12, padding: "2px 0", color: "#555", flexWrap: "wrap" }}>
                 <span style={{ fontWeight: 600 }}>#{j.job_number || "s/n"}</span>
                 <span>{j.customer || "—"}</span>
                 <span style={{ color: "#999" }}>{j.volume ? parseCf(j.volume).toLocaleString() + " CF" : ""}</span>
                 <span style={{ color: j.billing_active ? C.verde : "#999" }}>
-                  {j.client_monthly_rate ? fmtM(Number(j.client_monthly_rate)) + "/mes" + (j.billing_active ? "" : " (billing inactivo)") : "sin tarifa mensual"}
+                  {j.client_monthly_rate ? fmtM(Number(j.client_monthly_rate)) + tr("/mo", "/mes") + (j.billing_active ? "" : tr(" (billing inactive)", " (billing inactivo)")) : tr("no monthly rate", "sin tarifa mensual")}
                 </span>
               </div>
             ))}
@@ -892,8 +892,8 @@ function RevenueTab({ split, ctx, aging, collected, revSeries, perCf, stay, brok
 
       <div style={grid2}>
         <div style={card}>
-          <Title>Revenue neto vs broker share por mes</Title>
-          <div style={sub}>{brokerShareMissing ? "Columnas de broker share no configuradas en la base — solo bruto." : "Lo que queda en la empresa (verde) + lo que retienen los brokers (naranja) = bruto"}</div>
+          <Title>Net revenue vs broker share by month</Title>
+          <div style={sub}>{brokerShareMissing ? "Broker share columns not configured in the database — gross only." : "What stays in the company (green) + what brokers keep (orange) = gross"}</div>
           <LegendRow items={[["Neto empresa", C.verde], ["Broker share", C.naranja]]} />
           <div style={{ height: 220 }}>
             <ResponsiveContainer>
@@ -908,16 +908,16 @@ function RevenueTab({ split, ctx, aging, collected, revSeries, perCf, stay, brok
             </ResponsiveContainer>
           </div>
           <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#666", marginTop: 8, flexWrap: "wrap" }}>
-            <span>Bruto: <b>{fmtM(split.gross)}</b></span>
+            <span>Gross: <b>{fmtM(split.gross)}</b></span>
             <span>Brokers: <b style={{ color: C.naranja }}>{fmtM(split.broker)}</b></span>
-            <span>Neto: <b style={{ color: C.verde }}>{fmtM(split.net)}</b></span>
+            <span>Net: <b style={{ color: C.verde }}>{fmtM(split.net)}</b></span>
           </div>
         </div>
 
         <div style={card}>
-          <Title chip="hoy">Antigüedad de deuda (AR aging)</Title>
-          <div style={sub}>Saldos BOL sin cobrar en jobs ya entregados. Click en una barra para ver quién debe.</div>
-          {aging.total === 0 ? <Empty>Nada pendiente de cobro ✓</Empty> : (
+          <Title chip="hoy">Debt aging (AR aging)</Title>
+          <div style={sub}>Uncollected BOL balances on jobs already delivered. Click a bar to see who owes.</div>
+          {aging.total === 0 ? <Empty>Nothing left to collect ✓</Empty> : (
             <>
               <div style={{ height: 150 }}>
                 <ResponsiveContainer>
@@ -942,7 +942,7 @@ function RevenueTab({ split, ctx, aging, collected, revSeries, perCf, stay, brok
                           <td style={td({ fontWeight: 600 })}>#{j.job_number || "s/n"}</td>
                           <td style={td()}>{j.customer || "—"}</td>
                           <td style={td({ textAlign: "right", color: C.rojo, fontWeight: 600 })}>{fmtM(j.owed)}</td>
-                          <td style={td({ textAlign: "right", color: "#999" })}>{j.days} días</td>
+                          <td style={td({ textAlign: "right", color: "#999" })}>{j.days} days</td>
                         </tr>
                       ))}
                     </tbody>
@@ -956,9 +956,9 @@ function RevenueTab({ split, ctx, aging, collected, revSeries, perCf, stay, brok
 
       <div style={grid2}>
         <div style={card}>
-          <Title>Economía por pie cúbico ($/CF)</Title>
-          <div style={sub}>Lo que cobrás por CF movido cada mes{perCf.avgCarrierRate ? " — la línea punteada es tu costo carrier promedio" : ""}</div>
-          {perCf.series.every(s => s.value == null) ? <Empty>Sin datos de volumen y cobro en el período</Empty> : (
+          <Title>Economics per cubic foot ($/CF)</Title>
+          <div style={sub}>What you charge per CF moved each month{perCf.avgCarrierRate ? " — the dotted line is your average carrier cost" : ""}</div>
+          {perCf.series.every(s => s.value == null) ? <Empty>No volume and collection data in the period</Empty> : (
             <div style={{ height: 200 }}>
               <ResponsiveContainer>
                 <LineChart data={perCf.series} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
@@ -975,13 +975,13 @@ function RevenueTab({ split, ctx, aging, collected, revSeries, perCf, stay, brok
         </div>
 
         <div style={card}>
-          <Title>Estadía en storage</Title>
-          <div style={sub}>Cuántos días queda la carga adentro (jobs entregados del período)</div>
-          {stay.n === 0 ? <Empty>Sin jobs entregados con fechas completas</Empty> : (
+          <Title>Storage stay</Title>
+          <div style={sub}>How many days the cargo stays inside (delivered jobs in the period)</div>
+          {stay.n === 0 ? <Empty>No delivered jobs with complete dates</Empty> : (
             <>
               <div style={{ display: "flex", gap: 20, marginBottom: 10 }}>
-                <div><div style={{ fontSize: 24, fontWeight: 700 }}>{stay.avg}</div><div style={{ fontSize: 11, color: "#999" }}>días promedio</div></div>
-                <div><div style={{ fontSize: 24, fontWeight: 700 }}>{stay.median}</div><div style={{ fontSize: 11, color: "#999" }}>mediana</div></div>
+                <div><div style={{ fontSize: 24, fontWeight: 700 }}>{stay.avg}</div><div style={{ fontSize: 11, color: "#999" }}>avg days</div></div>
+                <div><div style={{ fontSize: 24, fontWeight: 700 }}>{stay.median}</div><div style={{ fontSize: 11, color: "#999" }}>median</div></div>
                 <div><div style={{ fontSize: 24, fontWeight: 700 }}>{stay.n}</div><div style={{ fontSize: 11, color: "#999" }}>jobs</div></div>
               </div>
               <div style={{ height: 150 }}>
@@ -1001,7 +1001,7 @@ function RevenueTab({ split, ctx, aging, collected, revSeries, perCf, stay, brok
       </div>
       {paymentsMissing && (
         <div style={{ background: "#FFF6E8", border: "1px solid #F4DDB0", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: "#854F0B", marginBottom: 14 }}>
-          ⚠ La tabla de pagos no está configurada — "Cobrado" se aproxima desde los campos del job.
+          ⚠ The payments table is not configured — "Collected" is approximated from job fields.
         </div>
       )}
     </>
@@ -1018,9 +1018,9 @@ function OperacionTab({ brokerRank, brokerF, setBrokerF, fadd, cfSeries, topDriv
     <>
       <div style={grid2}>
         <div style={{ ...card, gridColumn: "1 / -1" }}>
-          <Title>Ranking de brokers — con quién conviene trabajar</Title>
-          <div style={sub}>{brokerShareMissing ? "Columnas de broker share no configuradas — el neto asume share 0." : "Neto = lo cobrado en sus jobs menos lo que retienen. Click en una barra para filtrar todo el dashboard."}</div>
-          {brokerRank.length === 0 ? <Empty>Sin jobs de brokers en el período</Empty> : (
+          <Title>Broker ranking — who's worth working with</Title>
+          <div style={sub}>{brokerShareMissing ? "Broker share columns not configured — net assumes share 0." : "Net = what was collected on their jobs minus what they keep. Click a bar to filter the whole dashboard."}</div>
+          {brokerRank.length === 0 ? <Empty>No broker jobs in the period</Empty> : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 18 }}>
               <div style={{ height: Math.max(180, barData.length * 36) }}>
                 <ResponsiveContainer>
@@ -1074,13 +1074,13 @@ function OperacionTab({ brokerRank, brokerF, setBrokerF, fadd, cfSeries, topDriv
 
       <div style={grid2}>
         <div style={card}>
-          <Title>Cumplimiento FADD</Title>
-          <div style={sub}>% de jobs entregados en o antes de su primera fecha disponible</div>
-          {fadd.total === 0 ? <Empty>Sin jobs entregados con FADD en el período</Empty> : (
+          <Title>FADD compliance</Title>
+          <div style={sub}>% of jobs delivered on or before their first available date</div>
+          {fadd.total === 0 ? <Empty>No delivered jobs with FADD in the period</Empty> : (
             <>
               <div style={{ display: "flex", gap: 20, marginBottom: 8 }}>
-                <div><div style={{ fontSize: 24, fontWeight: 700, color: fadd.onTimePct >= 80 ? C.verde : fadd.onTimePct >= 50 ? "#92760B" : C.rojo }}>{fadd.onTimePct}%</div><div style={{ fontSize: 11, color: "#999" }}>a tiempo ({fadd.onTime}/{fadd.total})</div></div>
-                {fadd.late > 0 && <div><div style={{ fontSize: 24, fontWeight: 700 }}>{fadd.avgDaysLate}</div><div style={{ fontSize: 11, color: "#999" }}>días de atraso promedio</div></div>}
+                <div><div style={{ fontSize: 24, fontWeight: 700, color: fadd.onTimePct >= 80 ? C.verde : fadd.onTimePct >= 50 ? "#92760B" : C.rojo }}>{fadd.onTimePct}%</div><div style={{ fontSize: 11, color: "#999" }}>on time ({fadd.onTime}/{fadd.total})</div></div>
+                {fadd.late > 0 && <div><div style={{ fontSize: 24, fontWeight: 700 }}>{fadd.avgDaysLate}</div><div style={{ fontSize: 11, color: "#999" }}>avg days late</div></div>}
               </div>
               <div style={{ height: 160 }}>
                 <ResponsiveContainer>
@@ -1098,9 +1098,9 @@ function OperacionTab({ brokerRank, brokerF, setBrokerF, fadd, cfSeries, topDriv
         </div>
 
         <div style={card}>
-          <Title>CF movidos por mes</Title>
-          <div style={sub}>Volumen total (pies cúbicos) por mes</div>
-          {cfSeries.every(r => !r.cf) ? <Empty>Sin datos de volumen</Empty> : (
+          <Title>CF moved per month</Title>
+          <div style={sub}>Total volume (cubic feet) per month</div>
+          {cfSeries.every(r => !r.cf) ? <Empty>No volume data</Empty> : (
             <div style={{ height: 200 }}>
               <ResponsiveContainer>
                 <BarChart data={cfSeries} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
@@ -1119,8 +1119,8 @@ function OperacionTab({ brokerRank, brokerF, setBrokerF, fadd, cfSeries, topDriv
       <div style={grid2}>
         <div style={card}>
           <Title>Top drivers</Title>
-          <div style={sub}>Por jobs entregados en el período</div>
-          {topDrivers.length === 0 ? <Empty>Sin entregas en el período</Empty> : (
+          <div style={sub}>By jobs delivered in the period</div>
+          {topDrivers.length === 0 ? <Empty>No deliveries in the period</Empty> : (
             <div style={{ height: Math.max(150, topDrivers.length * 34) }}>
               <ResponsiveContainer>
                 <BarChart data={topDrivers} layout="vertical" margin={{ top: 0, right: 12, bottom: 0, left: 0 }}>
@@ -1138,9 +1138,9 @@ function OperacionTab({ brokerRank, brokerF, setBrokerF, fadd, cfSeries, topDriv
         </div>
 
         <div style={card}>
-          <Title>Jobs por status</Title>
-          <div style={sub}>Dónde está parada la operación (jobs del período)</div>
-          {funnel.length === 0 ? <Empty>Sin jobs en el período</Empty> : (
+          <Title>Jobs by status</Title>
+          <div style={sub}>Where the operation stands (jobs in the period)</div>
+          {funnel.length === 0 ? <Empty>No jobs in the period</Empty> : (
             <div style={{ height: Math.max(150, funnel.length * 32) }}>
               <ResponsiveContainer>
                 <BarChart data={funnel} layout="vertical" margin={{ top: 0, right: 12, bottom: 0, left: 0 }}>
