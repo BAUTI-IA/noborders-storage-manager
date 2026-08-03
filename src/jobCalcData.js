@@ -448,9 +448,16 @@ export const CREW_OPTIONS = [
  * compare a measured number against estimated ones.
  */
 export function compareCrews(job, settings, miles, opts = {}) {
-  const options = opts.options || CREW_OPTIONS;
   const curD = driversOf(job);
   const curH = helpersOf(job);
+
+  // The crew actually chosen is always in the table. Ranking the alternatives
+  // while leaving out the one the operator picked would compare against nothing.
+  const options = (opts.options || CREW_OPTIONS).slice();
+  if (!options.some((o) => o.drivers === curD && o.helpers === curH)) {
+    options.push({ drivers: curD, helpers: curH });
+    options.sort((a, b) => a.drivers + a.helpers - (b.drivers + b.helpers) || a.drivers - b.drivers);
+  }
 
   const rows = options.map((o) => {
     const r = evaluateJob({ ...job, drivers: o.drivers, helpers: o.helpers }, settings, miles);

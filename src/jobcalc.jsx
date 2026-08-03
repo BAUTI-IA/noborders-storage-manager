@@ -471,10 +471,15 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     setSaved(parseDraft(draft)); setDraft(null);
   }
 
+  // Columns added after the first release. If the operator has not run the
+  // migration yet, PostgREST rejects the WHOLE row for an unknown column, so a
+  // perfectly good evaluation would be lost. Retry without them and say why.
+  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides"];
+
   async function saveEvaluation(decision) {
     setSavingEval(true); setErr(null);
     const r = result;
-    const { error } = await supabase.from("job_evaluations").insert({
+    const payload = {
       created_by: session.user.id,
       origin_zip: originZip, dest_zip: destZip,
       cu_ft: num(inputs.cuFt), broker_price: num(inputs.brokerPrice),
@@ -496,7 +501,19 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       // `overrides` records only the deviations, so History can show them.
       settings_snapshot: settings,
       overrides: overrides.length ? Object.fromEntries(overrides.map((o) => [o.key, o.to])) : null,
-    });
+    };
+
+    let { error } = await supabase.from("job_evaluations").insert(payload);
+    if (error && /PGRST204|column .* does not exist|Could not find the '/.test(error.message || error.code || "")) {
+      const trimmed = { ...payload };
+      for (const c of LATER_COLUMNS) delete trimmed[c];
+      const retry = await supabase.from("job_evaluations").insert(trimmed);
+      error = retry.error;
+      if (!error) {
+        setErr(tr("Saved, but without the crew and adjustment columns — run the setup SQL to store those too.",
+                  "Guardado, pero sin las columnas de crew y ajustes — corré el SQL del setup para que también se guarden."));
+      }
+    }
     setSavingEval(false);
     if (error) { setErr(error.message); return; }
     // A one-off adjustment must not follow the operator into the next job.
@@ -506,6 +523,13 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
 
   /** Promote this job's adjustments into the company settings. Admin only, deliberate. */
   async function promoteOverrides() {
+    // Promoting writes from the SAVED row. With an unsaved settings edit open,
+    // that edit would vanish without a word — so make the operator resolve it.
+    if (draft) {
+      setErr(tr("Save or discard your Settings edit first, then promote these adjustments.",
+                "Guardá o descartá primero la edición de Settings, y después promové estos ajustes."));
+      return;
+    }
     const list = overrides.map((o) => `· ${SETTING_LABELS[o.key]?.label || o.key}: ${o.from} → ${o.to}`).join("\n");
     const ok = window.confirm(
       tr(`Make these the standard for every future job?\n\n${list}`,

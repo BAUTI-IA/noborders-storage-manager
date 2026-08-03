@@ -595,3 +595,28 @@ t("the saved snapshot must carry the EFFECTIVE settings, so calibration inverts 
   // 3 days x 10h = 30h useful, minus 20h driving = 10h handling → 2 x 1200 / 10
   near(cal.cuFtPerHour, 240, 0.01);
 });
+
+// ── Regressions found reviewing the crew + overrides work ────────────────────
+
+t("compareCrews: the crew actually chosen is always in the table", () => {
+  // 3 drivers is not in CREW_OPTIONS. Ranking alternatives while omitting the
+  // operator's own choice compares against nothing.
+  const rows = compareCrews({ ...JOB, drivers: 3, helpers: 4 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const cur = rows.filter((r) => r.isCurrent);
+  assert.equal(cur.length, 1, "the chosen crew must appear exactly once");
+  assert.equal(cur[0].drivers, 3);
+  assert.equal(cur[0].helpers, 4);
+  assert.equal(rows.length, CREW_OPTIONS.length + 1);
+});
+
+t("compareCrews: a crew already in the list is not duplicated", () => {
+  const rows = compareCrews({ ...JOB, drivers: 1, helpers: 2 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(rows.length, CREW_OPTIONS.length);
+  assert.equal(rows.filter((r) => r.isCurrent).length, 1);
+});
+
+t("compareCrews: rows come out ordered by crew size", () => {
+  const rows = compareCrews({ ...JOB, drivers: 3, helpers: 0 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const sizes = rows.map((r) => r.crewSize);
+  assert.deepEqual(sizes, sizes.slice().sort((a, b) => a - b));
+});
