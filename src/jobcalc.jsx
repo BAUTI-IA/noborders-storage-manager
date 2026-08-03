@@ -743,10 +743,25 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
               <div style={{ ...lbl, color: "#888" }}>Ask the broker for</div>
               <div style={{ fontSize: 30, fontWeight: 900, color: "#fff", letterSpacing: "-0.02em" }}>{money(result.askPrice)}</div>
               <div style={{ fontSize: 12, color: "#999", marginTop: 4 }}>
-                {tr(
-                  `${money(result.askPrice - num(inputs.brokerPrice))} above what they are offering. Break-even is ${money(result.breakevenPrice)}.`,
-                  `${money(result.askPrice - num(inputs.brokerPrice))} más de lo que están ofreciendo. El punto de equilibrio es ${money(result.breakevenPrice)}.`
-                )}
+                {(() => {
+                  const gap = result.askPrice - num(inputs.brokerPrice);
+                  // Never render a negative "above" — asking for less than the
+                  // broker already offers is not advice, it is a bug.
+                  if (gap <= 0) {
+                    return tr(`They are already offering enough. Break-even is ${money(result.breakevenPrice)}.`,
+                              `Ya te están ofreciendo lo suficiente. El punto de equilibrio es ${money(result.breakevenPrice)}.`);
+                  }
+                  if (result.askDrivenByStress) {
+                    return tr(
+                      `${money(gap)} above what they are offering. That extra covers the bad case — an extra day plus 20% more miles — not extra profit.`,
+                      `${money(gap)} más de lo que están ofreciendo. Ese plus cubre el peor caso — un día más y 20% más de millas — no es margen extra.`
+                    );
+                  }
+                  return tr(
+                    `${money(gap)} above what they are offering. Break-even is ${money(result.breakevenPrice)}.`,
+                    `${money(gap)} más de lo que están ofreciendo. El punto de equilibrio es ${money(result.breakevenPrice)}.`
+                  );
+                })()}
               </div>
             </div>
           )}

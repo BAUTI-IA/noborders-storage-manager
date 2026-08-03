@@ -298,7 +298,7 @@ export function computeFixed(truckDays, s) {
 
 // ── 5. Decision metrics ──────────────────────────────────────────────────────
 
-export function computeMetrics({ brokerPrice, truckDays, trucks, variableCost, fixedPerWorkedDay, absorbedFixed }, s) {
+export function computeMetrics({ brokerPrice, truckDays, trucks, variableCost, fixedPerWorkedDay, absorbedFixed, worstStressBreakeven }, s) {
   const price = num(brokerPrice);
   const days = num(truckDays);
 
@@ -323,12 +323,26 @@ export function computeMetrics({ brokerPrice, truckDays, trucks, variableCost, f
 
   const target = num(s.targetMarginPct);
   const hurdlePerTruckDay = target < 1 ? fixedPerWorkedDay / (1 - target) : Infinity;
-  // The negotiation number: what the broker has to pay for the truck to be worth tying up.
-  const askPrice = variableCost + hurdlePerTruckDay * truckDayUnits;
+
+  // The negotiation number: what the broker has to pay for the truck to be worth
+  // tying up. It has to answer whatever is ACTUALLY wrong with the job, which is
+  // two different things:
+  //   · the plan as costed has to clear the target margin, and
+  //   · the worst stress case has to at least not lose money.
+  // Pricing only the first is how this card ended up telling operators to ask for
+  // LESS than the broker already offered: on a job that is yellow purely because
+  // the stress case goes under, the baseline plan clears its hurdle easily, so the
+  // baseline ask lands below the offer. Taking the max fixes the advice.
+  const baselineAsk = variableCost + hurdlePerTruckDay * truckDayUnits;
+  const stressAsk = num(worstStressBreakeven, 0);
+  const askPrice = Math.max(baselineAsk, stressAsk);
+  // True when the stress case, not the baseline margin, is what sets the ask —
+  // the operator needs to know the extra buys downside cover, not extra profit.
+  const askDrivenByStress = stressAsk > baselineAsk;
 
   return {
     contributionMargin, contributionPerTruckDay, operatingMargin, breakevenPrice,
-    hurdlePerTruckDay, askPrice,
+    hurdlePerTruckDay, askPrice, baselineAsk, askDrivenByStress,
     truckDayUnits, revenuePerTruckDay, costPerTruckDay, profitPerTruckDay,
   };
 }
@@ -412,14 +426,24 @@ export function evaluateJob(job, settings, miles, opts = {}) {
 
   const variable = computeVariable({ truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice, job }, s);
   const fixed = computeFixed(truckDays, s);
-  const metrics = computeMetrics(
-    { brokerPrice, truckDays, trucks: trucksOf(job), variableCost: variable.variableCost, fixedPerWorkedDay: fixed.fixedPerWorkedDay, absorbedFixed: fixed.absorbedFixed },
-    s
-  );
 
+  // Stress first: the ask price has to know the worst case before it can name a
+  // number. The scenarios call computeMetrics themselves without a stress input,
+  // which is what stops this from recursing — a scenario has no sub-scenarios.
   const base = { ...dist, cuFt, brokerPrice, truckDays, hotelNights, job };
   const stress = STRESS_SCENARIOS.map((sc) => runScenario(base, s, sc));
   const worstStress = stress.reduce((w, x) => (w == null || x.operatingMargin < w.operatingMargin ? x : w), null);
+
+  const metrics = computeMetrics(
+    {
+      brokerPrice, truckDays, trucks: trucksOf(job),
+      variableCost: variable.variableCost,
+      fixedPerWorkedDay: fixed.fixedPerWorkedDay,
+      absorbedFixed: fixed.absorbedFixed,
+      worstStressBreakeven: worstStress ? worstStress.breakevenPrice : 0,
+    },
+    s
+  );
 
   const { verdict, reason } = verdictFor(
     {

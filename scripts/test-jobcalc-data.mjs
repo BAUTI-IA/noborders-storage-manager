@@ -233,8 +233,13 @@ t("reference case @ 1408 miles: the spec's 3.5 days / 3 nights / ~$3,400 — but
 
 t("evaluateJob: askPrice is what turns a yellow into a deal worth taking", () => {
   const r = evaluateJob(JOB, {}, { loadedMiles: 700, deadheadMiles: 708 });
-  near(r.askPrice, 3473 + 200 * 3.5, 3);
-  assert.ok(r.askPrice > 0);
+  // The baseline requirement alone would be 3473 + 200 x 3.5 = 4173, which is
+  // BELOW the $4,800 on offer — asking for that would be asking for less. The
+  // binding requirement here is the worst stress case breaking even: its 4364
+  // of variable cost plus 675 of absorbed fixed.
+  near(r.baselineAsk, 3473 + 200 * 3.5, 3);
+  near(r.askPrice, 5039, 3);
+  assert.ok(r.askPrice > r.brokerPrice);
 });
 
 t("evaluateJob: truck-days override recalculates hotel nights and every downstream number", () => {
@@ -671,4 +676,74 @@ t("per-truck-day figures never come out NaN or Infinity on degenerate settings",
   for (const k of ["revenuePerTruckDay", "costPerTruckDay", "profitPerTruckDay", "truckDayUnits"]) {
     assert.ok(Number.isFinite(r[k]), `${k} became ${r[k]}`);
   }
+});
+
+// ── askPrice must never tell you to ask for less ─────────────────────────────
+
+t("askPrice: a job yellow ONLY on stress still asks for MORE than the offer", () => {
+  // The regression that started this: the baseline plan clears its hurdle easily,
+  // so the baseline ask lands below the offer and the card said "ask for less".
+  const r = evaluateJob(JOB, {}, { loadedMiles: 700, deadheadMiles: 708 });
+  assert.equal(r.verdict, VERDICT.YELLOW);
+  assert.equal(r.reason, REASON.STRESS_NEGATIVE);
+  assert.ok(r.contributionPerTruckDay > r.hurdlePerTruckDay, "the baseline plan is fine");
+  assert.ok(r.baselineAsk < r.brokerPrice, "...which is exactly why the old ask went under");
+  assert.ok(r.askPrice > r.brokerPrice, `ask ${r.askPrice} must exceed the ${r.brokerPrice} offer`);
+  assert.equal(r.askDrivenByStress, true);
+});
+
+t("askPrice: whenever the light is not green, asking for less is never the answer", () => {
+  for (const price of [100, 1000, 3000, 3500, 4000, 4800, 5200]) {
+    const r = evaluateJob({ ...JOB, brokerPrice: price }, {}, { loadedMiles: 700, deadheadMiles: 708 });
+    if (r.verdict === VERDICT.GREEN) continue;
+    assert.ok(r.askPrice >= price, `at $${price} (${r.verdict}/${r.reason}) ask was ${Math.round(r.askPrice)}`);
+  }
+});
+
+t("askPrice: paying it makes the worst stress case stop losing money", () => {
+  const r = evaluateJob(JOB, {}, { loadedMiles: 700, deadheadMiles: 708 });
+  const paid = evaluateJob({ ...JOB, brokerPrice: r.askPrice }, {}, { loadedMiles: 700, deadheadMiles: 708 });
+  assert.ok(paid.worstStress.operatingMargin >= -0.01, `worst case still at ${paid.worstStress.operatingMargin}`);
+});
+
+t("askPrice: when the baseline margin is the binding requirement, IT sets the ask", () => {
+  // A steep target margin makes the baseline requirement (7542) outrun the
+  // stress break-even (4519), and the max must then leave the baseline alone.
+  const r = evaluateJob(JOB, { targetMarginPct: 0.9 }, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.ok(r.baselineAsk > r.worstStress.breakevenPrice);
+  near(r.askPrice, r.baselineAsk, 0.01);
+  assert.equal(r.askDrivenByStress, false);
+});
+
+t("askPrice: is always the higher of the two requirements, never a blend", () => {
+  for (const target of [0, 0.25, 0.5, 0.9]) {
+    const r = evaluateJob(JOB, { targetMarginPct: target }, { loadedMiles: 663, deadheadMiles: 671 });
+    near(r.askPrice, Math.max(r.baselineAsk, r.worstStress.breakevenPrice), 0.01, `target ${target}`);
+    assert.ok(r.askPrice >= r.baselineAsk);
+    assert.ok(r.askPrice >= r.worstStress.breakevenPrice);
+  }
+});
+
+t("askPrice: the base-case break-even is untouched by all of this", () => {
+  const r = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  near(r.breakevenPrice, r.variableCost + r.absorbedFixed, 0.01);
+});
+
+t("askPrice: does not feed the traffic light", () => {
+  // Same job, same verdict, regardless of how the ask is derived.
+  const r = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const v = verdictFor({
+    contributionMargin: r.contributionMargin,
+    contributionPerTruckDay: r.contributionPerTruckDay,
+    fixedPerWorkedDay: r.fixedPerWorkedDay,
+    hurdlePerTruckDay: r.hurdlePerTruckDay,
+  }, r.worstStress);
+  assert.equal(v.verdict, r.verdict);
+});
+
+t("askPrice: computeMetrics without a stress input keeps the plain baseline ask", () => {
+  const m = computeMetrics(
+    { brokerPrice: 4800, truckDays: 3.5, variableCost: 3400, fixedPerWorkedDay: 150, absorbedFixed: 525 }, S);
+  assert.equal(m.askPrice, 4100);
+  assert.equal(m.askDrivenByStress, false);
 });
