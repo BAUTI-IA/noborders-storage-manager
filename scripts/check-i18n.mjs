@@ -109,6 +109,12 @@ function extract(file, src) {
       const isProp = parent.type === "ObjectProperty" || parent.type === "MemberExpression" || parent.type === "CallExpression" && !inChildren;
       if (inChildren && !inAttr && !isCompare && !isProp) add(node.value, "jsx-expr", node.loc.start.line, node);
     }
+    // Display strings declared in plain objects and rendered later via JSX
+    // (NAV labels, PAGE_META titles/subs...): { label:"...", title:"...", sub:"..." }
+    if (node.type === "ObjectProperty" && !node.computed && node.value?.type === "StringLiteral") {
+      const key = node.key?.name || node.key?.value;
+      if (["label", "title", "sub", "section"].includes(key)) add(node.value.value, "objprop:" + key, node.loc.start.line, node.value);
+    }
     // alert("...") / window.confirm(`...`)
     if (node.type === "CallExpression") {
       const callee = node.callee;

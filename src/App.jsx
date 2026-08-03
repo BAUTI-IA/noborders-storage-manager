@@ -2574,14 +2574,14 @@ const NAV = [
     { id:"jobs", label:"Jobs", icon:"💼" },
     { id:"messages", label:"Chats", icon:"💬" },
   ]},
-  { section:"Finanzas", items:[
+  { section:"Finance", items:[
     { id:"brokers", label:"Brokers", icon:"🏦" },
     { id:"billing", label:"Storage Billing", icon:"🧾" },
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
     { id:"expenses", label:"Expenses", icon:"💸" },
-    { id:"bancos", label:"Bancos", icon:"🏛️" },
+    { id:"bancos", label:"Banks", icon:"🏛️" },
     { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"clientes", label:"Clients", icon:"👥" },
   ]},
@@ -2596,7 +2596,7 @@ const NAV = [
     { id:"analytics", label:"Analytics", icon:"📊" },
     { id:"suggestions", label:"Suggestions", icon:"💡" },
     { id:"bol", label:"BOL", icon:"📄" },
-    { id:"trash", label:"Papelera / Historial", icon:"🗑️" },
+    { id:"trash", label:"Trash / History", icon:"🗑️" },
     { id:"users", label:"Users", icon:"👤" },
     { id:"settings", label:"Settings", icon:"⚙️" },
   ]},
@@ -2641,7 +2641,7 @@ function Sidebar({ page, setPage, onSignOut, can = () => true, isAdmin = false }
 
 const PAGE_META = {
   dispatching: { title:"Dispatching", sub:"Pickup & delivery dispatch" },
-  calendario:  { title:"Pickup Calendar", sub:"Pick ups programados" },
+  calendario:  { title:"Pickup Calendar", sub:"Scheduled pickups" },
   calendario_entregas: { title:"Delivery Calendar", sub:"Scheduled deliveries" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
@@ -2651,8 +2651,8 @@ const PAGE_META = {
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
-  expenses:    { title:"Expenses", sub:"Gastos por driver, truck y trip · días trabajados · materiales" },
-  bancos:      { title:"Bancos", sub:"Movimientos bancarios reales · categorización con doble check · conciliación · P&L" },
+  expenses:    { title:"Expenses", sub:"Expenses per driver, truck and trip · days worked · materials" },
+  bancos:      { title:"Banks", sub:"Real bank movements · double-check categorization · reconciliation · P&L" },
   clientes:    { title:"Clients", sub:"Clients and their jobs" },
   drivers:     { title:"Drivers", sub:"Operation drivers" },
   trucks:      { title:"Trucks", sub:"Truck fleet" },
@@ -2664,7 +2664,7 @@ const PAGE_META = {
   suggestions: { title:"Suggestions", sub:"Employee feedback and improvement ideas" },
   users:       { title:"Users", sub:"Team members, roles and permissions" },
   bol:         { title:"BOL", sub:"Bill of Lading templates and generation" },
-  trash:       { title:"Papelera / Historial", sub:"Registros borrados recuperables y log de cambios" },
+  trash:       { title:"Trash / History", sub:"Recoverable deleted records and change log" },
   settings:    { title:"Settings", sub:"Operation settings" },
 };
 
@@ -9190,7 +9190,7 @@ export default function App() {
             )}
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:16 }}>
               {[
-                { label:"Trips activos", value:tripMetrics.activeCount, color:"#7C3AED" },
+                { label:"Active trips", value:tripMetrics.activeCount, color:"#7C3AED" },
                 { label:"CF in transit", value:Math.round(tripMetrics.cfTransit).toLocaleString()+" CF", color:"#185FA5" },
                 { label:"To collect in transit", value:"$"+Math.round(tripMetrics.collectTransit).toLocaleString(), color:"#1A8A4E" },
                 { label:"Delivered today", value:tripMetrics.deliveredToday, color:"#3B6D11" },
@@ -9962,7 +9962,7 @@ export default function App() {
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10, marginBottom:16 }}>
               {[
                 { label:"Active companies", value: m.activeCompanies, color:"#111" },
-                { label:"Documentos vencidos", value: m.expired, color:"#E24B4A" },
+                { label:"Expired documents", value: m.expired, color:"#E24B4A" },
                 { label:"Expiring in 30 days", value: m.expiringSoon, color:"#EF9F27" },
                 { label:"Up to date", value: m.upToDate, color:"#1A8A4E" },
               ].map(mt => (
