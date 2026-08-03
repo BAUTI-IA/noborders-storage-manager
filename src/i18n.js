@@ -1468,7 +1468,7 @@ export const I18N_ES = {
   "Tap to upload receipt (jpg, png, heic, pdf)": "Tocá para subir el recibo (jpg, png, heic, pdf)",
   "Tap to upload the CSV exported from the bank (if your bank exports Excel, save it as CSV first). If the CSV has the account_name + category column (master CSV), it loads by itself, already verified.": "Tocá para subir el CSV exportado del banco (si tu banco exporta Excel, guardalo como CSV primero). Si el CSV trae la columna account_name + category (CSV maestro), se carga solo, ya verificado.",
   "Team chat needs its tables created once. Run this SQL in Supabase (SQL Editor), or run": "El chat del equipo necesita crear sus tablas una vez. Corré este SQL en Supabase (SQL Editor), o corré",
-  "The Bancos module is not installed in the database yet.": "El módulo Bancos todavía no está instalado en la base.",
+  "The Banks module is not installed in the database yet.": "El módulo Bancos todavía no está instalado en la base.",
   "The deduction lowers the week's pay (and the driver cost in the P&L); the compensation raises it.": "El descuento le baja el pago de la semana (y el costo del driver en el P&L); la compensación se lo sube.",
   "The job history needs an initial database setup.": "El historial de jobs necesita una configuración inicial de la base de datos.",
   "The job wasn't delivered to the final customer — choose the storage unit or warehouse where it was left. It'll leave the trip and go back to storage.": "El job no se entregó al cliente final — elegí el storage unit o warehouse donde quedó. Sale del trip y vuelve a storage.",

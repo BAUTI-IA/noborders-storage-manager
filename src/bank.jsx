@@ -158,7 +158,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
   if (missing) {
     return (
       <div style={{ background:"#FFF7ED", border:"1px solid #FED7AA", borderRadius:12, padding:20, fontSize:13.5, color:"#9A3412" }}>
-        <b>The Bancos module is not installed in the database yet.</b>
+        <b>The Banks module is not installed in the database yet.</b>
         <div style={{ marginTop:6 }}>Run the migration and reload:</div>
         <pre style={{ background:"#fff", border:"1px solid #eee", borderRadius:8, padding:10, fontSize:12, marginTop:8 }}>SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-bank.mjs</pre>
       </div>
