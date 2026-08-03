@@ -3572,8 +3572,8 @@ export default function App() {
   const [dismissedDups, setDismissedDups] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem("dismissedDups") || "[]")); } catch { return new Set(); } });
   const [tab, setTab] = useState("active");           // jobs page sub-tab: active/delivered/wh:*
   const [dispatchFilter, setDispatchFilter] = useState("all"); // all/pickups/deliveries/longhaul/nofadd
-  const [bannerDismissed, setBannerDismissed] = useState(false);
-  const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
+  const [showAlertsModal, setShowAlertsModal] = useState(false); // per-section alerts popup (payments due / jobs needing attention / expiring docs)
+  useEffect(() => { setShowAlertsModal(false); }, [page]);       // the popup's content is per-section, so close it when navigating
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
   const [sortBy, setSortBy] = useState("date-desc");
@@ -3825,7 +3825,6 @@ export default function App() {
   const [companies, setCompanies] = useState([]);
   const [complianceDocs, setComplianceDocs] = useState([]);
   const [compTab, setCompTab] = useState("companies");    // companies | trucks | drivers | all
-  const [compBannerDismissed, setCompBannerDismissed] = useState(false);
   const [showCompanyModal, setShowCompanyModal] = useState(false);
   const [companyForm, setCompanyForm] = useState(EMPTY_COMPANY);
   const [editingCompanyId, setEditingCompanyId] = useState(null);
@@ -8615,6 +8614,19 @@ export default function App() {
               </button>
             );
           })()}
+          {(() => {
+            // Per-section alerts button (mirrors the duplicates one): opens a popup instead of a full-width banner.
+            const n = page === "storage" ? duePaymentsSoon.length
+              : page === "dispatching" ? dispatchAlerts.length
+              : page === "compliance" ? complianceAlerts.length
+              : 0;
+            if (n === 0) return null;
+            return (
+              <button onClick={() => setShowAlertsModal(true)} title="Ver alertas de esta sección" style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #F3C9C9", background:"#FCEBEB", color:"#A32D2D", fontSize:13, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6 }}>
+                ⚠️ {n} alert{n === 1 ? "" : "s"}
+              </button>
+            );
+          })()}
           {page === "storage" && can("storage","create") && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
           {page === "storage" && can("storage","create") && <Btn onClick={openAdd}>+ Unit</Btn>}
           {page === "storage" && storageTab === "storage_units" && can("storage","create") && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
@@ -8695,22 +8707,6 @@ export default function App() {
         </div>
       )}
 
-      {page === "storage" && duePaymentsSoon.length > 0 && !storageBannerDismissed && (
-        <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#A32D2D", display:"flex", alignItems:"flex-start", gap:10 }}>
-          <div style={{ flex:1 }}>
-            <strong>⚠️ {duePaymentsSoon.length} payment(s) due in 3 days or less:</strong>
-            <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
-              {duePaymentsSoon.map(p => (
-                <span key={p.id} onClick={() => setDetailId(p.id)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
-                  {p.label} · {p.days < 0 ? "overdue" : p.days === 0 ? "today" : `${p.days}d`}
-                </span>
-              ))}
-            </div>
-          </div>
-          <button onClick={() => setStorageBannerDismissed(true)} title="Dismiss" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#A32D2D", flexShrink:0 }}>×</button>
-        </div>
-      )}
-
       {/* ───────────────────────── USERS (admin) ───────────────────────── */}
       {page === "users" && isAdmin && <UsersSection session={session} />}
 
@@ -8749,22 +8745,6 @@ export default function App() {
               <b>{duplicateReport.total} posible{duplicateReport.total === 1 ? "" : "s"} duplicate{duplicateReport.total === 1 ? "" : "s"}</b>
               <span style={{ color:"#a07d3a" }}>· Jobs {duplicateReport.jobs.length} · Payments {duplicateReport.payments.length} · Storages {duplicateReport.storages.length}</span>
               <span style={{ marginLeft:"auto", textDecoration:"underline", fontWeight:600 }}>Revisar →</span>
-            </div>
-          )}
-
-          {dispatchAlerts.length > 0 && !bannerDismissed && (
-            <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:13, color:"#A32D2D", display:"flex", alignItems:"flex-start", gap:10 }}>
-              <div style={{ flex:1 }}>
-                <strong>⚠️ {dispatchAlerts.length} job(s) need attention:</strong>
-                <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:8 }}>
-                  {dispatchAlerts.map(a => (
-                    <span key={a.key} onClick={() => setJobDetailKey(a.key)} style={{ background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap" }}>
-                      <strong style={{ fontFamily:"monospace" }}>{a.job_number || "(job)"}</strong> · {a.customer || "—"} · {a.reason}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <button onClick={() => setBannerDismissed(true)} title="Dismiss" style={{ background:"none", border:"none", fontSize:18, lineHeight:1, cursor:"pointer", color:"#A32D2D", flexShrink:0 }}>×</button>
             </div>
           )}
 
@@ -10586,25 +10566,6 @@ export default function App() {
                 </div>
               ))}
             </div>
-
-            {!compBannerDismissed && complianceAlerts.length > 0 && (
-              <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                  <span style={{ fontSize:13, fontWeight:700, color:"#A32D2D" }}>⚠️ {complianceAlerts.length} document(s) expired or expiring soon (≤7 days)</span>
-                  <button onClick={() => setCompBannerDismissed(true)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#A32D2D", fontSize:16, lineHeight:1 }}>×</button>
-                </div>
-                <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                  {complianceAlerts.map(a => (
-                    <div key={a.doc.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#7A2222", flexWrap:"wrap" }}>
-                      <span style={{ fontSize:10, fontWeight:700, color:"#A32D2D", background:"#fff", borderRadius:20, padding:"1px 7px" }}>{ENTITY_LABELS[a.doc.entity_type] || a.doc.entity_type}</span>
-                      <b>{a.name}</b>
-                      <span>· {docTypeLabel(a.doc.document_type)}</span>
-                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{a.status === "expired" ? `Overdue ${Math.abs(a.days)} days ago` : `Expires in ${a.days} days`}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
               {tabs.map(([v,l]) => (
@@ -13518,6 +13479,56 @@ export default function App() {
                 <span>Company: <b style={{ color:"#EF9F27" }}>{money(base - dc - rc) || "$0"}</b></span>
               </div>
             </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ── Section alerts popup (replaces the old full-width banners) ── */}
+      {showAlertsModal && (() => {
+        const close = () => setShowAlertsModal(false);
+        const chip = { background:"#fff", border:"1px solid #f3c9c9", borderRadius:20, padding:"3px 10px", cursor:"pointer", whiteSpace:"nowrap", fontSize:13, color:"#A32D2D" };
+        const header = (text) => <div style={{ fontSize:13, fontWeight:700, color:"#A32D2D", marginBottom:10 }}>⚠️ {text}</div>;
+        return (
+          <Modal title="Alerts" onClose={close} footer={<Btn onClick={close}>Close</Btn>}>
+            {page === "storage" && (
+              <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px" }}>
+                {header(`${duePaymentsSoon.length} payment(s) due in 3 days or less:`)}
+                <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                  {duePaymentsSoon.map(p => (
+                    <span key={p.id} onClick={() => { close(); setDetailId(p.id); }} style={chip}>
+                      {p.label} · {p.days < 0 ? "overdue" : p.days === 0 ? "today" : `${p.days}d`}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {page === "dispatching" && (
+              <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px" }}>
+                {header(`${dispatchAlerts.length} job(s) need attention:`)}
+                <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                  {dispatchAlerts.map(a => (
+                    <span key={a.key} onClick={() => { close(); setJobDetailKey(a.key); }} style={chip}>
+                      <strong style={{ fontFamily:"monospace" }}>{a.job_number || "(job)"}</strong> · {a.customer || "—"} · {a.reason}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {page === "compliance" && (
+              <div style={{ background:"#FCEBEB", border:"1px solid #E24B4A", borderRadius:10, padding:"12px 14px" }}>
+                {header(`${complianceAlerts.length} document(s) expired or expiring soon (≤7 days)`)}
+                <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                  {complianceAlerts.map(a => (
+                    <div key={a.doc.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:"#7A2222", flexWrap:"wrap" }}>
+                      <span style={{ fontSize:10, fontWeight:700, color:"#A32D2D", background:"#fff", borderRadius:20, padding:"1px 7px" }}>{ENTITY_LABELS[a.doc.entity_type] || a.doc.entity_type}</span>
+                      <b>{a.name}</b>
+                      <span>· {docTypeLabel(a.doc.document_type)}</span>
+                      <span style={{ marginLeft:"auto", fontWeight:700 }}>{a.status === "expired" ? `Overdue ${Math.abs(a.days)} days ago` : `Expires in ${a.days} days`}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </Modal>
         );
       })()}
