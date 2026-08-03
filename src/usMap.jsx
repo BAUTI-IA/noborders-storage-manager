@@ -89,7 +89,7 @@ export function UsStorageMap({ stats, selected, onSelect }) {
         <div style={{ position:"absolute", left: tt.x, top: tt.y, transform:"translate(-50%, -100%)", marginTop:-10, background:"#111", color:"#fff", borderRadius:8, padding:"8px 11px", fontSize:11.5, lineHeight:1.5, pointerEvents:"none", whiteSpace:"nowrap", boxShadow:"0 6px 20px rgba(0,0,0,0.25)", zIndex:5 }}>
           <div style={{ fontWeight:700, marginBottom:2 }}>{US_CODE_TO_NAME[tt.code] || tt.code}</div>
           <div>{ts.count} storage{ts.count !== 1 ? "s" : ""} activo{ts.count !== 1 ? "s" : ""}</div>
-          <div>{Math.round(ts.cf).toLocaleString()} CF en uso</div>
+          <div>{Math.round(ts.cf).toLocaleString()} CF in use</div>
           {ts.due > 0
             ? <div style={{ color:"#FCA5A5", fontWeight:600 }}>⚠ {ts.due} payment{ts.due !== 1 ? "s" : ""} expiring soon (≤5 days)</div>
             : <div style={{ color:"#8fb98f" }}>No payments expiring soon</div>}
@@ -161,19 +161,19 @@ export function UsMarginMap({ stats, selected, onSelect }) {
       </ComposableMap>
 
       <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"2px 4px 4px", alignItems:"center" }}>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:MARGIN_NEG[2] }} />pierde plata</span>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#ececec" }} />~neutro</span>
-        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:MARGIN_POS[2] }} />gana plata</span>
-        <span style={{ marginLeft:"auto", color:"#aaa" }}>Click en un estado para filtrar</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:MARGIN_NEG[2] }} />loses money</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:"#ececec" }} />~neutral</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:11, height:11, borderRadius:3, background:MARGIN_POS[2] }} />makes money</span>
+        <span style={{ marginLeft:"auto", color:"#aaa" }}>Click a state to filter</span>
       </div>
 
       {tt && ts && (
         <div style={{ position:"absolute", left: tt.x, top: tt.y, transform:"translate(-50%, -100%)", marginTop:-10, background:"#111", color:"#fff", borderRadius:8, padding:"8px 11px", fontSize:11.5, lineHeight:1.5, pointerEvents:"none", whiteSpace:"nowrap", boxShadow:"0 6px 20px rgba(0,0,0,0.25)", zIndex:5 }}>
           <div style={{ fontWeight:700, marginBottom:2 }}>{US_CODE_TO_NAME[tt.code] || tt.code}</div>
           <div>{ts.units} unidad{ts.units !== 1 ? "es" : ""}</div>
-          <div>Pagás {fmt(ts.pay)}/mes · Cobrás {fmt(ts.income)}/mes</div>
-          <div style={{ fontWeight:700, color: ts.margin < 0 ? "#FCA5A5" : "#8fd08f" }}>Margen {fmt(ts.margin)}/mes</div>
-          {ts.vacantCost > 0 && <div style={{ color:"#FCA5A5" }}>Vacantes: {fmt(ts.vacantCost)}/mes</div>}
+          <div>You pay {fmt(ts.pay)}/mo · You collect {fmt(ts.income)}/mo</div>
+          <div style={{ fontWeight:700, color: ts.margin < 0 ? "#FCA5A5" : "#8fd08f" }}>Margin {fmt(ts.margin)}/mo</div>
+          {ts.vacantCost > 0 && <div style={{ color:"#FCA5A5" }}>Vacant: {fmt(ts.vacantCost)}/mo</div>}
         </div>
       )}
     </div>

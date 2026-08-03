@@ -3,6 +3,7 @@
 // a bubble conversation view, and online presence (green dots) via Supabase
 // Realtime Presence. Tables: chat_channels, chat_channel_members, chat_messages.
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { tr, t } from "./i18n.js";
 
 // Shown in the setup banner when the chat tables don't exist yet.
 // Keep in sync with scripts/setup-chat.mjs (the one-time migration).
@@ -419,7 +420,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
   };
 
   const deleteChannel = async (ch) => {
-    if (!window.confirm(`Delete #${ch.name} and all its messages?`)) return;
+    if (!window.confirm(tr(`Delete #${ch.name} and all its messages?`, `¿Borrar #${ch.name} y todos sus mensajes?`))) return;
     await supabase.from("chat_channels").delete().eq("id", ch.id);
     setChannels(cs => cs.filter(c => c.id !== ch.id));
     if (activeId === ch.id) setActiveId(null);
@@ -535,7 +536,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
             const last = lastMsg[ch.id];
             const n = unread[ch.id] || 0;
             const name = convName(ch);
-            const preview = last ? `${last.sender_id === me ? "You: " : (!ch.is_dm ? `${(last.sender_name || "").split(/\s+/)[0]}: ` : "")}${last.body.replace(/\n/g, " ")}` : (ch.is_dm ? "Say hi 👋" : "No messages yet");
+            const preview = last ? `${last.sender_id === me ? t("You: ") : (!ch.is_dm ? `${(last.sender_name || "").split(/\s+/)[0]}: ` : "")}${last.body.replace(/\n/g, " ")}` : (ch.is_dm ? "Say hi 👋" : "No messages yet");
             return (
               <button key={ch.id} onClick={() => setActiveId(ch.id)}
                 style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, border: "none", cursor: "pointer", textAlign: "left", background: isActive ? "#f0f6ff" : "transparent", marginBottom: 1 }}>

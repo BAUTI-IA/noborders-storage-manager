@@ -3,6 +3,7 @@
 // suggestions, and admins triage them (In review / Implemented / Rejected)
 // with an optional written response. Tables: suggestions, suggestion_votes.
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { tr } from "./i18n.js";
 
 // Shown in the setup banner when the tables don't exist yet.
 // Keep in sync with scripts/setup-suggestions.mjs (the one-time migration).
@@ -177,7 +178,7 @@ export function SuggestionsSection({ supabase, session, profile, isAdmin = false
   }
 
   async function remove(s) {
-    if (!window.confirm("Delete this suggestion?")) return;
+    if (!window.confirm(tr("Delete this suggestion?", "¿Borrar esta sugerencia?"))) return;
     await supabase.from("suggestions").delete().eq("id", s.id);
     load();
   }
