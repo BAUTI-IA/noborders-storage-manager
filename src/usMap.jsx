@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { ComposableMap, Geographies, Geography, Marker } from "react-simple-maps";
 import { geoCentroid } from "d3-geo";
+import { tr } from "./i18n.js";
 
 export const US_GEO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json";
 // Full state name → 2-letter code, to join us-atlas geographies with our stats.
@@ -88,7 +89,7 @@ export function UsStorageMap({ stats, selected, onSelect }) {
       {tt && ts && (
         <div style={{ position:"absolute", left: tt.x, top: tt.y, transform:"translate(-50%, -100%)", marginTop:-10, background:"#111", color:"#fff", borderRadius:8, padding:"8px 11px", fontSize:11.5, lineHeight:1.5, pointerEvents:"none", whiteSpace:"nowrap", boxShadow:"0 6px 20px rgba(0,0,0,0.25)", zIndex:5 }}>
           <div style={{ fontWeight:700, marginBottom:2 }}>{US_CODE_TO_NAME[tt.code] || tt.code}</div>
-          <div>{ts.count} storage{ts.count !== 1 ? "s" : ""} activo{ts.count !== 1 ? "s" : ""}</div>
+          <div>{ts.count} {tr(ts.count !== 1 ? "active storages" : "active storage", ts.count !== 1 ? "storages activos" : "storage activo")}</div>
           <div>{Math.round(ts.cf).toLocaleString()} CF in use</div>
           {ts.due > 0
             ? <div style={{ color:"#FCA5A5", fontWeight:600 }}>⚠ {ts.due} payment{ts.due !== 1 ? "s" : ""} expiring soon (≤5 days)</div>
@@ -170,7 +171,7 @@ export function UsMarginMap({ stats, selected, onSelect }) {
       {tt && ts && (
         <div style={{ position:"absolute", left: tt.x, top: tt.y, transform:"translate(-50%, -100%)", marginTop:-10, background:"#111", color:"#fff", borderRadius:8, padding:"8px 11px", fontSize:11.5, lineHeight:1.5, pointerEvents:"none", whiteSpace:"nowrap", boxShadow:"0 6px 20px rgba(0,0,0,0.25)", zIndex:5 }}>
           <div style={{ fontWeight:700, marginBottom:2 }}>{US_CODE_TO_NAME[tt.code] || tt.code}</div>
-          <div>{ts.units} unidad{ts.units !== 1 ? "es" : ""}</div>
+          <div>{ts.units} {tr(ts.units !== 1 ? "units" : "unit", ts.units !== 1 ? "unidades" : "unidad")}</div>
           <div>You pay {fmt(ts.pay)}/mo · You collect {fmt(ts.income)}/mo</div>
           <div style={{ fontWeight:700, color: ts.margin < 0 ? "#FCA5A5" : "#8fd08f" }}>Margin {fmt(ts.margin)}/mo</div>
           {ts.vacantCost > 0 && <div style={{ color:"#FCA5A5" }}>Vacant: {fmt(ts.vacantCost)}/mo</div>}
