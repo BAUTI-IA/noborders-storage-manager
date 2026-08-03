@@ -620,3 +620,55 @@ t("compareCrews: rows come out ordered by crew size", () => {
   const sizes = rows.map((r) => r.crewSize);
   assert.deepEqual(sizes, sizes.slice().sort((a, b) => a - b));
 });
+
+// ── Revenue / cost / profit per truck-day ────────────────────────────────────
+
+t("per-truck-day trio: computed on the reference case", () => {
+  const r = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(r.truckDays, 3);
+  near(r.revenuePerTruckDay, 4800 / 3, 0.01);
+  near(r.costPerTruckDay, (r.variableCost + r.absorbedFixed) / 3, 0.01);
+  near(r.profitPerTruckDay, r.operatingMargin / 3, 0.01);
+});
+
+t("per-truck-day trio: they reconcile — revenue - cost = profit", () => {
+  for (const price of [500, 4800, 9955]) {
+    const r = evaluateJob({ ...JOB, brokerPrice: price }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+    near(r.revenuePerTruckDay - r.costPerTruckDay, r.profitPerTruckDay, 0.01, `broke at $${price}`);
+  }
+});
+
+t("per-truck-day trio: profit goes negative exactly when the operating margin does", () => {
+  const bad = evaluateJob({ ...JOB, brokerPrice: 500 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.ok(bad.operatingMargin < 0 && bad.profitPerTruckDay < 0);
+  const good = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.ok(good.operatingMargin > 0 && good.profitPerTruckDay > 0);
+});
+
+t("evaluateJob exposes the broker price so the breakdown shows what it subtracts from", () => {
+  assert.equal(evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 }).brokerPrice, 4800);
+});
+
+t("truck-day units: one truck by default, so nothing moved", () => {
+  const r = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(r.trucks, 1);
+  assert.equal(r.truckDayUnits, r.truckDays);
+  near(r.contributionPerTruckDay, r.contributionMargin / r.truckDays, 0.01);
+});
+
+t("truck-day units: two trucks for three days is SIX truck-days, not three", () => {
+  // Without this the same money spread over twice the iron would look identical.
+  const one = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const two = evaluateJob({ ...JOB, trucks: 2 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(two.truckDayUnits, one.truckDays * 2);
+  near(two.contributionPerTruckDay, one.contributionPerTruckDay / 2, 0.01);
+  near(two.revenuePerTruckDay, one.revenuePerTruckDay / 2, 0.01);
+});
+
+t("per-truck-day figures never come out NaN or Infinity on degenerate settings", () => {
+  const s = { cuFtPerHour: 0, avgSpeedMph: 0, usefulHoursPerDay: 0, workedDaysPerMonth: 0, activeTrucks: 0 };
+  const r = evaluateJob(JOB, s, { loadedMiles: 663, deadheadMiles: 671 });
+  for (const k of ["revenuePerTruckDay", "costPerTruckDay", "profitPerTruckDay", "truckDayUnits"]) {
+    assert.ok(Number.isFinite(r[k]), `${k} became ${r[k]}`);
+  }
+});

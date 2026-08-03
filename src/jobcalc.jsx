@@ -820,6 +820,25 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
 
           {/* 6. The money */}
           <Collapsible title="Cost breakdown" defaultOpen>
+            {/* The three figures in the unit the whole screen decides in. They
+                reconcile on sight: revenue - cost = profit. */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "4px 0 14px", borderBottom: "1px solid #f0f0f0", marginBottom: 8 }}>
+              <div style={{ flex: "1 1 90px" }}>
+                <div style={lbl}>Revenue / day</div>
+                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.revenuePerTruckDay)}</div>
+              </div>
+              <div style={{ flex: "1 1 90px" }}>
+                <div style={lbl}>Cost / day</div>
+                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em", color: "#777" }}>{money(result.costPerTruckDay)}</div>
+              </div>
+              <div style={{ flex: "1 1 90px" }}>
+                <div style={lbl}>Profit / day</div>
+                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em", color: result.profitPerTruckDay < 0 ? "#A32D2D" : "#3B6D11" }}>
+                  {money(result.profitPerTruckDay)}
+                </div>
+              </div>
+            </div>
+            <Row label="Broker price" value={money(result.brokerPrice)} strong />
             <Row label="Crew" value={money(result.crew)} />
             <Row label="Fuel" value={money(result.fuel)} />
             <Row label="Hotel" value={`${money(result.hotel)}  (${result.hotelRooms}x)`} />

@@ -177,6 +177,13 @@ export function overrideDiff(base, effective) {
 // default to 1, so a job that says nothing behaves exactly like the baseline
 // crew and every number matches what it was before crews were configurable.
 
+/**
+ * Trucks assigned to the job. Not an input yet — the per-truck-day denominator
+ * is built around it so that adding multi-truck jobs later needs no rework here.
+ * At 1 truck every figure is exactly what it was before.
+ */
+export const trucksOf = (job) => Math.max(1, Math.round(num(job?.trucks, 1)));
+
 export const driversOf = (job) => Math.max(1, Math.round(num(job?.drivers, 1)));
 export const helpersOf = (job) => Math.max(0, Math.round(num(job?.helpers, 1)));
 export const crewSizeOf = (job) => driversOf(job) + helpersOf(job);
@@ -291,23 +298,39 @@ export function computeFixed(truckDays, s) {
 
 // ── 5. Decision metrics ──────────────────────────────────────────────────────
 
-export function computeMetrics({ brokerPrice, truckDays, variableCost, fixedPerWorkedDay, absorbedFixed }, s) {
+export function computeMetrics({ brokerPrice, truckDays, trucks, variableCost, fixedPerWorkedDay, absorbedFixed }, s) {
   const price = num(brokerPrice);
   const days = num(truckDays);
+
+  // The unit every "per truck-day" figure is measured in. Two trucks for three
+  // days is SIX truck-days, not three — otherwise a two-truck job would look
+  // twice as good as it is, which is the exact error this metric exists to
+  // prevent. Defaults to 1 truck, so today's numbers are unchanged.
+  const truckDayUnits = Math.max(1, num(trucks, 1)) * days;
 
   const contributionMargin = price - variableCost;
   // The metric that rules. A $2,000 job eating 3 days can be a worse deal than a
   // $900 job done in 1 — the dollar total lies, contribution per truck-day does not.
-  const contributionPerTruckDay = days > 0 ? contributionMargin / days : 0;
+  const contributionPerTruckDay = truckDayUnits > 0 ? contributionMargin / truckDayUnits : 0;
   const operatingMargin = contributionMargin - absorbedFixed;
   const breakevenPrice = variableCost + absorbedFixed;
+
+  // What the job brings in, what it really costs, and what is left — all in the
+  // same unit, so they reconcile on screen: revenue - cost = profit.
+  const revenuePerTruckDay = truckDayUnits > 0 ? price / truckDayUnits : 0;
+  const costPerTruckDay = truckDayUnits > 0 ? (variableCost + absorbedFixed) / truckDayUnits : 0;
+  const profitPerTruckDay = truckDayUnits > 0 ? operatingMargin / truckDayUnits : 0;
 
   const target = num(s.targetMarginPct);
   const hurdlePerTruckDay = target < 1 ? fixedPerWorkedDay / (1 - target) : Infinity;
   // The negotiation number: what the broker has to pay for the truck to be worth tying up.
-  const askPrice = variableCost + hurdlePerTruckDay * days;
+  const askPrice = variableCost + hurdlePerTruckDay * truckDayUnits;
 
-  return { contributionMargin, contributionPerTruckDay, operatingMargin, breakevenPrice, hurdlePerTruckDay, askPrice };
+  return {
+    contributionMargin, contributionPerTruckDay, operatingMargin, breakevenPrice,
+    hurdlePerTruckDay, askPrice,
+    truckDayUnits, revenuePerTruckDay, costPerTruckDay, profitPerTruckDay,
+  };
 }
 
 // ── 6. Stress scenarios ──────────────────────────────────────────────────────
@@ -332,6 +355,7 @@ function runScenario(base, s, sc) {
     {
       brokerPrice: base.brokerPrice,
       truckDays,
+      trucks: trucksOf(base.job),
       variableCost: v.variableCost,
       fixedPerWorkedDay: f.fixedPerWorkedDay,
       absorbedFixed: f.absorbedFixed,
@@ -389,7 +413,7 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   const variable = computeVariable({ truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice, job }, s);
   const fixed = computeFixed(truckDays, s);
   const metrics = computeMetrics(
-    { brokerPrice, truckDays, variableCost: variable.variableCost, fixedPerWorkedDay: fixed.fixedPerWorkedDay, absorbedFixed: fixed.absorbedFixed },
+    { brokerPrice, truckDays, trucks: trucksOf(job), variableCost: variable.variableCost, fixedPerWorkedDay: fixed.fixedPerWorkedDay, absorbedFixed: fixed.absorbedFixed },
     s
   );
 
@@ -410,6 +434,8 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   return {
     ...dist,
     ...time,
+    brokerPrice,
+    trucks: trucksOf(job),
     drivers: driversOf(job),
     helpers: helpersOf(job),
     truckDays,
