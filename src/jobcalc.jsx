@@ -10,7 +10,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { tr } from "./i18n.js";
 import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
-  mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews, num,
+  mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews,
+  applyOverrides, overrideDiff, num,
 } from "./jobCalcData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -78,6 +79,10 @@ create index if not exists job_evaluations_actuals_idx on public.job_evaluations
 alter table public.job_evaluations add column if not exists drivers smallint not null default 1;
 alter table public.job_evaluations add column if not exists helpers smallint not null default 1;
 alter table public.job_evaluations add column if not exists hotel_rooms smallint;
+
+-- Per-job parameter adjustments: only the deviations from the company settings.
+-- settings_snapshot already holds the effective values this job was priced with.
+alter table public.job_evaluations add column if not exists overrides jsonb;
 
 create table if not exists public.zip_distances (
   origin_zip text not null,
@@ -340,13 +345,30 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   const [actuals, setActuals] = useState(EMPTY_ACTUALS);
   const [err, setErr] = useState(null);
 
-  // Settings the operator sees saved, and the ones the live math runs on. While
-  // the settings panel is being edited the draft holds RAW STRINGS — storing the
-  // parsed number would rewrite the box on every keystroke and make a decimal
-  // point impossible to type, which would quietly turn 0.87 into 87.
+  // Three layers, innermost wins:
+  //   savedSettings  — the company row in the DB
+  //   draft          — that row being edited by an admin (live preview)
+  //   jobOverrides   — adjustments for THIS job only, never written to the row,
+  //                    so a one-off never quietly becomes the standard
+  //
+  // Both draft and jobOverrides hold RAW STRINGS: storing the parsed number would
+  // rewrite the box on every keystroke and make a decimal point impossible to
+  // type, which would quietly turn 0.87 into 87.
+  const [jobOverrides, setJobOverrides] = useState({});
+
   const savedSettings = useMemo(() => mergeSettings(saved), [saved]);
-  const settings = useMemo(() => (draft ? mergeSettings(parseDraft(draft)) : savedSettings), [draft, savedSettings]);
+  const companySettings = useMemo(
+    () => (draft ? mergeSettings(parseDraft(draft)) : savedSettings),
+    [draft, savedSettings]
+  );
+  const settings = useMemo(() => applyOverrides(companySettings, jobOverrides), [companySettings, jobOverrides]);
+  const overrides = useMemo(() => overrideDiff(companySettings, settings), [companySettings, settings]);
   const canEditSettings = isAdmin;
+
+  const setOverride = (k, v) => setJobOverrides((p) => ({ ...p, [k]: v }));
+  const setAccessOverride = (a, v) =>
+    setJobOverrides((p) => ({ ...p, accessMultiplier: { ...(p.accessMultiplier || {}), [a]: v } }));
+  const clearOverrides = () => setJobOverrides({});
 
   const isMissingErr = (error) => error && (error.code === "42P01" || /job_calc|job_evaluations/.test(error.message || ""));
 
@@ -429,7 +451,13 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
   );
   const u = (k) => (v) => setInputs((p) => ({ ...p, [k]: v }));
-  const pendingKeys = Object.keys(SETTING_FLAGS).filter((k) => SETTING_FLAGS[k] === "pending" && k !== "baseZip");
+  // Parameters flagged as unmeasured AND still sitting at zero. Checking the
+  // value matters: once the operator fills one in, the warning has to stop
+  // claiming it is missing, or the banner cries wolf forever.
+  const pendingKeys = useMemo(
+    () => Object.keys(SETTING_FLAGS).filter((k) => SETTING_FLAGS[k] === "pending" && k !== "baseZip" && !num(settings[k])),
+    [settings]
+  );
 
   // ── Persistence ────────────────────────────────────────────────────────────
 
@@ -463,11 +491,35 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       operating_margin: r.operatingMargin, breakeven_price: r.breakevenPrice,
       hurdle_per_truck_day: r.hurdlePerTruckDay, ask_price: r.askPrice,
       verdict: r.verdict, reason: r.reason, decision,
+      // The snapshot is the EFFECTIVE settings, overrides included — that is what
+      // this job was actually priced with, and what calibration has to invert.
+      // `overrides` records only the deviations, so History can show them.
       settings_snapshot: settings,
+      overrides: overrides.length ? Object.fromEntries(overrides.map((o) => [o.key, o.to])) : null,
     });
     setSavingEval(false);
     if (error) { setErr(error.message); return; }
+    // A one-off adjustment must not follow the operator into the next job.
+    clearOverrides();
     load();
+  }
+
+  /** Promote this job's adjustments into the company settings. Admin only, deliberate. */
+  async function promoteOverrides() {
+    const list = overrides.map((o) => `· ${SETTING_LABELS[o.key]?.label || o.key}: ${o.from} → ${o.to}`).join("\n");
+    const ok = window.confirm(
+      tr(`Make these the standard for every future job?\n\n${list}`,
+         `¿Hacer que esto sea el estándar para todos los jobs siguientes?\n\n${list}`)
+    );
+    if (!ok) return;
+    setSavingSettings(true); setErr(null);
+    const next = applyOverrides(savedSettings, jobOverrides);
+    const { error } = await supabase.from("job_calc_settings")
+      .update({ settings: next, updated_at: new Date().toISOString(), updated_by: session.user.id })
+      .eq("id", 1);
+    setSavingSettings(false);
+    if (error) { setErr(error.message); return; }
+    setSaved(next); setDraft(null); clearOverrides();
   }
 
   async function saveActuals() {
@@ -635,6 +687,16 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             <div style={{ fontSize: 13, color: vs.fg, marginTop: 7, lineHeight: 1.45 }}>
               {ready ? reasonText(result.reason, result) : tr("Enter the ZIPs, the volume and the broker price.", "Cargá los ZIP, el volumen y el precio del broker.")}
             </div>
+            {/* A verdict must never rest on adjustments nobody can see. */}
+            {overrides.length > 0 && (
+              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, padding: "4px 9px", borderRadius: 20, background: "#fff", color: vs.fg, border: `1px solid ${vs.bd}` }}>
+                  {tr(`${overrides.length} parameter(s) adjusted for this job`,
+                      `${overrides.length} parámetro(s) ajustado(s) para este job`)}
+                </span>
+                <button onClick={clearOverrides} style={{ ...btn(false), padding: "4px 10px", fontSize: 11.5 }}>Back to standard</button>
+              </div>
+            )}
           </div>
 
           {/* 3. The headline metric, next to the threshold it has to beat */}
@@ -775,6 +837,69 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             </div>
           )}
 
+          {/* Per-job adjustments. Same parameters as Settings, but they apply to
+              this job only and never reach the company row. */}
+          <Collapsible title="Adjust for this job">
+            <div style={{ fontSize: 12, color: "#777", marginBottom: 12, lineHeight: 1.5 }}>
+              Anything you type here applies to this job only. The company settings stay untouched, and the next job starts from them again.
+            </div>
+            {SETTING_GROUPS.map((g) => (
+              <div key={g.section} style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>{g.section}</div>
+                <div style={grid}>
+                  {g.keys.map((k) => {
+                    const on = jobOverrides[k] != null && jobOverrides[k] !== "";
+                    return (
+                      <div key={k}>
+                        <label style={lbl}>
+                          {SETTING_LABELS[k].label}
+                          {on && <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 5, background: "#EAF1F8", color: "#185FA5", marginLeft: 6 }}>ADJUSTED</span>}
+                        </label>
+                        <div style={{ display: "flex", gap: 5 }}>
+                          <input style={{ ...inp, borderColor: on ? "#185FA5" : "#e5e5e5" }}
+                            inputMode={k === "baseZip" ? "numeric" : "decimal"}
+                            placeholder={String(companySettings[k] ?? "")}
+                            value={jobOverrides[k] ?? ""}
+                            onChange={(e) => setOverride(k, e.target.value)} />
+                          {on && (
+                            <button onClick={() => setOverride(k, "")} title="Back to standard"
+                              style={{ ...btn(false), padding: "0 9px", color: "#999" }}>x</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>Access multipliers</div>
+              <div style={grid}>
+                {ACCESS_TYPES.map((a) => {
+                  const on = jobOverrides.accessMultiplier?.[a] != null && jobOverrides.accessMultiplier[a] !== "";
+                  return (
+                    <div key={a}>
+                      <label style={lbl}>
+                        {ACCESS_LABELS.find((x) => x.value === a).label}
+                        {on && <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 5, background: "#EAF1F8", color: "#185FA5", marginLeft: 6 }}>ADJUSTED</span>}
+                      </label>
+                      <input style={{ ...inp, borderColor: on ? "#185FA5" : "#e5e5e5" }} inputMode="decimal"
+                        placeholder={String(companySettings.accessMultiplier[a] ?? "")}
+                        value={jobOverrides.accessMultiplier?.[a] ?? ""}
+                        onChange={(e) => setAccessOverride(a, e.target.value)} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            {overrides.length > 0 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Btn onClick={clearOverrides}>Back to standard</Btn>
+                {canEditSettings && <Btn disabled={savingSettings} onClick={promoteOverrides}>Make this the standard</Btn>}
+              </div>
+            )}
+          </Collapsible>
+
           {/* 8. Settings, collapsed at the end */}
           <Collapsible title="Settings">
             {!canEditSettings && <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>Only an admin can change these.</div>}
@@ -819,8 +944,8 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
               Anything flagged above is an assumption, not a measurement. The traffic light is only as good as these numbers — the Calibration tab replaces them with what really happened.
             </div>
             <div style={{ fontSize: 12, color: "#777", marginBottom: 10 }}>
-              {tr(`Baseline crew day rate: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, settings))} (1 driver + 1 helper).`,
-                  `Costo de la crew base por día: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, settings))} (1 driver + 1 helper).`)}
+              {tr(`Baseline crew day rate: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, companySettings))} (1 driver + 1 helper).`,
+                  `Costo de la crew base por día: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, companySettings))} (1 driver + 1 helper).`)}
             </div>
             {canEditSettings && draft && (
               <div style={{ display: "flex", gap: 8 }}>
@@ -866,6 +991,12 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                     <span style={{ fontSize: 11.5, color: "#bbb" }}>Only whoever evaluated this job can record its actuals.</span>
                   )}
                 </div>
+                {r.overrides && Object.keys(r.overrides).length > 0 && (
+                  <div style={{ fontSize: 11.5, color: "#185FA5", background: "#EAF1F8", borderRadius: 7, padding: "6px 9px", marginTop: 8, lineHeight: 1.45 }}>
+                    {tr(`Priced with ${Object.keys(r.overrides).length} adjusted parameter(s), not the standard settings.`,
+                        `Costeado con ${Object.keys(r.overrides).length} parámetro(s) ajustado(s), no con los settings estándar.`)}
+                  </div>
+                )}
                 {r.actuals_at && (
                   <div style={{ fontSize: 12, color: "#777", marginTop: 8 }}>
                     {tr(`Actual: ${dec(r.actual_truck_days)} truck-days vs ${dec(r.truck_days)} estimated.`,

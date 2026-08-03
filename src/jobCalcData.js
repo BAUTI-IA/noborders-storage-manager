@@ -115,6 +115,62 @@ export function mergeSettings(saved) {
 /** driver + helper, the baseline crew. Derived on purpose — never stored loose. */
 export const crewDayRate = (s) => num(s.driverDayRate) + num(s.helperDayRate);
 
+// ── Per-job overrides ────────────────────────────────────────────────────────
+//
+// A job with something unusual about it — a crew that works differently, an
+// access worse than the usual "stairs", fuel that costs more on that route —
+// can have any parameter overridden for that job alone. The company settings
+// are never touched, so a one-off never quietly becomes the standard.
+
+/** A value the operator actually supplied. Blank fields are absent, not zero. */
+const isSet = (v) => v != null && v !== "" && !(typeof v === "number" && Number.isNaN(v));
+
+/**
+ * Lay per-job overrides on top of the company settings.
+ * Only keys the operator filled in win; everything else falls through to base.
+ */
+export function applyOverrides(base, overrides) {
+  const b = mergeSettings(base);
+  if (!overrides) return b;
+
+  const out = { ...b };
+  for (const [k, v] of Object.entries(overrides)) {
+    if (k === "accessMultiplier" || !isSet(v)) continue;
+    // baseZip is the one non-numeric setting; everything else is a number.
+    out[k] = k === "baseZip" ? String(v) : num(v, b[k]);
+  }
+
+  // Overriding one access multiplier must not wipe the other two.
+  const am = overrides.accessMultiplier;
+  if (am) {
+    out.accessMultiplier = { ...b.accessMultiplier };
+    for (const [k, v] of Object.entries(am)) {
+      if (isSet(v)) out.accessMultiplier[k] = num(v, b.accessMultiplier[k]);
+    }
+  }
+  return out;
+}
+
+/**
+ * What actually differs between the company settings and the effective ones.
+ * The UI shows this so a verdict can never rest on adjustments nobody can see.
+ */
+export function overrideDiff(base, effective) {
+  const b = mergeSettings(base);
+  const e = mergeSettings(effective);
+  const out = [];
+  for (const k of Object.keys(DEFAULT_SETTINGS)) {
+    if (k === "accessMultiplier") continue;
+    if (String(b[k]) !== String(e[k])) out.push({ key: k, from: b[k], to: e[k] });
+  }
+  for (const k of ACCESS_TYPES) {
+    if (String(b.accessMultiplier[k]) !== String(e.accessMultiplier[k])) {
+      out.push({ key: "accessMultiplier." + k, from: b.accessMultiplier[k], to: e.accessMultiplier[k] });
+    }
+  }
+  return out;
+}
+
 // ── Crew size ────────────────────────────────────────────────────────────────
 //
 // A job carries its own crew: `drivers` and `helpers`, chosen per job. Both

@@ -6,7 +6,7 @@ import {
   roundHalf, mergeSettings, crewDayRate, DEFAULT_SETTINGS, SETTING_FLAGS,
   assembleMiles, computeTime, hotelNightsFor, computeVariable, computeFixed,
   computeMetrics, verdictFor, evaluateJob, calibrate, calibrationPatch,
-  VERDICT, REASON, ACCESS_TYPES, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
+  VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
 } from "../src/jobCalcData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -507,4 +507,91 @@ t("calibrationPatch: writes the crew exponent only once it has been measured", (
     row({ drivers: 1, helpers: 2, actual_truck_days: 2, actual_miles: 1000 }),
   ]);
   assert.ok(Number.isFinite(calibrationPatch(cal, {}).crewScalingExponent));
+});
+
+// ── Per-job overrides ────────────────────────────────────────────────────────
+
+t("applyOverrides: an adjustment changes the job and leaves the company row untouched", () => {
+  const company = mergeSettings({});
+  const eff = applyOverrides(company, { cuFtPerHour: "150" });
+  assert.equal(eff.cuFtPerHour, 150);
+  assert.equal(company.cuFtPerHour, 275, "the company settings object must not be mutated");
+  assert.equal(mergeSettings({}).cuFtPerHour, 275, "and the defaults must not be mutated either");
+});
+
+t("applyOverrides: blank, null and undefined fall through to the company value", () => {
+  const eff = applyOverrides({}, { cuFtPerHour: "", fuelCostPerMile: null, avgSpeedMph: undefined });
+  assert.equal(eff.cuFtPerHour, 275);
+  assert.equal(eff.fuelCostPerMile, 0.87);
+  assert.equal(eff.avgSpeedMph, 50);
+});
+
+t("applyOverrides: garbage keeps the company value instead of becoming zero", () => {
+  const eff = applyOverrides({}, { cuFtPerHour: "abc", fuelCostPerMile: "$1.20" });
+  assert.equal(eff.cuFtPerHour, 275, "unparseable input must not silently zero a divisor");
+  assert.equal(eff.fuelCostPerMile, 0.87);
+});
+
+t("applyOverrides: one access multiplier can be adjusted without wiping the other two", () => {
+  const eff = applyOverrides({}, { accessMultiplier: { stairs: "1.9" } });
+  assert.equal(eff.accessMultiplier.stairs, 1.9);
+  assert.equal(eff.accessMultiplier.direct, 1.0);
+  assert.equal(eff.accessMultiplier.elevator, 1.25);
+});
+
+t("applyOverrides: baseZip stays a string, never a number", () => {
+  assert.equal(applyOverrides({}, { baseZip: "07030" }).baseZip, "07030");
+});
+
+t("overrides flow through to the verdict, and clearing them restores it exactly", () => {
+  const company = {};
+  const plain = evaluateJob(JOB, company, { loadedMiles: 663, deadheadMiles: 671 });
+  const slow = evaluateJob(JOB, applyOverrides(company, { cuFtPerHour: "80" }), { loadedMiles: 663, deadheadMiles: 671 });
+  assert.ok(slow.truckDays > plain.truckDays, "a slower crew rate must cost more days");
+  assert.ok(slow.variableCost > plain.variableCost);
+
+  const restored = evaluateJob(JOB, applyOverrides(company, { cuFtPerHour: "" }), { loadedMiles: 663, deadheadMiles: 671 });
+  assert.deepEqual(
+    [restored.truckDays, restored.variableCost, restored.verdict],
+    [plain.truckDays, plain.variableCost, plain.verdict]
+  );
+});
+
+t("an override can flip the traffic light without touching the standard", () => {
+  const company = mergeSettings({});
+  const green = evaluateJob(JOB, company, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(green.verdict, VERDICT.GREEN);
+  const red = evaluateJob(JOB, applyOverrides(company, { cuFtPerHour: "40" }), { loadedMiles: 663, deadheadMiles: 671 });
+  assert.notEqual(red.verdict, VERDICT.GREEN);
+  assert.equal(company.cuFtPerHour, 275);
+});
+
+t("overrideDiff: lists only what genuinely changed", () => {
+  const company = mergeSettings({});
+  assert.deepEqual(overrideDiff(company, applyOverrides(company, {})), []);
+  assert.deepEqual(overrideDiff(company, applyOverrides(company, { cuFtPerHour: "275" })), [],
+    "typing the same value is not an adjustment");
+
+  const d = overrideDiff(company, applyOverrides(company, { cuFtPerHour: "150", fuelCostPerMile: "1.1" }));
+  assert.equal(d.length, 2);
+  assert.deepEqual(d.find(x => x.key === "cuFtPerHour"), { key: "cuFtPerHour", from: 275, to: 150 });
+});
+
+t("overrideDiff: reports an adjusted access multiplier under its own key", () => {
+  const company = mergeSettings({});
+  const d = overrideDiff(company, applyOverrides(company, { accessMultiplier: { stairs: "1.9" } }));
+  assert.deepEqual(d, [{ key: "accessMultiplier.stairs", from: 1.5, to: 1.9 }]);
+});
+
+t("the saved snapshot must carry the EFFECTIVE settings, so calibration inverts the right assumptions", () => {
+  // A job priced with an adjusted rate, then executed. Calibration reads the
+  // snapshot; if it held the company value the algebra would invert a rate that
+  // was never used.
+  const snapshot = applyOverrides({}, { usefulHoursPerDay: "10" });
+  assert.equal(snapshot.usefulHoursPerDay, 10);
+  const cal = calibrate([
+    row({ actual_truck_days: 3, actual_miles: 1000, settings_snapshot: snapshot }),
+  ]);
+  // 3 days x 10h = 30h useful, minus 20h driving = 10h handling → 2 x 1200 / 10
+  near(cal.cuFtPerHour, 240, 0.01);
 });

@@ -90,6 +90,10 @@ alter table public.job_evaluations add column if not exists drivers smallint not
 alter table public.job_evaluations add column if not exists helpers smallint not null default 1;
 alter table public.job_evaluations add column if not exists hotel_rooms smallint;
 
+-- Per-job parameter adjustments: only the deviations from the company settings.
+-- settings_snapshot already holds the effective values this job was priced with.
+alter table public.job_evaluations add column if not exists overrides jsonb;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,
