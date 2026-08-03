@@ -14,6 +14,7 @@ import {
   parseCsv, mapBankCsv, reconcileBank, bankPnlStatement, pnlStatementFromRows,
 } from "./bankData.js";
 import { numv } from "./analyticsData.js";
+import { tr } from "./i18n.js";
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
@@ -28,7 +29,7 @@ function StatusBadge({ status }) {
 }
 function CatChip({ cats, category }) {
   const c = catByName(cats, category);
-  if (!c) return category ? <span style={{ fontSize:11, fontWeight:600 }}>{category}</span> : <span style={{ fontSize:11, color:"#bbb" }}>Sin categoría</span>;
+  if (!c) return category ? <span style={{ fontSize:11, fontWeight:600 }}>{category}</span> : <span style={{ fontSize:11, color:"#bbb" }}>No category</span>;
   return <span style={{ fontSize:11, fontWeight:600, whiteSpace:"nowrap" }}>{c.icon} {c.name}</span>;
 }
 function Tile({ label, value, color = "#111", sub }) {
@@ -51,7 +52,7 @@ const CategorySelect = ({ cats, value, onChange, style }) => {
   const opt = (c) => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>;
   return (
     <select value={value || ""} onChange={e => onChange(e.target.value)} style={{ ...inp, ...style }}>
-      <option value="">— categoría —</option>
+      <option value="">— category —</option>
       <optgroup label="Ingresos">{list.filter(c => c.direction === "in" && !c.is_transfer).map(opt)}</optgroup>
       <optgroup label="Egresos">{list.filter(c => c.direction === "out" && !c.is_transfer).map(opt)}</optgroup>
       <optgroup label="Transferencias">{list.filter(c => c.is_transfer).map(opt)}</optgroup>
@@ -119,7 +120,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
   };
   const categorize = async (t) => {
     if (!canEdit) return;
-    if (!t.category) { window.alert("Elegí una categoría antes de confirmar."); return; }
+    if (!t.category) { window.alert(tr("Pick a category before confirming.", "Elegí una categoría antes de confirmar.")); return; }
     await supabase.from("bank_transactions").update({
       status: "categorized", categorized_by: myName, categorized_at: new Date().toISOString(), ...stamp,
     }).eq("id", t.id);
@@ -129,7 +130,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
     if (!canEdit) return;
     // Anti-theft rule: the verifier must be a DIFFERENT person than whoever categorized.
     if (t.categorized_by && t.categorized_by === myName) {
-      window.alert("Doble check: quien verifica tiene que ser una persona distinta de quien categorizó (" + t.categorized_by + ").");
+      window.alert(tr("Double check: the verifier has to be a different person than whoever categorized (", "Doble check: quien verifica tiene que ser una persona distinta de quien categorizó (") + t.categorized_by + ").");
       return;
     }
     await supabase.from("bank_transactions").update({
@@ -149,7 +150,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
   };
   const removeTxn = async (t) => {
     if (!canEdit) return;
-    if (!window.confirm("¿Borrar este movimiento del ledger bancario?")) return;
+    if (!window.confirm(tr("Delete this transaction from the bank ledger?", "¿Borrar este movimiento del ledger bancario?"))) return;
     await supabase.from("bank_transactions").delete().eq("id", t.id);
     loadTxns();
   };
@@ -157,14 +158,14 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
   if (missing) {
     return (
       <div style={{ background:"#FFF7ED", border:"1px solid #FED7AA", borderRadius:12, padding:20, fontSize:13.5, color:"#9A3412" }}>
-        <b>El módulo Bancos todavía no está instalado en la base.</b>
-        <div style={{ marginTop:6 }}>Corré la migración y recargá:</div>
+        <b>The Bancos module is not installed in the database yet.</b>
+        <div style={{ marginTop:6 }}>Run the migration and reload:</div>
         <pre style={{ background:"#fff", border:"1px solid #eee", borderRadius:8, padding:10, fontSize:12, marginTop:8 }}>SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-bank.mjs</pre>
       </div>
     );
   }
 
-  const TABS = [["bandeja", "Bandeja"], ["cuentas", "Cuentas"], ["categorias", "Categorías"], ["conciliacion", "Conciliación"], ["pnl", "P&L"]];
+  const TABS = [["bandeja", "Inbox"], ["cuentas", "Accounts"], ["categorias", "Categories"], ["conciliacion", "Reconciliation"], ["pnl", "P&L"]];
   return (
     <div>
       <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
@@ -303,17 +304,17 @@ function InboxTab(props) {
     return (
       <div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14, alignItems:"center" }}>
-          {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Importar movimientos</Btn>}
-          {canCreate && <Btn onClick={() => setManualTxn({})}>＋ Movimiento manual</Btn>}
-          <button onClick={() => setViewMonth("all")} style={{ marginLeft:"auto", border:"none", background:"transparent", cursor:"pointer", color:"#888", fontSize:12.5, textDecoration:"underline" }}>Ver todos los movimientos →</button>
+          {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Import transactions</Btn>}
+          {canCreate && <Btn onClick={() => setManualTxn({})}>＋ Manual transaction</Btn>}
+          <button onClick={() => setViewMonth("all")} style={{ marginLeft:"auto", border:"none", background:"transparent", cursor:"pointer", color:"#888", fontSize:12.5, textDecoration:"underline" }}>See all transactions →</button>
         </div>
         {unreviewedCount > 0 && (
           <div style={{ background:"#FEF3C7", color:"#92760B", borderRadius:10, padding:"9px 14px", fontSize:12.5, marginBottom:14 }}>
-            ⏳ Hay <b>{unreviewedCount.toLocaleString()}</b> movimientos sin revisar en total — entrá al mes para categorizarlos.
+            ⏳ There are <b>{unreviewedCount.toLocaleString()}</b> unreviewed transactions in total — open the month to categorize them.
           </div>
         )}
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(215px, 1fr))", gap:12 }}>
-          {monthFolders.length === 0 && <div style={{ fontSize:13, color:"#bbb", padding:20 }}>Sin movimientos todavía. Importá un screenshot o CSV del banco.</div>}
+          {monthFolders.length === 0 && <div style={{ fontSize:13, color:"#bbb", padding:20 }}>No transactions yet. Import a bank screenshot or CSV.</div>}
           {monthFolders.map(f => (
             <button key={f.mo} onClick={() => setViewMonth(f.mo)}
               style={{ textAlign:"left", background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"14px 16px", cursor:"pointer" }}>
@@ -322,7 +323,7 @@ function InboxTab(props) {
                 <span style={{ fontSize:14, fontWeight:700 }}>{monthTitle(f.mo)}</span>
                 {f.unreviewed > 0 && <span style={{ marginLeft:"auto", background:"#E24B4A", color:"#fff", fontSize:10, fontWeight:700, borderRadius:10, padding:"1px 7px" }}>{f.unreviewed}</span>}
               </div>
-              <div style={{ fontSize:11.5, color:"#999", marginTop:6 }}>{f.count.toLocaleString()} movimientos</div>
+              <div style={{ fontSize:11.5, color:"#999", marginTop:6 }}>{f.count.toLocaleString()} transactions</div>
               <div style={{ display:"flex", gap:10, marginTop:4, fontSize:12, fontWeight:700 }}>
                 <span style={{ color:"#3B6D11" }}>{fmt$(f.tin)}</span>
                 <span style={{ color:"#A32D2D" }}>{fmt$(f.tout)}</span>
@@ -348,51 +349,51 @@ function InboxTab(props) {
   return (
     <div>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
-        <button onClick={() => setViewMonth(null)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"6px 12px", cursor:"pointer", fontSize:12.5, fontWeight:600, color:"#555" }}>← Meses</button>
-        <div style={{ fontSize:15, fontWeight:700 }}>📁 {viewMonth === "all" ? "Todos los movimientos" : monthTitle(viewMonth)}</div>
+        <button onClick={() => setViewMonth(null)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"6px 12px", cursor:"pointer", fontSize:12.5, fontWeight:600, color:"#555" }}>← Months</button>
+        <div style={{ fontSize:15, fontWeight:700 }}>📁 {viewMonth === "all" ? "All transactions" : monthTitle(viewMonth)}</div>
         <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
-          {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Importar</Btn>}
+          {canCreate && <Btn onClick={() => setShowImport(true)}>⬆ Import</Btn>}
           {canCreate && <Btn onClick={() => setManualTxn({})}>＋ Manual</Btn>}
         </div>
       </div>
       {rpcMissing && (
         <div style={{ background:"#FFF7ED", border:"1px solid #FED7AA", borderRadius:10, padding:"10px 14px", fontSize:12.5, color:"#9A3412", marginBottom:12 }}>
-          Falta la migración de agregados server-side. Corré <b>scripts/setup-bank-rpc.mjs</b> (o pegá su SQL en Supabase) para que los totales y el P&L usen toda la tabla.
+          The server-side aggregates migration is missing. Run <b>scripts/setup-bank-rpc.mjs</b> (or paste its SQL into Supabase) so the totals and the P&L use the whole table.
         </div>
       )}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:10, marginBottom:14 }}>
-        <Tile label="Sin revisar (total)" value={unreviewedCount} color="#92760B" />
-        <Tile label="Inflows (filtro)" value={fmt$(totals.tin)} color="#3B6D11" />
-        <Tile label="Outflows (filtro)" value={fmt$(totals.tout)} color="#A32D2D" />
-        <Tile label="Neto (filtro)" value={fmt$(totals.tin + totals.tout)} sub={`${totals.count.toLocaleString()} movimientos en el filtro`} />
+        <Tile label="Unreviewed (total)" value={unreviewedCount} color="#92760B" />
+        <Tile label="Inflows (filter)" value={fmt$(totals.tin)} color="#3B6D11" />
+        <Tile label="Outflows (filter)" value={fmt$(totals.tout)} color="#A32D2D" />
+        <Tile label="Net (filter)" value={fmt$(totals.tin + totals.tout)} sub={`${totals.count.toLocaleString()} ${tr("transactions in the filter", "movimientos en el filtro")}`} />
       </div>
 
       <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12, alignItems:"center" }}>
         <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={{ ...inp, width:"auto" }}>
-          <option value="">Todos los estados</option>
+          <option value="">All statuses</option>
           {Object.entries(BANK_STATUS).map(([v, c]) => <option key={v} value={v}>{c.l}</option>)}
         </select>
         <select value={fAccount} onChange={e => setFAccount(e.target.value)} style={{ ...inp, width:"auto" }}>
-          <option value="">Todas las cuentas</option>
+          <option value="">All accounts</option>
           {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
         <select value={fDir} onChange={e => setFDir(e.target.value)} style={{ ...inp, width:"auto" }}>
           <option value="">In + Out</option><option value="in">Inflows</option><option value="out">Outflows</option>
         </select>
         <select value={fCat} onChange={e => setFCat(e.target.value)} style={{ ...inp, width:"auto", maxWidth:180 }}>
-          <option value="">Todas las categorías</option>
+          <option value="">All categories</option>
           {(cats?.length ? cats : SEED_BANK_CATEGORIES).map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
         </select>
-        <input placeholder="Buscar descripción…" value={fSearch} onChange={e => setFSearch(e.target.value)} style={{ ...inp, width:180 }} />
+        <input placeholder="Search description…" value={fSearch} onChange={e => setFSearch(e.target.value)} style={{ ...inp, width:180 }} />
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>
-            {["Fecha", "Cuenta", "Descripción", "Monto", "Categoría", "Estado", "Quién", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
+            {["Date", "Account", "Description", "Amount", "Category", "Status", "Who", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {filtered.length === 0 && <tr><td colSpan={8} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Sin movimientos. Importá un screenshot o CSV del banco.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={8} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>No transactions. Import a bank screenshot or CSV.</td></tr>}
             {filtered.map(t => {
               const amt = signedAmount(t);
               return (
@@ -1188,7 +1189,7 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
         <span style={{ color:"#bbb" }}>→</span>
         <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ ...inp, width:"auto" }} />
         <select value={account} onChange={e => setAccount(e.target.value)} style={{ ...inp, width:"auto" }}>
-          <option value="">Todas las cuentas</option>
+          <option value="">All accounts</option>
           {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
         <label style={{ fontSize:12.5, color:"#555", display:"flex", alignItems:"center", gap:6, marginLeft:8 }}>

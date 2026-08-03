@@ -185,7 +185,7 @@ t("pnlStatementFromRows: builds the same waterfall from bank_pnl RPC rows", () =
   ];
   const r = pnlStatementFromRows(rpcRows, { from: "2026-06-01", to: "2026-07-31" });
   assert.deepEqual(r.months, ["2026-06", "2026-07"]);
-  assert.deepEqual(r.sections.map(s => s.group), ["Revenue", "Cost of Revenues", "Structure Expenses", "Otros egresos"]);
+  assert.deepEqual(r.sections.map(s => s.group), ["Revenue", "Cost of Revenues", "Structure Expenses", "Other Expenses"]);
   assert.equal(r.sections[0].total, 3000);
   assert.equal(r.gross.total, 2400);
   assert.equal(r.gross.byMonth["2026-07"], 1400);

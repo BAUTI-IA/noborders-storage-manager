@@ -360,7 +360,7 @@ export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVeri
     if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
   }
   const other = expenseRows.filter(c => !c.meta?.pnl_group || !PNL_GROUPS.includes(c.meta.pnl_group)).sort((a, b) => a.total - b.total);
-  if (other.length) sections.push({ group: "Otros egresos", rows: other, ...sumLines(other) });
+  if (other.length) sections.push({ group: "Other Expenses", rows: other, ...sumLines(other) });
 
   // Running subtotals: Gross Profit = Revenue − Cost of Revenues; Net = everything.
   let running = sections[0] ? { byMonth: { ...sections[0].byMonth }, total: sections[0].total } : { byMonth: {}, total: 0 };
@@ -418,7 +418,7 @@ export function pnlStatementFromRows(rpcRows, { from, to } = {}) {
     if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
   }
   const other = expenseRows.filter(c => !c.meta?.pnl_group || !PNL_GROUPS.includes(c.meta.pnl_group)).sort((a, b) => a.total - b.total);
-  if (other.length) sections.push({ group: "Otros egresos", rows: other, ...sumLines(other) });
+  if (other.length) sections.push({ group: "Other Expenses", rows: other, ...sumLines(other) });
 
   let running = sections[0] ? { byMonth: { ...sections[0].byMonth }, total: sections[0].total } : { byMonth: {}, total: 0 };
   const cor = sections.find(s => s.group === "Cost of Revenues");
