@@ -10,7 +10,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { tr } from "./i18n.js";
 import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
-  mergeSettings, evaluateJob, calibrate, calibrationPatch, crewDayRate, num,
+  mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews, num,
 } from "./jobCalcData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -22,6 +22,7 @@ export const JOB_CALC_SQL = `create table if not exists public.job_calc_settings
   updated_by uuid references public.profiles(id) on delete set null
 );
 insert into public.job_calc_settings (id, settings) values (1, '{}'::jsonb) on conflict (id) do nothing;
+
 create table if not exists public.job_evaluations (
   id bigint generated always as identity primary key,
   created_by uuid references public.profiles(id) on delete set null,
@@ -37,62 +38,101 @@ create table if not exists public.job_evaluations (
   dest_access text not null default 'direct' check (dest_access in ('direct','elevator','stairs')),
   long_carry boolean not null default false,
   shuttle boolean not null default false,
-  loaded_miles numeric, deadhead_miles numeric, total_miles numeric,
+  loaded_miles numeric,
+  deadhead_miles numeric,
+  total_miles numeric,
   miles_manual boolean not null default false,
-  handling_hours numeric, driving_hours numeric,
-  truck_days numeric, truck_days_estimated numeric,
+  handling_hours numeric,
+  driving_hours numeric,
+  truck_days numeric,
+  truck_days_estimated numeric,
   truck_days_overridden boolean not null default false,
   hotel_nights numeric,
-  variable_cost numeric, absorbed_fixed numeric,
-  contribution_margin numeric, contribution_per_truck_day numeric,
-  operating_margin numeric, breakeven_price numeric,
-  hurdle_per_truck_day numeric, ask_price numeric,
+  variable_cost numeric,
+  absorbed_fixed numeric,
+  contribution_margin numeric,
+  contribution_per_truck_day numeric,
+  operating_margin numeric,
+  breakeven_price numeric,
+  hurdle_per_truck_day numeric,
+  ask_price numeric,
   verdict text check (verdict in ('red','yellow','green')),
   reason text,
   decision text not null default 'pending' check (decision in ('pending','accepted','rejected')),
   settings_snapshot jsonb,
-  actual_truck_days numeric, actual_hotel_nights numeric, actual_fuel numeric,
-  actual_tolls numeric, actual_materials numeric, actual_extra_labor numeric,
-  actual_miles numeric, actuals_at timestamptz, notes text
+  actual_truck_days numeric,
+  actual_hotel_nights numeric,
+  actual_fuel numeric,
+  actual_tolls numeric,
+  actual_materials numeric,
+  actual_extra_labor numeric,
+  actual_miles numeric,
+  actuals_at timestamptz,
+  notes text
 );
 create index if not exists job_evaluations_created_idx on public.job_evaluations (created_at desc);
+create index if not exists job_evaluations_actuals_idx on public.job_evaluations (actuals_at) where actuals_at is not null;
+
+-- Crew sizing, added after the first release. Rows created before it default to
+-- the baseline 1 driver + 1 helper, which is exactly how they were priced.
+alter table public.job_evaluations add column if not exists drivers smallint not null default 1;
+alter table public.job_evaluations add column if not exists helpers smallint not null default 1;
+alter table public.job_evaluations add column if not exists hotel_rooms smallint;
+
 create table if not exists public.zip_distances (
-  origin_zip text not null, dest_zip text not null, miles numeric not null,
-  provider text, fetched_at timestamptz not null default now(),
+  origin_zip text not null,
+  dest_zip text not null,
+  miles numeric not null,
+  provider text,
+  fetched_at timestamptz not null default now(),
   primary key (origin_zip, dest_zip)
 );
 create table if not exists public.zip_geo (
-  zip text primary key, lat numeric not null, lng numeric not null,
+  zip text primary key,
+  lat numeric not null,
+  lng numeric not null,
   fetched_at timestamptz not null default now()
 );
+
 alter table public.job_calc_settings enable row level security;
 alter table public.job_evaluations enable row level security;
 alter table public.zip_distances enable row level security;
 alter table public.zip_geo enable row level security;
+
+-- RLS follows the same per-section permission model as the rest of the CRM
+-- (public.has_perm, from scripts/setup-profiles.mjs), so the sidebar gating over
+-- the company's whole cost model is actually enforced and not just cosmetic.
 drop policy if exists "job_calc_settings_select" on public.job_calc_settings;
 create policy "job_calc_settings_select" on public.job_calc_settings
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
 drop policy if exists "job_calc_settings_write" on public.job_calc_settings;
 create policy "job_calc_settings_write" on public.job_calc_settings
   for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
 drop policy if exists "job_evaluations_select" on public.job_evaluations;
 create policy "job_evaluations_select" on public.job_evaluations
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
 drop policy if exists "job_evaluations_insert" on public.job_evaluations;
 create policy "job_evaluations_insert" on public.job_evaluations
-  for insert to authenticated with check (created_by = auth.uid());
+  for insert to authenticated with check (created_by = auth.uid() and public.has_perm('jobcalc','create'));
 drop policy if exists "job_evaluations_update" on public.job_evaluations;
 create policy "job_evaluations_update" on public.job_evaluations
-  for update to authenticated using (created_by = auth.uid() or public.is_admin());
+  for update to authenticated
+  using ((created_by = auth.uid() or public.is_admin()) and public.has_perm('jobcalc','edit'))
+  with check ((created_by = auth.uid() or public.is_admin()) and public.has_perm('jobcalc','edit'));
 drop policy if exists "job_evaluations_delete" on public.job_evaluations;
 create policy "job_evaluations_delete" on public.job_evaluations
-  for delete to authenticated using (created_by = auth.uid() or public.is_admin());
+  for delete to authenticated using ((created_by = auth.uid() or public.is_admin()) and public.has_perm('jobcalc','edit'));
+
+-- The miles cache is read by anyone who can see the calculator, and written only
+-- by /api/distance, which uses the service role and bypasses RLS.
 drop policy if exists "zip_distances_select" on public.zip_distances;
 create policy "zip_distances_select" on public.zip_distances
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
 drop policy if exists "zip_geo_select" on public.zip_geo;
 create policy "zip_geo_select" on public.zip_geo
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
+
 do $$ begin alter publication supabase_realtime add table public.job_evaluations; exception when others then null; end $$;`;
 
 // ── Presentation ─────────────────────────────────────────────────────────────
@@ -124,7 +164,7 @@ const ACCESS_LABELS = [
 // The settings editor. Grouped, English labels (the i18n checker audits every
 // `label` property here), and each one carries its trust flag from jobCalcData.
 const SETTING_GROUPS = [
-  { section: "Crew", keys: ["driverDayRate", "helperDayRate"] },
+  { section: "Crew", keys: ["driverDayRate", "helperDayRate", "baselineCrewSize", "crewScalingExponent", "teamDrivingBonusHours"] },
   { section: "Operation", keys: ["fuelCostPerMile", "avgSpeedMph", "usefulHoursPerDay"] },
   { section: "Productivity", keys: ["cuFtPerHour", "longCarryUplift", "shuttleUplift"] },
   { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks"] },
@@ -136,6 +176,9 @@ const SETTING_GROUPS = [
 const SETTING_LABELS = {
   driverDayRate: { label: "Driver day rate" },
   helperDayRate: { label: "Helper day rate" },
+  baselineCrewSize: { label: "Baseline crew size" },
+  crewScalingExponent: { label: "Bigger crew speed-up" },
+  teamDrivingBonusHours: { label: "Extra hours with 2 drivers" },
   fuelCostPerMile: { label: "Fuel cost per mile" },
   avgSpeedMph: { label: "Average speed (mph)" },
   usefulHoursPerDay: { label: "Useful hours per day" },
@@ -236,12 +279,43 @@ const SCENARIO_LABELS = {
 const EMPTY_INPUTS = {
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
+  drivers: 1, helpers: 1,
 };
 
 const EMPTY_ACTUALS = {
   actual_truck_days: "", actual_hotel_nights: "", actual_fuel: "",
   actual_tolls: "", actual_materials: "", actual_extra_labor: "", actual_miles: "",
 };
+
+/** Prefill the actuals modal from a row, so "Edit actuals" edits instead of blanking. */
+const actualsOf = (r) =>
+  Object.fromEntries(Object.keys(EMPTY_ACTUALS).map((k) => [k, r[k] == null ? "" : String(r[k])]));
+
+// The settings panel edits raw strings so a decimal point survives typing;
+// these convert between that and the numeric settings the math needs.
+const NUMERIC_SETTING = (k) => k !== "baseZip" && k !== "accessMultiplier";
+
+function draftFrom(s) {
+  const d = {};
+  for (const k of Object.keys(DEFAULT_SETTINGS)) {
+    if (k === "accessMultiplier") continue;
+    d[k] = s[k] == null ? "" : String(s[k]);
+  }
+  d.accessMultiplier = Object.fromEntries(
+    ACCESS_TYPES.map((a) => [a, s.accessMultiplier?.[a] == null ? "" : String(s.accessMultiplier[a])])
+  );
+  return d;
+}
+
+function parseDraft(d) {
+  const out = {};
+  for (const [k, v] of Object.entries(d)) {
+    if (k === "accessMultiplier") {
+      out[k] = Object.fromEntries(Object.entries(v || {}).map(([a, x]) => [a, num(x)]));
+    } else out[k] = NUMERIC_SETTING(k) ? num(v) : String(v ?? "");
+  }
+  return out;
+}
 
 // ── Section ──────────────────────────────────────────────────────────────────
 
@@ -259,13 +333,19 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   const [truckDaysOverride, setTruckDaysOverride] = useState("");
 
   const [miles, setMiles] = useState({ loading: false, error: null, loadedMiles: null, deadheadMiles: 0, deadheadKnown: false, manual: false });
+  const [manualMiles, setManualMiles] = useState({ loaded: "", deadhead: "" });
   const [rows, setRows] = useState([]);
   const [savingEval, setSavingEval] = useState(false);
   const [actualsFor, setActualsFor] = useState(null);   // evaluation row being closed out
   const [actuals, setActuals] = useState(EMPTY_ACTUALS);
   const [err, setErr] = useState(null);
 
-  const settings = useMemo(() => mergeSettings(saved), [saved]);
+  // Settings the operator sees saved, and the ones the live math runs on. While
+  // the settings panel is being edited the draft holds RAW STRINGS — storing the
+  // parsed number would rewrite the box on every keystroke and make a decimal
+  // point impossible to type, which would quietly turn 0.87 into 87.
+  const savedSettings = useMemo(() => mergeSettings(saved), [saved]);
+  const settings = useMemo(() => (draft ? mergeSettings(parseDraft(draft)) : savedSettings), [draft, savedSettings]);
   const canEditSettings = isAdmin;
 
   const isMissingErr = (error) => error && (error.code === "42P01" || /job_calc|job_evaluations/.test(error.message || ""));
@@ -305,7 +385,10 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       return;
     }
     const seq = ++reqSeq.current;
-    setMiles((m) => ({ ...m, loading: true, error: null }));
+    // Drop the previous route's miles the moment the ZIPs change. Keeping them
+    // while a new lookup is in flight — or after it fails — would price THIS job
+    // off a route nobody measured, and it would look just as confident.
+    setMiles((m) => ({ ...m, loading: true, error: null, loadedMiles: null, deadheadMiles: 0, deadheadKnown: false }));
     const timer = setTimeout(async () => {
       try {
         const token = session?.access_token || "";
@@ -317,21 +400,34 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
         setMiles({ loading: false, error: null, loadedMiles: body.loadedMiles, deadheadMiles: body.deadheadMiles, deadheadKnown: body.deadheadKnown, manual: false });
       } catch (e) {
         if (seq !== reqSeq.current) return;
-        // Never invent a distance — surface the failure and let them type it in.
-        setMiles((m) => ({ ...m, loading: false, error: e?.message || "Could not compute the route." }));
+        // Never invent a distance and never inherit one — surface the failure
+        // and let them type it in.
+        setMiles((m) => ({
+          ...m, loading: false, loadedMiles: null, deadheadMiles: 0, deadheadKnown: false,
+          error: e?.message || "Could not compute the route.",
+        }));
       }
     }, 600);
     return () => clearTimeout(timer);
   }, [originZip, destZip, baseZip, miles.manual, session]);
 
   // ── Live evaluation ────────────────────────────────────────────────────────
-  const hasMiles = miles.loadedMiles != null;
+  // Manual entry, when active, is the source of truth for miles.
+  const effMiles = miles.manual
+    ? { loadedMiles: num(manualMiles.loaded), deadheadMiles: num(manualMiles.deadhead) }
+    : { loadedMiles: miles.loadedMiles || 0, deadheadMiles: miles.deadheadMiles || 0 };
+  const hasMiles = miles.manual ? num(manualMiles.loaded) > 0 : miles.loadedMiles != null;
+
   const result = useMemo(
-    () => evaluateJob(inputs, settings, { loadedMiles: miles.loadedMiles || 0, deadheadMiles: miles.deadheadMiles || 0 }, { truckDaysOverride }),
-    [inputs, settings, miles.loadedMiles, miles.deadheadMiles, truckDaysOverride]
+    () => evaluateJob(inputs, settings, effMiles, { truckDaysOverride }),
+    [inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles, truckDaysOverride]
   );
 
   const ready = hasMiles && num(inputs.cuFt) > 0 && num(inputs.brokerPrice) > 0;
+  const crewRows = useMemo(
+    () => (ready ? compareCrews(inputs, settings, effMiles) : []),
+    [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
+  );
   const u = (k) => (v) => setInputs((p) => ({ ...p, [k]: v }));
   const pendingKeys = Object.keys(SETTING_FLAGS).filter((k) => SETTING_FLAGS[k] === "pending" && k !== "baseZip");
 
@@ -340,11 +436,11 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   async function saveSettings() {
     setSavingSettings(true); setErr(null);
     const { error } = await supabase.from("job_calc_settings")
-      .update({ settings: draft, updated_at: new Date().toISOString(), updated_by: session.user.id })
+      .update({ settings: parseDraft(draft), updated_at: new Date().toISOString(), updated_by: session.user.id })
       .eq("id", 1);
     setSavingSettings(false);
     if (error) { setErr(error.message); return; }
-    setSaved(draft); setDraft(null);
+    setSaved(parseDraft(draft)); setDraft(null);
   }
 
   async function saveEvaluation(decision) {
@@ -356,6 +452,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       cu_ft: num(inputs.cuFt), broker_price: num(inputs.brokerPrice),
       origin_access: inputs.originAccess, dest_access: inputs.destAccess,
       long_carry: inputs.longCarry, shuttle: inputs.shuttle,
+      drivers: r.drivers, helpers: r.helpers, hotel_rooms: r.hotelRooms,
       loaded_miles: r.loadedMiles, deadhead_miles: r.deadheadMiles, total_miles: r.totalMiles,
       miles_manual: miles.manual,
       handling_hours: r.handlingHours, driving_hours: r.drivingHours,
@@ -376,8 +473,16 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   async function saveActuals() {
     const patch = { actuals_at: new Date().toISOString() };
     for (const k of Object.keys(EMPTY_ACTUALS)) patch[k] = actuals[k] === "" ? null : num(actuals[k]);
-    const { error } = await supabase.from("job_evaluations").update(patch).eq("id", actualsFor.id);
+    // .select() so an update the RLS policy filtered out comes back as zero rows
+    // instead of a silent success — otherwise the UI would report a save that
+    // never happened.
+    const { data, error } = await supabase.from("job_evaluations").update(patch).eq("id", actualsFor.id).select("id");
     if (error) { setErr(error.message); return; }
+    if (!data || data.length === 0) {
+      setErr(tr("That evaluation could not be updated — it belongs to someone else.",
+                "No se pudo actualizar esa evaluación — es de otra persona."));
+      return;
+    }
     setActualsFor(null); setActuals(EMPTY_ACTUALS); load();
   }
 
@@ -465,18 +570,54 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                 <input type="checkbox" checked={inputs.shuttle} onChange={(e) => u("shuttle")(e.target.checked)} /> Shuttle
               </label>
             </div>
+            {/* Crew for this job. A bigger crew costs more per day and finishes sooner. */}
+            <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
+              <div>
+                <label style={lbl}>Drivers</label>
+                <select style={inp} value={inputs.drivers} onChange={(e) => u("drivers")(Number(e.target.value))}>
+                  {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>Helpers</label>
+                <select style={inp} value={inputs.helpers} onChange={(e) => u("helpers")(Number(e.target.value))}>
+                  {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 7 }}>
+              {tr(
+                `Crew of ${result.crewSize}: ${money(crewCostPerDay(inputs, settings))} per worked day, ${result.hotelRooms} hotel room(s) per night.`,
+                `Crew de ${result.crewSize}: ${money(crewCostPerDay(inputs, settings))} por día trabajado, ${result.hotelRooms} habitación(es) de hotel por noche.`
+              )}
+            </div>
           </div>
 
           {/* Distance status: loading, failure + manual fallback, missing base ZIP */}
           {miles.loading && <div style={{ fontSize: 12.5, color: "#999" }}>Looking up the route…</div>}
-          {miles.error && (
+          {/* Manual fallback. It stays mounted while manual entry is on — clearing
+              the error here would unmount the very input being typed into. */}
+          {(miles.error || miles.manual) && (
             <div style={{ background: "#FCEBEB", border: "1px solid #E24B4A", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#A32D2D" }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not get the distance</div>
-              <div style={{ marginBottom: 8 }}>{miles.error}</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span>Enter the miles by hand:</span>
-                <input style={{ ...inp, width: 110 }} inputMode="decimal" placeholder="Loaded"
-                  onChange={(e) => setMiles((m) => ({ ...m, manual: true, error: null, loadedMiles: num(e.target.value) }))} />
+              {miles.error && <div style={{ marginBottom: 8 }}>{miles.error}</div>}
+              <div style={{ marginBottom: 6 }}>Enter the miles by hand:</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div>
+                  <label style={lbl}>Loaded miles</label>
+                  <input style={{ ...inp, width: 120 }} inputMode="decimal" value={manualMiles.loaded}
+                    onChange={(e) => { setManualMiles((p) => ({ ...p, loaded: e.target.value })); setMiles((m) => ({ ...m, manual: true })); }} />
+                </div>
+                <div>
+                  <label style={lbl}>Deadhead miles</label>
+                  <input style={{ ...inp, width: 120 }} inputMode="decimal" value={manualMiles.deadhead}
+                    onChange={(e) => { setManualMiles((p) => ({ ...p, deadhead: e.target.value })); setMiles((m) => ({ ...m, manual: true })); }} />
+                </div>
+                {miles.manual && (
+                  <button style={btn(false)} onClick={() => { setManualMiles({ loaded: "", deadhead: "" }); setMiles((m) => ({ ...m, manual: false, error: null })); }}>
+                    Retry the lookup
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -509,8 +650,9 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             </div>
           </div>
 
-          {/* 4. Ask price — what to counter-offer. Loudest when the light is not green. */}
-          {result.verdict !== VERDICT.GREEN && (
+          {/* 4. Ask price — what to counter-offer. Loudest when the light is not
+              green, and never shown before there is a real job to price. */}
+          {ready && result.verdict !== VERDICT.GREEN && (
             <div style={{ ...card, background: "#111", border: "none" }}>
               <div style={{ ...lbl, color: "#888" }}>Ask the broker for</div>
               <div style={{ fontSize: 30, fontWeight: 900, color: "#fff", letterSpacing: "-0.02em" }}>{money(result.askPrice)}</div>
@@ -521,6 +663,54 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                 )}
               </div>
             </div>
+          )}
+
+          {/* Crew comparison — the same job under each crew, so the trade between
+              paying more per day and finishing sooner is visible instead of guessed. */}
+          {ready && (
+            <Collapsible title="Which crew pays best" defaultOpen>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 380 }}>
+                  <thead>
+                    <tr style={{ color: "#999", textAlign: "right" }}>
+                      <th style={{ textAlign: "left", fontWeight: 600, padding: "4px 6px" }}>Crew</th>
+                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Days</th>
+                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Cost</th>
+                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Per truck-day</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {crewRows.map((c) => {
+                      const cs = VERDICT_STYLE[c.verdict];
+                      return (
+                        <tr key={`${c.drivers}-${c.helpers}`} style={{ background: c.isBest ? "#EAF3DE" : "transparent", fontWeight: c.isCurrent ? 800 : 500 }}>
+                          <td style={{ padding: "6px", textAlign: "left", whiteSpace: "nowrap" }}>
+                            {c.drivers}D + {c.helpers}H{c.isCurrent ? " ←" : ""}
+                          </td>
+                          <td style={{ padding: "6px", textAlign: "right" }}>{dec(c.truckDays)}</td>
+                          <td style={{ padding: "6px", textAlign: "right" }}>{money(c.variableCost)}</td>
+                          <td style={{ padding: "6px", textAlign: "right", color: cs.fg, fontWeight: 800 }}>{money(c.contributionPerTruckDay)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {crewRows.some((c) => c.isBest && !c.isCurrent) && (
+                <div style={{ fontSize: 12, color: "#3B6D11", marginTop: 8, lineHeight: 1.45 }}>
+                  {(() => {
+                    const b = crewRows.find((c) => c.isBest);
+                    return tr(
+                      `A crew of ${b.drivers} driver(s) + ${b.helpers} helper(s) would leave ${money(b.contributionPerTruckDay)} per truck-day instead of ${money(result.contributionPerTruckDay)}.`,
+                      `Una crew de ${b.drivers} driver(s) + ${b.helpers} helper(s) dejaría ${money(b.contributionPerTruckDay)} por día-camión en vez de ${money(result.contributionPerTruckDay)}.`
+                    );
+                  })()}
+                </div>
+              )}
+              <div style={{ fontSize: 11.5, color: "#854F0B", background: "#FAEEDA", borderRadius: 8, padding: "8px 10px", marginTop: 8, lineHeight: 1.45 }}>
+                How much faster a bigger crew works is an assumption, not a measurement. Until the Calibration tab has real jobs with different crews, treat this ranking as a hint.
+              </div>
+            </Collapsible>
           )}
 
           {/* 5. What the app worked out on its own */}
@@ -546,7 +736,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
           <Collapsible title="Cost breakdown" defaultOpen>
             <Row label="Crew" value={money(result.crew)} />
             <Row label="Fuel" value={money(result.fuel)} />
-            <Row label="Hotel" value={money(result.hotel)} />
+            <Row label="Hotel" value={`${money(result.hotel)}  (${result.hotelRooms}x)`} />
             <Row label="Tolls" value={money(result.tolls)} />
             <Row label="Materials" value={money(result.materials)} />
             <Row label="Damages reserve" value={money(result.damages)} />
@@ -599,9 +789,9 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                         <FlagBadge flag={SETTING_FLAGS[k]} />
                       </label>
                       <input style={inp} disabled={!canEditSettings}
-                        value={(draft ?? settings)[k] ?? ""}
+                        value={(draft ?? draftFrom(savedSettings))[k] ?? ""}
                         inputMode={k === "baseZip" ? "numeric" : "decimal"}
-                        onChange={(e) => setDraft({ ...(draft ?? settings), [k]: k === "baseZip" ? e.target.value : num(e.target.value) })} />
+                        onChange={(e) => setDraft({ ...(draft ?? draftFrom(savedSettings)), [k]: e.target.value })} />
                     </div>
                   ))}
                 </div>
@@ -616,10 +806,10 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                   <div key={a}>
                     <label style={lbl}>{ACCESS_LABELS.find((x) => x.value === a).label}</label>
                     <input style={inp} disabled={!canEditSettings} inputMode="decimal"
-                      value={(draft ?? settings).accessMultiplier[a] ?? ""}
+                      value={(draft ?? draftFrom(savedSettings)).accessMultiplier[a] ?? ""}
                       onChange={(e) => {
-                        const base = draft ?? settings;
-                        setDraft({ ...base, accessMultiplier: { ...base.accessMultiplier, [a]: num(e.target.value) } });
+                        const base = draft ?? draftFrom(savedSettings);
+                        setDraft({ ...base, accessMultiplier: { ...base.accessMultiplier, [a]: e.target.value } });
                       }} />
                   </div>
                 ))}
@@ -629,8 +819,8 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
               Anything flagged above is an assumption, not a measurement. The traffic light is only as good as these numbers — the Calibration tab replaces them with what really happened.
             </div>
             <div style={{ fontSize: 12, color: "#777", marginBottom: 10 }}>
-              {tr(`Crew day rate: ${money(crewDayRate(draft ?? settings))} (driver + helper).`,
-                  `Costo de tripulación por día: ${money(crewDayRate(draft ?? settings))} (driver + helper).`)}
+              {tr(`Baseline crew day rate: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, settings))} (1 driver + 1 helper).`,
+                  `Costo de la crew base por día: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, settings))} (1 driver + 1 helper).`)}
             </div>
             {canEditSettings && draft && (
               <div style={{ display: "flex", gap: 8 }}>
@@ -661,11 +851,20 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                     {money(r.contribution_per_truck_day)} / day
                   </span>
                 </div>
+                {/* Only the owner or an admin can write actuals — the RLS policy
+                    filters everyone else out, and a filtered-out update returns
+                    no error, so offering the button would fake a save. */}
                 <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  <Btn onClick={() => { setActualsFor(r); setActuals(EMPTY_ACTUALS); }}>
-                    {r.actuals_at ? "Edit actuals" : "Record actuals"}
-                  </Btn>
-                  {(r.created_by === session.user.id || isAdmin) && <Btn danger onClick={() => softDelete(r.id)}>Delete</Btn>}
+                  {(r.created_by === session.user.id || isAdmin) ? (
+                    <>
+                      <Btn onClick={() => { setActualsFor(r); setActuals(actualsOf(r)); }}>
+                        {r.actuals_at ? "Edit actuals" : "Record actuals"}
+                      </Btn>
+                      <Btn danger onClick={() => softDelete(r.id)}>Delete</Btn>
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 11.5, color: "#bbb" }}>Only whoever evaluated this job can record its actuals.</span>
+                  )}
                 </div>
                 {r.actuals_at && (
                   <div style={{ fontSize: 12, color: "#777", marginTop: 8 }}>
@@ -690,6 +889,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
           </div>
           <div style={card}>
             <Row label="Cu ft per hour" value={cal.cuFtPerHour ? `${dec(cal.cuFtPerHour)} (${cal.cuFtPerHourSamples})` : "—"} />
+            <Row label="Bigger crew speed-up" value={cal.crewScalingExponent != null ? `${dec(cal.crewScalingExponent, 2)} (${cal.crewSamples})` : "—"} />
             {ACCESS_TYPES.map((a) => (
               <Row key={a} label={ACCESS_LABELS.find((x) => x.value === a).label}
                 value={cal.accessMultiplier[a] ? `${dec(cal.accessMultiplier[a], 2)} (${cal.accessSamples[a]})` : "—"} />
@@ -701,8 +901,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
           </div>
           {canEditSettings && cal.sampleSize > 0 && (
             <Btn primary onClick={async () => {
-              const patch = { ...settings, ...calibrationPatch(cal, settings) };
-              setDraft(patch);
+              const patch = { ...savedSettings, ...calibrationPatch(cal, savedSettings) };
               const { error } = await supabase.from("job_calc_settings")
                 .update({ settings: patch, updated_at: new Date().toISOString(), updated_by: session.user.id }).eq("id", 1);
               if (error) { setErr(error.message); return; }

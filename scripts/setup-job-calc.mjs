@@ -84,6 +84,12 @@ create table if not exists public.job_evaluations (
 create index if not exists job_evaluations_created_idx on public.job_evaluations (created_at desc);
 create index if not exists job_evaluations_actuals_idx on public.job_evaluations (actuals_at) where actuals_at is not null;
 
+-- Crew sizing, added after the first release. Rows created before it default to
+-- the baseline 1 driver + 1 helper, which is exactly how they were priced.
+alter table public.job_evaluations add column if not exists drivers smallint not null default 1;
+alter table public.job_evaluations add column if not exists helpers smallint not null default 1;
+alter table public.job_evaluations add column if not exists hotel_rooms smallint;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,
@@ -104,34 +110,39 @@ alter table public.job_evaluations enable row level security;
 alter table public.zip_distances enable row level security;
 alter table public.zip_geo enable row level security;
 
+-- RLS follows the same per-section permission model as the rest of the CRM
+-- (public.has_perm, from scripts/setup-profiles.mjs), so the sidebar gating over
+-- the company's whole cost model is actually enforced and not just cosmetic.
 drop policy if exists "job_calc_settings_select" on public.job_calc_settings;
 create policy "job_calc_settings_select" on public.job_calc_settings
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
 drop policy if exists "job_calc_settings_write" on public.job_calc_settings;
 create policy "job_calc_settings_write" on public.job_calc_settings
   for all to authenticated using (public.is_admin()) with check (public.is_admin());
 
 drop policy if exists "job_evaluations_select" on public.job_evaluations;
 create policy "job_evaluations_select" on public.job_evaluations
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
 drop policy if exists "job_evaluations_insert" on public.job_evaluations;
 create policy "job_evaluations_insert" on public.job_evaluations
-  for insert to authenticated with check (created_by = auth.uid());
+  for insert to authenticated with check (created_by = auth.uid() and public.has_perm('jobcalc','create'));
 drop policy if exists "job_evaluations_update" on public.job_evaluations;
 create policy "job_evaluations_update" on public.job_evaluations
-  for update to authenticated using (created_by = auth.uid() or public.is_admin());
+  for update to authenticated
+  using ((created_by = auth.uid() or public.is_admin()) and public.has_perm('jobcalc','edit'))
+  with check ((created_by = auth.uid() or public.is_admin()) and public.has_perm('jobcalc','edit'));
 drop policy if exists "job_evaluations_delete" on public.job_evaluations;
 create policy "job_evaluations_delete" on public.job_evaluations
-  for delete to authenticated using (created_by = auth.uid() or public.is_admin());
+  for delete to authenticated using ((created_by = auth.uid() or public.is_admin()) and public.has_perm('jobcalc','edit'));
 
--- The miles cache is read by everyone and written only by /api/distance, which
--- uses the service role and bypasses RLS.
+-- The miles cache is read by anyone who can see the calculator, and written only
+-- by /api/distance, which uses the service role and bypasses RLS.
 drop policy if exists "zip_distances_select" on public.zip_distances;
 create policy "zip_distances_select" on public.zip_distances
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
 drop policy if exists "zip_geo_select" on public.zip_geo;
 create policy "zip_geo_select" on public.zip_geo
-  for select to authenticated using (true);
+  for select to authenticated using (public.has_perm('jobcalc','view'));
 
 do $$ begin alter publication supabase_realtime add table public.job_evaluations; exception when others then null; end $$;
 `;

@@ -6,7 +6,7 @@ import {
   roundHalf, mergeSettings, crewDayRate, DEFAULT_SETTINGS, SETTING_FLAGS,
   assembleMiles, computeTime, hotelNightsFor, computeVariable, computeFixed,
   computeMetrics, verdictFor, evaluateJob, calibrate, calibrationPatch,
-  VERDICT, REASON, ACCESS_TYPES,
+  VERDICT, REASON, ACCESS_TYPES, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
 } from "../src/jobCalcData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -373,4 +373,138 @@ t("calibrationPatch: only writes parameters that actually have a reading", () =>
 
 t("ACCESS_TYPES matches the access multiplier keys", () => {
   assert.deepEqual(ACCESS_TYPES.slice().sort(), Object.keys(DEFAULT_SETTINGS.accessMultiplier).sort());
+});
+
+// ── Crew sizing ──────────────────────────────────────────────────────────────
+
+t("crew defaults to 1 driver + 1 helper, so a job that says nothing is unchanged", () => {
+  const a = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const b = evaluateJob({ ...JOB, drivers: 1, helpers: 1 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(a.crewSize, 2);
+  assert.equal(a.crewFactor, 1, "the baseline crew is the unit — no scaling applied");
+  assert.deepEqual([a.truckDays, a.variableCost], [b.truckDays, b.variableCost]);
+});
+
+t("crewCostPerDay: each body is paid its own rate", () => {
+  assert.equal(crewCostPerDay({ drivers: 1, helpers: 1 }, S), 475);
+  assert.equal(crewCostPerDay({ drivers: 1, helpers: 2 }, S), 700);
+  assert.equal(crewCostPerDay({ drivers: 2, helpers: 1 }, S), 725);
+  assert.equal(crewCostPerDay({ drivers: 1, helpers: 0 }, S), 250);
+});
+
+t("a bigger crew handles faster, with diminishing returns — not proportionally", () => {
+  const two = computeTime({ ...JOB, drivers: 1, helpers: 1 }, S, 0);
+  const three = computeTime({ ...JOB, drivers: 1, helpers: 2 }, S, 0);
+  near(three.crewFactor, Math.pow(1.5, 0.8), 0.001);
+  assert.ok(three.crewFactor < 1.5, "3 people are NOT 1.5x faster than 2");
+  assert.ok(three.crewFactor > 1.2, "...but meaningfully faster");
+  near(three.handlingHours, two.handlingHours / three.crewFactor, 0.001);
+});
+
+t("hotel rooms: a room sleeps two, so a crew of three needs two of them", () => {
+  assert.equal(hotelRoomsFor({ drivers: 1, helpers: 1 }), 1);
+  assert.equal(hotelRoomsFor({ drivers: 1, helpers: 2 }), 2);
+  assert.equal(hotelRoomsFor({ drivers: 2, helpers: 2 }), 2);
+  assert.equal(hotelRoomsFor({ drivers: 2, helpers: 3 }), 3);
+});
+
+t("a third crew member doubles the hotel bill", () => {
+  const two = evaluateJob({ ...JOB, helpers: 1 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const three = evaluateJob({ ...JOB, helpers: 2 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(three.hotelRooms, 2);
+  near(three.hotel, two.hotel * 2 * (three.hotelNights / two.hotelNights), 0.01);
+});
+
+t("teamDrivingBonusHours defaults to zero — no invented benefit for a second driver", () => {
+  assert.equal(DEFAULT_SETTINGS.teamDrivingBonusHours, 0);
+  assert.equal(SETTING_FLAGS.teamDrivingBonusHours, "pending");
+  assert.equal(usefulHoursFor({ drivers: 2, helpers: 1 }, S), S.usefulHoursPerDay);
+  assert.equal(usefulHoursFor({ drivers: 2, helpers: 1 }, mergeSettings({ teamDrivingBonusHours: 3 })), 15);
+  assert.equal(usefulHoursFor({ drivers: 1, helpers: 1 }, mergeSettings({ teamDrivingBonusHours: 3 })), 12,
+    "one driver gets no team bonus");
+});
+
+t("compareCrews: ranks every option and flags the current one and the best", () => {
+  const rows = compareCrews({ ...JOB, drivers: 1, helpers: 1 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  assert.equal(rows.length, CREW_OPTIONS.length);
+  assert.equal(rows.filter(r => r.isCurrent).length, 1);
+  assert.equal(rows.filter(r => r.isBest).length, 1);
+  const best = rows.find(r => r.isBest);
+  for (const r of rows) assert.ok(best.contributionPerTruckDay >= r.contributionPerTruckDay);
+});
+
+t("compareCrews: the trade is real — more crew costs more per day but can finish sooner", () => {
+  const rows = compareCrews(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const two = rows.find(r => r.drivers === 1 && r.helpers === 1);
+  const three = rows.find(r => r.drivers === 1 && r.helpers === 2);
+  assert.ok(three.crew / three.truckDays > two.crew / two.truckDays, "costs more per day");
+  assert.ok(three.truckDays <= two.truckDays, "and never takes longer");
+});
+
+t("compareCrews: ignores a truck-days override so it never compares measured against estimated", () => {
+  const plain = compareCrews(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
+  const withOverride = compareCrews(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 }, { truckDaysOverride: 9 });
+  assert.deepEqual(plain.map(r => r.truckDays), withOverride.map(r => r.truckDays));
+});
+
+t("crew size never divides by zero or goes negative", () => {
+  for (const j of [{ drivers: 0, helpers: 0 }, { drivers: -3, helpers: -2 }, { drivers: "x", helpers: null }]) {
+    const r = evaluateJob({ ...JOB, ...j }, {}, { loadedMiles: 663, deadheadMiles: 671 });
+    assert.ok(Number.isFinite(r.variableCost) && r.variableCost > 0, `broke on ${JSON.stringify(j)}`);
+    assert.ok(r.crewSize >= 1);
+  }
+  assert.equal(crewFactor({ drivers: 1, helpers: 1 }, mergeSettings({ baselineCrewSize: 0 })), 1);
+});
+
+// ── Calibration robustness (regressions from the adversarial review) ─────────
+
+t("calibrate: cuFtPerHour is pooled, so one near-zero-handling row cannot blow it up", () => {
+  // Second row: 20h driving against 20h of useful time leaves ~0 handling hours.
+  // A mean of per-row ratios would run away to infinity; pooling cannot.
+  const cal = calibrate([
+    row({ actual_truck_days: 3, actual_miles: 1000 }),
+    row({ actual_truck_days: 1.67, actual_miles: 1000, cu_ft: 1200 }),
+  ]);
+  assert.ok(Number.isFinite(cal.cuFtPerHour), "must stay finite");
+  assert.ok(cal.cuFtPerHour < 1000, `pooled estimate stayed sane: ${cal.cuFtPerHour}`);
+});
+
+t("calibrate: long-carry and shuttle rows never reach the access multipliers", () => {
+  const cal = calibrate([
+    row({ actual_truck_days: 3, actual_miles: 1000 }),
+    row({ long_carry: true, actual_truck_days: 6, actual_miles: 1000 }),
+    row({ shuttle: true, actual_truck_days: 7, actual_miles: 1000 }),
+  ]);
+  near(cal.accessMultiplier.direct, 1.0, 0.001,
+    "direct must come out at exactly 1.0 — it rests on the same rows as cuFtPerHour");
+  assert.equal(cal.accessSamples.direct, 1);
+});
+
+t("calibrate: only baseline-crew rows set the productivity rate", () => {
+  const cal = calibrate([
+    row({ actual_truck_days: 3, actual_miles: 1000 }),
+    row({ drivers: 1, helpers: 3, actual_truck_days: 2, actual_miles: 1000 }),
+  ]);
+  assert.equal(cal.cuFtPerHourSamples, 1, "the 4-person crew is excluded from the rate");
+  near(cal.cuFtPerHour, 150, 0.01);
+});
+
+t("calibrate: derives the real crew speed-up exponent from non-baseline crews", () => {
+  // rate = 150 from the clean baseline row. Then a 3-person crew (ratio 1.5)
+  // that did 1200 cu ft in 16h handling => factor 2400/(16*150) = 1.0 => exponent 0.
+  const cal = calibrate([
+    row({ actual_truck_days: 3, actual_miles: 1000 }),
+    row({ drivers: 1, helpers: 2, actual_truck_days: 3, actual_miles: 1000 }),
+  ]);
+  assert.equal(cal.crewSamples, 1);
+  near(cal.crewScalingExponent, 0, 0.001, "a crew that was no faster reads as zero speed-up");
+});
+
+t("calibrationPatch: writes the crew exponent only once it has been measured", () => {
+  assert.equal(calibrationPatch(calibrate([]), {}).crewScalingExponent, undefined);
+  const cal = calibrate([
+    row({ actual_truck_days: 3, actual_miles: 1000 }),
+    row({ drivers: 1, helpers: 2, actual_truck_days: 2, actual_miles: 1000 }),
+  ]);
+  assert.ok(Number.isFinite(calibrationPatch(cal, {}).crewScalingExponent));
 });

@@ -163,13 +163,19 @@ export default async function handler(req, res) {
   // Unlike api/geocode.mjs this endpoint is gated: it burns a free-tier quota
   // (or real money once GOOGLE_MAPS_API_KEY exists) and writes to the DB with
   // the service role. Only signed-in CRM users get to spend that.
-  if (admin) {
-    const token = (req.headers?.authorization || "").replace(/^Bearer\s+/i, "");
-    const { data, error } = token ? await admin.auth.getUser(token) : { data: null, error: true };
-    if (error || !data?.user) {
-      res.status(401).json({ error: "Not authorized." });
-      return;
-    }
+  //
+  // Without the service-role client there is no way to verify a token, so the
+  // endpoint refuses to serve at all. Degrading to "open to the internet"
+  // because an env var is missing is exactly how a billable route gets drained.
+  if (!admin) {
+    res.status(503).json({ error: "Distance service is not configured on the server." });
+    return;
+  }
+  const token = (req.headers?.authorization || "").replace(/^Bearer\s+/i, "");
+  const { data: authData, error: authErr } = token ? await admin.auth.getUser(token) : { data: null, error: true };
+  if (authErr || !authData?.user) {
+    res.status(401).json({ error: "Not authorized." });
+    return;
   }
 
   const origin = normZip(req.query?.origin);

@@ -34,6 +34,18 @@ export const DEFAULT_SETTINGS = {
   driverDayRate: 250,
   helperDayRate: 225,
 
+  // Crew size. A bigger crew costs more per day but finishes in fewer days —
+  // the whole trade-off this model exists to weigh.
+  //   baselineCrewSize    — the crew cuFtPerHour was measured with (1 driver + 1 helper)
+  //   crewScalingExponent — diminishing returns. 1 would mean a third person makes
+  //     the job 50% faster; in reality the stairs, the truck and coordination are
+  //     the bottleneck, so 0.8 puts a 3-person crew at ~1.38x instead of 1.5x.
+  //   teamDrivingBonusHours — extra useful hours per day with two drivers, who can
+  //     legally split the driving. Zero until somebody measures it.
+  baselineCrewSize: 2,
+  crewScalingExponent: 0.8,
+  teamDrivingBonusHours: 0,
+
   // Operation
   fuelCostPerMile: 0.87,
   avgSpeedMph: 50,
@@ -77,6 +89,8 @@ export const DEFAULT_SETTINGS = {
 export const SETTING_FLAGS = {
   fuelCostPerMile: "unvalidated",
   cuFtPerHour: "uncalibrated",
+  crewScalingExponent: "uncalibrated",
+  teamDrivingBonusHours: "pending",
   accessMultiplier: "uncalibrated",
   longCarryUplift: "uncalibrated",
   shuttleUplift: "uncalibrated",
@@ -98,8 +112,42 @@ export function mergeSettings(saved) {
   return s;
 }
 
-/** driver + helper. Derived on purpose — never stored loose. */
+/** driver + helper, the baseline crew. Derived on purpose — never stored loose. */
 export const crewDayRate = (s) => num(s.driverDayRate) + num(s.helperDayRate);
+
+// ── Crew size ────────────────────────────────────────────────────────────────
+//
+// A job carries its own crew: `drivers` and `helpers`, chosen per job. Both
+// default to 1, so a job that says nothing behaves exactly like the baseline
+// crew and every number matches what it was before crews were configurable.
+
+export const driversOf = (job) => Math.max(1, Math.round(num(job?.drivers, 1)));
+export const helpersOf = (job) => Math.max(0, Math.round(num(job?.helpers, 1)));
+export const crewSizeOf = (job) => driversOf(job) + helpersOf(job);
+
+/** What this crew costs for one worked day. */
+export function crewCostPerDay(job, s) {
+  return driversOf(job) * num(s.driverDayRate) + helpersOf(job) * num(s.helperDayRate);
+}
+
+/**
+ * How much faster this crew handles cargo than the baseline crew.
+ * Diminishing returns: doubling the people does not halve the time.
+ */
+export function crewFactor(job, s) {
+  const base = num(s.baselineCrewSize, 2);
+  const size = crewSizeOf(job);
+  if (base <= 0 || size <= 0) return 1;
+  return Math.pow(size / base, num(s.crewScalingExponent, 1));
+}
+
+/** Hotel rooms needed. A room is priced per room and sleeps two. */
+export const hotelRoomsFor = (job) => Math.ceil(crewSizeOf(job) / 2);
+
+/** Useful hours in a day for this crew — two drivers can split the driving. */
+export function usefulHoursFor(job, s) {
+  return num(s.usefulHoursPerDay) + (driversOf(job) >= 2 ? num(s.teamDrivingBonusHours) : 0);
+}
 
 // ── 1. Distances ─────────────────────────────────────────────────────────────
 //
@@ -120,18 +168,20 @@ export function computeTime(job, s, totalMiles) {
   const mo = num(s.accessMultiplier?.[job.originAccess], 1);
   const md = num(s.accessMultiplier?.[job.destAccess], 1);
 
-  const rate = num(s.cuFtPerHour);
+  // A bigger crew moves the same cubic feet in less time, with diminishing returns.
+  const cf = crewFactor(job, s);
+  const rate = num(s.cuFtPerHour) * cf;
   const perLeg = rate > 0 ? cuFt / rate : 0;
   const handlingHours = perLeg * mo * uplift + perLeg * md * uplift;
 
   const speed = num(s.avgSpeedMph);
   const drivingHours = speed > 0 ? num(totalMiles) / speed : 0;
 
-  const day = num(s.usefulHoursPerDay);
+  const day = usefulHoursFor(job, s);
   const rawDays = day > 0 ? (handlingHours + drivingHours) / day : 0;
   const truckDays = Math.max(0.5, roundHalf(rawDays));
 
-  return { uplift, handlingHours, drivingHours, rawDays, truckDays };
+  return { uplift, crewFactor: cf, crewSize: crewSizeOf(job), handlingHours, drivingHours, rawDays, truckDays };
 }
 
 /**
@@ -148,16 +198,18 @@ export function hotelNightsFor(truckDays, totalMiles, s) {
 // Wages sit here, not in fixed costs: the crew is paid only for days actually
 // worked. A day is paid in full even when the job only fills half of it.
 
-export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brokerPrice }, s) {
-  const crew = num(truckDays) * crewDayRate(s);
+export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brokerPrice, job }, s) {
+  const crew = num(truckDays) * crewCostPerDay(job, s);
   const fuel = num(totalMiles) * num(s.fuelCostPerMile);
-  const hotel = num(hotelNights) * num(s.hotelPerNight);
+  // A room sleeps two, so a crew of three needs two rooms every night.
+  const hotelRooms = hotelRoomsFor(job);
+  const hotel = num(hotelNights) * hotelRooms * num(s.hotelPerNight);
   const tolls = num(totalMiles) * num(s.tollPerMile);
   const materials = num(cuFt) * num(s.materialsPerCuFt);
   const damages = num(brokerPrice) * num(s.damagesReservePct);
   const contingency = (crew + fuel + hotel + tolls + materials) * num(s.contingencyPct);
   const variableCost = crew + fuel + hotel + tolls + materials + damages + contingency;
-  return { crew, fuel, hotel, tolls, materials, damages, contingency, variableCost };
+  return { crew, fuel, hotel, hotelRooms, tolls, materials, damages, contingency, variableCost };
 }
 
 // ── 4. Fixed costs ───────────────────────────────────────────────────────────
@@ -216,7 +268,7 @@ function runScenario(base, s, sc) {
   const totalMiles = base.totalMiles * sc.milesFactor;
 
   const v = computeVariable(
-    { truckDays, hotelNights, totalMiles, cuFt: base.cuFt, brokerPrice: base.brokerPrice },
+    { truckDays, hotelNights, totalMiles, cuFt: base.cuFt, brokerPrice: base.brokerPrice, job: base.job },
     s
   );
   const f = computeFixed(truckDays, s);
@@ -278,14 +330,14 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   const cuFt = num(job.cuFt);
   const brokerPrice = num(job.brokerPrice);
 
-  const variable = computeVariable({ truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice }, s);
+  const variable = computeVariable({ truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice, job }, s);
   const fixed = computeFixed(truckDays, s);
   const metrics = computeMetrics(
     { brokerPrice, truckDays, variableCost: variable.variableCost, fixedPerWorkedDay: fixed.fixedPerWorkedDay, absorbedFixed: fixed.absorbedFixed },
     s
   );
 
-  const base = { ...dist, cuFt, brokerPrice, truckDays, hotelNights };
+  const base = { ...dist, cuFt, brokerPrice, truckDays, hotelNights, job };
   const stress = STRESS_SCENARIOS.map((sc) => runScenario(base, s, sc));
   const worstStress = stress.reduce((w, x) => (w == null || x.operatingMargin < w.operatingMargin ? x : w), null);
 
@@ -302,6 +354,8 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   return {
     ...dist,
     ...time,
+    drivers: driversOf(job),
+    helpers: helpersOf(job),
     truckDays,
     truckDaysEstimated: time.truckDays,
     truckDaysOverridden: overridden,
@@ -316,6 +370,54 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   };
 }
 
+// ── Crew comparison ──────────────────────────────────────────────────────────
+//
+// The point of a bigger crew is that it costs more per day and finishes in
+// fewer days. Whether that trade is worth taking is exactly what
+// contributionPerTruckDay answers, so the app can just try each crew and say
+// which one wins instead of making the operator guess.
+
+export const CREW_OPTIONS = [
+  { drivers: 1, helpers: 1 },
+  { drivers: 1, helpers: 2 },
+  { drivers: 1, helpers: 3 },
+  { drivers: 2, helpers: 1 },
+  { drivers: 2, helpers: 2 },
+];
+
+/**
+ * Evaluate the same job under each crew option.
+ * A manual truck-days override is deliberately NOT applied here: it describes
+ * the crew that is actually on the job, so carrying it across sizes would
+ * compare a measured number against estimated ones.
+ */
+export function compareCrews(job, settings, miles, opts = {}) {
+  const options = opts.options || CREW_OPTIONS;
+  const curD = driversOf(job);
+  const curH = helpersOf(job);
+
+  const rows = options.map((o) => {
+    const r = evaluateJob({ ...job, drivers: o.drivers, helpers: o.helpers }, settings, miles);
+    return {
+      drivers: o.drivers,
+      helpers: o.helpers,
+      crewSize: o.drivers + o.helpers,
+      truckDays: r.truckDays,
+      hotelRooms: r.hotelRooms,
+      crew: r.crew,
+      variableCost: r.variableCost,
+      contributionMargin: r.contributionMargin,
+      contributionPerTruckDay: r.contributionPerTruckDay,
+      operatingMargin: r.operatingMargin,
+      verdict: r.verdict,
+      isCurrent: o.drivers === curD && o.helpers === curH,
+    };
+  });
+
+  const best = rows.reduce((b, x) => (b == null || x.contributionPerTruckDay > b.contributionPerTruckDay ? x : b), null);
+  return rows.map((r) => ({ ...r, isBest: best != null && r.drivers === best.drivers && r.helpers === best.helpers }));
+}
+
 // ── Calibration ──────────────────────────────────────────────────────────────
 //
 // Every evaluated job is stored with its inputs, its derived values and the
@@ -325,13 +427,16 @@ export function evaluateJob(job, settings, miles, opts = {}) {
 
 const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
+/** The crew that actually ran a stored evaluation. Rows predating crew sizing default to 1 + 1. */
+const rowCrew = (row) => ({ drivers: num(row.drivers, 1), helpers: num(row.helpers, 1) });
+
 /** Handling hours implied by the real truck-days: total useful hours minus driving. */
 function impliedHandlingHours(row) {
   const s = mergeSettings(row.settings_snapshot);
   const miles = num(row.actual_miles, num(row.total_miles));
   const speed = num(s.avgSpeedMph);
   const drivingHours = speed > 0 ? miles / speed : 0;
-  const useful = num(row.actual_truck_days) * num(s.usefulHoursPerDay);
+  const useful = num(row.actual_truck_days) * usefulHoursFor(rowCrew(row), s);
   const handling = useful - drivingHours;
   return handling > 0 ? handling : null;
 }
@@ -353,43 +458,77 @@ function accessLoad(row) {
 export function calibrate(rows) {
   const done = (rows || []).filter((r) => !r.deleted_at && num(r.actual_truck_days) > 0);
 
-  // cuFtPerHour: only clean rows (direct/direct, no long carry, no shuttle) so
-  // the access multipliers cannot contaminate the productivity rate.
+  // cuFtPerHour: only clean rows — direct/direct, no long carry, no shuttle AND
+  // the baseline crew, so neither the access multipliers nor the crew scaling
+  // can contaminate the productivity rate. Everything else is derived from it,
+  // so it has to come first and come clean.
+  const atBaseline = (r) => {
+    const s = mergeSettings(r.settings_snapshot);
+    return crewSizeOf(rowCrew(r)) === num(s.baselineCrewSize, 2);
+  };
   const clean = done.filter(
-    (r) => r.origin_access === "direct" && r.dest_access === "direct" && !r.long_carry && !r.shuttle && num(r.cu_ft) > 0
+    (r) => r.origin_access === "direct" && r.dest_access === "direct" && !r.long_carry && !r.shuttle && num(r.cu_ft) > 0 && atBaseline(r)
   );
-  const cuFtPerHourSamples = clean
-    .map((r) => {
-      const h = impliedHandlingHours(r);
-      return h ? (2 * num(r.cu_ft)) / h : null;
-    })
-    .filter((x) => x != null && Number.isFinite(x) && x > 0);
-
-  const cuFtPerHour = avg(cuFtPerHourSamples);
+  // POOLED, not an average of per-row ratios. Implied handling is a residual of a
+  // half-day-quantized day count, so on a long haul it can come out near zero and
+  // send that row's ratio towards infinity. One such row would wreck a mean of
+  // ratios forever; totalling the cubic feet and the hours first cannot blow up,
+  // and it weights each job by how much cargo it actually moved.
+  const cleanPairs = clean
+    .map((r) => ({ cuFt: num(r.cu_ft), h: impliedHandlingHours(r) }))
+    .filter((x) => x.h != null && x.h > 0 && x.cuFt > 0);
+  const cleanCuFt = cleanPairs.reduce((a, x) => a + 2 * x.cuFt, 0);
+  const cleanHours = cleanPairs.reduce((a, x) => a + x.h, 0);
+  const cuFtPerHour = cleanHours > 0 ? cleanCuFt / cleanHours : null;
 
   // Access multipliers: rows where BOTH legs share one access type give a clean
-  // reading. Mixed rows cannot separate the two legs, so they are skipped.
+  // reading. Mixed rows cannot separate the two legs, so they are skipped, and
+  // so are long-carry/shuttle rows — dividing by an uncalibrated uplift to
+  // recover a multiplier just launders one guess into another. Excluding them
+  // also makes `direct` come out at exactly 1.0 by construction, since it then
+  // rests on the very rows cuFtPerHour was derived from.
   const rate = cuFtPerHour || null;
   const accessMultiplier = {};
   const accessSamples = {};
   for (const type of ACCESS_TYPES) {
-    const sameBoth = done.filter((r) => r.origin_access === type && r.dest_access === type && num(r.cu_ft) > 0);
-    const vals = sameBoth
+    const sameBoth = done.filter(
+      (r) => r.origin_access === type && r.dest_access === type && !r.long_carry && !r.shuttle && num(r.cu_ft) > 0
+    );
+    const pairs = sameBoth
       .map((r) => {
         const h = impliedHandlingHours(r);
         if (!h || !rate) return null;
         const s = mergeSettings(r.settings_snapshot);
-        const uplift = 1 + (r.long_carry ? num(s.longCarryUplift) : 0) + (r.shuttle ? num(s.shuttleUplift) : 0);
-        // handling = (cuFt / rate) x uplift x (mo + md), and mo === md === m here
-        const load = (h * rate) / (num(r.cu_ft) * uplift);
-        return load / 2;
+        // handling = cuFt / (rate x crewFactor) x (mo + md), and mo === md === m here
+        return { load: h * rate * crewFactor(rowCrew(r), s), cuFt: num(r.cu_ft) };
       })
-      .filter((x) => x != null && Number.isFinite(x) && x > 0);
-    if (vals.length) {
-      accessMultiplier[type] = avg(vals);
-      accessSamples[type] = vals.length;
+      .filter((x) => x != null && Number.isFinite(x.load) && x.load > 0 && x.cuFt > 0);
+    const totCuFt = pairs.reduce((a, x) => a + x.cuFt, 0);
+    if (totCuFt > 0) {
+      accessMultiplier[type] = pairs.reduce((a, x) => a + x.load, 0) / totCuFt / 2;
+      accessSamples[type] = pairs.length;
     }
   }
+
+  // Crew scaling: how much faster a non-baseline crew really worked. Measured
+  // only on otherwise-clean jobs, against the rate derived above.
+  //   handling = 2 x cuFt / (rate x crewFactor)  →  crewFactor = 2 x cuFt / (handling x rate)
+  //   crewFactor = (size / baseline) ^ exponent  →  exponent = ln(factor) / ln(size / baseline)
+  const crewSamples = done
+    .filter((r) => r.origin_access === "direct" && r.dest_access === "direct" && !r.long_carry && !r.shuttle && num(r.cu_ft) > 0 && !atBaseline(r))
+    .map((r) => {
+      const h = impliedHandlingHours(r);
+      if (!h || !rate) return null;
+      const s = mergeSettings(r.settings_snapshot);
+      const ratio = crewSizeOf(rowCrew(r)) / num(s.baselineCrewSize, 2);
+      if (!(ratio > 0) || ratio === 1) return null;
+      const factor = (2 * num(r.cu_ft)) / (h * rate);
+      if (!(factor > 0)) return null;
+      return Math.log(factor) / Math.log(ratio);
+    })
+    .filter((x) => x != null && Number.isFinite(x));
+
+  const crewScalingExponent = avg(crewSamples);
 
   // Fuel and tolls: straight totals over the miles actually driven.
   const fuelRows = done.filter((r) => num(r.actual_fuel) > 0 && num(r.actual_miles, num(r.total_miles)) > 0);
@@ -415,7 +554,9 @@ export function calibrate(rows) {
   return {
     sampleSize: done.length,
     cuFtPerHour,
-    cuFtPerHourSamples: cuFtPerHourSamples.length,
+    cuFtPerHourSamples: cleanPairs.length,
+    crewScalingExponent,
+    crewSamples: crewSamples.length,
     accessMultiplier,
     accessSamples,
     fuelCostPerMile,
@@ -433,6 +574,9 @@ export function calibrate(rows) {
 export function calibrationPatch(cal, current) {
   const patch = {};
   if (cal.cuFtPerHour) patch.cuFtPerHour = cal.cuFtPerHour;
+  if (cal.crewScalingExponent != null && Number.isFinite(cal.crewScalingExponent)) {
+    patch.crewScalingExponent = cal.crewScalingExponent;
+  }
   if (cal.fuelCostPerMile) patch.fuelCostPerMile = cal.fuelCostPerMile;
   if (cal.tollPerMile != null) patch.tollPerMile = cal.tollPerMile;
   if (cal.materialsPerCuFt != null) patch.materialsPerCuFt = cal.materialsPerCuFt;
