@@ -403,7 +403,7 @@ function InboxTab(props) {
                   <td style={{ ...td, maxWidth:280 }}>
                     <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={t.raw_description}>{t.raw_description || "—"}</div>
                     {t.ai_suggested_category && t.status === "unreviewed" && (
-                      <div style={{ fontSize:10.5, color:"#7C3AED" }}>🤖 sugiere: {t.ai_suggested_category}{t.ai_confidence != null ? ` (${Math.round(numv(t.ai_confidence) * 100)}%)` : ""}</div>
+                      <div style={{ fontSize:10.5, color:"#7C3AED" }}>🤖 suggests: {t.ai_suggested_category}{t.ai_confidence != null ? ` (${Math.round(numv(t.ai_confidence) * 100)}%)` : ""}</div>
                     )}
                   </td>
                   <td style={{ ...td, fontWeight:700, whiteSpace:"nowrap", color: amt >= 0 ? "#3B6D11" : "#A32D2D" }}>{fmt$(amt)}</td>
@@ -418,16 +418,16 @@ function InboxTab(props) {
                     {t.verified_by && <div>✔ {t.verified_by}</div>}
                   </td>
                   <td style={{ ...td, whiteSpace:"nowrap" }}>
-                    {canEdit && t.status === "unreviewed" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => categorize(t)}>Categorizar</Btn>}
-                    {canEdit && t.status === "categorized" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => verify(t)}>✔ Verificar</Btn>}
-                    {canEdit && t.status === "verified" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => reopen(t)}>Reabrir</Btn>}
+                    {canEdit && t.status === "unreviewed" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => categorize(t)}>Categorize</Btn>}
+                    {canEdit && t.status === "categorized" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => verify(t)}>✔ Verify</Btn>}
+                    {canEdit && t.status === "verified" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => reopen(t)}>Reopen</Btn>}
                     {canEdit && t.status !== "verified" && (
-                      <button onClick={() => setIgnored(t, t.status !== "ignored")} title={t.status === "ignored" ? "Restaurar" : "Ignorar"} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:13, marginLeft:4 }}>
+                      <button onClick={() => setIgnored(t, t.status !== "ignored")} title={t.status === "ignored" ? "Restore" : "Ignore"} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:13, marginLeft:4 }}>
                         {t.status === "ignored" ? "↩" : "🚫"}
                       </button>
                     )}
-                    {canEdit && <button onClick={() => setManualTxn(t)} title="Editar" style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:13, marginLeft:2 }}>✏️</button>}
-                    {canEdit && <button onClick={() => removeTxn(t)} title="Borrar" style={{ border:"none", background:"transparent", cursor:"pointer", color:"#ccc", fontSize:13, marginLeft:2 }}>🗑</button>}
+                    {canEdit && <button onClick={() => setManualTxn(t)} title="Edit" style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:13, marginLeft:2 }}>✏️</button>}
+                    {canEdit && <button onClick={() => removeTxn(t)} title="Delete" style={{ border:"none", background:"transparent", cursor:"pointer", color:"#ccc", fontSize:13, marginLeft:2 }}>🗑</button>}
                   </td>
                 </tr>
               );
@@ -436,7 +436,7 @@ function InboxTab(props) {
         </table>
         {pageCount > 1 && (
           <div style={{ padding:12, display:"flex", justifyContent:"center", alignItems:"center", gap:6, borderTop:"1px solid #f3f3f3", flexWrap:"wrap" }}>
-            <button disabled={page === 0 || loading} onClick={() => loadPage(page - 1)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"5px 10px", cursor: page === 0 ? "default" : "pointer", fontSize:12.5, color:"#555", opacity: page === 0 ? 0.4 : 1 }}>‹ Anterior</button>
+            <button disabled={page === 0 || loading} onClick={() => loadPage(page - 1)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"5px 10px", cursor: page === 0 ? "default" : "pointer", fontSize:12.5, color:"#555", opacity: page === 0 ? 0.4 : 1 }}>‹ Previous</button>
             {Array.from({ length: pageCount }, (_, i) => i)
               .filter(i => i === 0 || i === pageCount - 1 || Math.abs(i - page) <= 2)
               .reduce((acc, i, idx, arr) => { // insert ellipsis markers between gaps
@@ -448,8 +448,8 @@ function InboxTab(props) {
                 ? <span key={i} style={{ color:"#bbb", fontSize:12 }}>…</span>
                 : <button key={i} disabled={loading} onClick={() => loadPage(i)}
                     style={{ border:"1px solid " + (i === page ? "#111" : "#e5e5e5"), background: i === page ? "#111" : "#fff", color: i === page ? "#fff" : "#555", borderRadius:8, padding:"5px 10px", cursor:"pointer", fontSize:12.5, fontWeight: i === page ? 700 : 500 }}>{i + 1}</button>)}
-            <button disabled={page >= pageCount - 1 || loading} onClick={() => loadPage(page + 1)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"5px 10px", cursor: page >= pageCount - 1 ? "default" : "pointer", fontSize:12.5, color:"#555", opacity: page >= pageCount - 1 ? 0.4 : 1 }}>Siguiente ›</button>
-            <span style={{ fontSize:11.5, color:"#999", marginLeft:8 }}>Página {page + 1} de {pageCount} · {totals.count.toLocaleString()} movimientos</span>
+            <button disabled={page >= pageCount - 1 || loading} onClick={() => loadPage(page + 1)} style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:8, padding:"5px 10px", cursor: page >= pageCount - 1 ? "default" : "pointer", fontSize:12.5, color:"#555", opacity: page >= pageCount - 1 ? 0.4 : 1 }}>Next ›</button>
+            <span style={{ fontSize:11.5, color:"#999", marginLeft:8 }}>Page {page + 1} of {pageCount} · {totals.count.toLocaleString()} transactions</span>
           </div>
         )}
       </div>
@@ -488,9 +488,9 @@ function ManualTxnModal({ txn, accounts, cats, supabase, session, onClose, onDon
   const set = (k) => (e) => setF(x => ({ ...x, [k]: e?.target ? e.target.value : e }));
 
   const save = async () => {
-    if (!f.bank_account_id) { window.alert("Elegí la cuenta bancaria."); return; }
-    if (!f.txn_date) { window.alert("Falta la fecha."); return; }
-    if (!numv(f.amount)) { window.alert("Falta el monto."); return; }
+    if (!f.bank_account_id) { window.alert(tr("Pick the bank account.", "Elegí la cuenta bancaria.")); return; }
+    if (!f.txn_date) { window.alert(tr("Missing date.", "Falta la fecha.")); return; }
+    if (!numv(f.amount)) { window.alert(tr("Missing amount.", "Falta el monto.")); return; }
     setSaving(true);
     const amount = f.direction === "out" ? -Math.abs(numv(f.amount)) : Math.abs(numv(f.amount));
     const base = {
@@ -516,49 +516,49 @@ function ManualTxnModal({ txn, accounts, cats, supabase, session, onClose, onDon
     }
     setSaving(false);
     if (error) {
-      window.alert(/duplicate|unique/i.test(error.message) ? "Ya existe un movimiento igual (misma cuenta, fecha, monto y descripción)." : error.message);
+      window.alert(/duplicate|unique/i.test(error.message) ? tr("A matching transaction already exists (same account, date, amount and description).", "Ya existe un movimiento igual (misma cuenta, fecha, monto y descripción).") : error.message);
       return;
     }
     onDone();
   };
 
   return (
-    <Modal title={txn ? "Editar movimiento" : "Movimiento manual"} onClose={onClose}>
+    <Modal title={txn ? "Edit transaction" : "Manual transaction"} onClose={onClose}>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-        <Field label="Cuenta bancaria">
+        <Field label="Bank account">
           <select style={inp} value={f.bank_account_id} onChange={set("bank_account_id")}>
-            <option value="">— elegir —</option>
+            <option value="">— choose —</option>
             {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
         </Field>
-        <Field label="Tipo">
+        <Field label="Type">
           <select style={inp} value={f.direction} onChange={set("direction")}>
-            <option value="in">🟢 Inflow (entra)</option>
-            <option value="out">🔴 Outflow (sale)</option>
+            <option value="in">🟢 Inflow (money in)</option>
+            <option value="out">🔴 Outflow (money out)</option>
           </select>
         </Field>
-        <Field label="Fecha banco"><input type="date" style={inp} value={f.txn_date} onChange={set("txn_date")} /></Field>
-        <Field label="Fecha operación (opcional)"><input type="date" style={inp} value={f.operation_date} onChange={set("operation_date")} /></Field>
-        <Field label="Monto (USD)"><input type="number" min="0" step="0.01" style={inp} value={f.amount} onChange={set("amount")} placeholder="0.00" /></Field>
-        <Field label="Categoría"><CategorySelect cats={cats} value={f.category} onChange={v => setF(x => ({ ...x, category: v }))} /></Field>
+        <Field label="Bank date"><input type="date" style={inp} value={f.txn_date} onChange={set("txn_date")} /></Field>
+        <Field label="Operation date (optional)"><input type="date" style={inp} value={f.operation_date} onChange={set("operation_date")} /></Field>
+        <Field label="Amount (USD)"><input type="number" min="0" step="0.01" style={inp} value={f.amount} onChange={set("amount")} placeholder="0.00" /></Field>
+        <Field label="Category"><CategorySelect cats={cats} value={f.category} onChange={v => setF(x => ({ ...x, category: v }))} /></Field>
       </div>
-      <Field label="Descripción"><input style={inp} value={f.raw_description} onChange={set("raw_description")} placeholder="Zelle de John Smith / Pago e-zpass…" /></Field>
+      <Field label="Description"><input style={inp} value={f.raw_description} onChange={set("raw_description")} placeholder="Zelle from John Smith / E-ZPass payment…" /></Field>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-        <Field label="Método de pago">
+        <Field label="Payment method">
           <select style={inp} value={f.payment_method} onChange={set("payment_method")}>
             <option value="">—</option>
             {PAYMENT_METHODS_BANK.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
-        <Field label="Nº de cheque / referencia (opcional)"><input style={inp} value={f.payment_method_id} onChange={set("payment_method_id")} /></Field>
-        <Field label="Supplier / contraparte (opcional)"><input style={inp} value={f.supplier} onChange={set("supplier")} placeholder="shell, cash app, cliente…" /></Field>
-        <Field label="Empleado (opcional)"><input style={inp} value={f.employee_name} onChange={set("employee_name")} placeholder="para salaries" /></Field>
+        <Field label="Check # / reference (optional)"><input style={inp} value={f.payment_method_id} onChange={set("payment_method_id")} /></Field>
+        <Field label="Supplier / counterparty (optional)"><input style={inp} value={f.supplier} onChange={set("supplier")} placeholder="shell, cash app, client…" /></Field>
+        <Field label="Employee (optional)"><input style={inp} value={f.employee_name} onChange={set("employee_name")} placeholder="for salaries" /></Field>
       </div>
-      <Field label="Notas"><input style={inp} value={f.notes} onChange={set("notes")} /></Field>
-      <div style={{ fontSize:11, color:"#999", marginBottom:8 }}>El movimiento entra al mismo doble check: otra persona lo tiene que verificar.</div>
+      <Field label="Notes"><input style={inp} value={f.notes} onChange={set("notes")} /></Field>
+      <div style={{ fontSize:11, color:"#999", marginBottom:8 }}>The transaction enters the same double check: a different person has to verify it.</div>
       <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
-        <Btn onClick={onClose}>Cancelar</Btn>
-        <Btn onClick={save} disabled={saving}>{saving ? "Guardando…" : "Guardar"}</Btn>
+        <Btn onClick={onClose}>Cancel</Btn>
+        <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>
       </div>
     </Modal>
   );
@@ -611,9 +611,9 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         direction: l.direction, category: l.category || "", ai_suggested_category: l.category || "",
         ai_confidence: l.confidence ?? null, source: "screenshot", keep: true,
       }));
-      if (!lines.length) setError("La IA no encontró movimientos en la imagen. Probá con una captura más clara.");
+      if (!lines.length) setError(tr("The AI found no transactions in the image. Try a clearer screenshot.", "La IA no encontró movimientos en la imagen. Probá con una captura más clara."));
       setDrafts(d => [...d, ...lines]);
-    } catch (e) { setError(e.message || "Error leyendo el screenshot."); }
+    } catch (e) { setError(e.message || tr("Error reading the screenshot.", "Error leyendo el screenshot.")); }
     setBusy(false);
   };
 
@@ -622,7 +622,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
     try {
       const text = await file.text();
       const rows = parseCsv(text);
-      if (!rows.length) throw new Error("El CSV está vacío.");
+      if (!rows.length) throw new Error(tr("The CSV is empty.", "El CSV está vacío."));
       setFileRef(file.name);
 
       // "CSV maestro": a per-row account_name column + category already set
@@ -634,13 +634,13 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         const idx = (name) => h.indexOf(name);
         const iAcc = idx("account_name"), iDate = idx("txn_date"), iDesc = idx("description"),
           iAmt = idx("amount"), iDir = idx("direction"), iCat = idx("category");
-        if (iDate < 0 || iAmt < 0) throw new Error("El CSV maestro necesita columnas txn_date y amount.");
+        if (iDate < 0 || iAmt < 0) throw new Error(tr("The master CSV needs txn_date and amount columns.", "El CSV maestro necesita columnas txn_date y amount."));
         const accByName = Object.fromEntries(accounts.map(a => [a.name.toLowerCase().trim(), a.id]));
         const unknown = new Set();
         const parsed = rows.slice(1).map(r => {
           const accName = String(r[iAcc] || "").trim();
           const accId = accByName[accName.toLowerCase()];
-          if (!accId) unknown.add(accName || "(vacío)");
+          if (!accId) unknown.add(accName || tr("(empty)", "(vacío)"));
           const rawAmt = numv(String(r[iAmt] ?? "").replace(/[^0-9.\-]/g, ""));
           const dir = String(iDir >= 0 ? r[iDir] : "").toLowerCase().trim();
           const amount = dir === "debit" || dir === "out" ? -Math.abs(rawAmt) : dir === "credit" || dir === "in" ? Math.abs(rawAmt) : rawAmt;
@@ -651,8 +651,8 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
             category: iCat >= 0 ? String(r[iCat] || "").trim() : "",
           };
         }).filter(r => r.txn_date && r.amount);
-        if (unknown.size) throw new Error("Cuentas del CSV que no existen en la app: " + [...unknown].join(", ") + ". Crealas en la tab Cuentas con ese nombre exacto y volvé a subir.");
-        if (!parsed.length) throw new Error("No salieron movimientos del CSV maestro.");
+        if (unknown.size) throw new Error(tr("CSV accounts that don't exist in the app: ", "Cuentas del CSV que no existen en la app: ") + [...unknown].join(", ") + tr(". Create them in the Accounts tab with that exact name and upload again.", ". Crealas en la tab Cuentas con ese nombre exacto y volvé a subir."));
+        if (!parsed.length) throw new Error(tr("No transactions came out of the master CSV.", "No salieron movimientos del CSV maestro."));
         setMaster({ rows: parsed, fileName: file.name });
         setBusy(false);
         return;
@@ -665,7 +665,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         date: find("date", "fecha"), description: find("desc", "detail", "detalle", "memo", "concepto"),
         amount: find("amount", "monto", "importe"), debit: find("debit", "débito", "debito", "withdrawal"), credit: find("credit", "crédito", "credito", "deposit"),
       });
-    } catch (e) { setError(e.message || "Error leyendo el CSV."); }
+    } catch (e) { setError(e.message || tr("Error reading the CSV.", "Error leyendo el CSV.")); }
     setBusy(false);
   };
 
@@ -699,7 +699,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         if (iErr) throw iErr;
       }
       onDone();
-    } catch (e) { setError(e.message || "Error importando el CSV maestro."); }
+    } catch (e) { setError(e.message || tr("Error importing the master CSV.", "Error importando el CSV maestro.")); }
     setBusy(false); setMasterProgress("");
   };
 
@@ -709,7 +709,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       const mapping = { date: map.date, description: map.description };
       if (map.amount) mapping.amount = map.amount; else { mapping.debit = map.debit; mapping.credit = map.credit; }
       const parsed = mapBankCsv(csvRows, mapping, { bank_account_id: accountId || null });
-      if (!parsed.length) throw new Error("No salieron movimientos con ese mapeo de columnas.");
+      if (!parsed.length) throw new Error(tr("No transactions came out with that column mapping.", "No salieron movimientos con ese mapeo de columnas."));
       let lines = parsed.map(p => ({ ...p, category: "", ai_suggested_category: "", ai_confidence: null, keep: true }));
       // Batch AI category suggestion (best-effort — import works without it).
       try {
@@ -726,14 +726,14 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       } catch { /* suggestions are optional */ }
       setDrafts(d => [...d, ...lines]);
       setCsvRows(null);
-    } catch (e) { setError(e.message || "Error mapeando el CSV."); }
+    } catch (e) { setError(e.message || tr("Error mapping the CSV.", "Error mapeando el CSV.")); }
     setBusy(false);
   };
 
   const confirmImport = async () => {
-    if (!accountId) { setError("Elegí a qué cuenta bancaria pertenece este extracto."); return; }
+    if (!accountId) { setError(tr("Pick which bank account this statement belongs to.", "Elegí a qué cuenta bancaria pertenece este extracto.")); return; }
     const keep = drafts.filter(d => d.keep && (d.txn_date || d.raw_description));
-    if (!keep.length) { setError("No hay movimientos para importar."); return; }
+    if (!keep.length) { setError(tr("There are no transactions to import.", "No hay movimientos para importar.")); return; }
     setBusy(true); setError("");
     try {
       const { data: batch, error: bErr } = await supabase.from("bank_import_batches").insert({
@@ -757,23 +757,23 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       const { error: iErr } = await supabase.from("bank_transactions").upsert(rows, { onConflict: "dedup_hash", ignoreDuplicates: true });
       if (iErr) throw iErr;
       onDone();
-    } catch (e) { setError(e.message || "Error importando."); }
+    } catch (e) { setError(e.message || tr("Error importing.", "Error importando.")); }
     setBusy(false);
   };
 
   return (
-    <Modal title="Importar movimientos del banco" onClose={onClose}>
+    <Modal title="Import bank transactions" onClose={onClose}>
       <div style={{ display:"flex", gap:10, marginBottom:12, alignItems:"flex-end", flexWrap:"wrap" }}>
         <div style={{ minWidth:200 }}>
-          <Field label="Cuenta bancaria">
+          <Field label="Bank account">
             <select style={inp} value={accountId} onChange={e => setAccountId(e.target.value)}>
-              <option value="">— elegir —</option>
+              <option value="">— choose —</option>
               {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </Field>
         </div>
         <div style={{ display:"flex", gap:6, marginBottom:10 }}>
-          {[["screenshot", "📸 Screenshot (IA)"], ["csv", "📄 CSV del banco"]].map(([v, l]) => (
+          {[["screenshot", "📸 Screenshot (AI)"], ["csv", "📄 Bank CSV"]].map(([v, l]) => (
             <button key={v} onClick={() => setMode(v)} style={{ padding:"7px 12px", borderRadius:8, border:"1px solid " + (mode === v ? "#111" : "#e5e5e5"), background: mode === v ? "#111" : "#fff", color: mode === v ? "#fff" : "#555", fontSize:12.5, fontWeight:600, cursor:"pointer" }}>{l}</button>
           ))}
         </div>
@@ -782,7 +782,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       {mode === "screenshot" && (
         <div onClick={() => !busy && document.getElementById("bank-shot-input")?.click()}
           style={{ border:"2px dashed #ddd", borderRadius:10, padding:18, textAlign:"center", background:"#fafafa", cursor:"pointer", fontSize:12.5, color:"#888", marginBottom:12 }}>
-          {busy ? "Leyendo el extracto con IA…" : "Tocá para subir capturas del homebanking (jpg/png). La IA extrae cada línea; después revisás antes de importar."}
+          {busy ? "Reading the statement with AI…" : "Tap to upload homebanking screenshots (jpg/png). The AI extracts each line; you review before importing."}
           <input id="bank-shot-input" type="file" accept="image/*" multiple style={{ display:"none" }}
             onChange={async e => { for (const f of Array.from(e.target.files || [])) await onScreenshot(f); e.target.value = ""; }} />
         </div>
@@ -791,7 +791,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       {mode === "csv" && !csvRows && !master && (
         <div onClick={() => !busy && document.getElementById("bank-csv-input")?.click()}
           style={{ border:"2px dashed #ddd", borderRadius:10, padding:18, textAlign:"center", background:"#fafafa", cursor:"pointer", fontSize:12.5, color:"#888", marginBottom:12 }}>
-          {busy ? "Procesando…" : "Tocá para subir el CSV exportado del banco (si tu banco exporta Excel, guardalo como CSV primero). Si el CSV trae la columna account_name + category (CSV maestro), se carga solo, ya verificado."}
+          {busy ? "Processing…" : "Tap to upload the CSV exported from the bank (if your bank exports Excel, save it as CSV first). If the CSV has the account_name + category column (master CSV), it loads by itself, already verified."}
           <input id="bank-csv-input" type="file" accept=".csv,text/csv" style={{ display:"none" }}
             onChange={e => { const f = e.target.files[0]; if (f) onCsvFile(f); e.target.value = ""; }} />
         </div>
@@ -808,15 +808,15 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         }
         return (
           <div style={{ background:"#F0FDF4", border:"1px solid #BBF7D0", borderRadius:10, padding:14, marginBottom:12 }}>
-            <div style={{ fontSize:13, fontWeight:700, marginBottom:6 }}>✅ CSV maestro detectado — {master.rows.length.toLocaleString()} movimientos listos</div>
+            <div style={{ fontSize:13, fontWeight:700, marginBottom:6 }}>✅ Master CSV detected — {master.rows.length.toLocaleString()} transactions ready</div>
             <div style={{ fontSize:12, color:"#555", lineHeight:1.7 }}>
-              {Object.entries(byAcc).map(([n, c]) => <div key={n}>· {n}: <b>{c.toLocaleString()}</b> movimientos</div>)}
-              <div>· Meses: {[...months].sort()[0]} → {[...months].sort().slice(-1)[0]} · Inflows <b style={{ color:"#3B6D11" }}>{fmt$(tin)}</b> · Outflows <b style={{ color:"#A32D2D" }}>{fmt$(tout)}</b></div>
+              {Object.entries(byAcc).map(([n, c]) => <div key={n}>· {n}: <b>{c.toLocaleString()}</b> transactions</div>)}
+              <div>· Months: {[...months].sort()[0]} → {[...months].sort().slice(-1)[0]} · Inflows <b style={{ color:"#3B6D11" }}>{fmt$(tin)}</b> · Outflows <b style={{ color:"#A32D2D" }}>{fmt$(tout)}</b></div>
             </div>
-            <div style={{ fontSize:11.5, color:"#888", margin:"8px 0" }}>Cada fila va a su cuenta (por nombre) con la categoría del CSV, y entra como <b>verificada</b>. Re-subir el mismo archivo no duplica nada.</div>
+            <div style={{ fontSize:11.5, color:"#888", margin:"8px 0" }}>Each row goes to its account (by name) with the CSV's category, and enters as <b>verified</b>. Re-uploading the same file doesn't duplicate anything.</div>
             <div style={{ display:"flex", gap:8 }}>
-              <Btn onClick={confirmMasterImport} disabled={busy}>{busy ? `Cargando… ${masterProgress}` : `⬆ Cargar ${master.rows.length.toLocaleString()} movimientos`}</Btn>
-              <Btn onClick={() => setMaster(null)} disabled={busy}>Cancelar</Btn>
+              <Btn onClick={confirmMasterImport} disabled={busy}>{busy ? `${tr("Loading…", "Cargando…")} ${masterProgress}` : `${tr("⬆ Load", "⬆ Cargar")} ${master.rows.length.toLocaleString()} ${tr("transactions", "movimientos")}`}</Btn>
+              <Btn onClick={() => setMaster(null)} disabled={busy}>Cancel</Btn>
             </div>
           </div>
         );
@@ -824,9 +824,9 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
 
       {mode === "csv" && csvRows && (
         <div style={{ background:"#F8FAFC", border:"1px solid #E2E8F0", borderRadius:10, padding:12, marginBottom:12 }}>
-          <div style={{ fontSize:12.5, fontWeight:700, marginBottom:8 }}>Mapeo de columnas ({csvRows.length - 1} filas)</div>
+          <div style={{ fontSize:12.5, fontWeight:700, marginBottom:8 }}>Column mapping ({csvRows.length - 1} rows)</div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:8 }}>
-            {[["date", "Fecha"], ["description", "Descripción"], ["amount", "Monto (con signo)"], ["debit", "Débito"], ["credit", "Crédito"]].map(([k, l]) => (
+            {[["date", "Date"], ["description", "Description"], ["amount", "Amount (signed)"], ["debit", "Debit"], ["credit", "Credit"]].map(([k, l]) => (
               <div key={k}>
                 <span style={fieldLabel}>{l}</span>
                 <select style={inp} value={map[k]} onChange={e => setMap(m => ({ ...m, [k]: e.target.value }))}>
@@ -836,17 +836,17 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
               </div>
             ))}
           </div>
-          <div style={{ fontSize:11, color:"#888", marginTop:6 }}>Usá “Monto” si el CSV trae una sola columna con signo, o “Débito”+“Crédito” si vienen separadas.</div>
-          <div style={{ marginTop:10 }}><Btn onClick={applyCsvMap} disabled={busy}>{busy ? "Procesando…" : "Extraer movimientos"}</Btn></div>
+          <div style={{ fontSize:11, color:"#888", marginTop:6 }}>Use “Amount” if the CSV has a single signed column, or “Debit”+“Credit” if they come separate.</div>
+          <div style={{ marginTop:10 }}><Btn onClick={applyCsvMap} disabled={busy}>{busy ? "Processing…" : "Extract transactions"}</Btn></div>
         </div>
       )}
 
       {drafts.length > 0 && (
         <div>
-          <div style={{ fontSize:12.5, fontWeight:700, margin:"6px 0" }}>Revisá antes de importar ({drafts.filter(d => d.keep).length} de {drafts.length} seleccionados)</div>
+          <div style={{ fontSize:12.5, fontWeight:700, margin:"6px 0" }}>Review before importing ({drafts.filter(d => d.keep).length} of {drafts.length} selected)</div>
           <div style={{ maxHeight:300, overflowY:"auto", border:"1px solid #efefef", borderRadius:10 }}>
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
-              <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["", "Fecha", "Descripción", "Monto", "Categoría (IA, editable)"].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["", "Date", "Description", "Amount", "Category (AI, editable)"].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
               <tbody>
                 {drafts.map((d, i) => (
                   <tr key={i} style={{ borderBottom:"1px solid #f7f7f7", opacity: d.keep ? 1 : 0.45 }}>
@@ -861,8 +861,8 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
             </table>
           </div>
           <div style={{ display:"flex", gap:8, marginTop:12, justifyContent:"flex-end" }}>
-            <Btn onClick={() => setDrafts([])}>Limpiar</Btn>
-            <Btn onClick={confirmImport} disabled={busy}>{busy ? "Importando…" : `Importar ${drafts.filter(d => d.keep).length} movimientos`}</Btn>
+            <Btn onClick={() => setDrafts([])}>Clear</Btn>
+            <Btn onClick={confirmImport} disabled={busy}>{busy ? tr("Importing…", "Importando…") : `${tr("Import", "Importar")} ${drafts.filter(d => d.keep).length} ${tr("transactions", "movimientos")}`}</Btn>
           </div>
         </div>
       )}
@@ -901,7 +901,7 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
     setShowModal(true);
   };
   const save = async () => {
-    if (!form.name.trim()) { window.alert("La cuenta necesita un nombre."); return; }
+    if (!form.name.trim()) { window.alert(tr("The account needs a name.", "La cuenta necesita un nombre.")); return; }
     setSaving(true);
     const payload = { ...form, opening_balance: form.opening_balance === "" ? 0 : numv(form.opening_balance), opening_date: form.opening_date || null };
     const q = editingId ? supabase.from("bank_accounts").update(payload).eq("id", editingId) : supabase.from("bank_accounts").insert(payload);
@@ -914,10 +914,10 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
 
   return (
     <div>
-      {canCreate && <div style={{ marginBottom:12 }}><Btn onClick={openAdd}>＋ Nueva cuenta</Btn></div>}
+      {canCreate && <div style={{ marginBottom:12 }}><Btn onClick={openAdd}>＋ New account</Btn></div>}
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Cuenta", "Banco", "Tipo", "Saldo calculado", "Movimientos", "Activa", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Account", "Bank", "Type", "Calculated balance", "Transactions", "Active", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
           <tbody>
             {accounts.map(a => (
               <tr key={a.id} style={{ borderBottom:"1px solid #f7f7f7", opacity: a.active === false ? 0.5 : 1 }}>
@@ -926,37 +926,37 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
                 <td style={td}>{a.type || "checking"}</td>
                 <td style={{ ...td, fontWeight:700 }}>{fmt$(balanceOf(a))}</td>
                 <td style={td}>{txnCountOf(a)}</td>
-                <td style={td}>{a.active === false ? "No" : "Sí"}</td>
+                <td style={td}>{a.active === false ? "No" : "Yes"}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>
-                  {canEdit && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => openEdit(a)}>Editar</Btn>}
-                  {canEdit && <button onClick={() => toggleActive(a)} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:12, marginLeft:6 }}>{a.active === false ? "Activar" : "Desactivar"}</button>}
+                  {canEdit && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => openEdit(a)}>Edit</Btn>}
+                  {canEdit && <button onClick={() => toggleActive(a)} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:12, marginLeft:6 }}>{a.active === false ? "Activate" : "Deactivate"}</button>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize:11, color:"#999", marginTop:8 }}>Saldo calculado = saldo inicial + Σ movimientos importados (excluye ignorados). Si no coincide con el banco, faltan movimientos por importar.</div>
+      <div style={{ fontSize:11, color:"#999", marginTop:8 }}>Calculated balance = opening balance + Σ imported transactions (excludes ignored). If it doesn't match the bank, there are transactions left to import.</div>
 
       {showModal && (
-        <Modal title={editingId ? "Editar cuenta" : "Nueva cuenta bancaria"} onClose={() => setShowModal(false)}>
-          <Field label="Nombre"><input style={inp} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Chase Operativa" /></Field>
+        <Modal title={editingId ? "Edit account" : "New bank account"} onClose={() => setShowModal(false)}>
+          <Field label="Name"><input style={inp} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Chase Operating" /></Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Banco"><input style={inp} value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} placeholder="Chase" /></Field>
-            <Field label="Últimos 4"><input style={inp} value={form.account_last4} onChange={e => setForm(f => ({ ...f, account_last4: e.target.value }))} maxLength={4} /></Field>
-            <Field label="Tipo">
+            <Field label="Bank"><input style={inp} value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} placeholder="Chase" /></Field>
+            <Field label="Last 4"><input style={inp} value={form.account_last4} onChange={e => setForm(f => ({ ...f, account_last4: e.target.value }))} maxLength={4} /></Field>
+            <Field label="Type">
               <select style={inp} value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
                 <option value="checking">Checking</option><option value="savings">Savings</option><option value="credit_card">Credit card</option>
               </select>
             </Field>
-            <Field label="Moneda"><input style={inp} value={form.currency} disabled /></Field>
-            <Field label="Saldo inicial"><input style={inp} type="number" value={form.opening_balance} onChange={e => setForm(f => ({ ...f, opening_balance: e.target.value }))} /></Field>
-            <Field label="Fecha saldo inicial"><input style={inp} type="date" value={form.opening_date} onChange={e => setForm(f => ({ ...f, opening_date: e.target.value }))} /></Field>
+            <Field label="Currency"><input style={inp} value={form.currency} disabled /></Field>
+            <Field label="Opening balance"><input style={inp} type="number" value={form.opening_balance} onChange={e => setForm(f => ({ ...f, opening_balance: e.target.value }))} /></Field>
+            <Field label="Opening balance date"><input style={inp} type="date" value={form.opening_date} onChange={e => setForm(f => ({ ...f, opening_date: e.target.value }))} /></Field>
           </div>
-          <Field label="Notas"><input style={inp} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></Field>
+          <Field label="Notes"><input style={inp} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></Field>
           <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:12 }}>
             <Btn onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={save} disabled={saving}>{saving ? "Guardando…" : "Guardar"}</Btn>
+            <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>
           </div>
         </Modal>
       )}
@@ -984,8 +984,8 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
   };
   const save = async () => {
     const name = form.name.trim();
-    if (!name) { window.alert("La categoría necesita un nombre."); return; }
-    if (list.some(c => c.name.toLowerCase() === name.toLowerCase() && c.id !== editing?.id)) { window.alert("Ya existe una categoría con ese nombre."); return; }
+    if (!name) { window.alert(tr("The category needs a name.", "La categoría necesita un nombre.")); return; }
+    if (list.some(c => c.name.toLowerCase() === name.toLowerCase() && c.id !== editing?.id)) { window.alert(tr("A category with that name already exists.", "Ya existe una categoría con ese nombre.")); return; }
     setSaving(true);
     const payload = {
       name, icon: form.icon || null, is_transfer: !!form.is_transfer, active: form.active !== false,
@@ -1013,28 +1013,28 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
     onReload();
   };
 
-  const groupLabel = (c) => c.is_transfer ? "Transferencia" : c.direction === "in" ? "Ingreso" : (c.pnl_group || "—");
+  const groupLabel = (c) => c.is_transfer ? "Transfer" : c.direction === "in" ? "Income" : (c.pnl_group || "—");
   return (
     <div>
-      {canCreate && <div style={{ marginBottom:12 }}><Btn onClick={openAdd}>＋ Nueva categoría</Btn></div>}
+      {canCreate && <div style={{ marginBottom:12 }}><Btn onClick={openAdd}>＋ New category</Btn></div>}
       <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>
-        Estas son las mismas categorías y grupos del Excel de Bank Flows. Podés agregar nuevas o renombrar — los movimientos ya categorizados se actualizan solos. Desactivar una categoría la saca del selector sin tocar el histórico.
+        These are the same categories and groups from the Bank Flows Excel. You can add new ones or rename — already-categorized transactions update by themselves. Deactivating a category removes it from the selector without touching the history.
       </div>
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Categoría", "Dirección", "Grupo P&L", "Movimientos", "Activa", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Category", "Direction", "P&L group", "Transactions", "Active", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
           <tbody>
-            {list.length === 0 && <tr><td colSpan={6} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Corré la migración setup-bank.mjs para sembrar las categorías del Excel.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={6} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Run the setup-bank.mjs migration to seed the Excel categories.</td></tr>}
             {list.map(c => (
               <tr key={c.id} style={{ borderBottom:"1px solid #f7f7f7", opacity: c.active === false ? 0.5 : 1 }}>
                 <td style={{ ...td, fontWeight:600 }}>{c.icon} {c.name}</td>
-                <td style={td}>{c.is_transfer ? "🔁 Transfer" : c.direction === "in" ? "🟢 Ingreso" : "🔴 Egreso"}</td>
+                <td style={td}>{c.is_transfer ? "🔁 Transfer" : c.direction === "in" ? "🟢 Income" : "🔴 Expense"}</td>
                 <td style={td}>{groupLabel(c)}</td>
                 <td style={td}>{usesOf(c.name)}</td>
-                <td style={td}>{c.active === false ? "No" : "Sí"}</td>
+                <td style={td}>{c.active === false ? "No" : "Yes"}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>
-                  {canEdit && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => openEdit(c)}>Editar</Btn>}
-                  {canEdit && <button onClick={() => toggleActive(c)} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:12, marginLeft:6 }}>{c.active === false ? "Activar" : "Desactivar"}</button>}
+                  {canEdit && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => openEdit(c)}>Edit</Btn>}
+                  {canEdit && <button onClick={() => toggleActive(c)} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:12, marginLeft:6 }}>{c.active === false ? "Activate" : "Deactivate"}</button>}
                 </td>
               </tr>
             ))}
@@ -1043,23 +1043,23 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
       </div>
 
       {showModal && (
-        <Modal title={editing ? "Editar categoría" : "Nueva categoría"} onClose={() => setShowModal(false)}>
+        <Modal title={editing ? "Edit category" : "New category"} onClose={() => setShowModal(false)}>
           <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:10 }}>
-            <Field label="Nombre"><input style={inp} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Truck Wash" /></Field>
-            <Field label="Icono (emoji)"><input style={inp} value={form.icon} onChange={e => setForm(f => ({ ...f, icon: e.target.value }))} placeholder="🧽" maxLength={4} /></Field>
+            <Field label="Name"><input style={inp} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Truck Wash" /></Field>
+            <Field label="Icon (emoji)"><input style={inp} value={form.icon} onChange={e => setForm(f => ({ ...f, icon: e.target.value }))} placeholder="🧽" maxLength={4} /></Field>
           </div>
-          <Field label="Tipo">
+          <Field label="Type">
             <select style={inp} value={form.is_transfer ? "transfer" : form.direction} onChange={e => {
               const v = e.target.value;
               setForm(f => ({ ...f, is_transfer: v === "transfer", direction: v === "transfer" ? "" : v }));
             }}>
-              <option value="out">🔴 Egreso</option>
-              <option value="in">🟢 Ingreso</option>
-              <option value="transfer">🔁 Transferencia entre cuentas (fuera del P&L)</option>
+              <option value="out">🔴 Expense</option>
+              <option value="in">🟢 Income</option>
+              <option value="transfer">🔁 Transfer between accounts (outside the P&L)</option>
             </select>
           </Field>
           {!form.is_transfer && form.direction !== "in" && (
-            <Field label="Grupo del P&L">
+            <Field label="P&L group">
               <select style={inp} value={form.pnl_group} onChange={e => setForm(f => ({ ...f, pnl_group: e.target.value }))}>
                 <option value="">—</option>
                 {PNL_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
@@ -1068,7 +1068,7 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
           )}
           <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:12 }}>
             <Btn onClick={() => setShowModal(false)}>Cancelar</Btn>
-            <Btn onClick={save} disabled={saving}>{saving ? "Guardando…" : "Guardar"}</Btn>
+            <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>
           </div>
         </Modal>
       )}
@@ -1080,30 +1080,30 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
 function ReconTab({ txns, cats, payments, expenses }) {
   const recon = useMemo(() => reconcileBank({ bankTxns: txns, payments, expenses, categories: cats }), [txns, cats, payments, expenses]);
   const KIND_LABEL = {
-    bank_no_backing: { l:"Banco sin respaldo", color:"#A32D2D", hint:"Plata que se movió en el banco y nadie registró en la operación. Investigar." },
-    payment_no_bank: { l:"Cobro que no llegó al banco", color:"#C2410C", hint:"Un cobro marcado como depositado que no aparece en el extracto. ¿Dónde está?" },
-    expense_no_bank: { l:"Gasto sin línea en el banco", color:"#92760B", hint:"Un gasto cargado como pagado por banco que el extracto no muestra (o falta importar ese período)." },
+    bank_no_backing: { l:"Bank without backing", color:"#A32D2D", hint:"Money that moved in the bank and nobody recorded in the operation. Investigate." },
+    payment_no_bank: { l:"Payment that never hit the bank", color:"#C2410C", hint:"A payment marked as deposited that doesn't show up in the statement. Where is it?" },
+    expense_no_bank: { l:"Expense with no bank line", color:"#92760B", hint:"An expense recorded as paid by bank that the statement doesn't show (or that period is missing an import)." },
   };
   const groups = ["bank_no_backing", "payment_no_bank", "expense_no_bank"].map(k => ({ k, ...KIND_LABEL[k], items: recon.discrepancies.filter(d => d.kind === k) }));
 
   return (
     <div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10, marginBottom:16 }}>
-        <Tile label="Movimientos matcheados" value={recon.matchedCount} color="#3B6D11" sub={`in ${fmt$(recon.balances.matchedIn)} · out ${fmt$(recon.balances.matchedOut)}`} />
-        <Tile label="Discrepancias" value={recon.discrepancies.length} color={recon.discrepancies.length ? "#A32D2D" : "#3B6D11"} sub={recon.discrepancies.length ? "Los números NO dan — revisar abajo" : "Los números dan ✓"} />
-        <Tile label="Transferencias internas" value={recon.transfersCount} sub="Excluidas del P&L y del cruce" />
+        <Tile label="Matched transactions" value={recon.matchedCount} color="#3B6D11" sub={`in ${fmt$(recon.balances.matchedIn)} · out ${fmt$(recon.balances.matchedOut)}`} />
+        <Tile label="Discrepancies" value={recon.discrepancies.length} color={recon.discrepancies.length ? "#A32D2D" : "#3B6D11"} sub={recon.discrepancies.length ? "Numbers do NOT add up — check below" : "Numbers add up ✓"} />
+        <Tile label="Internal transfers" value={recon.transfersCount} sub="Excluded from the P&L and the cross-check" />
       </div>
       <div style={{ fontSize:12, color:"#888", marginBottom:14 }}>
-        💡 El cruce matchea cada línea del banco contra <b>Payments</b> (cobros depositados) y <b>Expenses</b> (gastos pagados por banco) por monto y fecha (±días). Lo que no matchea es una discrepancia para investigar con el equipo — ahí es donde aparece si falta plata.
+        💡 The cross-check matches every bank line against <b>Payments</b> (deposited payments) and <b>Expenses</b> (expenses paid by bank) by amount and date (±days). Whatever doesn't match is a discrepancy to investigate with the team — that's where it shows if money is missing.
       </div>
       {groups.map(g => (
         <div key={g.k} style={{ marginBottom:18 }}>
           <div style={{ fontSize:13, fontWeight:700, color:g.color, marginBottom:6 }}>{g.l} · {g.items.length}</div>
           <div style={{ fontSize:11, color:"#999", marginBottom:6 }}>{g.hint}</div>
-          {g.items.length === 0 ? <div style={{ fontSize:12, color:"#bbb" }}>Nada acá. ✓</div> : (
+          {g.items.length === 0 ? <div style={{ fontSize:12, color:"#bbb" }}>Nothing here. ✓</div> : (
             <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Fecha", "Detalle", "Monto"].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+                <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Date", "Detail", "Amount"].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
                 <tbody>
                   {g.items.map((d, i) => {
                     const date = d.txn?.txn_date || d.payment?.banked_date || d.payment?.received_date || d.expense?.expense_date || "—";
@@ -1194,18 +1194,18 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
         </select>
         <label style={{ fontSize:12.5, color:"#555", display:"flex", alignItems:"center", gap:6, marginLeft:8 }}>
           <input type="checkbox" checked={onlyVerified} onChange={e => setOnlyVerified(e.target.checked)} />
-          Solo movimientos verificados
+          Only verified transactions
         </label>
       </div>
       {rpcMissing && (
         <div style={{ background:"#FFF7ED", border:"1px solid #FED7AA", borderRadius:10, padding:"10px 14px", fontSize:12.5, color:"#9A3412", marginBottom:12 }}>
-          Falta la migración <b>scripts/setup-bank-rpc.mjs</b> — el P&L está calculando en el navegador y puede quedarse corto si hay muchos movimientos. Pegá el SQL de esa migración en Supabase.
+          Missing the migration <b>scripts/setup-bank-rpc.mjs</b> — the P&L is computing in the browser and can fall short if there are many transactions. Paste that migration's SQL into Supabase.
         </div>
       )}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10, marginBottom:16 }}>
         <Tile label="Revenue" value={fmt$(revenue?.total || 0)} color="#3B6D11" />
-        {st.gross && <Tile label="Gross Profit" value={fmt$(st.gross.total)} color={st.gross.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={revenue?.total ? `${Math.round(st.gross.total / revenue.total * 100)}% margen` : undefined} />}
-        <Tile label="Net Profit" value={fmt$(st.net.total)} color={st.net.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={`${st.count} movimientos · transferencias excluidas${revenue?.total ? ` · ${Math.round(st.net.total / revenue.total * 100)}% margen neto` : ""}`} />
+        {st.gross && <Tile label="Gross Profit" value={fmt$(st.gross.total)} color={st.gross.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={revenue?.total ? `${Math.round(st.gross.total / revenue.total * 100)}${tr("% margin", "% margen")}` : undefined} />}
+        <Tile label="Net Profit" value={fmt$(st.net.total)} color={st.net.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={`${st.count} ${tr("transactions · transfers excluded", "movimientos · transferencias excluidas")}${revenue?.total ? ` · ${Math.round(st.net.total / revenue.total * 100)}${tr("% net margin", "% margen neto")}` : ""}`} />
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
@@ -1218,7 +1218,7 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
             </tr>
           </thead>
           <tbody>
-            {st.count === 0 && <tr><td colSpan={st.months.length + 2} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Sin movimientos en el período{onlyVerified ? " (o nada verificado todavía — destildá el filtro para ver lo categorizado)" : ""}.</td></tr>}
+            {st.count === 0 && <tr><td colSpan={st.months.length + 2} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>No transactions in the period{onlyVerified ? " (or nothing verified yet — untick the filter to see what's categorized)" : ""}.</td></tr>}
             {st.sections.map(sec => (
               <FragmentSection key={sec.group} sec={sec} months={st.months} rowCells={rowCells}
                 gross={sec.group === "Cost of Revenues" ? st.gross : null} subtotalRow={subtotalRow} />
@@ -1227,7 +1227,7 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize:11, color:"#999", marginTop:8 }}>Los gastos se muestran entre paréntesis, estilo contable. Revenue → (Cost of Revenues) → <b>Gross Profit</b> → resto de los gastos → <b>Net Profit</b>.</div>
+      <div style={{ fontSize:11, color:"#999", marginTop:8 }}>Expenses are shown in parentheses, accounting style. Revenue → (Cost of Revenues) → <b>Gross Profit</b> → rest of the expenses → <b>Net Profit</b>.</div>
     </div>
   );
 }
@@ -1239,7 +1239,7 @@ function FragmentSection({ sec, months, rowCells, gross, subtotalRow }) {
   return (
     <>
       <tr>
-        <td colSpan={months.length + 2} style={{ ...td, fontWeight:700, fontSize:11, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em", paddingTop:14, position:"sticky", left:0, background:"#fff" }}>{isRevenue ? "Revenue (facturado)" : sec.group}</td>
+        <td colSpan={months.length + 2} style={{ ...td, fontWeight:700, fontSize:11, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em", paddingTop:14, position:"sticky", left:0, background:"#fff" }}>{isRevenue ? "Revenue (billed)" : sec.group}</td>
       </tr>
       {sec.rows.map(c => (
         <tr key={c.name} style={{ borderBottom:"1px solid #f7f7f7" }}>
