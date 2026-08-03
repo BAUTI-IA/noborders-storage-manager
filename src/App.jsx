@@ -176,8 +176,8 @@ function ExtraRow({ type, extra, driverId, drivers, employees, onActivate, onPat
           <div style={{ lineHeight:1.45, fontSize:10.5 }}>
             <div><b>{numv(extra.extra_cf_count).toLocaleString()} CF</b> × {money(extra.extra_cf_rate) || "$0"} = {money(extra.extra_cf_subtotal) || "$0"}</div>
             <div style={{ color:"#888" }}>fuel {numv(extra.fuel_surcharge_pct)}% +{money(extra.fuel_surcharge_amount) || "$0"}</div>
-            <div>Total c/fuel: <b>{money(extra.extra_total_with_fuel) || "$0"}</b></div>
-            <div style={{ color:"#854F0B" }}>Base com.: <b>{money(extra.commission_base_amount) || "$0"}</b> ({extra.commission_base === "without_fuel" ? "s/fuel" : "c/fuel"})</div>
+            <div>Total w/fuel: <b>{money(extra.extra_total_with_fuel) || "$0"}</b></div>
+            <div style={{ color:"#854F0B" }}>Base comm.: <b>{money(extra.commission_base_amount) || "$0"}</b> ({extra.commission_base === "without_fuel" ? "w/o fuel" : "w/fuel"})</div>
           </div>
           <button onClick={() => onEdit(extra)} title="Edit Extra CF" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✎</button>
         </div>
@@ -336,7 +336,7 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
         onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
         onClick={() => ref.current?.click()}
         style={{ border:`2px dashed ${drag ? "#378ADD" : "#ddd"}`, borderRadius:10, padding: url ? "8px" : "14px", textAlign:"center", background: drag ? "#E6F1FB" : "#fafafa", cursor:"pointer", fontSize:12, color:"#888" }}>
-        {uploading ? "Subiendo…" : url ? (
+        {uploading ? "Uploading…" : url ? (
           <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
             {isPdf ? <span style={{ fontSize:28 }}>📄</span> : <img src={url} alt="" style={{ maxHeight:56, maxWidth:90, borderRadius:6, objectFit:"cover" }} />}
             <span style={{ color:"#185FA5" }}>Replace file</span>
@@ -433,7 +433,7 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
           <div style={{ fontSize:10.5, color: expColor }}>{doc.expiry_date ? `Vence ${doc.expiry_date}${days != null ? ` (${days < 0 ? `hace ${-days}d` : `${days}d`})` : ""}` : "No expiry"}</div>
           <div style={{ display:"flex", gap:9, marginTop:"auto", alignItems:"center" }}>
             {doc.document_url
-              ? <a href={doc.document_url} target="_blank" rel="noreferrer" style={{ fontSize:10.5, color:"#185FA5", textDecoration:"none" }}>📎 Ver</a>
+              ? <a href={doc.document_url} target="_blank" rel="noreferrer" style={{ fontSize:10.5, color:"#185FA5", textDecoration:"none" }}>📎 View</a>
               : <span style={{ fontSize:10.5, color:"#bbb" }}>No file</span>}
             <button onClick={() => inputRef.current?.click()} style={{ fontSize:10.5, color:"#185FA5", border:"none", background:"none", cursor:"pointer", padding:0 }}>Subir</button>
             <button onClick={onEdit} style={{ fontSize:10.5, color:"#888", border:"none", background:"none", cursor:"pointer", padding:0 }}>Edit</button>
@@ -583,7 +583,7 @@ function FaddCell({ group, onSet }) {
     );
   }
   return (
-    <span onClick={() => setEditing(true)} style={{ cursor:"pointer" }} title="Cambiar FADD"><FaddBadge fadd={group.fadd} /></span>
+    <span onClick={() => setEditing(true)} style={{ cursor:"pointer" }} title="Change FADD"><FaddBadge fadd={group.fadd} /></span>
   );
 }
 
@@ -619,7 +619,7 @@ function InlineField({ value, onSave, type = "text", listId, placeholder = "—"
   useEffect(() => { setVal(value || ""); }, [value]);
   if (!editing) {
     return (
-      <span onClick={() => { setVal(value || ""); setEditing(true); }} title="Click para editar"
+      <span onClick={() => { setVal(value || ""); setEditing(true); }} title="Click to edit"
         style={{ cursor:"pointer", borderBottom:"1px dashed #ddd", paddingBottom:1, fontFamily: mono ? "monospace" : undefined }}>
         {display != null ? display : (value ? value : <span style={{ color:"#bbb" }}>{placeholder}</span>)}
       </span>
@@ -1859,7 +1859,7 @@ const CopyButton = ({ value }) => {
   return (
     <button
       onClick={copy}
-      title={copied ? "Copiado" : "Copiar gate code"}
+      title={copied ? "Copiado" : "Copy gate code"}
       style={{ flexShrink:0, marginLeft:6, padding:0, width:18, height:18, lineHeight:"18px", border:"none", background:"none", cursor:"pointer", color:copied?"#16a34a":"#bbb", fontSize:11, opacity:0.8 }}
       onMouseEnter={e => e.currentTarget.style.opacity=1}
       onMouseLeave={e => e.currentTarget.style.opacity=0.8}>
@@ -1908,7 +1908,7 @@ function DupHint({ checking, tone = "warn", children }) {
     <div style={{ fontSize:11, color:"#999", marginTop:4, display:"flex", alignItems:"center", gap:6 }}>
       <span style={{ width:11, height:11, border:"2px solid #eee", borderTop:"2px solid #999", borderRadius:"50%", display:"inline-block", animation:"spin 0.7s linear infinite" }} />
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      Verificando…
+      Verifying…
     </div>
   );
   if (!children) return null;
@@ -2530,7 +2530,7 @@ function TrashSection({ supabase, undoMgr, onRestored }) {
     <div>
       <div style={{ display:"flex", gap:8, marginBottom:14 }}>{tabBtn("trash", "🗑️ Trash")}{tabBtn("history", "🕒 History")}</div>
       {err && <div style={{ ...card, borderColor:"#EF9F27", background:"#FAEEDA", color:"#854F0B", fontSize:13 }}>{err}</div>}
-      {busy && !rows && <div style={{ fontSize:13, color:"#999" }}>Cargando…</div>}
+      {busy && !rows && <div style={{ fontSize:13, color:"#999" }}>Loading…</div>}
       {tab === "trash" && rows && TRASH_TABLES.map(([t, lbl, fmt]) => (rows[t] || []).length > 0 && (
         <div key={t} style={card}>
           <div style={{ fontSize:14, fontWeight:700, marginBottom:10 }}>{lbl} <span style={{ color:"#999", fontWeight:500 }}>({rows[t].length})</span></div>
@@ -2538,7 +2538,7 @@ function TrashSection({ supabase, undoMgr, onRestored }) {
             <div key={r.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:"1px solid #f5f5f5", fontSize:13 }}>
               <span style={{ flex:1 }}>{fmt(r)}</span>
               <span style={{ color:"#aaa", fontSize:12 }}>borrado {String(r.deleted_at).slice(0, 16).replace("T", " ")}</span>
-              <button onClick={() => restoreRow(t, fmt(r), r)} style={{ padding:"5px 12px", borderRadius:7, border:"1px solid #d8e8c8", background:"#EAF3DE", color:"#3B6D11", fontSize:12, fontWeight:700, cursor:"pointer" }}>↩ Restaurar</button>
+              <button onClick={() => restoreRow(t, fmt(r), r)} style={{ padding:"5px 12px", borderRadius:7, border:"1px solid #d8e8c8", background:"#EAF3DE", color:"#3B6D11", fontSize:12, fontWeight:700, cursor:"pointer" }}>↩ Restore</button>
             </div>
           ))}
         </div>
@@ -7977,13 +7977,13 @@ export default function App() {
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", flexDirection:"column", gap:12, color:"#888", fontFamily:"system-ui,sans-serif" }}>
       <div style={{ width:32, height:32, border:"3px solid #f0f0f0", borderTop:"3px solid #111", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      <span style={{ fontSize:14 }}>Cargando storages...</span>
+      <span style={{ fontSize:14 }}>Loading storages...</span>
     </div>
   );
 
   if (error) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", flexDirection:"column", gap:12, color:"#b91c1c", fontFamily:"system-ui,sans-serif", padding:24 }}>
-      <span style={{ fontSize:15, fontWeight:600 }}>Error de conexion</span>
+      <span style={{ fontSize:15, fontWeight:600 }}>Connection error</span>
       <span style={{ fontSize:13, color:"#888" }}>{error}</span>
       <button onClick={loadData} style={{ padding:"8px 16px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer", fontSize:13 }}>Reintentar</button>
     </div>
@@ -8005,9 +8005,9 @@ export default function App() {
           <div style={{ fontSize:13, color:"#999", marginTop:2 }}>{PAGE_META[page].sub}</div>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <button onClick={doUndo} disabled={!undoMgr.canUndo()} title={undoMgr.canUndo() ? `Deshacer: ${undoMgr.peekUndoLabel() || ""} (Ctrl+Z)` : "Nada para deshacer (Ctrl+Z)"}
+          <button onClick={doUndo} disabled={!undoMgr.canUndo()} title={undoMgr.canUndo() ? `Deshacer: ${undoMgr.peekUndoLabel() || ""} (Ctrl+Z)` : "Nothing to undo (Ctrl+Z)"}
             style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color: undoMgr.canUndo() ? "#111" : "#bbb", fontSize:13, fontWeight:600, cursor: undoMgr.canUndo() ? "pointer" : "default" }}>↶ Undo</button>
-          <button onClick={doRedo} disabled={!undoMgr.canRedo()} title={undoMgr.canRedo() ? `Rehacer: ${undoMgr.peekRedoLabel() || ""} (Ctrl+Y)` : "Nada para rehacer (Ctrl+Y)"}
+          <button onClick={doRedo} disabled={!undoMgr.canRedo()} title={undoMgr.canRedo() ? `Rehacer: ${undoMgr.peekRedoLabel() || ""} (Ctrl+Y)` : "Nothing to redo (Ctrl+Y)"}
             style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color: undoMgr.canRedo() ? "#111" : "#bbb", fontSize:13, fontWeight:600, cursor: undoMgr.canRedo() ? "pointer" : "default" }}>↷ Redo</button>
           {(() => {
             // Per-section duplicate alert: shown top-right only when this section has duplicates.
@@ -8033,9 +8033,9 @@ export default function App() {
               </button>
             );
           })()}
-          {page === "storage" && can("storage","create") && <Btn onClick={openImportModal}>Importar WhatsApp</Btn>}
+          {page === "storage" && can("storage","create") && <Btn onClick={openImportModal}>Import WhatsApp</Btn>}
           {page === "storage" && can("storage","create") && <Btn onClick={openAdd}>+ Unit</Btn>}
-          {page === "storage" && storageTab === "storage_units" && can("storage","create") && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job a unidad</Btn>}
+          {page === "storage" && storageTab === "storage_units" && can("storage","create") && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job to unit</Btn>}
           {page === "drivers" && can("drivers","create") && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && can("brokers","create") && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
           {page === "settlements" && !csDetailId && can("settlements","create") && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
@@ -8060,7 +8060,7 @@ export default function App() {
       {dbSetupNeeded && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span>Per-unit job history needs the <strong>storage_jobs</strong> table created once.</span>
-          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>Ver instrucciones</button>
+          <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View instructions</button>
         </div>
       )}
 
@@ -8150,7 +8150,7 @@ export default function App() {
               <span style={{ fontSize:16 }}>🔍</span>
               <b>{duplicateReport.total} posible{duplicateReport.total === 1 ? "" : "s"} duplicate{duplicateReport.total === 1 ? "" : "s"}</b>
               <span style={{ color:"#a07d3a" }}>· Jobs {duplicateReport.jobs.length} · Payments {duplicateReport.payments.length} · Storages {duplicateReport.storages.length}</span>
-              <span style={{ marginLeft:"auto", textDecoration:"underline", fontWeight:600 }}>Revisar →</span>
+              <span style={{ marginLeft:"auto", textDecoration:"underline", fontWeight:600 }}>Review →</span>
             </div>
           )}
 
@@ -8201,12 +8201,12 @@ export default function App() {
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
                           {!g.sticker_color && <span title="Sticker unassigned" style={{ cursor:"help" }}>⚠️</span>}
-                          <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(ver)"}</button>
+                          <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(view)"}</button>
                           {g.job_type === "broker_delivery" && (g.status === "delivered" || g.parts?.some(p => p.date_out)) && numv(g.bol_collected) < numv(g.bol_balance) && numv(g.bol_balance) > 0 && (
                             <span title="BOL collection pending" style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Collection pending</span>
                           )}
                           {jobKeysWithExtras.has(g.key) && (
-                            <span title="Tiene extras registrados" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>
+                            <span title="Has extras recorded" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>
                           )}
                           {!paymentsMissing && (() => {
                             const outstanding = jobOutstanding(g, g.key);
@@ -8249,7 +8249,7 @@ export default function App() {
                       </td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                         <div style={{ display:"flex", flexDirection:"column", gap:5, alignItems:"flex-start" }}>
-                          {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Ruta</a>}
+                          {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Route</a>}
                           <a href={waHref} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
                           {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
                           <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:14, padding:0, alignSelf:"flex-start" }}>🗑 Delete</button>
@@ -8460,10 +8460,10 @@ export default function App() {
             {deliveryCandidates.length > 0 && (
               <div style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:10, marginBottom:14, overflow:"hidden" }}>
                 <div onClick={() => setDcalPanelOpen(o => !o)} style={{ padding:"10px 14px", cursor:"pointer", display:"flex", alignItems:"center", gap:8, background:"#FFF9EE" }}>
-                  <span style={{ fontSize:13, fontWeight:700, color:"#854F0B" }}>📋 Entregas por agendar ({deliveryCandidates.length})</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:"#854F0B" }}>📋 Deliveries to schedule ({deliveryCandidates.length})</span>
                   {deliveryToSchedule > 0 && <span style={{ fontSize:10.5, fontWeight:700, background:"#E24B4A", color:"#fff", borderRadius:10, padding:"1px 7px" }}>{deliveryToSchedule} with FADD ≤ 7 days</span>}
                   <span style={{ flex:1 }} />
-                  <span style={{ color:"#B58B3D", fontSize:12 }}>{dcalPanelOpen ? "▾ ocultar" : "▸ mostrar"}</span>
+                  <span style={{ color:"#B58B3D", fontSize:12 }}>{dcalPanelOpen ? "▾ hide" : "▸ show"}</span>
                 </div>
                 {dcalPanelOpen && (
                   <>
@@ -8595,7 +8595,7 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Broker","Contact","Phone","Jobs","Balance pend.","Broker share","CS abiertos","Owes us","We owe","Net","" ].map((h, i) => (
+                    {["Broker","Contact","Phone","Jobs","Pending balance","Broker share","Open CS","Owes us","We owe","Net","" ].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -8642,7 +8642,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Driver","Phone","Grupo WhatsApp","Jobs activos","Status",""].map((h,i) => (
+                  {["Driver","Phone","WhatsApp group","Active jobs","Status",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -8682,7 +8682,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Client","Phone","Email","Jobs activos","Total jobs","Outstanding balance"].map((h,i) => (
+                  {["Client","Phone","Email","Active jobs","Total jobs","Outstanding balance"].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -8790,7 +8790,7 @@ export default function App() {
       {/* ───────────────────────── SETTLEMENTS (detail) ───────────────────────── */}
       {page === "settlements" && csDetailId && (() => {
         const s = sheetById[csDetailId];
-        if (!s) return <div style={{ color:"#bbb" }}>Closing sheet no encontrado. <button onClick={() => setCsDetailId(null)} style={{ color:"#185FA5", background:"none", border:"none", cursor:"pointer" }}>Back</button></div>;
+        if (!s) return <div style={{ color:"#bbb" }}>Closing sheet not found. <button onClick={() => setCsDetailId(null)} style={{ color:"#185FA5", background:"none", border:"none", cursor:"pointer" }}>Back</button></div>;
         const jobsIn = jobsBySheet[csDetailId] || [];
         const c = sheetCalc(s, jobsIn);
         const brokerNm = brokerName(s.broker_id);
@@ -8833,14 +8833,14 @@ export default function App() {
               </div>
 
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:8 }}>Documento original</div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:8 }}>Original document</div>
                 <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:10, padding:"14px", textAlign:"center", cursor:"pointer", background:"#fafafa" }}
                   onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, s); }}>
                   <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], s)} />
-                  {docUploading ? <div style={{ fontSize:12, color:"#888" }}>Subiendo…</div>
+                  {docUploading ? <div style={{ fontSize:12, color:"#888" }}>Uploading…</div>
                     : s.document_url ? (
                       isImg ? <img src={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
-                        : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Ver documento (PDF)</a></div>
+                        : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>View document (PDF)</a></div>
                     ) : <div style={{ fontSize:12, color:"#999" }}>Drag or click to upload closing-sheet photo/PDF</div>}
                 </label>
                 {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>Click the area to replace</div>}
@@ -8868,7 +8868,7 @@ export default function App() {
                       const route = [[j.pickup_city, j.pickup_state].filter(Boolean).join(" "), [j.delivery_city, j.delivery_state].filter(Boolean).join(" ")].filter(Boolean).join(" → ");
                       return (
                         <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><button onClick={() => setJobDetailKey(k)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button></td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><button onClick={() => setJobDetailKey(k)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(view)"}</button></td>
                           <td style={{ padding:"10px 12px" }}>{j.customer || "—"}</td>
                           <td style={{ padding:"10px 12px", fontSize:12, color:"#555" }}>{route || "—"}</td>
                           <td style={{ padding:"10px 12px" }}><input defaultValue={parseCf(j.volume) || ""} onBlur={e => { if (e.target.value !== String(parseCf(j.volume))) updateJobBol(k, "volume", e.target.value); }} style={{ ...inp, width:64, padding:"5px 7px" }} /></td>
@@ -8891,10 +8891,10 @@ export default function App() {
             {/* Pads + Deductions + Settlement */}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Pads (por job)</div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Pads (per job)</div>
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                   <thead><tr style={{ color:"#aaa", fontSize:10, textTransform:"uppercase" }}>
-                    <th style={{ textAlign:"left", padding:"3px 4px" }}>Job</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Recib.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Devuel.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Falt.</th>
+                    <th style={{ textAlign:"left", padding:"3px 4px" }}>Job</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Recv.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Ret.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Miss.</th>
                   </tr></thead>
                   <tbody>
                     {jobsIn.map(j => { const miss = jobPadsMissing(j); return (
@@ -8908,38 +8908,38 @@ export default function App() {
                   </tbody>
                 </table>
                 <div style={{ borderTop:"1px solid #eee", marginTop:8, paddingTop:8 }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total enviados</span><b>{c.padsSent}</b></div>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total devueltos</span><b>{c.padsReturned}</b></div>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total faltantes</span><b style={{ color: c.padsMissing>0?"#C2410C":"#111" }}>{c.padsMissing}</b></div>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Cargo por pad</span><b>{m(s.charge_per_pad != null ? s.charge_per_pad : 7)}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total sent</span><b>{c.padsSent}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total returned</span><b>{c.padsReturned}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total missing</span><b style={{ color: c.padsMissing>0?"#C2410C":"#111" }}>{c.padsMissing}</b></div>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Charge per pad</span><b>{m(s.charge_per_pad != null ? s.charge_per_pad : 7)}</b></div>
                   <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total pads charge</span><b>{m(c.padsCharge)}</b></div>
                 </div>
               </div>
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Deducciones del broker</div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Broker deductions</div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Trip cost</span><b>{m(s.trip_cost)}</b></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Labor</span><b>{m(s.labor_charges)}</b></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Other fees{s.other_fees_description ? ` (${s.other_fees_description})` : ""}</span><b>{m(s.other_fees)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total deducciones</span><b>{m(c.deductions)}</b></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total deductions</span><b>{m(c.deductions)}</b></div>
               </div>
             </div>
 
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Broker nos debe</div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Broker owes us</div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Carrier fee subtotal</span><b>{m(c.carrierFee)}</b></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Trip cost</span><span>{m(s.trip_cost)}</span></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Labor</span><span>{m(s.labor_charges)}</span></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Other fees</span><span>{m(s.other_fees)}</span></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Pads charge</span><span>{m(c.padsCharge)}</span></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total broker nos debe</span><span>{m(c.netCarrier)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total broker owes us</span><span>{m(c.netCarrier)}</span></div>
               </div>
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Cobrado a clientes (BOL)</div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Collected from clients (BOL)</div>
                 {jobsIn.map(j => (
                   <div key={j.id} style={{ display:"flex", justifyContent:"space-between", fontSize:12, margin:"4px 0", color:"#555" }}><span style={{ fontFamily:"monospace" }}>{j.job_number || "-"}</span><span>{money(j.bol_collected) || "$0"} / {money(j.bol_balance) || "$0"}</span></div>
                 ))}
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total cobrado</span><span>{m(c.bolCollected)}</span></div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total collected</span><span>{m(c.bolCollected)}</span></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:4, color:"#C2410C" }}><span>Pending</span><span>{m(c.pending)}</span></div>
               </div>
             </div>
@@ -8962,7 +8962,7 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Truck","Patente / VIN","Capacidad CF","Current load","Occupancy","Status",""].map((h,i) => (
+                  {["Truck","Plate / VIN","CF capacity","Current load","Occupancy","Status",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -9142,7 +9142,7 @@ export default function App() {
               {numBadge("#111")}
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                  <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                  <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(view)"}</button>
                   {j.split_group && <span style={{ color:"#7C3AED", fontWeight:700, fontSize:10.5 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                   {reloc && <span title={trAI("Internal move between locations — no delivery, no collection", "Movimiento interno entre locations — sin delivery, sin cobro")} style={{ color:"#185FA5", background:"#E6F1FB", fontWeight:700, fontSize:10, borderRadius:20, padding:"1px 7px", whiteSpace:"nowrap" }}>🔁 Relocation</span>}
                   <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
@@ -9158,7 +9158,7 @@ export default function App() {
                     if (tot <= 0) return null;
                     return out > 0
                       ? <span title={`Pendiente de cobrar (balance + extras · total $${Math.round(tot).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(out).toLocaleString()}</span>
-                      : <span title="Balance y extras cobrados por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
+                      : <span title="Balance and extras fully collected" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
                   })()}
                   {reloc && jobToCollect(j) > 0 && <span title={trAI("Outstanding balance — NOT collected on this trip (relocation)", "Balance pendiente — NO se cobra en este trip (reubicación)")} style={{ color:"#999", textDecoration:"line-through" }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                 </div>
@@ -9172,7 +9172,7 @@ export default function App() {
                     {relocAtOrigin
                       ? <Btn onClick={() => tripRelocLoad(trip, j)} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>🔼 {trAI("Load onto truck", "Cargar al camión")}</Btn>
                       : <Btn onClick={() => { setDropSel(""); setDropModal({ trip, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() }); }} style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>📦 {reloc ? trAI("Drop at destination", "Dejar en destino") : "Dropped at storage"}</Btn>}
-                    {!jobSplitColMissing && !reloc && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
+                    {!jobSplitColMissing && !reloc && <Btn onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Split this job across two trucks" style={{ padding:"3px 8px", fontSize:11, justifyContent:"center" }}>✂️ Split</Btn>}
                   </div>}
             </div>
           );
@@ -9229,7 +9229,7 @@ export default function App() {
                     {/* Verizon-style side list */}
                     <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", maxHeight:560, display:"flex", flexDirection:"column" }}>
                       <div style={{ padding:"12px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, flexWrap:"wrap" }}>
-                        {[["all",`All (${located.length})`],["moving",`En movimiento (${moving})`],["stopped",`Detenidos (${stopped})`]].map(([v,l]) => (
+                        {[["all",`${tr("All", "Todos")} (${located.length})`],["moving",`${tr("In transit", "En movimiento")} (${moving})`],["stopped",`${tr("Stopped", "Detenidos")} (${stopped})`]].map(([v,l]) => (
                           <button key={v} onClick={() => setLiveStatusFilter(v)} style={{ fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: liveStatusFilter===v?"#111":"#e5e5e5", background: liveStatusFilter===v?"#111":"#fff", color: liveStatusFilter===v?"#fff":"#666", fontWeight: liveStatusFilter===v?600:500 }}>{l}</button>
                         ))}
                       </div>
@@ -9276,7 +9276,7 @@ export default function App() {
                     <div>
                       <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} />
                       <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0" }}>
-                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />En movimiento</span>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
                         <span style={{ marginLeft:"auto", color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
@@ -9321,7 +9321,7 @@ export default function App() {
                           </div>
                           <div style={{ background:"#f0f0f0", borderRadius:6, height:12, overflow:"hidden" }}><div style={{ background: occColor(c.occPct || 0), height:12, width:`${Math.min(100, c.occPct || 0)}%`, transition:"width .4s" }} /></div>
                         </div>
-                      ) : <div style={{ fontSize:12, color:"#999", marginBottom:10 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF en el trip</div>}
+                      ) : <div style={{ fontSize:12, color:"#999", marginBottom:10 }}>Truck with no capacity set · {Math.round(c.totalCf).toLocaleString()} CF on the trip</div>}
                       {(() => { const seq = tripSequenceByTrip[t.id] || []; return (<>
                       <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Stops ({seq.length})</div>
                       <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:320, overflowY:"auto" }}>
@@ -9514,14 +9514,14 @@ export default function App() {
                           <span style={{ flex:1 }} />
                           <span style={{ fontSize:12, color:"#666" }}>Extras: <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
                           <span style={{ fontSize:12, color:"#185FA5" }}>Commission: <b>${Math.round(sec.totalComm).toLocaleString()}</b></span>
-                          <Btn onClick={() => copyRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>📋 Copiar</Btn>
+                          <Btn onClick={() => copyRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>📋 Copy</Btn>
                           <Btn onClick={() => printRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>🖨️ PDF</Btn>
                         </div>
                         <div style={{ padding:"6px 12px 12px" }}>
                           {sec.jobsForRep.map(jf => (
                             <div key={jf.g.key} style={{ marginTop:12 }}>
                               <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4, paddingLeft:2 }}>
-                                <button onClick={() => setJobDetailKey(jf.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{jf.g.job_number || "(ver)"}</button>
+                                <button onClick={() => setJobDetailKey(jf.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{jf.g.job_number || "(view)"}</button>
                                 <span style={{ fontSize:13 }}>{jf.g.customer || "—"}</span>
                                 {brokerName(jf.g.broker_id) && <span style={{ fontSize:11, color:"#888" }}>· {brokerName(jf.g.broker_id)}</span>}
                                 {jf.g.date_in && <span style={{ fontSize:11, color:"#aaa" }}>· {jf.g.date_in}</span>}
@@ -9530,7 +9530,7 @@ export default function App() {
                               <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
                                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
                                   <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                    {["Type", "Amount", "Generated by", "Driver", "Rep %", "Com. rep"].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                    {["Type", "Amount", "Generated by", "Driver", "Rep %", "Rep comm."].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
                                   </tr></thead>
                                   <tbody>
                                     {jf.extras.map(e => (
@@ -9587,7 +9587,7 @@ export default function App() {
                       {dExpanded && (
                         <div style={{ padding:"8px 12px 12px" }}>
                           <div style={{ display:"flex", justifyContent:"flex-end", gap:6, marginBottom:6 }}>
-                            <Btn onClick={() => copyDriverExtras(sec.driver.name, periodLabel, allJobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>📋 Copiar</Btn>
+                            <Btn onClick={() => copyDriverExtras(sec.driver.name, periodLabel, allJobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>📋 Copy</Btn>
                             <Btn onClick={() => printDriverExtras(sec.driver.name, periodLabel, allJobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>🖨️ PDF</Btn>
                           </div>
                           {sec.months.map(mn => {
@@ -9606,7 +9606,7 @@ export default function App() {
                                   <div>
                                     {mn.jobs.map(j => (
                                       <div key={j.g.key} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", borderTop:"1px solid #f6f6f6", flexWrap:"wrap" }}>
-                                        <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:12.5, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(ver)"}</button>
+                                        <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:12.5, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(view)"}</button>
                                         <span style={{ fontSize:12.5, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.g.customer || "—"}</span>
                                         <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Edit extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>)}</span>
                                         <span style={{ flex:1 }} />
@@ -9674,7 +9674,7 @@ export default function App() {
         // One payment row (also used for split children, slightly indented + tinted).
         const renderPayRow = (p, child = false) => (
           <tr key={p.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"middle", background: child ? "#FBFAFE" : undefined }}>
-            <td style={{ ...td2, paddingLeft: child ? 26 : td2.padding }}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{child ? "↳ " : ""}{p._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>{child ? "↳ " : ""}—</span>}</td>
+            <td style={{ ...td2, paddingLeft: child ? 26 : td2.padding }}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{child ? "↳ " : ""}{p._g?.job_number || "(view)"}</button> : <span style={{ color:"#bbb" }}>{child ? "↳ " : ""}—</span>}</td>
             <td style={td2}>{p._g?.customer || "—"}</td>
             <td style={td2}>{brokerName(p._g?.broker_id) || "—"}</td>
             <td style={td2}>{p._g ? (jobDriverNames(p._g) || "—") : "—"}</td>
@@ -9837,7 +9837,7 @@ export default function App() {
                             <div key={p.id} style={{ padding:"7px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12, background: depositSel.has(p.id) ? "#F0FAF4" : undefined }}>
                               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                                 <input type="checkbox" checked={depositSel.has(p.id)} onChange={() => toggleDepositSel(p.id)} title="Tick to deposit" style={{ cursor:"pointer", accentColor:"#1A8A4E" }} />
-                                <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
+                                <button onClick={() => p._key && setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(view)"}</button>
                                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{p._g?.customer || "—"}</span>
                                 <PaymentMethodBadge method={p.method} />
                                 {payPhotoUrl(p) && <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="View document" style={{ border:"none", background:"none", cursor:"pointer", fontSize:13 }}>📷</button>}
@@ -9879,7 +9879,7 @@ export default function App() {
                         const rep = it.rep, open = expandedSplits.has(it.group);
                         const parent = (
                           <tr key={it.key} style={{ borderBottom:"1px solid #f3f0fb", verticalAlign:"middle", background:"#FBFAFE" }}>
-                            <td style={td2}>{rep._key ? <button onClick={() => setJobDetailKey(rep._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{rep._g?.job_number || "(ver)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
+                            <td style={td2}>{rep._key ? <button onClick={() => setJobDetailKey(rep._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{rep._g?.job_number || "(view)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
                             <td style={td2}>{rep._g?.customer || "—"}</td>
                             <td style={td2}>{brokerName(rep._g?.broker_id) || "—"}</td>
                             <td style={td2}>{rep._g ? (jobDriverNames(rep._g) || "—") : "—"}</td>
@@ -10037,7 +10037,7 @@ export default function App() {
               <>
                 <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
                   <select value={docFilterEntity} onChange={e => setDocFilterEntity(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
-                    <option value="">Todas las entidades</option>
+                    <option value="">All entities</option>
                     <option value="company">Companys</option><option value="truck">Camiones</option><option value="driver">Drivers</option>
                   </select>
                   <select value={docFilterStatus} onChange={e => setDocFilterStatus(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
@@ -10045,7 +10045,7 @@ export default function App() {
                     <option value="expired">Expired</option><option value="expiring_soon">Expiring soon</option><option value="active">Up to date</option><option value="none">No date</option>
                   </select>
                   <select value={docFilterDays} onChange={e => setDocFilterDays(e.target.value)} style={{ ...inp, width:"auto", minWidth:150 }}>
-                    <option value="">Cualquier vencimiento</option>
+                    <option value="">Any due date</option>
                     <option value="7">Expires in ≤7 days</option><option value="30">≤30 days</option><option value="60">≤60 days</option><option value="90">≤90 days</option>
                   </select>
                 </div>
@@ -10423,14 +10423,14 @@ export default function App() {
             </div>
             {mapStateFilter && (
               <span style={{ display:"inline-flex", alignItems:"center", gap:8, fontSize:12.5, background:"#EEF2FF", color:"#185FA5", borderRadius:20, padding:"5px 12px", fontWeight:600 }}>
-                Filtrando: {US_CODE_TO_NAME[mapStateFilter] || mapStateFilter} ({(storageStateStats[mapStateFilter]?.count) || 0})
+                Filtering: {US_CODE_TO_NAME[mapStateFilter] || mapStateFilter} ({(storageStateStats[mapStateFilter]?.count) || 0})
                 <button onClick={() => setMapStateFilter("")} style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", textDecoration:"underline", fontSize:12, padding:0 }}>Clear filter</button>
               </span>
             )}
           </div>
           {storageView === "map" && (
             Object.keys(storageStateStats).length === 0
-              ? <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"36px", textAlign:"center", color:"#bbb", marginBottom:14 }}>No hay storages activos con estado cargado para mostrar en el mapa.</div>
+              ? <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, padding:"36px", textAlign:"center", color:"#bbb", marginBottom:14 }}>No active storages with loaded status to show on the map.</div>
               : <UsStorageMap stats={storageStateStats} selected={mapStateFilter} onSelect={setMapStateFilter} />
           )}
         </>
@@ -10465,7 +10465,7 @@ export default function App() {
                         <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12 }}>{s.unit || "—"}</td>
                         <td style={{ padding:"12px", fontSize:12, color:"#555" }}>{[s.address, s.state, s.zip].filter(Boolean).join(", ") || "—"}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(view)"}</button>
                         </td>
                         <td style={{ padding:"12px" }}>{j.customer || "—"}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{j.volume || "—"}</td>
@@ -10475,7 +10475,7 @@ export default function App() {
                         <td style={{ padding:"12px" }}><FaddBadge fadd={j.fadd} /></td>
                         <td style={{ padding:"12px" }}><StatusBadge status={j.status} /></td>
                         <td style={{ padding:"12px", textAlign:"right" }}>
-                          <span onClick={() => { setJobDetailKey(null); setDetailId(j.storage_id); }} style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline", whiteSpace:"nowrap" }}>Ver unidad</span>
+                          <span onClick={() => { setJobDetailKey(null); setDetailId(j.storage_id); }} style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline", whiteSpace:"nowrap" }}>View unit</span>
                         </td>
                       </tr>
                     );
@@ -10507,10 +10507,10 @@ export default function App() {
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap", marginBottom:14 }}>
                 <div>
                   <div style={{ fontSize:18, fontWeight:700 }}>🏭 {name}</div>
-                  <div style={{ fontSize:12, color:"#999" }}>Own warehouse · {byJob.length} job(s) activo(s)</div>
+                  <div style={{ fontSize:12, color:"#999" }}>Own warehouse · {byJob.length} active job(s)</div>
                 </div>
                 <div style={{ display:"flex", gap:8 }}>
-                  <Btn primary disabled={!dbReady} onClick={() => openWarehouseJobPicker(name)} style={{ padding:"7px 14px" }}>+ Job a este warehouse</Btn>
+                  <Btn primary disabled={!dbReady} onClick={() => openWarehouseJobPicker(name)} style={{ padding:"7px 14px" }}>+ Job to this warehouse</Btn>
                   <Btn onClick={() => openCapacity({ kind:"warehouse", name, value: cap != null ? String(cap) : "" })} style={{ padding:"7px 14px" }}>Edit capacidad</Btn>
                 </div>
               </div>
@@ -10527,7 +10527,7 @@ export default function App() {
               ) : (
                 <div style={{ fontSize:13, color:"#999", display:"flex", alignItems:"center", gap:8 }}>
                   Capacity not set · {Math.round(used).toLocaleString()} CF in use.
-                  <span onClick={() => openCapacity({ kind:"warehouse", name, value:"" })} style={{ color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Configurar capacidad</span>
+                  <span onClick={() => openCapacity({ kind:"warehouse", name, value:"" })} style={{ color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Set capacity</span>
                 </div>
               )}
             </div>
@@ -10548,7 +10548,7 @@ export default function App() {
                     ) : byJob.map(j => (
                       <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                          <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(view)"}</button>
                         </td>
                         <td style={{ padding:"12px" }}>{j.customer || "—"}</td>
                         <td style={{ padding:"12px", fontFamily:"monospace", fontSize:12, whiteSpace:"nowrap" }}>{j.lot_number || "—"}</td>
@@ -10565,7 +10565,7 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-              <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{byJob.length} job(s) en {name}</div>
+              <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{byJob.length} job(s) in {name}</div>
             </div>
           </>
         );
@@ -10596,8 +10596,8 @@ export default function App() {
           </select>
         )}
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inp, minWidth:150 }}>
-          <option value="date-desc">Mas reciente</option>
-          <option value="date-asc">Mas antiguo</option>
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
           <option value="customer">Client A-Z</option>
           <option value="driver">Driver A-Z</option>
         </select>
@@ -10613,7 +10613,7 @@ export default function App() {
               </colgroup>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Company","Status","Zip","Address","Unit","Gate Code","Apertura","Payment","Jobs activos","Situacion","Occupancy"].map(h => (
+                  {["Company","Status","Zip","Address","Unit","Gate Code","Apertura","Payment","Active jobs","Situacion","Occupancy"].map(h => (
                     <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{h}</th>
                   ))}
                 </tr>
@@ -10678,7 +10678,7 @@ export default function App() {
                     <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
                       <button onClick={() => setJobDetailKey(g.key)}
                         style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>
-                        {g.job_number || "(ver)"}
+                        {g.job_number || "(view)"}
                       </button>
                       {!claimsMissing && can("claims","view") && <ClaimCountPill count={claimsByJob[normJobNumber(g.job_number)]} />}
                     </td>
@@ -10692,13 +10692,13 @@ export default function App() {
                     </td>
                     <td style={{ padding:"12px" }}>{g.driver||"—"}</td>
                     <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                      {mapHref ? <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:13 }}>🗺️ Ruta</a> : "—"}
+                      {mapHref ? <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:13 }}>🗺️ Route</a> : "—"}
                     </td>
                     {tab === "delivered" ? (
                       <>
                         <td style={{ padding:"12px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{g.parts.map(p => p.date_out).filter(Boolean)[0] || "—"}</td>
                         <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                          <Btn onClick={() => undeliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Desentregar</Btn>
+                          <Btn onClick={() => undeliverJobs(g.parts.map(p => p.id))} style={{ padding:"5px 10px", fontSize:12 }}>Undeliver</Btn>
                           <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:6, verticalAlign:"middle" }}>🗑</button>
                         </td>
                       </>
@@ -10736,7 +10736,7 @@ export default function App() {
               <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Mark all delivered</Btn>
             )}
             {jobDetail.parts.some(p => p.date_out) && (
-              <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Desentregar todo</Btn>
+              <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Undeliver all</Btn>
             )}
             {!jobSplitColMissing && jobDetail.parts.some(p => p.split_group) && (
               <Btn disabled={tripBusy} onClick={() => mergeSplit(jobDetail.parts.find(p => p.split_group))}>✂️ {trAI("Merge portions", "Unir porciones")}</Btn>
@@ -10814,7 +10814,7 @@ export default function App() {
               <InlineField type="number" value={jobDetail.real_cf ?? ""} onSave={set("real_cf")}
                 display={hasRealCf(jobDetail)
                   ? <span style={{ fontWeight:600, color:"#3B6D11" }}>{Math.round(Number(jobDetail.real_cf)).toLocaleString()} CF ✓{parseCf(jobDetail.volume) > 0 ? <span style={{ fontWeight:400, color:"#999" }}> · est. {Math.round(parseCf(jobDetail.volume)).toLocaleString()}</span> : null}</span>
-                  : <span style={{ color:"#bbb" }}>— (usa el estimado)</span>} />
+                  : <span style={{ color:"#bbb" }}>— (uses the estimate)</span>} />
             </EditRow>
           )}
           <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
@@ -10843,7 +10843,7 @@ export default function App() {
           <EditRow label="Client billing">
             {jobDetail.billing_active
               ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · since ${jobDetail.billing_start_date}` : ""}</span>
-              : <span style={{ color:"#bbb" }}>No se cobra storage</span>}
+              : <span style={{ color:"#bbb" }}>No storage charged</span>}
           </EditRow>
           <EditRow label="Notes"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
           </>
@@ -10974,15 +10974,15 @@ export default function App() {
                 <SectionLabel>Payments {ps.length ? `(${ps.length})` : ""}</SectionLabel>
                 <div style={{ background:"#fafafa", borderRadius:9, padding:"10px 12px", marginBottom:8 }}>
                   <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13 }}>
-                    <span>Balance del job: <b>${Math.round(expected).toLocaleString()}</b></span>
-                    <span>Cobrado (job): <b style={{ color:"#1A8A4E" }}>${Math.round(jobCollected).toLocaleString()}</b></span>
+                    <span>Job balance: <b>${Math.round(expected).toLocaleString()}</b></span>
+                    <span>Collected (job): <b style={{ color:"#1A8A4E" }}>${Math.round(jobCollected).toLocaleString()}</b></span>
                     <span>Job balance: <b style={{ color: jobOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(jobOutstanding).toLocaleString()}</b></span>
                   </div>
                   {(exsOwed > 0 || extrasCollected > 0) && (
                     <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12.5, marginTop:6, paddingTop:6, borderTop:"1px solid #eee", color:"#555" }}>
-                      <span>Extras cobrados: <b style={{ color:"#6D28D9" }}>${Math.round(extrasCollected).toLocaleString()}</b></span>
-                      {exsOwed > 0 && <span>Extras facturados: <b>${Math.round(exsOwed).toLocaleString()}</b></span>}
-                      {extrasOutstanding > 0 && <span>Extras pendientes: <b style={{ color:"#EF9F27" }}>${Math.round(extrasOutstanding).toLocaleString()}</b></span>}
+                      <span>Extras collected: <b style={{ color:"#6D28D9" }}>${Math.round(extrasCollected).toLocaleString()}</b></span>
+                      {exsOwed > 0 && <span>Extras invoiced: <b>${Math.round(exsOwed).toLocaleString()}</b></span>}
+                      {extrasOutstanding > 0 && <span>Extras pending: <b style={{ color:"#EF9F27" }}>${Math.round(extrasOutstanding).toLocaleString()}</b></span>}
                     </div>
                   )}
                   {typeEntries.length > 0 && (
@@ -10990,7 +10990,7 @@ export default function App() {
                       {typeEntries.map(([t, amt]) => <span key={t} style={{ fontSize:10.5, fontWeight:600, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"2px 9px" }}>{extraTypeLabel(t)} ${Math.round(amt).toLocaleString()}</span>)}
                     </div>
                   )}
-                  {ccFeeTotal > 0 && <div style={{ fontSize:12, marginTop:6, color:"#854F0B" }}>CC fees cobrados: <b>${Math.round(ccFeeTotal).toLocaleString()}</b></div>}
+                  {ccFeeTotal > 0 && <div style={{ fontSize:12, marginTop:6, color:"#854F0B" }}>CC fees collected: <b>${Math.round(ccFeeTotal).toLocaleString()}</b></div>}
                   {(() => {
                     // Money received but not yet applied to a charge ("a cuenta").
                     const onAcc = recv.filter(p => p.concept === "on_account");
@@ -11167,10 +11167,10 @@ export default function App() {
                     <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
                     {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
                     <span style={{ flex:1 }} />
-                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Dividir en dos camiones" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
+                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Split across two trucks" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
                     {!delivered
                       ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
-                      : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Desentregar</Btn>}
+                      : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Undeliver</Btn>}
                   </div>
                   <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
                     {isWh ? (
@@ -11189,7 +11189,7 @@ export default function App() {
                   {!isWh && (
                     <div style={{ marginTop:6 }}>
                       <span onClick={() => { setJobDetailKey(null); setDetailId(p.storage_id); }}
-                        style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>Ver unidad completa →</span>
+                        style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>View full unit →</span>
                     </div>
                   )}
                 </div>
@@ -11209,7 +11209,7 @@ export default function App() {
           </>}>
           <div style={{ marginBottom:10, display:"flex", alignItems:"center", gap:10 }}>
             <Badge situation={sit(detail)} />
-            <span style={{ fontSize:13, color:"#888" }}>{activeJobsByStorage[detail.id] || 0} job(s) activo(s)</span>
+            <span style={{ fontSize:13, color:"#888" }}>{activeJobsByStorage[detail.id] || 0} active job(s)</span>
           </div>
           <SectionLabel>Unit</SectionLabel>
           <DetailRow label="Company" value={detail.brand} />
@@ -11238,7 +11238,7 @@ export default function App() {
           </div>
           <div style={{ display:"flex", gap:8, marginTop:10 }}>
             <Btn onClick={() => renewPayment(detail)}>Renew — add 30 days</Btn>
-            {sit(detail) !== "Close" && <Btn danger onClick={() => closeStorage(detail)}>Cerrar storage</Btn>}
+            {sit(detail) !== "Close" && <Btn danger onClick={() => closeStorage(detail)}>Close storage</Btn>}
           </div>
 
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", margin:"16px 0 8px" }}>
@@ -11273,7 +11273,7 @@ export default function App() {
             <Field label="Unit #">
               <input style={inp} value={form.unit} onChange={e => setForm(f => ({...f, unit:e.target.value}))} placeholder="G13" />
               <DupHint checking={stBrandChecking && (form.brand || "").trim() !== "" && (form.unit || "").trim() !== ""} tone="danger">
-                {storageDup && <span>⚠️ {storageDup.brand} Unit {storageDup.unit}{storageDup.state ? ` in ${storageDup.state}` : ""} is already open in the system. <a onClick={() => { setShowAdd(false); setDetailId(storageDup.id); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver storage</a></span>}
+                {storageDup && <span>⚠️ {storageDup.brand} Unit {storageDup.unit}{storageDup.state ? ` in ${storageDup.state}` : ""} is already open in the system. <a onClick={() => { setShowAdd(false); setDetailId(storageDup.id); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View storage</a></span>}
               </DupHint>
             </Field>
             <Field label="Tamano"><input style={inp} list="sizes-list" value={form.size} onChange={e => setForm(f => ({...f, size:e.target.value}))} placeholder="10x10" /></Field>
@@ -11348,7 +11348,7 @@ export default function App() {
               </select>
             </Field>
             {ujUnitId && candidates.length === 0 && (
-              <div style={{ fontSize:12, color:"#999", marginTop:8 }}>No hay jobs activos disponibles para esta unidad.</div>
+              <div style={{ fontSize:12, color:"#999", marginTop:8 }}>No active jobs available for this unit.</div>
             )}
             <div style={{ display:"flex", alignItems:"center", gap:10, margin:"16px 0 4px" }}>
               <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
@@ -11394,7 +11394,7 @@ export default function App() {
               </select>
             </Field>
             {candidates.length === 0 && (
-              <div style={{ fontSize:12, color:"#999", marginTop:8 }}>No hay otros jobs activos disponibles para agregar.</div>
+              <div style={{ fontSize:12, color:"#999", marginTop:8 }}>No other active jobs available to add.</div>
             )}
             <div style={{ display:"flex", alignItems:"center", gap:10, margin:"16px 0 4px" }}>
               <div style={{ flex:1, height:1, background:"#f0f0f0" }} />
@@ -11424,15 +11424,15 @@ export default function App() {
                     <input style={inp} value={jobForm.job_number} onChange={u("job_number")} placeholder="B8417142" />
                     <DupHint checking={jobNumChecking && (jobForm.job_number || "").trim() !== ""} tone={jobNumberDup?.delivered ? "ok" : "warn"}>
                       {jobNumberDup && (jobNumberDup.delivered ? (
-                        <span>ℹ️ This job was already delivered on {jobNumberDup.dateOut || jobNumberDup.date} — are you sure? <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
+                        <span>ℹ️ This job was already delivered on {jobNumberDup.dateOut || jobNumberDup.date} — are you sure? <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View job</a></span>
                       ) : (
-                        <span>⚠️ Job {jobNumberDup.job_number} already exists — {jobNumberDup.customer || "no client"}, {statusMeta(jobNumberDup.status).l}, {jobNumberDup.date}. <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>Ver job</a></span>
+                        <span>⚠️ Job {jobNumberDup.job_number} already exists — {jobNumberDup.customer || "no client"}, {statusMeta(jobNumberDup.status).l}, {jobNumberDup.date}. <a onClick={() => { setShowAddJob(false); setJobDetailKey(jobNumberDup.key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View job</a></span>
                       ))}
                     </DupHint>
                   </Field>
                   <Field label="Job type *">
                     <select style={inp} value={jobForm.job_type} onChange={u("job_type")}>
-                      {JOB_TYPES.map(x => <option key={x.v} value={x.v}>{x.l}{x.v==="full"?" (pickup → storage → delivery)":x.v==="direct"?" (pickup → delivery)":" (solo delivery)"}</option>)}
+                      {JOB_TYPES.map(x => <option key={x.v} value={x.v}>{x.l}{x.v==="full"?" (pickup → storage → delivery)":x.v==="direct"?" (pickup → delivery)":" (delivery only)"}</option>)}
                     </select>
                   </Field>
                   <Field label="Broker">
@@ -11493,7 +11493,7 @@ export default function App() {
                   <Field label="Pickup city"><input style={inp} value={jobForm.pickup_city} onChange={u("pickup_city")} placeholder="City" /></Field>
                   <Field label="Pickup state"><input style={inp} list="states-list" value={jobForm.pickup_state} onChange={uUp("pickup_state")} placeholder="NY" /></Field>
                   <Field label="Pickup zip"><input style={inp} value={jobForm.pickup_zip} onChange={u("pickup_zip")} placeholder="10001" /></Field>
-                  <Field label="Extra stops" full><input style={inp} value={jobForm.extra_stops} onChange={u("extra_stops")} placeholder="paradas adicionales" /></Field>
+                  <Field label="Extra stops" full><input style={inp} value={jobForm.extra_stops} onChange={u("extra_stops")} placeholder="additional stops" /></Field>
                 </div>
               </FormSection>
             );
@@ -11514,12 +11514,12 @@ export default function App() {
             const load = (
               <FormSection title="Load / Carga">
                 <div style={fgrid}>
-                  <Field label="Volumen (CF) — estimado broker"><input style={inp} value={jobForm.volume} onChange={u("volume")} placeholder="ej: 1200" /></Field>
+                  <Field label="Volumen (CF) — estimado broker"><input style={inp} value={jobForm.volume} onChange={u("volume")} placeholder="e.g. 1200" /></Field>
                   {!realCfMissing && <Field label="Real CF (medido al cargar)"><input style={inp} type="number" value={jobForm.real_cf ?? ""} onChange={u("real_cf")} placeholder="empty = uses the estimate" /></Field>}
                   <Field label="Sticker color">
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                       <span style={{ width:18, height:18, borderRadius:"50%", flexShrink:0, background: colorHex(jobForm.sticker_color) || "#fff", border:"1px solid #ccc" }} />
-                      <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={u("sticker_color")} placeholder="Rojo, Azul..." />
+                      <input style={inp} list="sticker-colors-list" value={jobForm.sticker_color} onChange={u("sticker_color")} placeholder="Red, Blue..." />
                     </div>
                   </Field>
                   <Field label="Lot number"><input style={inp} value={jobForm.lot_number} onChange={u("lot_number")} placeholder="LOT-4821" /></Field>
@@ -11549,7 +11549,7 @@ export default function App() {
                 <div style={{ gridColumn:"1/-1", padding:"10px 12px", background:"#FFF8F0", border:"1px solid #FAE6CF", borderRadius:9, marginTop:4 }}>
                   <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
                     <input type="checkbox" checked={on} onChange={e => setJobForm(f => ({ ...f, broker_job_share_enabled: e.target.checked, broker_job_share_pct: e.target.checked ? f.broker_job_share_pct : "" }))} />
-                    🤝 El broker se queda con un % del balance del job
+                    🤝 The broker keeps a % of the job balance
                   </label>
                   {on && (
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
@@ -11576,7 +11576,7 @@ export default function App() {
 
             const carrierTotal = parseCf(jobForm.volume) * numv(jobForm.carrier_rate_per_cf);
             const financialsBroker = (
-              <FormSection title="Financiero (broker delivery)">
+              <FormSection title="Financial (broker delivery)">
                 <div style={fgrid}>
                   <Field label="BOL balance to collect from client ($)"><input style={inp} type="number" value={jobForm.bol_balance} onChange={u("bol_balance")} placeholder="0" /></Field>
                   <Field label="Carrier rate / CF ($)"><input style={inp} type="number" value={jobForm.carrier_rate_per_cf} onChange={u("carrier_rate_per_cf")} placeholder="0.55" /></Field>
@@ -11609,7 +11609,7 @@ export default function App() {
                       <span style={{ color: none ? "#111" : "#888" }}>— Unassigned —</span>
                     </label>
                   ); })()}
-                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Warehouses propios</div>
+                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Own warehouses</div>
                   {WAREHOUSES.map(w => {
                     const checked = jobForm.warehouses.includes(w);
                     return (
@@ -11618,7 +11618,7 @@ export default function App() {
                       </label>
                     );
                   })}
-                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Units alquiladas</div>
+                  <div style={{ padding:"6px 10px", fontSize:10, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", background:"#fafafa" }}>Rented units</div>
                   {records.filter(r => r.space_type !== "warehouse").length === 0 ? (
                     <div style={{ padding:"10px 12px", fontSize:12, color:"#bbb" }}>No units added yet.</div>
                   ) : records.filter(r => r.space_type !== "warehouse").map(r => {
@@ -11643,7 +11643,7 @@ export default function App() {
                 </label>
                 {jobForm.billing_active && (
                   <div style={{ ...fgrid, marginTop:8 }}>
-                    <Field label="Monthly rate ($)"><input style={inp} type="number" value={jobForm.client_monthly_rate} onChange={u("client_monthly_rate")} placeholder="ej: 150" /></Field>
+                    <Field label="Monthly rate ($)"><input style={inp} type="number" value={jobForm.client_monthly_rate} onChange={u("client_monthly_rate")} placeholder="e.g. 150" /></Field>
                     <Field label="First month free?">
                       <select style={inp} value={jobForm.first_month_free ? "yes" : "no"} onChange={e => setJobForm(f => ({...f, first_month_free: e.target.value === "yes"}))}>
                         <option value="no">No</option><option value="yes">Yes — bills after 30 days</option>
@@ -11705,7 +11705,7 @@ export default function App() {
             <input style={inp} type="number" autoFocus value={capTarget.value}
               onChange={e => setCapTarget(t => ({ ...t, value:e.target.value }))}
               onKeyDown={e => { if (e.key === "Enter") saveCapacity(); }}
-              placeholder="ej: 10000" />
+              placeholder="e.g. 10000" />
           </Field>
           <p style={{ fontSize:12, color:"#999", marginTop:8 }}>Cubic-feet capacity. Occupancy is calculated from the active jobs' volume (CF).</p>
         </Modal>
@@ -11721,12 +11721,12 @@ export default function App() {
             </Btn>
           </>}>
           <div style={{ display:"flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
-            <button onClick={() => { setImportTab("paste"); setPending([]); }} style={impTabStyle("paste")}>Pegar texto</button>
-            <button onClick={() => { setImportTab("zip"); setPending([]); }} style={impTabStyle("zip")}>Subir ZIP del chat</button>
+            <button onClick={() => { setImportTab("paste"); setPending([]); }} style={impTabStyle("paste")}>Paste text</button>
+            <button onClick={() => { setImportTab("zip"); setPending([]); }} style={impTabStyle("zip")}>Upload chat ZIP</button>
           </div>
           {importTab === "paste" && (
             <>
-              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Pega uno o varios mensajes del grupo de WhatsApp.</p>
+              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Paste one or more messages from the WhatsApp group.</p>
               <textarea value={pasteText} onChange={e => setPasteText(e.target.value)}
                 placeholder={"Storage para: Elvin Medina\nGo Store It!\nsize: 10x10\nAddress: 1870 West Avenue, Crossville, TN\nUnit Number: G13\nGate Code: 130438"}
                 style={{ ...inp, fontFamily:"monospace", fontSize:12, resize:"vertical", minHeight:120, display:"block", marginBottom:8 }} />
@@ -11734,7 +11734,7 @@ export default function App() {
           )}
           {importTab === "zip" && (
             <>
-              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Subi el .zip exportado del chat de WhatsApp. Se procesa en tu navegador.</p>
+              <p style={{ fontSize:13, color:"#888", marginBottom:10 }}>Upload the .zip exported from the WhatsApp chat. It's processed in your browser.</p>
               <div onDragOver={e => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)}
                 onDrop={e => { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f) handleZip(f); }}
                 onClick={() => fileRef.current.click()}
@@ -11749,7 +11749,7 @@ export default function App() {
           )}
           {pending.length > 0 && (
             <div style={{ marginTop:14 }}>
-              <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:8 }}>{pending.length} storage(s) detectados:</div>
+              <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:8 }}>{pending.length} storage(s) detected:</div>
               <div style={{ maxHeight:260, overflowY:"auto", display:"flex", flexDirection:"column", gap:6 }}>
                 {pending.map((r, i) => (
                   <label key={i} style={{ display:"flex", alignItems:"flex-start", gap:8, fontSize:12, background: excluded[i] ? "#fafafa" : "#f0fdf4", borderRadius:8, padding:"8px 10px", cursor:"pointer", border:"1px solid", borderColor: excluded[i] ? "#efefef" : "#bbf7d0" }}>
@@ -11907,7 +11907,7 @@ export default function App() {
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
           <p style={{ fontSize:13, color:"#555", lineHeight:1.6, marginTop:0 }}>
             The public key cannot create tables/columns. Run this SQL <strong>once</strong> in the
-            SQL Editor de Supabase. Incluye <strong>storage_jobs</strong>, las columnas de Dispatching, la tabla
+            Supabase SQL Editor. Includes <strong>storage_jobs</strong>, the Dispatching columns, the table
             <strong> brokers</strong> (with common brokers pre-loaded) and balances. Then reload.
           </p>
           <pre style={{ background:"#0f172a", color:"#e2e8f0", borderRadius:10, padding:"14px", fontSize:11.5, lineHeight:1.5, overflowX:"auto", whiteSpace:"pre" }}>{allSql}</pre>
@@ -11945,9 +11945,9 @@ export default function App() {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
-            <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="ej: T-12" /></Field>
-            <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="ej: 250" /></Field>
-            <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="ej: 25 (opcional)" /></Field>
+            <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="e.g. T-12" /></Field>
+            <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="e.g. 250" /></Field>
+            <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="e.g. 25 (optional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
             <Field label="Status">
@@ -12019,7 +12019,7 @@ export default function App() {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name / number *"><input style={inp} value={truckForm.name} onChange={e => setTruckForm(f => ({...f, name:e.target.value}))} placeholder="Truck 1 / Box 26'" /></Field>
             <Field label="Patente"><input style={inp} value={truckForm.plate} onChange={e => setTruckForm(f => ({...f, plate:e.target.value}))} placeholder="ABC-1234" /></Field>
-            <Field label="Capacidad (CF)"><input style={inp} type="number" value={truckForm.capacity_cf} onChange={e => setTruckForm(f => ({...f, capacity_cf:e.target.value}))} placeholder="ej: 1600" /></Field>
+            <Field label="Capacidad (CF)"><input style={inp} type="number" value={truckForm.capacity_cf} onChange={e => setTruckForm(f => ({...f, capacity_cf:e.target.value}))} placeholder="e.g. 1600" /></Field>
             <Field label="Status">
               <select style={inp} value={truckForm.active ? "yes" : "no"} onChange={e => setTruckForm(f => ({...f, active: e.target.value === "yes"}))}><option value="yes">Active</option><option value="no">Inactivo</option></select>
             </Field>
@@ -12037,7 +12037,7 @@ export default function App() {
             <Field label="Year"><input style={inp} type="number" value={truckForm.year} onChange={e => setTruckForm(f => ({...f, year:e.target.value}))} placeholder="2019" /></Field>
             <Field label="Make"><input style={inp} value={truckForm.make} onChange={e => setTruckForm(f => ({...f, make:e.target.value}))} placeholder="Freightliner, International, Volvo…" /></Field>
             <Field label="Model"><input style={inp} value={truckForm.model} onChange={e => setTruckForm(f => ({...f, model:e.target.value}))} placeholder="Cascadia, LT, VNL…" /></Field>
-            <Field label="VIN"><input style={inp} maxLength={17} value={truckForm.vin} onChange={e => setTruckForm(f => ({...f, vin: e.target.value.toUpperCase().slice(0, 17)}))} placeholder="17 caracteres" /></Field>
+            <Field label="VIN"><input style={inp} maxLength={17} value={truckForm.vin} onChange={e => setTruckForm(f => ({...f, vin: e.target.value.toUpperCase().slice(0, 17)}))} placeholder="17 characters" /></Field>
             <Field label="License plate"><input style={inp} value={truckForm.license_plate} onChange={e => setTruckForm(f => ({...f, license_plate:e.target.value}))} placeholder="ABC-1234" /></Field>
             <Field label="License state">
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
@@ -12058,7 +12058,7 @@ export default function App() {
           <Field label="Search by address / city">
             <div style={{ display:"flex", gap:8 }}>
               <input style={{ ...inp, flex:1 }} value={locForm.query} onChange={e => setLocForm(f => ({...f, query:e.target.value}))}
-                onKeyDown={e => { if (e.key === "Enter") geocodeLoc(); }} placeholder="ej: Atlanta, GA  ·  5050 N 13th St, Terre Haute, IN" />
+                onKeyDown={e => { if (e.key === "Enter") geocodeLoc(); }} placeholder="e.g. Atlanta, GA · 5050 N 13th St, Terre Haute, IN" />
               <Btn onClick={geocodeLoc} disabled={locBusy}>{locBusy ? "..." : "Search"}</Btn>
             </div>
           </Field>
@@ -12067,7 +12067,7 @@ export default function App() {
             <Field label="Lng"><input style={inp} value={locForm.lng} onChange={e => setLocForm(f => ({...f, lng:e.target.value}))} placeholder="-84.388" /></Field>
             <Field label="Status">
               <select style={inp} value={locForm.status} onChange={e => setLocForm(f => ({...f, status:e.target.value}))}>
-                <option value="moving">En movimiento</option>
+                <option value="moving">In transit</option>
                 <option value="stopped">Detenido</option>
                 <option value="unknown">No data</option>
               </select>
@@ -12158,9 +12158,9 @@ export default function App() {
                   {typeKeys.map(k => <option key={k} value={k}>{DOC_TYPE_LABELS[k] || k}</option>)}
                 </select>
               </Field>
-              <Field label="Document name"><input style={inp} value={docForm.document_name} onChange={e => setF({ document_name:e.target.value })} placeholder="ej: Cargo insurance" /></Field>
+              <Field label="Document name"><input style={inp} value={docForm.document_name} onChange={e => setF({ document_name:e.target.value })} placeholder="e.g. Cargo insurance" /></Field>
               <Field label="No. / policy / certificate"><input style={inp} value={docForm.document_number} onChange={e => setF({ document_number:e.target.value })} placeholder="N°" /></Field>
-              <Field label="Issuer"><input style={inp} value={docForm.issuer} onChange={e => setF({ issuer:e.target.value })} placeholder="Aseguradora / agencia" /></Field>
+              <Field label="Issuer"><input style={inp} value={docForm.issuer} onChange={e => setF({ issuer:e.target.value })} placeholder="Insurer / agency" /></Field>
               <Field label="Issue date"><input style={inp} type="date" value={docForm.issue_date} onChange={e => setF({ issue_date:e.target.value })} /></Field>
               <Field label="Due date"><input style={inp} type="date" value={docForm.expiry_date} onChange={e => setF({ expiry_date:e.target.value })} /></Field>
               <Field label="Notes" full><input style={inp} value={docForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notes" /></Field>
@@ -12171,14 +12171,14 @@ export default function App() {
             <SectionLabel>File (photo or PDF)</SectionLabel>
             <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) uploadComplianceDoc(f); }}
               style={{ border:"2px dashed #ddd", borderRadius:10, padding:"16px", textAlign:"center", background:"#fafafa", fontSize:12.5, color:"#888" }}>
-              {compDocUploading ? "Subiendo…" : (
+              {compDocUploading ? "Uploading…" : (
                 <>
                   Drag a file here or{" "}
                   <label style={{ color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>
                     choose one
                     <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) uploadComplianceDoc(f); e.target.value = ""; }} />
                   </label>
-                  {docForm.document_url && <div style={{ marginTop:8 }}><a href={docForm.document_url} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E" }}>📎 Archivo cargado — ver</a></div>}
+                  {docForm.document_url && <div style={{ marginTop:8 }}><a href={docForm.document_url} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E" }}>📎 File uploaded — view</a></div>}
                 </>
               )}
             </div>
@@ -12231,7 +12231,7 @@ export default function App() {
                   <div style={{ maxHeight:200, overflowY:"auto" }}>
                     {history.map(({ e, g, mo }) => (
                       <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, padding:"4px 0", borderBottom:"1px solid #eef2f6", flexWrap:"wrap" }}>
-                        <button onClick={() => { setShowEmpModal(false); setEmpDetailId(null); if (g) setJobDetailKey(g.key); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g?.job_number || "(ver)"}</button>
+                        <button onClick={() => { setShowEmpModal(false); setEmpDetailId(null); if (g) setJobDetailKey(g.key); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g?.job_number || "(view)"}</button>
                         <span>{extraTypeLabel(e.extra_type)}</span>
                         <span style={{ color:"#888" }}>{moLabel(mo)}</span>
                         <span style={{ flex:1 }} />
@@ -12379,7 +12379,7 @@ export default function App() {
               <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF8F0", border:"1px solid #FAE6CF", borderRadius:9 }}>
                 <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
                   <input type="checkbox" checked={bsOn} onChange={e => setQ({ broker_share_enabled: e.target.checked, broker_share_pct: e.target.checked && (quickExtra.broker_share_pct === "" || quickExtra.broker_share_pct == null) ? "" : quickExtra.broker_share_pct })} />
-                  🤝 El broker se queda con un % de este extra
+                  🤝 The broker keeps a % of this extra
                 </label>
                 {bsOn && (
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginTop:10 }}>
@@ -12523,7 +12523,7 @@ export default function App() {
                       if (on && !fields.alloc_lines && !splitLines.length) fields.split_lines = [{ concept:"job", amount:"", notes:"" }];
                       setF(fields);
                     }} />
-                    {!allocMissing && payForm.job_id ? "✂️ Asignar a cargos (split)" : "✂️ Split the payment"}
+                    {!allocMissing && payForm.job_id ? "✂️ Assign to charges (split)" : "✂️ Split the payment"}
                   </label>
                 )}
                 {allocOn && (
@@ -12546,8 +12546,8 @@ export default function App() {
                           <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchAlloc(i, { amount: e.target.value })} placeholder="$" />
                           {l.kind !== "custom" && (
                             over
-                              ? <span style={{ fontSize:11, color:"#C2410C", fontWeight:600 }}>Sobrepago ${ (entered - l.remaining).toLocaleString(undefined,{maximumFractionDigits:2}) } — se registra igual</span>
-                              : <span style={{ fontSize:11, color: after > 0 ? "#92760B" : "#1A8A4E" }}>Restante: ${after.toLocaleString(undefined,{maximumFractionDigits:2})}</span>
+                              ? <span style={{ fontSize:11, color:"#C2410C", fontWeight:600 }}>Overpayment ${ (entered - l.remaining).toLocaleString(undefined,{maximumFractionDigits:2}) } — recorded anyway</span>
+                              : <span style={{ fontSize:11, color: after > 0 ? "#92760B" : "#1A8A4E" }}>Remaining: ${after.toLocaleString(undefined,{maximumFractionDigits:2})}</span>
                           )}
                           {l.kind === "custom" && (
                             <>
@@ -12811,8 +12811,8 @@ export default function App() {
             <div style={{ marginTop:14, padding:"12px 14px", background:"#fafafa", borderRadius:9 }}>
               <div style={{ fontSize:13, fontWeight:700, marginBottom:10 }}>{editingAccountId ? "Edit account" : "New account"}</div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                <Field label="Name" full><input style={inp} value={accountForm.name} onChange={e => setAccountForm(f => ({ ...f, name:e.target.value }))} placeholder="ej: Chase Operations" /></Field>
-                <Field label="Bank"><input style={inp} value={accountForm.bank_name} onChange={e => setAccountForm(f => ({ ...f, bank_name:e.target.value }))} placeholder="ej: Chase" /></Field>
+                <Field label="Name" full><input style={inp} value={accountForm.name} onChange={e => setAccountForm(f => ({ ...f, name:e.target.value }))} placeholder="e.g. Chase Operations" /></Field>
+                <Field label="Bank"><input style={inp} value={accountForm.bank_name} onChange={e => setAccountForm(f => ({ ...f, bank_name:e.target.value }))} placeholder="e.g. Chase" /></Field>
                 <Field label="Account type"><input style={inp} value={accountForm.account_type} onChange={e => setAccountForm(f => ({ ...f, account_type:e.target.value }))} placeholder="checking / savings" /></Field>
                 <Field label="Last 4 digits"><input style={inp} value={accountForm.account_last4} onChange={e => setAccountForm(f => ({ ...f, account_last4:e.target.value.replace(/\D/g, "").slice(0, 4) }))} placeholder="1234" /></Field>
                 <Field label="Status">
@@ -13004,7 +13004,7 @@ export default function App() {
             </div>}
 
             {(!dupFocus || dupFocus === "storages") && R.storages.length > 0 && <div style={{ marginBottom:8 }}>
-              {sectionTitle("🏬", "Storages abiertos repetidos", R.storages.length)}
+              {sectionTitle("🏬", "Duplicate open storages", R.storages.length)}
               {R.storages.map(d => (
                 <div key={d.key} style={groupBox}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
@@ -13151,7 +13151,7 @@ export default function App() {
                 : (driverNm || "—");
               return (
                 <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>🔄 Handoff de driver</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>🔄 Driver handoff</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
                     <Field label="Qué se traspasa">
                       <select style={inp} value={hf.jobKey} onChange={e => setH({ jobKey: e.target.value })}>
@@ -13164,7 +13164,7 @@ export default function App() {
                     <Field label="De"><input style={{ ...inp, background:"#f1f1f1" }} value={fromNm} disabled /></Field>
                     <Field label="Pasar a *">
                       <select style={inp} value={hf.to} onChange={e => setH({ to: e.target.value })}>
-                        <option value="">— Elegir driver —</option>
+                        <option value="">— Choose driver —</option>
                         {driversList.filter(d => d.name !== fromNm).map(d => <option key={d.id} value={d.id}>{d.name}{d.truck_id ? ` · ${d.truck_id}` : ""}</option>)}
                       </select>
                     </Field>
@@ -13173,7 +13173,7 @@ export default function App() {
                         {HANDOFF_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                       </select>
                     </Field>
-                    <Field label="Nota (opcional)" full><input style={inp} value={hf.note} onChange={e => setH({ note: e.target.value })} placeholder="Detalle del traspaso" /></Field>
+                    <Field label="Nota (opcional)" full><input style={inp} value={hf.note} onChange={e => setH({ note: e.target.value })} placeholder="Handoff details" /></Field>
                   </div>
                   <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
                     <Btn primary disabled={tripBusy || !hf.to} onClick={async () => {
@@ -13182,7 +13182,7 @@ export default function App() {
                       if (hf.jobKey) await handoffJob(hf.jobKey, hf.to, hf.reason, hf.note);
                       else await handoffTrip(t, hf.to, hf.reason, hf.note);
                       setTripAction(null);
-                    }}>{tripBusy ? "..." : "Confirmar handoff"}</Btn>
+                    }}>{tripBusy ? "..." : "Confirm handoff"}</Btn>
                   </div>
                 </div>
               );
@@ -13218,7 +13218,7 @@ export default function App() {
               <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Load a job from storage</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
                 <div style={{ border:"1px solid #f0f0f0", borderRadius:8, maxHeight:230, overflowY:"auto", background:"#fff" }}>
-                  {jobsInStorage.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No hay jobs en storage para cargar.</div>
+                  {jobsInStorage.length === 0 ? <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>No jobs in storage to load.</div>
                     : jobsInStorage.map(j => (
                       <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", borderBottom:"1px solid #f6f6f6", fontSize:12 }}>
                         <div style={{ flex:1, minWidth:0 }}>
@@ -13236,11 +13236,11 @@ export default function App() {
             {/* action panel: unplanned pickup quick form */}
             {tripAction === "unplanned" && (
               <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", margin:"10px 0", background:"#fafafa" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Pick up no previsto</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}><b style={{ fontSize:13 }}>Unplanned pick up</b><button onClick={() => setTripAction(null)} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#888" }}>cancel</button></div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                   <Field label="Job #"><input style={inp} value={unplannedForm.job_number} onChange={e => setU({ job_number:e.target.value })} placeholder="Job #" /></Field>
                   <Field label="Client"><input style={inp} value={unplannedForm.customer} onChange={e => setU({ customer:e.target.value })} placeholder="Client" /></Field>
-                  <Field label="CF"><input style={inp} value={unplannedForm.volume} onChange={e => setU({ volume:e.target.value })} placeholder="ej: 600" /></Field>
+                  <Field label="CF"><input style={inp} value={unplannedForm.volume} onChange={e => setU({ volume:e.target.value })} placeholder="e.g. 600" /></Field>
                   <Field label="FADD"><input style={inp} type="date" value={unplannedForm.fadd} onChange={e => setU({ fadd:e.target.value })} /></Field>
                   <Field label="Pickup"><input style={inp} value={unplannedForm.pickup_address} onChange={e => setU({ pickup_address:e.target.value })} placeholder="Pickup address" /></Field>
                   <Field label="Delivery"><input style={inp} value={unplannedForm.delivery_address} onChange={e => setU({ delivery_address:e.target.value })} placeholder="Delivery address" /></Field>
@@ -13261,7 +13261,7 @@ export default function App() {
                     <option value="">— Choose storage / warehouse —</option>
                     {dropTargets.map((d, i) => <option key={i} value={i}>{d.label}</option>)}
                   </select>
-                  <Btn primary disabled={tripBusy} onClick={() => { const sel = document.getElementById("drop-target-sel"); const idx = sel?.value; if (idx === "" || idx == null) { window.alert("Choose a destination."); return; } tripDropAtStorage(t, storageDropJob.jobKey, dropTargets[Number(idx)]); }}>Confirmar drop</Btn>
+                  <Btn primary disabled={tripBusy} onClick={() => { const sel = document.getElementById("drop-target-sel"); const idx = sel?.value; if (idx === "" || idx == null) { window.alert("Choose a destination."); return; } tripDropAtStorage(t, storageDropJob.jobKey, dropTargets[Number(idx)]); }}>Confirm drop</Btn>
                 </div>
               </div>
             )}
@@ -13328,7 +13328,7 @@ export default function App() {
                           <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                             {handle}
                             {numBadge("#111", i + 1)}
-                            <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                            <button onClick={() => setJobDetailKey(jobKey(j))} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(view)"}</button>
                             {j.split_group && <span style={{ fontSize:10, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(j)}</span>}
                             {reloc && <span title={trAI("Internal move between locations — no delivery, no collection", "Movimiento interno entre locations — sin delivery, sin cobro")} style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>🔁 Relocation</span>}
                             <span style={{ fontSize:13 }}>{j.customer || "—"}</span>
@@ -13338,10 +13338,10 @@ export default function App() {
                             {relocAtOrigin && <span title={dropLoc} style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, color:"#854F0B", background:"#FEF3C7", borderRadius:20, padding:"2px 9px", whiteSpace:"nowrap" }}>📦 At origin · {dropLoc}</span>}
                           </div>
                           <div style={{ display:"flex", alignItems:"center", gap:10, margin:"6px 0", flexWrap:"wrap", fontSize:12, color:"#666" }}>
-                            <span title={hasRealCf(j) ? `Real (est. ${Math.round(parseCf(j.volume))} CF)` : "Estimado del broker"}>
+                            <span title={hasRealCf(j) ? `Real (est. ${Math.round(parseCf(j.volume))} CF)` : "Broker's estimate"}>
                               {Math.round(effCf(j))} CF{hasRealCf(j) ? <b style={{ color:"#3B6D11" }}> ✓real</b> : <span style={{ color:"#aaa" }}> est.</span>}
                             </span>
-                            {!realCfMissing && <button onClick={() => quickSetRealCf(j)} title="Cargar el CF real medido" style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:6, cursor:"pointer", fontSize:10.5, padding:"1px 7px", color:"#185FA5" }}>✏️ CF real</button>}
+                            {!realCfMissing && <button onClick={() => quickSetRealCf(j)} title="Enter the measured actual CF" style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:6, cursor:"pointer", fontSize:10.5, padding:"1px 7px", color:"#185FA5" }}>✏️ Actual CF</button>}
                             {j.sticker_color && <span style={{ width:10, height:10, borderRadius:"50%", background:colorHex(j.sticker_color)||"#ccc", border:"1px solid #ccc" }} title={j.sticker_color} />}
                             {j.lot_number && <span style={{ fontFamily:"monospace" }}>{j.lot_number}</span>}
                             <FaddBadge fadd={j.fadd} />
@@ -13350,7 +13350,7 @@ export default function App() {
                               if (tot <= 0) return null;
                               return out > 0
                                 ? <span title={`Pendiente de cobrar (balance + extras · total $${Math.round(tot).toLocaleString()})`} style={{ color:"#1A8A4E", fontWeight:600 }}>${Math.round(out).toLocaleString()}</span>
-                                : <span title="Balance y extras cobrados por completo" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
+                                : <span title="Balance and extras fully collected" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>✓ Paid</span>;
                             })()}
                             {reloc && jobToCollect(j) > 0 && <span title={trAI("Outstanding balance — NOT collected on this trip (relocation)", "Balance pendiente — NO se cobra en este trip (reubicación)")} style={{ color:"#999", textDecoration:"line-through" }}>${Math.round(jobToCollect(j)).toLocaleString()}</span>}
                             {(() => {
@@ -13366,8 +13366,8 @@ export default function App() {
                               {!reloc && <Btn primary disabled={tripBusy} onClick={() => tripMarkDelivered(j, t)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>✅ Mark delivered</Btn>}
                               {relocAtOrigin && <Btn primary disabled={tripBusy} onClick={() => tripRelocLoad(t, j)} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>🔼 {trAI("Load onto truck", "Cargar al camión")}</Btn>}
                               {inTransit && !relocAtOrigin && <Btn primary={reloc} disabled={tripBusy} onClick={() => setStorageDropJob({ tripId: t.id, jobKey: tripUnitKey(j), label: `${j.job_number || ""} ${j.customer || ""}`.trim() })} style={{ flex:1, justifyContent:"center", padding:"9px", fontSize:12.5 }}>📦 {reloc ? trAI("Drop at destination", "Dejar en destino") : "Drop at storage"}</Btn>}
-                              <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: tripUnitKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Pasar este job a otro driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
-                              {!jobSplitColMissing && !reloc && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Dividir este job en dos camiones" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
+                              <Btn disabled={tripBusy} onClick={() => { setHandoffForm({ jobKey: tripUnitKey(j), to:"", reason:"better_fit", note:"" }); setTripAction("handoff"); }} title="Move this job to another driver" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>🔄</Btn>
+                              {!jobSplitColMissing && !reloc && <Btn disabled={tripBusy} onClick={() => { setSplitJobRow(j); setSplitCf(String(Math.round(effCf(j) / 2))); setSplitDest(""); }} title="Split this job across two trucks" style={{ justifyContent:"center", padding:"9px 12px", fontSize:12.5 }}>✂️</Btn>}
                             </div>
                           )}
                         </div>
@@ -14006,12 +14006,12 @@ export default function App() {
           <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:10, padding:"12px", textAlign:"center", cursor:"pointer", background:"#fafafa" }}
             onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, null); }}>
             <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], null)} />
-            {docUploading ? <span style={{ fontSize:12, color:"#888" }}>Subiendo…</span>
+            {docUploading ? <span style={{ fontSize:12, color:"#888" }}>Uploading…</span>
               : csForm.document_url ? <span style={{ fontSize:12, color:"#3B6D11" }}>✓ Document uploaded — click to replace</span>
               : <span style={{ fontSize:12, color:"#999" }}>Drag or click to upload</span>}
           </label>
 
-          <SectionLabel>Jobs en este closing sheet{csForm.job_keys.length ? ` (${csForm.job_keys.length})` : ""}</SectionLabel>
+          <SectionLabel>Jobs in this closing sheet{csForm.job_keys.length ? ` (${csForm.job_keys.length})` : ""}</SectionLabel>
           <input style={{ ...inp, marginBottom:8 }} value={csJobSearch} onChange={e => setCsJobSearch(e.target.value)} placeholder="Search job # or client to add..." />
           <div style={{ border:"1px solid #e5e5e5", borderRadius:8, maxHeight:180, overflowY:"auto", background:"#fff" }}>
             {(() => {
@@ -14032,7 +14032,7 @@ export default function App() {
                     <input type="checkbox" disabled={inOther} checked={checked} onChange={() => csToggleJob(k)} />
                     <span style={{ fontFamily:"monospace", fontWeight:600 }}>{j.job_number || "(job)"}</span>
                     <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
-                    {inOther && <span style={{ fontSize:10, color:"#999" }}>en otro CS</span>}
+                    {inOther && <span style={{ fontSize:10, color:"#999" }}>in another CS</span>}
                   </label>
                 );
               });
@@ -14045,12 +14045,12 @@ export default function App() {
           </div>
           <div style={{ fontSize:11, color:"#999", marginTop:4 }}>Sent/returned pads are entered per job (job Pads section) and summed here automatically.</div>
 
-          <SectionLabel>Deducciones del broker</SectionLabel>
+          <SectionLabel>Broker deductions</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Trip cost ($)"><input style={inp} type="number" value={csForm.trip_cost} onChange={e => setCsForm(f => ({...f, trip_cost:e.target.value}))} placeholder="0" /></Field>
             <Field label="Labor charges ($)"><input style={inp} type="number" value={csForm.labor_charges} onChange={e => setCsForm(f => ({...f, labor_charges:e.target.value}))} placeholder="0" /></Field>
             <Field label="Other fees ($)"><input style={inp} type="number" value={csForm.other_fees} onChange={e => setCsForm(f => ({...f, other_fees:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Other fees description"><input style={inp} value={csForm.other_fees_description} onChange={e => setCsForm(f => ({...f, other_fees_description:e.target.value}))} placeholder="ej: detention" /></Field>
+            <Field label="Other fees description"><input style={inp} value={csForm.other_fees_description} onChange={e => setCsForm(f => ({...f, other_fees_description:e.target.value}))} placeholder="e.g. detention" /></Field>
             <Field label="Notes" full><input style={inp} value={csForm.notes} onChange={e => setCsForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
           </div>
           {editingCsId && <div style={{ marginTop:12 }}><Btn danger onClick={() => { setShowCsModal(false); deleteCs(closingSheets.find(x=>x.id===editingCsId)); }}>Delete closing sheet</Btn></div>}
@@ -14085,7 +14085,7 @@ export default function App() {
             <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:8 }}>
               {rows.map(j => (
                 <div key={j.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, borderBottom:"1px solid #f4f4f4", paddingBottom:6 }}>
-                  <button onClick={() => { setBrokerDetailId(null); setDriverDetailId(null); setClientDetail(null); setJobDetailKey(jobKey(j)); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(ver)"}</button>
+                  <button onClick={() => { setBrokerDetailId(null); setDriverDetailId(null); setClientDetail(null); setJobDetailKey(jobKey(j)); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(view)"}</button>
                   <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.customer || "—"}</span>
                   <StatusBadge status={j.status} />
                   {j.fadd && <span style={{ fontSize:11, color:"#888" }}>{j.fadd}</span>}
@@ -14103,7 +14103,7 @@ export default function App() {
                 <DetailRow label="Contact" value={brokerD.contact_name} />
                 <DetailRow label="Phone" value={brokerD.contact_phone} />
                 <DetailRow label="Email" value={brokerD.contact_email} />
-                <SectionLabel>Jobs del broker</SectionLabel>
+                <SectionLabel>Broker jobs</SectionLabel>
                 <JobsPanel predicate={j => j.broker_id === brokerD.id} />
               </Modal>
             )}
@@ -14111,7 +14111,7 @@ export default function App() {
               <Modal title={`Driver · ${driverD.name}`} onClose={() => setDriverDetailId(null)} footer={<Btn primary onClick={() => setDriverDetailId(null)}>Close</Btn>}>
                 <DetailRow label="Phone" value={driverD.phone} />
                 <DetailRow label="Truck" value={driverD.truck_id} />
-                {driverD.whatsapp_group_link && <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}><span style={{ color:"#888", minWidth:150 }}>Grupo WhatsApp</span><a href={driverD.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Open group ↗</a></div>}
+                {driverD.whatsapp_group_link && <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}><span style={{ color:"#888", minWidth:150 }}>WhatsApp group</span><a href={driverD.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Open group ↗</a></div>}
                 {!paymentsMissing && (() => {
                   const mine = paymentRows.filter(p => [p.cash_with_whom, p.received_by].some(v => (v || "").trim() && (v || "").trim() === driverD.name));
                   const holding = mine.filter(p => isPhysical(p.method) && p.received && !p.banked);
@@ -14126,12 +14126,12 @@ export default function App() {
                     <>
                       <SectionLabel>In circulation</SectionLabel>
                       <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13, marginBottom:6, flexWrap:"wrap" }}>
-                        <span>Tiene en mano: <b style={{ color: heldTotal > 0 ? "#E24B4A" : "#1A8A4E", fontSize:15 }}>${Math.round(heldTotal).toLocaleString()}</b></span>
+                        <span>Has on hand: <b style={{ color: heldTotal > 0 ? "#E24B4A" : "#1A8A4E", fontSize:15 }}>${Math.round(heldTotal).toLocaleString()}</b></span>
                         {heldTotal > 0 && <span style={{ fontSize:11, color:"#888" }}>{tr(`(${holding.length} payment${holding.length !== 1 ? "s" : ""} not deposited)`, `(${holding.length} pago${holding.length !== 1 ? "s" : ""} sin depositar)`)}</span>}
                       </div>
                       {cashExpTotal > 0 && (
                         <div style={{ background:"#fafafa", borderRadius:10, padding:"8px 12px", fontSize:12.5, marginBottom:8 }}>
-                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>Tiene en mano (pagos)</span><b>${Math.round(heldTotal).toLocaleString()}</b></div>
+                          <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>Has on hand (payments)</span><b>${Math.round(heldTotal).toLocaleString()}</b></div>
                           <div style={{ display:"flex", justifyContent:"space-between" }}><span style={{ color:"#888" }}>− approved cash expenses not settled</span><b style={{ color:"#C2410C" }}>−${Math.round(cashExpTotal).toLocaleString()}</b></div>
                           <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #eee", marginTop:4, paddingTop:4 }}><span style={{ fontWeight:600 }}>= Should hand over</span><b style={{ color: expectedOnHand < 0 ? "#E24B4A" : "#1A8A4E", fontSize:14 }}>${Math.round(expectedOnHand).toLocaleString()}</b></div>
                           {cashExp.map(e => (
@@ -14141,7 +14141,7 @@ export default function App() {
                               <span>{e.vendor || ""}</span>
                               <span style={{ flex:1 }} />
                               <b>${Math.round(numv(e.amount)).toLocaleString()}</b>
-                              {can("expenses", "edit") && <button onClick={() => settleExpense(e)} title="Marcar rendido" style={{ background:"none", border:"none", cursor:"pointer", fontSize:12 }}>🤝</button>}
+                              {can("expenses", "edit") && <button onClick={() => settleExpense(e)} title="Mark settled" style={{ background:"none", border:"none", cursor:"pointer", fontSize:12 }}>🤝</button>}
                             </div>
                           ))}
                         </div>
@@ -14150,7 +14150,7 @@ export default function App() {
                       {history.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments received.</div>
                         : <div style={{ maxHeight:200, overflowY:"auto" }}>{history.map(p => (
                             <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f4f4f4", fontSize:12.5, flexWrap:"wrap" }}>
-                              <button onClick={() => { setDriverDetailId(null); if (p._key) setJobDetailKey(p._key); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(ver)"}</button>
+                              <button onClick={() => { setDriverDetailId(null); if (p._key) setJobDetailKey(p._key); }} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{p._g?.job_number || "(view)"}</button>
                               <PaymentMethodBadge method={p.method} />
                               <b>${p._net.toLocaleString()}</b>
                               <span style={{ color:"#888" }}>recibido {p.received_date || p.payment_date || "—"}</span>
@@ -14181,11 +14181,11 @@ export default function App() {
                       {!row ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>No activity this month.</div> : (
                         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(105px,1fr))", gap:8, marginBottom:8 }}>
                           {[
-                            ["Revenue (atribuido)", row.revenue, "#185FA5"],
+                            ["Revenue (attributed)", row.revenue, "#185FA5"],
                             ["Days × rate", -row.laborCost, "#C2410C"],
                             ["Approved expenses", -row.expensesTotal, "#C2410C"],
                             ["Comisiones", -row.commissions, "#C2410C"],
-                            ["Ajustes (bonos−desc.)", -row.adjustmentsNet, row.adjustmentsNet > 0 ? "#C2410C" : "#1A8A4E"],
+                            ["Adjustments (bonuses−disc.)", -row.adjustmentsNet, row.adjustmentsNet > 0 ? "#C2410C" : "#1A8A4E"],
                             ["Neto", row.net, row.net >= 0 ? "#1A8A4E" : "#E24B4A"],
                           ].map(([l, v, c]) => (
                             <div key={l} style={{ background:"#fafafa", borderRadius:8, padding:"7px 9px" }}>
@@ -14195,10 +14195,10 @@ export default function App() {
                           ))}
                         </div>
                       )}
-                      {row && row.jobsCount > 1 && <div style={{ fontSize:10.5, color:"#bbb", marginBottom:6 }}>Revenue de jobs compartidos se divide en partes iguales entre drivers.</div>}
+                      {row && row.jobsCount > 1 && <div style={{ fontSize:10.5, color:"#bbb", marginBottom:6 }}>Revenue from shared jobs is split equally between drivers.</div>}
                       {myOnHand.length > 0 && (
                         <>
-                          <SectionLabel>Materiales en mano</SectionLabel>
+                          <SectionLabel>Materials on hand</SectionLabel>
                           {myOnHand.map((s, i) => (
                             <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, padding:"4px 0", borderBottom:"1px solid #f4f4f4" }}>
                               <span style={{ fontWeight:600 }}>{s.itemName}</span>
