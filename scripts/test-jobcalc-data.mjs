@@ -747,3 +747,115 @@ t("askPrice: computeMetrics without a stress input keeps the plain baseline ask"
   assert.equal(m.askPrice, 4100);
   assert.equal(m.askDrivenByStress, false);
 });
+
+// ── Billable extras ──────────────────────────────────────────────────────────
+
+const MILES = { loadedMiles: 663, deadheadMiles: 671 };
+const withExtras = (extras) => evaluateJob({ ...JOB, extras }, {}, MILES);
+
+t("extras: no extras means every number is exactly what it was before", () => {
+  const a = evaluateJob(JOB, {}, MILES);
+  const b = withExtras([]);
+  for (const k of ["truckDays", "handlingHours", "variableCost", "contributionMargin", "verdict"]) {
+    assert.deepEqual(a[k], b[k], `${k} moved`);
+  }
+  assert.equal(b.extrasTotal, 0);
+  assert.equal(b.totalRevenue, 4800);
+});
+
+t("extras: money-only lines raise revenue and move NO cost at all", () => {
+  const base = evaluateJob(JOB, {}, MILES);
+  const r = withExtras([{ concept: "Fuel surcharge", amount: 400 }, { concept: "Packing", amount: 250 }]);
+  assert.equal(r.extrasTotal, 650);
+  assert.equal(r.totalRevenue, 5450);
+  // Not one cost line may move.
+  for (const k of ["crew", "fuel", "hotel", "tolls", "materials", "contingency", "variableCost", "truckDays", "handlingHours"]) {
+    near(r[k], base[k], 0.001, `${k} should not have moved`);
+  }
+  near(r.contributionMargin, base.contributionMargin + 650, 0.01);
+});
+
+t("extras: a line WITH cu ft is real cargo — it costs time, not just money", () => {
+  const base = evaluateJob(JOB, {}, MILES);
+  const r = withExtras([{ concept: "Extra CF", amount: 900, cuFt: 600 }]);
+  assert.equal(r.effectiveCuFt, 1800);
+  assert.equal(r.quotedCuFt, 1200);
+  assert.ok(r.handlingHours > base.handlingHours, "more volume, more handling");
+  assert.ok(r.truckDays >= base.truckDays);
+  assert.equal(r.totalRevenue, 5700);
+});
+
+t("extras: cu ft on an extra can push the job into another truck-day", () => {
+  const base = evaluateJob(JOB, {}, MILES);
+  const r = withExtras([{ concept: "Extra CF", amount: 3000, cuFt: 4000 }]);
+  assert.ok(r.truckDays > base.truckDays, `${r.truckDays} vs ${base.truckDays}`);
+  assert.ok(r.crew > base.crew, "extra days cost extra crew");
+});
+
+t("extras: blank cu ft is money only, zero cu ft is money only, both are safe", () => {
+  const a = withExtras([{ amount: 500 }]);
+  const b = withExtras([{ amount: 500, cuFt: "" }]);
+  const c = withExtras([{ amount: 500, cuFt: 0 }]);
+  for (const r of [a, b, c]) {
+    assert.equal(r.effectiveCuFt, 1200);
+    assert.equal(r.totalRevenue, 5300);
+  }
+});
+
+t("extras: the traffic light runs on total revenue, not the broker price alone", () => {
+  const poor = evaluateJob({ ...JOB, brokerPrice: 3200 }, {}, MILES);
+  assert.notEqual(poor.verdict, VERDICT.GREEN);
+  const saved = evaluateJob({ ...JOB, brokerPrice: 3200, extras: [{ amount: 2500 }] }, {}, MILES);
+  assert.equal(saved.verdict, VERDICT.GREEN, "extras can rescue an underpriced job");
+});
+
+t("extras: the damages reserve rides on everything invoiced, not just the broker's share", () => {
+  const r = evaluateJob({ ...JOB, extras: [{ amount: 1000 }] }, { damagesReservePct: 0.05 }, MILES);
+  near(r.damages, 5800 * 0.05, 0.01);
+});
+
+t("extras: the per-truck-day trio still reconciles with extras loaded", () => {
+  const r = withExtras([{ amount: 700 }, { amount: 300, cuFt: 200 }]);
+  near(r.revenuePerTruckDay - r.costPerTruckDay, r.profitPerTruckDay, 0.01);
+  near(r.revenuePerTruckDay, r.totalRevenue / r.truckDays, 0.01);
+});
+
+t("extras: garbage in the fields never fabricates money or breaks the math", () => {
+  const r = withExtras([
+    { amount: "abc", cuFt: "xyz" }, { amount: null, cuFt: null },
+    { amount: "", cuFt: "" }, { amount: undefined }, {},
+  ]);
+  assert.equal(r.extrasTotal, 0);
+  assert.equal(r.effectiveCuFt, 1200);
+  assert.ok(Number.isFinite(r.variableCost) && Number.isFinite(r.contributionMargin));
+});
+
+t("extras: a negative line is a discount, and negative cu ft never shrinks the load", () => {
+  const r = withExtras([{ amount: -500, cuFt: -900 }]);
+  assert.equal(r.extrasTotal, -500);
+  assert.equal(r.totalRevenue, 4300);
+  assert.equal(r.effectiveCuFt, 1200, "you cannot unload cargo by typing a negative");
+});
+
+t("extras: numbers typed as strings work, since the UI keeps raw text", () => {
+  const r = withExtras([{ amount: "450.50", cuFt: "300" }]);
+  near(r.extrasTotal, 450.5, 0.001);
+  assert.equal(r.effectiveCuFt, 1500);
+});
+
+t("extraCuFtRate ships pending at zero — no invented billing rate", () => {
+  assert.equal(DEFAULT_SETTINGS.extraCuFtRate, 0);
+  assert.equal(SETTING_FLAGS.extraCuFtRate, "pending");
+});
+
+// ── Base ZIP and crew rates promoted to the main card ────────────────────────
+
+t("promoted fields: overriding them from the card equals overriding from the panel", () => {
+  // Same mechanism, so the card must not need its own path through the math.
+  const viaOverrides = applyOverrides(mergeSettings({}), { driverDayRate: "300", helperDayRate: "260", baseZip: "54962" });
+  assert.equal(viaOverrides.driverDayRate, 300);
+  assert.equal(viaOverrides.helperDayRate, 260);
+  assert.equal(viaOverrides.baseZip, "54962");
+  const r = evaluateJob({ ...JOB, drivers: 2, helpers: 2 }, viaOverrides, MILES);
+  near(r.crew, r.truckDays * (2 * 300 + 2 * 260), 0.01);
+});

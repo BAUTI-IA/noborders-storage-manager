@@ -94,6 +94,11 @@ alter table public.job_evaluations add column if not exists hotel_rooms smallint
 -- settings_snapshot already holds the effective values this job was priced with.
 alter table public.job_evaluations add column if not exists overrides jsonb;
 
+-- Billable extras charged on top of the broker price, plus what they produced.
+alter table public.job_evaluations add column if not exists extras jsonb;
+alter table public.job_evaluations add column if not exists total_revenue numeric;
+alter table public.job_evaluations add column if not exists effective_cu_ft numeric;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,

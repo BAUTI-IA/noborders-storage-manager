@@ -64,6 +64,10 @@ export const DEFAULT_SETTINGS = {
   overheadMonthly: 0,
   activeTrucks: 11,
 
+  // What extra cubic feet are billed at. Typing cu ft on the Extra CF line
+  // prices itself from this. Zero until the owner says what he charges.
+  extraCuFtRate: 0,
+
   // Per-unit costs
   hotelPerNight: 90, // per ROOM; driver + helper share it
   tollPerMile: 0,
@@ -98,6 +102,7 @@ export const SETTING_FLAGS = {
   overheadMonthly: "pending",
   tollPerMile: "pending",
   materialsPerCuFt: "pending",
+  extraCuFtRate: "pending",
   damagesReservePct: "pending",
   baseZip: "pending",
 };
@@ -177,6 +182,33 @@ export function overrideDiff(base, effective) {
 // default to 1, so a job that says nothing behaves exactly like the baseline
 // crew and every number matches what it was before crews were configurable.
 
+// ── Billable extras ──────────────────────────────────────────────────────────
+//
+// Services charged on top of the broker price: extra cubic feet, fuel surcharge,
+// shuttle, packing, or anything else. Each line carries a dollar `amount` and an
+// OPTIONAL `cuFt`.
+//
+// That optional cu ft is the whole design. Extra volume is sometimes real cargo
+// to load and unload, and sometimes just a billing adjustment. Fill it in and the
+// job gets heavier — more handling hours, possibly another half truck-day, more
+// materials. Leave it blank and the line is pure revenue. One field, both cases,
+// no toggle to get wrong.
+
+/** Extras as a clean array, whatever the UI handed us. */
+const extrasOf = (job) => (Array.isArray(job?.extras) ? job.extras : []);
+
+/** Total billed on top of the broker price. Negative lines are allowed — a discount is an extra too. */
+export const extrasTotal = (job) => extrasOf(job).reduce((a, e) => a + num(e?.amount), 0);
+
+/** Cubic feet the extras physically add to the job. Only lines that filled it in. */
+export const extrasCuFt = (job) => extrasOf(job).reduce((a, e) => a + Math.max(0, num(e?.cuFt)), 0);
+
+/** The volume actually being moved: what was quoted plus any extra that is real cargo. */
+export const effectiveCuFt = (job) => num(job?.cuFt) + extrasCuFt(job);
+
+/** Everything this job brings in. The traffic light runs on this, not on the broker price alone. */
+export const totalRevenue = (job) => num(job?.brokerPrice) + extrasTotal(job);
+
 /**
  * Trucks assigned to the job. Not an input yet — the per-truck-day denominator
  * is built around it so that adding multi-truck jobs later needs no rework here.
@@ -226,7 +258,8 @@ export function assembleMiles({ loadedMiles, deadheadMiles }) {
 // ── 2. Time ──────────────────────────────────────────────────────────────────
 
 export function computeTime(job, s, totalMiles) {
-  const cuFt = num(job.cuFt);
+  // Extras that carry real cargo make the job heavier, not just richer.
+  const cuFt = effectiveCuFt(job);
   const uplift = 1 + (job.longCarry ? num(s.longCarryUplift) : 0) + (job.shuttle ? num(s.shuttleUplift) : 0);
   const mo = num(s.accessMultiplier?.[job.originAccess], 1);
   const md = num(s.accessMultiplier?.[job.destAccess], 1);
@@ -269,6 +302,7 @@ export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brok
   const hotel = num(hotelNights) * hotelRooms * num(s.hotelPerNight);
   const tolls = num(totalMiles) * num(s.tollPerMile);
   const materials = num(cuFt) * num(s.materialsPerCuFt);
+  // Reserve rides on everything invoiced, not just the broker's share.
   const damages = num(brokerPrice) * num(s.damagesReservePct);
   const contingency = (crew + fuel + hotel + tolls + materials) * num(s.contingencyPct);
   const variableCost = crew + fuel + hotel + tolls + materials + damages + contingency;
@@ -421,22 +455,28 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   const truckDays = overridden ? Math.max(0.5, num(opts.truckDaysOverride, time.truckDays)) : time.truckDays;
   const hotelNights = hotelNightsFor(truckDays, dist.totalMiles, s);
 
-  const cuFt = num(job.cuFt);
+  // What is really being moved, and everything really being charged. Extras that
+  // carry cargo raise the first; every extra raises the second.
   const brokerPrice = num(job.brokerPrice);
+  const cuFt = effectiveCuFt(job);
+  const revenue = totalRevenue(job);
 
-  const variable = computeVariable({ truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice, job }, s);
+  const variable = computeVariable(
+    { truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice: revenue, job },
+    s
+  );
   const fixed = computeFixed(truckDays, s);
 
   // Stress first: the ask price has to know the worst case before it can name a
   // number. The scenarios call computeMetrics themselves without a stress input,
   // which is what stops this from recursing — a scenario has no sub-scenarios.
-  const base = { ...dist, cuFt, brokerPrice, truckDays, hotelNights, job };
+  const base = { ...dist, cuFt, brokerPrice: revenue, truckDays, hotelNights, job };
   const stress = STRESS_SCENARIOS.map((sc) => runScenario(base, s, sc));
   const worstStress = stress.reduce((w, x) => (w == null || x.operatingMargin < w.operatingMargin ? x : w), null);
 
   const metrics = computeMetrics(
     {
-      brokerPrice, truckDays, trucks: trucksOf(job),
+      brokerPrice: revenue, truckDays, trucks: trucksOf(job),
       variableCost: variable.variableCost,
       fixedPerWorkedDay: fixed.fixedPerWorkedDay,
       absorbedFixed: fixed.absorbedFixed,
@@ -459,6 +499,11 @@ export function evaluateJob(job, settings, miles, opts = {}) {
     ...dist,
     ...time,
     brokerPrice,
+    extrasTotal: extrasTotal(job),
+    extrasCuFt: extrasCuFt(job),
+    totalRevenue: revenue,
+    effectiveCuFt: cuFt,
+    quotedCuFt: num(job.cuFt),
     trucks: trucksOf(job),
     drivers: driversOf(job),
     helpers: helpersOf(job),

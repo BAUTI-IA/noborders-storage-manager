@@ -84,6 +84,11 @@ alter table public.job_evaluations add column if not exists hotel_rooms smallint
 -- settings_snapshot already holds the effective values this job was priced with.
 alter table public.job_evaluations add column if not exists overrides jsonb;
 
+-- Billable extras charged on top of the broker price, plus what they produced.
+alter table public.job_evaluations add column if not exists extras jsonb;
+alter table public.job_evaluations add column if not exists total_revenue numeric;
+alter table public.job_evaluations add column if not exists effective_cu_ft numeric;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,
@@ -173,7 +178,7 @@ const SETTING_GROUPS = [
   { section: "Operation", keys: ["fuelCostPerMile", "avgSpeedMph", "usefulHoursPerDay"] },
   { section: "Productivity", keys: ["cuFtPerHour", "longCarryUplift", "shuttleUplift"] },
   { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks"] },
-  { section: "Per-unit cost", keys: ["hotelPerNight", "tollPerMile", "materialsPerCuFt", "damagesReservePct", "contingencyPct"] },
+  { section: "Per-unit cost", keys: ["hotelPerNight", "tollPerMile", "materialsPerCuFt", "extraCuFtRate", "damagesReservePct", "contingencyPct"] },
   { section: "Decision", keys: ["workedDaysPerMonth", "targetMarginPct", "longDistanceThresholdMiles"] },
   { section: "Base", keys: ["baseZip"] },
 ];
@@ -198,6 +203,7 @@ const SETTING_LABELS = {
   hotelPerNight: { label: "Hotel per night" },
   tollPerMile: { label: "Tolls per mile" },
   materialsPerCuFt: { label: "Materials per cu ft" },
+  extraCuFtRate: { label: "Charged per extra cu ft" },
   damagesReservePct: { label: "Damages reserve" },
   contingencyPct: { label: "Contingency" },
   workedDaysPerMonth: { label: "Worked days per month" },
@@ -281,10 +287,23 @@ const SCENARIO_LABELS = {
   both: { label: "Both together" },
 };
 
+// Extras are billed on top of the broker price. `cuFt` is optional and it is the
+// point of the whole design: fill it in when the extra is real cargo to load and
+// unload, leave it blank when it is only money. The named rows are the four the
+// operation actually charges; "Add line" covers anything else.
+const EXTRA_ROWS = [
+  { id: "extraCuFt", concept: "Extra CF" },
+  { id: "fuelSurcharge", concept: "Fuel surcharge" },
+  { id: "shuttleFee", concept: "Shuttle" },
+  { id: "packing", concept: "Packing" },
+];
+const EMPTY_EXTRAS = () => EXTRA_ROWS.map((r) => ({ ...r, amount: "", cuFt: "", fixed: true }));
+
 const EMPTY_INPUTS = {
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
   drivers: 1, helpers: 1,
+  extras: EMPTY_EXTRAS(),
 };
 
 const EMPTY_ACTUALS = {
@@ -451,6 +470,21 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
   );
   const u = (k) => (v) => setInputs((p) => ({ ...p, [k]: v }));
+
+  const setExtra = (i, patch) =>
+    setInputs((p) => ({ ...p, extras: p.extras.map((e, j) => (j === i ? { ...e, ...patch } : e)) }));
+
+  // Typing cubic feet on the Extra CF line prices itself, once the owner has told
+  // the app what he charges per cu ft. The amount stays editable afterwards.
+  const onExtraCuFt = (i, v) => {
+    const rate = num(settings.extraCuFtRate);
+    const patch = { cuFt: v };
+    if (inputs.extras[i]?.id === "extraCuFt" && rate > 0 && v !== "") {
+      patch.amount = String(Math.round(num(v) * rate * 100) / 100);
+    }
+    setExtra(i, patch);
+  };
+
   // Parameters flagged as unmeasured AND still sitting at zero. Checking the
   // value matters: once the operator fills one in, the warning has to stop
   // claiming it is missing, or the banner cries wolf forever.
@@ -474,7 +508,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   // Columns added after the first release. If the operator has not run the
   // migration yet, PostgREST rejects the WHOLE row for an unknown column, so a
   // perfectly good evaluation would be lost. Retry without them and say why.
-  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides"];
+  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft"];
 
   async function saveEvaluation(decision) {
     setSavingEval(true); setErr(null);
@@ -486,6 +520,8 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       origin_access: inputs.originAccess, dest_access: inputs.destAccess,
       long_carry: inputs.longCarry, shuttle: inputs.shuttle,
       drivers: r.drivers, helpers: r.helpers, hotel_rooms: r.hotelRooms,
+      extras: r.extrasTotal !== 0 ? inputs.extras.filter((e) => num(e.amount) !== 0 || num(e.cuFt) !== 0) : null,
+      total_revenue: r.totalRevenue, effective_cu_ft: r.effectiveCuFt,
       loaded_miles: r.loadedMiles, deadhead_miles: r.deadheadMiles, total_miles: r.totalMiles,
       miles_manual: miles.manual,
       handling_hours: r.handlingHours, driving_hours: r.drivingHours,
@@ -518,6 +554,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     if (error) { setErr(error.message); return; }
     // A one-off adjustment must not follow the operator into the next job.
     clearOverrides();
+    setInputs((p) => ({ ...p, extras: EMPTY_EXTRAS() }));
     load();
   }
 
@@ -646,6 +683,18 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                 <input type="checkbox" checked={inputs.shuttle} onChange={(e) => u("shuttle")(e.target.checked)} /> Shuttle
               </label>
             </div>
+            {/* Where the truck is standing. Same per-job override mechanism as the
+                adjust panel — it just belongs up here, because it changes per job
+                and it is what makes deadhead miles real. */}
+            <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
+              <div>
+                <label style={lbl}>Truck is at (base ZIP)</label>
+                <input style={{ ...inp, borderColor: jobOverrides.baseZip ? "#185FA5" : "#e5e5e5" }}
+                  inputMode="numeric" placeholder={companySettings.baseZip || "33166"}
+                  value={jobOverrides.baseZip ?? ""} onChange={(e) => setOverride("baseZip", e.target.value)} />
+              </div>
+            </div>
+
             {/* Crew for this job. A bigger crew costs more per day and finishes sooner. */}
             <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
               <div>
@@ -660,11 +709,62 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                   {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
                 </select>
               </div>
+              <div>
+                <label style={lbl}>Driver rate / day</label>
+                <input style={{ ...inp, borderColor: jobOverrides.driverDayRate ? "#185FA5" : "#e5e5e5" }}
+                  inputMode="decimal" placeholder={String(companySettings.driverDayRate ?? "")}
+                  value={jobOverrides.driverDayRate ?? ""} onChange={(e) => setOverride("driverDayRate", e.target.value)} />
+              </div>
+              <div>
+                <label style={lbl}>Helper rate / day</label>
+                <input style={{ ...inp, borderColor: jobOverrides.helperDayRate ? "#185FA5" : "#e5e5e5" }}
+                  inputMode="decimal" placeholder={String(companySettings.helperDayRate ?? "")}
+                  value={jobOverrides.helperDayRate ?? ""} onChange={(e) => setOverride("helperDayRate", e.target.value)} />
+              </div>
             </div>
             <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 7 }}>
               {tr(
                 `Crew of ${result.crewSize}: ${money(crewCostPerDay(inputs, settings))} per worked day, ${result.hotelRooms} hotel room(s) per night.`,
                 `Crew de ${result.crewSize}: ${money(crewCostPerDay(inputs, settings))} por día trabajado, ${result.hotelRooms} habitación(es) de hotel por noche.`
+              )}
+            </div>
+
+            {/* Billable extras */}
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
+              <div style={{ ...lbl, marginBottom: 8 }}>Extras you are charging</div>
+              {inputs.extras.map((ex, i) => (
+                <div key={ex.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 7, flexWrap: "wrap" }}>
+                  {ex.fixed ? (
+                    <span style={{ flex: "1 1 110px", fontSize: 12.5, color: "#666" }}>{ex.concept}</span>
+                  ) : (
+                    <input style={{ ...inp, flex: "1 1 110px", width: "auto" }} placeholder="Concept"
+                      value={ex.concept} onChange={(e) => setExtra(i, { concept: e.target.value })} />
+                  )}
+                  <input style={{ ...inp, width: 100, flex: "0 0 100px" }} inputMode="decimal" placeholder="$"
+                    value={ex.amount} onChange={(e) => setExtra(i, { amount: e.target.value })} />
+                  <input style={{ ...inp, width: 100, flex: "0 0 100px" }} inputMode="decimal" placeholder="cu ft"
+                    value={ex.cuFt} onChange={(e) => onExtraCuFt(i, e.target.value)} />
+                  {!ex.fixed && (
+                    <button onClick={() => setInputs((p) => ({ ...p, extras: p.extras.filter((_, j) => j !== i) }))}
+                      style={{ ...btn(false), padding: "0 9px", color: "#999" }}>x</button>
+                  )}
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+                <button style={btn(false)}
+                  onClick={() => setInputs((p) => ({ ...p, extras: [...p.extras, { id: "x" + p.extras.length, concept: "", amount: "", cuFt: "", fixed: false }] }))}>
+                  + Add line
+                </button>
+                <span style={{ fontSize: 11.5, color: "#aaa" }}>
+                  {tr("Fill cu ft only when the extra is real cargo to load — that adds hours, not just money.",
+                      "Llená los cu ft solo si el extra es carga real — eso suma horas, no solo plata.")}
+                </span>
+              </div>
+              {result.extrasTotal !== 0 && (
+                <div style={{ fontSize: 12.5, color: "#111", marginTop: 9, fontWeight: 600 }}>
+                  {tr(`Extras ${money(result.extrasTotal)} · total revenue ${money(result.totalRevenue)}${result.extrasCuFt > 0 ? ` · ${int(result.effectiveCuFt)} cu ft to move` : ""}`,
+                      `Extras ${money(result.extrasTotal)} · revenue total ${money(result.totalRevenue)}${result.extrasCuFt > 0 ? ` · ${int(result.effectiveCuFt)} cu ft a mover` : ""}`)}
+                </div>
               )}
             </div>
           </div>
@@ -853,7 +953,9 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                 </div>
               </div>
             </div>
-            <Row label="Broker price" value={money(result.brokerPrice)} strong />
+            <Row label="Broker price" value={money(result.brokerPrice)} />
+            {result.extrasTotal !== 0 && <Row label="Extras" value={money(result.extrasTotal)} />}
+            <Row label="Total revenue" value={money(result.totalRevenue)} strong />
             <Row label="Crew" value={money(result.crew)} />
             <Row label="Fuel" value={money(result.fuel)} />
             <Row label="Hotel" value={`${money(result.hotel)}  (${result.hotelRooms}x)`} />
