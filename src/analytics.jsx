@@ -779,7 +779,7 @@ function StorageTab({ pnl, byState, metrics, stateF, setStateF, occup }) {
                 {vacant.map(r => (
                   <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid #f7f7f7" }}>
                     <span style={{ color: "#333" }}>{r.name}</span>
-                    <span style={{ color: C.rojo, fontWeight: 600 }}>{r.hasCost ? fmtM(r.pay) + tr("/mo", "/mes") : "no cost ⚠"}</span>
+                    <span style={{ color: C.rojo, fontWeight: 600 }}>{r.hasCost ? <>{fmtM(r.pay)}{"/mo"}</> : "no cost ⚠"}</span>
                   </div>
                 ))}
               </div>
@@ -855,7 +855,7 @@ function RowPnl({ r, expanded, onToggle }) {
                 <span>{j.customer || "—"}</span>
                 <span style={{ color: "#999" }}>{j.volume ? parseCf(j.volume).toLocaleString() + " CF" : ""}</span>
                 <span style={{ color: j.billing_active ? C.verde : "#999" }}>
-                  {j.client_monthly_rate ? fmtM(Number(j.client_monthly_rate)) + tr("/mo", "/mes") + (j.billing_active ? "" : tr(" (billing inactive)", " (billing inactivo)")) : tr("no monthly rate", "sin tarifa mensual")}
+                  {j.client_monthly_rate ? <>{fmtM(Number(j.client_monthly_rate))}{"/mo"}{j.billing_active ? "" : " (billing inactive)"}</> : "no monthly rate"}
                 </span>
               </div>
             ))}

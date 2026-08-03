@@ -72,10 +72,10 @@ export const catByName = (categories, name) =>
 export const isTransferCat = (categories, name) => !!catByName(categories, name)?.is_transfer;
 
 export const BANK_STATUS = {
-  unreviewed: { l:"Sin revisar", bg:"#FEF3C7", text:"#92760B" },
-  categorized:{ l:"Categorizado", bg:"#E6F1FB", text:"#185FA5" },
-  verified:   { l:"Verificado", bg:"#EAF3DE", text:"#3B6D11" },
-  ignored:    { l:"Ignorado", bg:"#f1f1f1", text:"#888" },
+  unreviewed: { l:"Unreviewed", bg:"#FEF3C7", text:"#92760B" },
+  categorized:{ l:"Categorized", bg:"#E6F1FB", text:"#185FA5" },
+  verified:   { l:"Verified", bg:"#EAF3DE", text:"#3B6D11" },
+  ignored:    { l:"Ignored", bg:"#f1f1f1", text:"#888" },
 };
 
 export const PAYMENT_METHODS_BANK = ["Zelle", "Venmo", "Cash Deposit", "Money Order", "Cashier's Check", "Personal Check", "Official Check", "Online Transfer", "Card", "Debit", "Credit", "Check", "Transfer", "Other"];
@@ -231,13 +231,13 @@ export function reconcileBank({ bankTxns, payments, expenses, categories = [], t
   for (const t of [...pay.unmatchedBank, ...exp.unmatchedBank]) {
     if (isTransferCat(categories, t.category)) continue;
     discrepancies.push({ kind: "bank_no_backing", txn: t, amount: signedAmount(t),
-      reason: signedAmount(t) > 0 ? "Entró plata al banco sin cobro operativo asociado" : "Salió plata del banco sin gasto operativo asociado" });
+      reason: signedAmount(t) > 0 ? "Money entered the bank with no matching operational payment" : "Money left the bank with no matching operational expense" });
   }
   // B) operational money that never appears in the bank
   for (const p of pay.unmatchedPayments)
-    discrepancies.push({ kind: "payment_no_bank", payment: p, amount: paymentNet(p), reason: "Cobro marcado como depositado que no aparece en el banco" });
+    discrepancies.push({ kind: "payment_no_bank", payment: p, amount: paymentNet(p), reason: "Payment marked as deposited that doesn't show up in the bank" });
   for (const e of exp.unmatchedExpenses)
-    discrepancies.push({ kind: "expense_no_bank", expense: e, amount: numv(e.amount), reason: "Gasto pagado por banco que no aparece en el extracto" });
+    discrepancies.push({ kind: "expense_no_bank", expense: e, amount: numv(e.amount), reason: "Expense paid by bank that doesn't show up in the statement" });
 
   return {
     links: linkByTxn,
