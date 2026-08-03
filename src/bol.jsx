@@ -6,6 +6,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { tr } from "./i18n.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 // ── Job fields that can be mapped onto a template ───────────────────────────
@@ -404,7 +405,7 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
   useEffect(() => { load(); }, [load]);
 
   async function removeTemplate(t) {
-    if (!window.confirm(`Delete template "${t.company_name}"?`)) return;
+    if (!window.confirm(tr(`Delete template "${t.company_name}"?`, `¿Borrar el template "${t.company_name}"?`))) return;
     await supabase.from("bol_templates").delete().eq("id", t.id);
     if (t.pdf_path) await supabase.storage.from("bol-templates").remove([t.pdf_path]);
     load();
@@ -736,10 +737,10 @@ function TemplateEditor({ supabase, session, template, fieldConfig = EMPTY_FIELD
                   <label style={{ fontSize: 12, color: "#888" }}>Signature (DocuSign)</label>
                   <select value={["signature", "initial", "sign_date"].includes(sel.kind) ? sel.kind : ""} onChange={e => updateField(sel.id, { kind: e.target.value, ...(e.target.value ? { mode: "fixed", stage: sel.stage || "pickup" } : {}) })}
                     style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid #e5e5e5", margin: "4px 0 8px", fontSize: 13 }}>
-                    <option value="">— no es firma —</option>
-                    <option value="signature">Firma</option>
-                    <option value="initial">Inicial</option>
-                    <option value="sign_date">Fecha de firma</option>
+                    <option value="">— not a signature —</option>
+                    <option value="signature">Signature</option>
+                    <option value="initial">Initial</option>
+                    <option value="sign_date">Signature date</option>
                   </select>
                   {["signature", "initial", "sign_date"].includes(sel.kind) && (
                     <div style={{ display: "flex", gap: 4, margin: "0 0 10px" }}>
@@ -833,7 +834,7 @@ function FieldConfigModal({ supabase, session, fieldConfig, onClose }) {
               <span style={{ flex: 1 }}>{c.l}</span>
               <span style={{ fontSize: 11, color: "#94a3b8" }}>{c.fmt === "money" ? "money $" : c.fmt === "date" ? "date" : "text"}</span>
               <button style={{ border: "none", background: "transparent", color: "#b91c1c", cursor: "pointer", fontSize: 12 }}
-                onClick={() => { if (window.confirm(`Remove custom field "${c.l}"? Templates mapping it keep working.`)) setCustoms(cs => cs.filter(x => x.k !== c.k)); }}>Remove</button>
+                onClick={() => { if (window.confirm(tr(`Remove custom field "${c.l}"? Templates mapping it keep working.`, `¿Quitar el campo custom "${c.l}"? Los templates que lo mapean siguen funcionando.`))) setCustoms(cs => cs.filter(x => x.k !== c.k)); }}>Remove</button>
             </div>
           ))}
           <div style={{ display: "flex", gap: 8, margin: "10px 0 16px" }}>
@@ -1307,7 +1308,7 @@ function GeneratePanel({ supabase, session, templates, jobs, brokers, initialJob
       {notice && <div style={{ background: "#EAF3DE", border: "1px solid #cfe6b4", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#3B6D11", marginBottom: 12 }}>{notice}</div>}
       {reopenDoc?.pickup_signed_path && (
         <div style={{ background: "#EFF6FF", border: "1px solid #bfdbfe", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#1d4ed8", marginBottom: 12 }}>
-          ✍ Este BOL ya tiene el <b>pickup firmado</b> (esa copia queda archivada tal cual). Al guardar, la nueva versión hereda esa firma y queda lista para <b>firmar el delivery</b> con los cambios incluidos.
+          ✍ This BOL already has the <b>signed pickup</b> (that copy stays archived as-is). On save, the new version inherits that signature and is ready to <b>sign the delivery</b> with the changes included.
         </div>
       )}
 
@@ -1537,7 +1538,7 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose, jobs = [
 
   function urlFor(r) { return r.pdf_path ? supabase.storage.from("bol-generated").getPublicUrl(r.pdf_path).data.publicUrl : null; }
   async function remove(r) {
-    if (!window.confirm(`Delete this BOL for ${r.customer || "—"}? This removes the legal record.`)) return;
+    if (!window.confirm(tr(`Delete this BOL for ${r.customer || "—"}? This removes the legal record.`, `¿Borrar este BOL de ${r.customer || "—"}? Esto elimina el registro legal.`))) return;
     await supabase.from("bol_documents").delete().eq("id", r.id);
     if (r.pdf_path) await supabase.storage.from("bol-generated").remove([r.pdf_path]);
     load();
@@ -1546,7 +1547,7 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose, jobs = [
   // Send this BOL to DocuSign for the given stage and open the embedded signing view.
   // Email the DocuSign signing request to the client (remote back-office flow).
   async function sign(r, stage) {
-    const email = window.prompt(`Email del cliente para firmar el ${stage} (le llega el mail de DocuSign):`, r.values?.client_email || "");
+    const email = window.prompt(tr(`Client email to sign the ${stage} (they get the DocuSign email):`, `Email del cliente para firmar el ${stage} (le llega el mail de DocuSign):`), r.values?.client_email || "");
     if (email === null) return;
     if (!email.trim()) { setError("Poné el email del cliente."); return; }
     setBusyId(r.id); setError(null); setNotice(null);
@@ -1616,8 +1617,8 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose, jobs = [
                     {r.delivery_signed_path && <button style={{ ...smallBtn, marginLeft: 4, fontSize: 11, padding: "3px 7px" }} onClick={() => viewSigned(r.delivery_signed_path)}>DEL ✍</button>}
                   </td>
                   <td style={{ padding: "10px 12px", textAlign: "right", whiteSpace: "nowrap", borderBottom: "1px solid #f6f6f6" }}>
-                    {canEdit && !r.pickup_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "pickup")}>{busy ? "…" : "Firmar pickup"}</button>}
-                    {canEdit && r.pickup_signed_path && !r.delivery_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "delivery")}>{busy ? "…" : "Firmar delivery"}</button>}
+                    {canEdit && !r.pickup_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "pickup")}>{busy ? "…" : "Sign pickup"}</button>}
+                    {canEdit && r.pickup_signed_path && !r.delivery_signed_path && <button style={{ ...smallBtn, marginRight: 6 }} disabled={busy} onClick={() => sign(r, "delivery")}>{busy ? "…" : "Sign delivery"}</button>}
                     {urlFor(r) && <a href={urlFor(r)} target="_blank" rel="noreferrer" style={{ ...smallBtn, textDecoration: "none", marginRight: 6 }}>View</a>}
                     <button style={{ ...smallBtn, marginRight: 6 }} onClick={() => onReopen(r)}>Reopen</button>
                     {canEdit && <button style={{ ...smallBtn, color: "#b91c1c" }} onClick={() => remove(r)}>Delete</button>}
