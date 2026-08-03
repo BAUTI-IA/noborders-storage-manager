@@ -1,0 +1,85 @@
+name: Guía CRM semanal
+
+# Cada lunes a la mañana: lee los commits de la semana, actualiza la guía
+# bilingüe (docs/guia-crm.html + docs/crm-guide-en.html) con Claude, regenera
+# los dos PDFs con Chromium y comitea todo a main. Si no hubo cambios visibles
+# para el usuario, no comitea nada.
+#
+# REQUISITO (una sola vez): crear el secret ANTHROPIC_API_KEY en
+# Settings → Secrets and variables → Actions (mismo valor que ya está en
+# Vercel). Si el secret no está, se saltea sin fallar.
+
+on:
+  schedule:
+    - cron: "0 10 * * 1" # lunes 10:00 UTC = 6:00 ET (verano) / 5:00 ET (invierno)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Regenerar aunque no haya cambios"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-guide:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que el secret esté configurado
+        id: guard
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::warning::Falta el secret ANTHROPIC_API_KEY. Se omite la actualización de la guía."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout (historial completo, para encontrar el último commit del bot)
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Instalar dependencias
+        if: steps.guard.outputs.run == 'true'
+        run: npm ci
+
+      - name: Actualizar el HTML de la guía con Claude
+        if: steps.guard.outputs.run == 'true'
+        id: update
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/update-guide.mjs ${{ inputs.force && '--force' || '' }}
+
+      - name: Instalar Chromium
+        if: steps.update.outputs.guide_changed == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Renderizar los PDFs
+        if: steps.update.outputs.guide_changed == 'true'
+        run: node scripts/render-guide-pdf.mjs
+
+      - name: Commit y push a main
+        if: steps.update.outputs.guide_changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/guia-crm.html docs/crm-guide-en.html \
+                  Guia-CRM-NoBorders.pdf CRM-Guide-NoBorders-EN.pdf
+          if git diff --cached --quiet; then
+            echo "Nada para comitear."
+            exit 0
+          fi
+          git commit -m "docs: actualización semanal de la guía del CRM [guide-bot]"
+          git push

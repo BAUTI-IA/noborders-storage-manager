@@ -141,17 +141,20 @@
 <body>
 
 <!-- ============ COVER ============ -->
+<!-- section:cover -->
 <div class="cover">
   <div class="kicker">No Borders Moving &amp; Storage</div>
   <h1>Operations<br>CRM</h1>
   <div class="sub">Team user guide</div>
   <div class="pill">📘 Practical manual · Dispatching · Storage · Billing</div>
 
+<!-- static-mock -->
   <div class="mock">
     <div class="chip"><div class="n" style="color:#7FB2E6">4</div><div class="l">Pickups today</div></div>
     <div class="chip"><div class="n" style="color:#E88">1</div><div class="l">FADD overdue</div></div>
     <div class="chip"><div class="n" style="color:#8Fd08f">12</div><div class="l">In storage</div></div>
   </div>
+<!-- /static-mock -->
 
   <div class="foot">
     <div>Version 1.0 · Internal use</div>
@@ -159,7 +162,10 @@
   </div>
 </div>
 
+<!-- /section:cover -->
+
 <!-- ============ INTRO + INDEX ============ -->
+<!-- section:intro -->
 <h1 class="sec"><span class="num">›</span>Before you start</h1>
 <p class="lead">The essentials to run the system day to day.</p>
 <p>This is the system we use to manage <b>pickups, deliveries, storage and billing</b>. The key things:</p>
@@ -184,7 +190,10 @@
   </table>
 </div>
 
+<!-- /section:intro -->
+
 <!-- ============ 1 ACCESS ============ -->
+<!-- section:acceso -->
 <h1 class="sec"><span class="num">1</span>Access</h1>
 <p class="lead">Signing in.</p>
 <ul>
@@ -193,10 +202,14 @@
   <li>You land directly on <b>Dispatching</b>.</li>
 </ul>
 
+<!-- /section:acceso -->
+
 <!-- ============ 2 MENU ============ -->
+<!-- section:menu -->
 <h1 class="sec"><span class="num">2</span>The left-hand menu</h1>
 <p class="lead">Everything is navigated from the sidebar, split into three blocks.</p>
 
+<!-- static-mock -->
 <div class="shot">
   <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app</span></div>
   <div class="app">
@@ -229,6 +242,7 @@
   </div>
 </div>
 <div class="cap">The sidebar. The red number on Dispatching = jobs that need attention today.</div>
+<!-- /static-mock -->
 
 <table class="g">
   <tr><th>Section</th><th>What it's for</th></tr>
@@ -241,10 +255,14 @@
   <tr><td>📊 Analytics</td><td>Operation charts + AI recommendations.</td></tr>
 </table>
 
+<!-- /section:menu -->
+
 <!-- ============ 3 DISPATCHING ============ -->
+<!-- section:dispatching -->
 <h1 class="sec"><span class="num">3</span>Dispatching — the daily board</h1>
 <p class="lead">The most important screen. Top to bottom: metrics → alerts → tabs → table.</p>
 
+<!-- static-mock -->
 <div class="shot">
   <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app — Dispatching</span></div>
   <div class="app">
@@ -330,6 +348,7 @@
   </div>
 </div>
 <div class="cap">The Dispatching screen: metrics on top, alert banner, sub-tabs, and the jobs table with its actions. (“Pickups hoy” = Pickups today · “Sin FADD” = No FADD · “+ Nuevo job” = New job · “requieren atención” = need attention.)</div>
+<!-- /static-mock -->
 
 <h3 style="margin-top:16px">The columns, one by one</h3>
 <table class="g">
@@ -374,7 +393,10 @@
 </div>
 <div class="note"><b>Important:</b> <b>Direct</b> and <b>Broker</b> jobs do NOT go through <i>In storage</i> (they go Picked up → Out for delivery). When you mark it <b>Delivered</b>, the job leaves the active lists automatically.</div>
 
+<!-- /section:dispatching -->
+
 <!-- ============ 4 CREATE JOB ============ -->
+<!-- section:jobs -->
 <h1 class="sec"><span class="num">4</span>Create and edit a job</h1>
 <p class="lead">Tap <b>“+ Nuevo job”</b> (= New job), top right in Dispatching or Jobs.</p>
 
@@ -393,10 +415,14 @@
 </ul>
 <div class="note"><b>Edit later:</b> tap the <b>Job #</b> to open the detail and <b>click almost any field to change it on the spot</b> (FADD, customer, driver, addresses, balances…). There's also an <b>Editar</b> (Edit) button for the full form.</div>
 
+<!-- /section:jobs -->
+
 <!-- ============ 5 STORAGE ============ -->
+<!-- section:storage -->
 <h1 class="sec"><span class="num">5</span>Storage — units and warehouses</h1>
 <p class="lead">The Storage section has one tab per place: <b>Storage Units</b>, <b>🏭 Indiana</b> and <b>🏭 New Jersey</b>.</p>
 
+<!-- static-mock -->
 <div class="shot">
   <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app — Storage · New Jersey</span></div>
   <div class="main" style="background:#fafafa">
@@ -421,6 +447,7 @@
   </div>
 </div>
 <div class="cap">Each warehouse shows its occupancy (green &lt;70%, amber 70-90%, red &gt;90%) and the table of jobs inside it. (“Warehouse propio” = Own warehouse · “% ocupado” = % occupied · “usado/libre” = used/free · “+ Job a este warehouse” = Add job here · “Editar capacidad” = Edit capacity.)</div>
+<!-- /static-mock -->
 
 <div class="two avoid" style="margin-top:14px">
   <div class="card"><h3>Storage Units</h3>
@@ -435,7 +462,10 @@
   </div>
 </div>
 
+<!-- /section:storage -->
+
 <!-- ============ 6 BROKERS / DRIVERS ============ -->
+<!-- section:brokers,drivers -->
 <h1 class="sec"><span class="num">6</span>Brokers &amp; Drivers</h1>
 <div class="two">
   <div class="card"><h3>🤝 Brokers</h3>
@@ -446,10 +476,14 @@
   </div>
 </div>
 
+<!-- /section:brokers,drivers -->
+
 <!-- ============ 7 BILLING ============ -->
+<!-- section:billing -->
 <h1 class="sec"><span class="num">7</span>Billing — charging storage to the client</h1>
 <p class="lead">Some clients pay a monthly fee to store their goods (negotiated case by case). The system handles it automatically.</p>
 
+<!-- static-mock -->
 <div class="shot">
   <div class="bar"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><span class="url">noborders-storage-manager.vercel.app — Billing</span></div>
   <div class="main" style="background:#fafafa">
@@ -475,6 +509,7 @@
   </div>
 </div>
 <div class="cap">The Billing page: the system auto-generates each 30-day cycle's charge and flips past-due items to Overdue. (“Total pendiente” = Total pending · “Vence esta semana” = Due this week · “Cobrado este mes” = Collected this month · “Marcar pagado” = Mark as paid · “Días/Período/Monto” = Days/Period/Amount.)</div>
+<!-- /static-mock -->
 
 <div class="two avoid" style="margin-top:14px">
   <div class="card"><h3>Turn it on in the job</h3>
@@ -485,7 +520,10 @@
   </div>
 </div>
 
+<!-- /section:billing -->
+
 <!-- ============ 8 TIPS + GLOSSARY ============ -->
+<!-- section:tips -->
 <h1 class="sec"><span class="num">8</span>Golden rules &amp; glossary</h1>
 
 <div class="card avoid" style="background:#0f172a;color:#fff;border:none;margin-bottom:16px">
@@ -511,6 +549,8 @@
   <tr><td>Billing</td><td>Monthly fee charged to the client for storing their goods.</td></tr>
   <tr><td>Gate code</td><td>Code to get into the storage unit.</td></tr>
 </table>
+
+<!-- /section:tips -->
 
 <div style="margin-top:26px;text-align:center;color:#aaa;font-size:11px;border-top:1px solid #eee;padding-top:14px">
   No Borders Moving &amp; Storage · Operations CRM · Internal user guide · Questions? Ask your manager 🚚
