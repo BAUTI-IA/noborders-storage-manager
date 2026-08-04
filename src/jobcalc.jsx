@@ -101,6 +101,7 @@ alter table public.job_evaluations add column if not exists actual_helpers small
 alter table public.job_evaluations add column if not exists deadhead_mode text;
 alter table public.job_evaluations add column if not exists rented boolean not null default false;
 alter table public.job_evaluations add column if not exists rental_cost numeric;
+alter table public.job_evaluations add column if not exists subcontract_cost numeric;
 
 create table if not exists public.zip_distances (
   origin_zip text not null,
@@ -325,7 +326,7 @@ const EMPTY_EXTRAS = () => EXTRA_ROWS.map((r) => ({ ...r, amount: "", cuFt: "", 
 const EMPTY_INPUTS = {
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
-  trucks: 1, drivers: 1, helpers: 1, deadheadMode: "roundTrip", rented: false,
+  trucks: 1, drivers: 1, helpers: 1, deadheadMode: "roundTrip", rented: false, subcontractCost: "",
   extras: EMPTY_EXTRAS(),
 };
 
@@ -543,7 +544,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   // Columns added after the first release. If the operator has not run the
   // migration yet, PostgREST rejects the WHOLE row for an unknown column, so a
   // perfectly good evaluation would be lost. Retry without them and say why.
-  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft", "trucks", "actual_trucks", "actual_drivers", "actual_helpers", "deadhead_mode", "rented", "rental_cost"];
+  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft", "trucks", "actual_trucks", "actual_drivers", "actual_helpers", "deadhead_mode", "rented", "rental_cost", "subcontract_cost"];
 
   async function saveEvaluation(decision) {
     setSavingEval(true); setErr(null);
@@ -556,6 +557,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       long_carry: inputs.longCarry, shuttle: inputs.shuttle,
       trucks: r.trucks, drivers: r.drivers, helpers: r.helpers, hotel_rooms: r.hotelRooms,
       deadhead_mode: inputs.deadheadMode, rented: inputs.rented, rental_cost: r.rental,
+      subcontract_cost: r.subcontract,
       extras: r.extrasTotal !== 0 ? inputs.extras.filter((e) => num(e.amount) !== 0 || num(e.cuFt) !== 0) : null,
       total_revenue: r.totalRevenue, effective_cu_ft: r.effectiveCuFt,
       loaded_miles: r.loadedMiles, deadhead_miles: r.deadheadMiles, total_miles: r.totalMiles,
@@ -737,6 +739,11 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                   <option value="own">Mine</option>
                   <option value="rented">Rented near pickup</option>
                 </select>
+              </div>
+              <div>
+                <label style={lbl}>Paid to a third party</label>
+                <input style={inp} inputMode="decimal" placeholder="0"
+                  value={inputs.subcontractCost} onChange={(e) => u("subcontractCost")(e.target.value)} />
               </div>
               <div>
                 <label style={lbl}>Truck is at (base ZIP)</label>
@@ -1033,6 +1040,21 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             </Collapsible>
           )}
 
+          {/* What is left over reads like profit but is really a budget: this is what
+              you can pay somebody else to run the rest of the job. */}
+          {ready && result.maxSubcontract > 0 && (
+            <div style={{ ...card, borderColor: "#e5e5e5" }}>
+              <div style={lbl}>Room to pay a third party</div>
+              <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.maxSubcontract)}</div>
+              <div style={{ fontSize: 12, color: "#777", marginTop: 4, lineHeight: 1.45 }}>
+                {tr(
+                  `That is break-even. To keep your ${Math.round(num(settings.targetMarginPct) * 100)}% target margin, do not pay more than ${money(result.maxSubcontractAtTarget)}.`,
+                  `Ese es el punto de equilibrio. Para conservar tu margen objetivo del ${Math.round(num(settings.targetMarginPct) * 100)}%, no pagues más de ${money(result.maxSubcontractAtTarget)}.`
+                )}
+              </div>
+            </div>
+          )}
+
           {/* 5. What the app worked out on its own */}
           <Collapsible title="Estimate" defaultOpen>
             <Row label="Loaded miles" value={int(result.loadedMiles)} />
@@ -1081,6 +1103,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             <Row label="Tolls" value={money(result.tolls)} />
             <Row label="Materials" value={money(result.materials)} />
             {result.rental > 0 && <Row label="Truck rental" value={money(result.rental)} />}
+            {result.subcontract > 0 && <Row label="Third party" value={money(result.subcontract)} />}
             <Row label="Damages reserve" value={money(result.damages)} />
             <Row label="Contingency" value={money(result.contingency)} />
             <Row label="Variable cost" value={money(result.variableCost)} strong />

@@ -358,12 +358,18 @@ export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brok
   const rental = isRented(job)
     ? trucks * (num(truckDays) * num(s.rentalDayRate) + num(totalMiles) * num(s.rentalPerMile))
     : 0;
+  // Paid to a third party for a leg you are not running. Common pattern: your
+  // crew does the local pickup into the warehouse and a carrier takes the
+  // linehaul. It is a real cost of the job even though no truck of yours moves.
+  const subcontract = Math.max(0, num(job?.subcontractCost));
   const materials = num(cuFt) * num(s.materialsPerCuFt);
   // Reserve rides on everything invoiced, not just the broker's share.
   const damages = num(brokerPrice) * num(s.damagesReservePct);
+  // Contingency does not pad the subcontract: it is an agreed price, not an
+  // estimate that can run over. Same reasoning as the damages reserve.
   const contingency = (crew + fuel + hotel + tolls + materials + rental) * num(s.contingencyPct);
-  const variableCost = crew + fuel + hotel + tolls + materials + rental + damages + contingency;
-  return { crew, fuel, hotel, hotelRooms, tolls, materials, rental, damages, contingency, variableCost };
+  const variableCost = crew + fuel + hotel + tolls + materials + rental + subcontract + damages + contingency;
+  return { crew, fuel, hotel, hotelRooms, tolls, materials, rental, subcontract, damages, contingency, variableCost };
 }
 
 // ── 4. Fixed costs ───────────────────────────────────────────────────────────
@@ -393,7 +399,7 @@ export function computeFixed(truckDays, s, trucksOnJob = 1, rented = false) {
 
 // ── 5. Decision metrics ──────────────────────────────────────────────────────
 
-export function computeMetrics({ brokerPrice, truckDays, trucks, variableCost, fixedPerWorkedDay, absorbedFixed, worstStressBreakeven }, s) {
+export function computeMetrics({ brokerPrice, truckDays, trucks, variableCost, fixedPerWorkedDay, absorbedFixed, worstStressBreakeven, subcontract }, s) {
   const price = num(brokerPrice);
   const days = num(truckDays);
 
@@ -435,9 +441,16 @@ export function computeMetrics({ brokerPrice, truckDays, trucks, variableCost, f
   // the operator needs to know the extra buys downside cover, not extra profit.
   const askDrivenByStress = stressAsk > baselineAsk;
 
+  // The most a third party could be paid for the rest of the job. Without this,
+  // the margin left over reads like profit when it is really a budget.
+  const paid = Math.max(0, num(subcontract));
+  const maxSubcontract = operatingMargin + paid;
+  const maxSubcontractAtTarget = maxSubcontract - num(s.targetMarginPct) * price;
+
   return {
     contributionMargin, contributionPerTruckDay, operatingMargin, breakevenPrice,
     hurdlePerTruckDay, askPrice, baselineAsk, askDrivenByStress,
+    maxSubcontract, maxSubcontractAtTarget,
     truckDayUnits, revenuePerTruckDay, costPerTruckDay, profitPerTruckDay,
   };
 }
@@ -542,6 +555,7 @@ export function evaluateJob(job, settings, miles, opts = {}) {
       fixedPerWorkedDay: fixed.fixedPerWorkedDay,
       absorbedFixed: fixed.absorbedFixed,
       worstStressBreakeven: worstStress ? worstStress.breakevenPrice : 0,
+      subcontract: variable.subcontract,
     },
     s
   );

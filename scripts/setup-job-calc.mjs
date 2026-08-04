@@ -111,6 +111,7 @@ alter table public.job_evaluations add column if not exists actual_helpers small
 alter table public.job_evaluations add column if not exists deadhead_mode text;
 alter table public.job_evaluations add column if not exists rented boolean not null default false;
 alter table public.job_evaluations add column if not exists rental_cost numeric;
+alter table public.job_evaluations add column if not exists subcontract_cost numeric;
 
 create table if not exists public.zip_distances (
   origin_zip text not null,

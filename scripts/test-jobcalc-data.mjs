@@ -1048,3 +1048,59 @@ t("not renting leaves every number exactly where it was", () => {
   near(a.variableCost, b.variableCost, 0.001);
   assert.equal(a.verdict, b.verdict);
 });
+
+// ── Subcontracting a leg to a third party ────────────────────────────────────
+
+t("subcontract: what you pay a third party is a real cost of the job", () => {
+  const a = evaluateJob(JOB, {}, MILES);
+  const b = evaluateJob({ ...JOB, subcontractCost: 2000 }, {}, MILES);
+  assert.equal(b.subcontract, 2000);
+  near(b.variableCost, a.variableCost + 2000, 0.01);
+  near(b.operatingMargin, a.operatingMargin - 2000, 0.01);
+});
+
+t("subcontract: contingency does not pad it — it is an agreed price, not an estimate", () => {
+  const a = evaluateJob(JOB, {}, MILES);
+  const b = evaluateJob({ ...JOB, subcontractCost: 2000 }, {}, MILES);
+  near(b.contingency, a.contingency, 0.001);
+});
+
+t("subcontract: the leftover is a BUDGET, and the app says how big it is", () => {
+  const r = evaluateJob(JOB, {}, MILES);
+  // With nothing paid out yet, the room to pay equals the whole operating margin.
+  near(r.maxSubcontract, r.operatingMargin, 0.01);
+  // Paying exactly that lands on break-even.
+  const spent = evaluateJob({ ...JOB, subcontractCost: r.maxSubcontract }, {}, MILES);
+  near(spent.operatingMargin, 0, 0.01);
+  // And the budget itself does not move: it is a property of the job, not of what was paid.
+  near(spent.maxSubcontract, r.maxSubcontract, 0.01);
+});
+
+t("subcontract: the target-margin budget leaves the margin behind", () => {
+  const r = evaluateJob(JOB, {}, MILES);
+  near(r.maxSubcontractAtTarget, r.maxSubcontract - 0.25 * r.totalRevenue, 0.01);
+  const spent = evaluateJob({ ...JOB, subcontractCost: r.maxSubcontractAtTarget }, {}, MILES);
+  near(spent.operatingMargin, 0.25 * r.totalRevenue, 0.01);
+});
+
+t("subcontract: the real pattern — long haul subcontracted beats running it yourself", () => {
+  const job = { originZip: "54962", destZip: "47805", cuFt: 3456, brokerPrice: 9955,
+    originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
+    drivers: 2, helpers: 2, trucks: 2 };
+  const s = { fuelCostPerMile: 0.8, tollPerMile: 0.3, driverDayRate: 250, helperDayRate: 250, cuFtPerHour: 575.6 };
+  const own = evaluateJob({ ...job, destZip: "87114" }, s, { loadedMiles: 1405, deadheadMiles: 1680 });
+  const local = evaluateJob(job, s, { loadedMiles: 450, deadheadMiles: 450 });
+  assert.ok(own.operatingMargin < 0, "running it all yourself loses money");
+  assert.ok(local.maxSubcontract > 4000, "and there is real room to pay a carrier");
+  // Paying a carrier less than the budget keeps the job positive.
+  const done = evaluateJob({ ...job, subcontractCost: 3000 }, s, { loadedMiles: 450, deadheadMiles: 450 });
+  assert.ok(done.operatingMargin > 0);
+  assert.ok(done.operatingMargin > own.operatingMargin);
+});
+
+t("subcontract: garbage and negatives never create money", () => {
+  for (const v of ["", null, "abc", -5000]) {
+    const r = evaluateJob({ ...JOB, subcontractCost: v }, {}, MILES);
+    assert.equal(r.subcontract, 0, `broke on ${JSON.stringify(v)}`);
+  }
+});
