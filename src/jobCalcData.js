@@ -64,6 +64,10 @@ export const DEFAULT_SETTINGS = {
   overheadMonthly: 0,
   activeTrucks: 11,
 
+  // How much a single truck holds. Zero means no check at all — inventing a
+  // capacity would tell the operator a job does not fit on no evidence.
+  truckCapacityCuFt: 0,
+
   // What extra cubic feet are billed at. Typing cu ft on the Extra CF line
   // prices itself from this. Zero until the owner says what he charges.
   extraCuFtRate: 0,
@@ -103,6 +107,7 @@ export const SETTING_FLAGS = {
   tollPerMile: "pending",
   materialsPerCuFt: "pending",
   extraCuFtRate: "pending",
+  truckCapacityCuFt: "pending",
   damagesReservePct: "pending",
   baseZip: "pending",
 };
@@ -210,13 +215,27 @@ export const effectiveCuFt = (job) => num(job?.cuFt) + extrasCuFt(job);
 export const totalRevenue = (job) => num(job?.brokerPrice) + extrasTotal(job);
 
 /**
+ * Does the load fit on the trucks assigned? Silent until truckCapacityCuFt is
+ * set — telling an operator his job does not fit, on a capacity nobody supplied,
+ * would be inventing the most consequential number on the screen.
+ */
+export function capacityCheck(job, s) {
+  const cap = num(s?.truckCapacityCuFt);
+  if (cap <= 0) return { checked: false, overCapacity: false, trucksNeeded: trucksOf(job) };
+  const needed = Math.max(1, Math.ceil(effectiveCuFt(job) / cap));
+  return { checked: true, overCapacity: needed > trucksOf(job), trucksNeeded: needed };
+}
+
+/**
  * Trucks assigned to the job. Not an input yet — the per-truck-day denominator
  * is built around it so that adding multi-truck jobs later needs no rework here.
  * At 1 truck every figure is exactly what it was before.
  */
 export const trucksOf = (job) => Math.max(1, Math.round(num(job?.trucks, 1)));
 
-export const driversOf = (job) => Math.max(1, Math.round(num(job?.drivers, 1)));
+// Every truck needs someone behind the wheel, so the driver count can never sit
+// below the truck count however the form was filled in.
+export const driversOf = (job) => Math.max(trucksOf(job), Math.round(num(job?.drivers, 1)));
 export const helpersOf = (job) => Math.max(0, Math.round(num(job?.helpers, 1)));
 export const crewSizeOf = (job) => driversOf(job) + helpersOf(job);
 
@@ -296,11 +315,15 @@ export function hotelNightsFor(truckDays, totalMiles, s) {
 
 export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brokerPrice, job }, s) {
   const crew = num(truckDays) * crewCostPerDay(job, s);
-  const fuel = num(totalMiles) * num(s.fuelCostPerMile);
+  // Every truck drives the whole route, so fuel and tolls are per truck. Handling
+  // is NOT: a second truck splits the load, it does not carry it twice. Hotel is
+  // not either — rooms come from how many people there are, not how many trucks.
+  const trucks = trucksOf(job);
+  const fuel = num(totalMiles) * num(s.fuelCostPerMile) * trucks;
   // A room sleeps two, so a crew of three needs two rooms every night.
   const hotelRooms = hotelRoomsFor(job);
   const hotel = num(hotelNights) * hotelRooms * num(s.hotelPerNight);
-  const tolls = num(totalMiles) * num(s.tollPerMile);
+  const tolls = num(totalMiles) * num(s.tollPerMile) * trucks;
   const materials = num(cuFt) * num(s.materialsPerCuFt);
   // Reserve rides on everything invoiced, not just the broker's share.
   const damages = num(brokerPrice) * num(s.damagesReservePct);
@@ -315,17 +338,19 @@ export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brok
 // not work all 30. Dividing by days WORKED is what makes the number honest: at
 // 15 worked days, insurance really costs $70 per working day, not $35.
 
-export function computeFixed(truckDays, s) {
-  const trucks = num(s.activeTrucks);
+export function computeFixed(truckDays, s, trucksOnJob = 1) {
+  const fleet = num(s.activeTrucks);
   const fixedMonthlyPerTruck =
     num(s.insuranceMonthlyPerTruck) +
     num(s.maintenanceReserveMonthlyPerTruck) +
     num(s.depreciationMonthlyPerTruck) +
-    (trucks > 0 ? num(s.overheadMonthly) / trucks : 0);
+    (fleet > 0 ? num(s.overheadMonthly) / fleet : 0);
 
   const worked = num(s.workedDaysPerMonth);
   const fixedPerWorkedDay = worked > 0 ? fixedMonthlyPerTruck / worked : 0;
-  const absorbedFixed = fixedPerWorkedDay * num(truckDays);
+  // Each truck on the job carries its own insurance and maintenance for every
+  // day it is tied up — two trucks for three days absorb six days of fixed cost.
+  const absorbedFixed = fixedPerWorkedDay * num(truckDays) * Math.max(1, num(trucksOnJob, 1));
 
   return { fixedMonthlyPerTruck, fixedPerWorkedDay, absorbedFixed };
 }
@@ -398,7 +423,7 @@ function runScenario(base, s, sc) {
     { truckDays, hotelNights, totalMiles, cuFt: base.cuFt, brokerPrice: base.brokerPrice, job: base.job },
     s
   );
-  const f = computeFixed(truckDays, s);
+  const f = computeFixed(truckDays, s, trucksOf(base.job));
   const m = computeMetrics(
     {
       brokerPrice: base.brokerPrice,
@@ -465,7 +490,7 @@ export function evaluateJob(job, settings, miles, opts = {}) {
     { truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice: revenue, job },
     s
   );
-  const fixed = computeFixed(truckDays, s);
+  const fixed = computeFixed(truckDays, s, trucksOf(job));
 
   // Stress first: the ask price has to know the worst case before it can name a
   // number. The scenarios call computeMetrics themselves without a stress input,
@@ -586,7 +611,14 @@ export function compareCrews(job, settings, miles, opts = {}) {
 const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
 /** The crew that actually ran a stored evaluation. Rows predating crew sizing default to 1 + 1. */
-const rowCrew = (row) => ({ drivers: num(row.drivers, 1), helpers: num(row.helpers, 1) });
+// Prefer what ACTUALLY went out over what was planned. Calibrating a crew of 4
+// as if it had been the 2 on the estimate misattributes the productivity and
+// poisons cuFtPerHour, the most sensitive parameter in the model.
+const rowCrew = (row) => ({
+  drivers: num(row.actual_drivers, num(row.drivers, 1)),
+  helpers: num(row.actual_helpers, num(row.helpers, 1)),
+  trucks: num(row.actual_trucks, num(row.trucks, 1)),
+});
 
 /** Handling hours implied by the real truck-days: total useful hours minus driving. */
 function impliedHandlingHours(row) {

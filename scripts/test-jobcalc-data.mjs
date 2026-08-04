@@ -6,7 +6,7 @@ import {
   roundHalf, mergeSettings, crewDayRate, DEFAULT_SETTINGS, SETTING_FLAGS,
   assembleMiles, computeTime, hotelNightsFor, computeVariable, computeFixed,
   computeMetrics, verdictFor, evaluateJob, calibrate, calibrationPatch,
-  VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
+  VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, capacityCheck, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
 } from "../src/jobCalcData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -666,8 +666,11 @@ t("truck-day units: two trucks for three days is SIX truck-days, not three", () 
   const one = evaluateJob(JOB, {}, { loadedMiles: 663, deadheadMiles: 671 });
   const two = evaluateJob({ ...JOB, trucks: 2 }, {}, { loadedMiles: 663, deadheadMiles: 671 });
   assert.equal(two.truckDayUnits, one.truckDays * 2);
-  near(two.contributionPerTruckDay, one.contributionPerTruckDay / 2, 0.01);
+  // Revenue is fixed, so spreading it over twice the truck-days halves it exactly.
   near(two.revenuePerTruckDay, one.revenuePerTruckDay / 2, 0.01);
+  // Contribution falls by MORE than half, because the second truck also burns its
+  // own fuel and absorbs its own fixed cost. Halving alone would flatter the job.
+  assert.ok(two.contributionPerTruckDay < one.contributionPerTruckDay / 2);
 });
 
 t("per-truck-day figures never come out NaN or Infinity on degenerate settings", () => {
@@ -858,4 +861,100 @@ t("promoted fields: overriding them from the card equals overriding from the pan
   assert.equal(viaOverrides.baseZip, "54962");
   const r = evaluateJob({ ...JOB, drivers: 2, helpers: 2 }, viaOverrides, MILES);
   near(r.crew, r.truckDays * (2 * 300 + 2 * 260), 0.01);
+});
+
+// ── Two-truck jobs ───────────────────────────────────────────────────────────
+
+// Crew held FIXED, so only the truck count differs — that isolates what a second
+// truck actually costs from what the driver it needs costs.
+const T1 = { ...JOB, drivers: 2, helpers: 1, trucks: 1 };
+const T2 = { ...JOB, drivers: 2, helpers: 1, trucks: 2 };
+
+t("two trucks: fuel and tolls double — each truck drives the whole route", () => {
+  const a = evaluateJob(T1, { tollPerMile: 0.3 }, MILES);
+  const b = evaluateJob(T2, { tollPerMile: 0.3 }, MILES);
+  near(b.fuel, a.fuel * 2, 0.01);
+  near(b.tolls, a.tolls * 2, 0.01);
+  assert.ok(a.tolls > 0, "the toll assertion has to be testing something");
+});
+
+t("two trucks: each absorbs its own fixed cost", () => {
+  const a = evaluateJob(T1, {}, MILES);
+  const b = evaluateJob(T2, {}, MILES);
+  near(b.absorbedFixed, a.absorbedFixed * 2, 0.01);
+  near(b.absorbedFixed, b.fixedPerWorkedDay * b.truckDays * 2, 0.01);
+});
+
+t("two trucks: handling does NOT double — the load is split, not repeated", () => {
+  const a = evaluateJob(T1, {}, MILES);
+  const b = evaluateJob(T2, {}, MILES);
+  near(b.handlingHours, a.handlingHours, 0.001);
+  near(b.drivingHours, a.drivingHours, 0.001, "they drive together, not twice");
+  near(b.hotel, a.hotel, 0.001, "rooms come from crew size, not truck count");
+  near(b.crew, a.crew, 0.001);
+});
+
+t("two trucks: a second truck forces a second driver", () => {
+  const r = evaluateJob({ ...JOB, trucks: 2, drivers: 1 }, {}, MILES);
+  assert.equal(r.drivers, 2, "somebody has to drive it");
+  assert.equal(evaluateJob({ ...JOB, trucks: 3, drivers: 1 }, {}, MILES).drivers, 3);
+  assert.equal(evaluateJob({ ...JOB, trucks: 1, drivers: 3 }, {}, MILES).drivers, 3, "the floor never caps");
+});
+
+t("two trucks: the per-truck-day trio still reconciles", () => {
+  const r = evaluateJob(T2, {}, MILES);
+  near(r.revenuePerTruckDay - r.costPerTruckDay, r.profitPerTruckDay, 0.01);
+  assert.equal(r.truckDayUnits, r.truckDays * 2);
+});
+
+t("one truck: every number is identical to before multi-truck existed", () => {
+  const explicit = evaluateJob({ ...JOB, trucks: 1 }, {}, MILES);
+  const implicit = evaluateJob(JOB, {}, MILES);
+  for (const k of ["fuel", "tolls", "crew", "hotel", "absorbedFixed", "variableCost", "contributionPerTruckDay", "verdict"]) {
+    assert.deepEqual(explicit[k], implicit[k], `${k} moved`);
+  }
+});
+
+t("capacity: silent until somebody says what a truck holds", () => {
+  const off = capacityCheck({ ...JOB, cuFt: 99999 }, mergeSettings({}));
+  assert.equal(off.checked, false);
+  assert.equal(off.overCapacity, false, "never warn on a capacity nobody supplied");
+});
+
+t("capacity: once set, it says how many trucks the load really needs", () => {
+  const s = mergeSettings({ truckCapacityCuFt: 1600 });
+  const fits = capacityCheck({ ...JOB, cuFt: 1200, trucks: 1 }, s);
+  assert.equal(fits.overCapacity, false);
+  assert.equal(fits.trucksNeeded, 1);
+
+  // The real job that prompted this: 3,456 cu ft never fitted on one truck.
+  const over = capacityCheck({ ...JOB, cuFt: 3456, trucks: 1 }, s);
+  assert.equal(over.checked, true);
+  assert.equal(over.overCapacity, true);
+  assert.equal(over.trucksNeeded, 3);
+  assert.equal(capacityCheck({ ...JOB, cuFt: 3456, trucks: 3 }, s).overCapacity, false);
+});
+
+t("capacity: counts the cu ft that extras actually add", () => {
+  const s = mergeSettings({ truckCapacityCuFt: 1600 });
+  const r = capacityCheck({ ...JOB, cuFt: 1500, trucks: 1, extras: [{ amount: 500, cuFt: 400 }] }, s);
+  assert.equal(r.overCapacity, true, "1500 + 400 does not fit in 1600");
+});
+
+// ── Calibration believes what actually happened ──────────────────────────────
+
+t("calibration: the crew that ACTUALLY went out beats the one that was planned", () => {
+  // Planned 1+1, really went 1+3. Attributing a 4-person crew's output to a
+  // 2-person crew would inflate cuFtPerHour for every future job.
+  const planned = calibrate([row({ actual_truck_days: 3, actual_miles: 1000 })]);
+  const real = calibrate([row({ actual_truck_days: 3, actual_miles: 1000, actual_drivers: 1, actual_helpers: 3 })]);
+  assert.ok(real.cuFtPerHourSamples === 0 || real.cuFtPerHour !== planned.cuFtPerHour,
+    "a different real crew must not calibrate to the same rate");
+});
+
+t("calibration: rows with no actual crew still fall back to the planned one", () => {
+  const a = calibrate([row({ actual_truck_days: 3, actual_miles: 1000 })]);
+  const b = calibrate([row({ actual_truck_days: 3, actual_miles: 1000, drivers: 1, helpers: 1 })]);
+  near(a.cuFtPerHour, b.cuFtPerHour, 0.01);
+  near(a.cuFtPerHour, 150, 0.01, "and it is still the old, correct number");
 });

@@ -99,6 +99,13 @@ alter table public.job_evaluations add column if not exists extras jsonb;
 alter table public.job_evaluations add column if not exists total_revenue numeric;
 alter table public.job_evaluations add column if not exists effective_cu_ft numeric;
 
+-- Two-truck jobs, and the crew that ACTUALLY went out — calibration reads the
+-- actuals first and only falls back to what was planned.
+alter table public.job_evaluations add column if not exists trucks smallint not null default 1;
+alter table public.job_evaluations add column if not exists actual_trucks smallint;
+alter table public.job_evaluations add column if not exists actual_drivers smallint;
+alter table public.job_evaluations add column if not exists actual_helpers smallint;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,

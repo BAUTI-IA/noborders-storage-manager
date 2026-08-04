@@ -11,7 +11,7 @@ import { tr } from "./i18n.js";
 import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
   mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews,
-  applyOverrides, overrideDiff, num,
+  applyOverrides, overrideDiff, capacityCheck, num,
 } from "./jobCalcData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -88,6 +88,13 @@ alter table public.job_evaluations add column if not exists overrides jsonb;
 alter table public.job_evaluations add column if not exists extras jsonb;
 alter table public.job_evaluations add column if not exists total_revenue numeric;
 alter table public.job_evaluations add column if not exists effective_cu_ft numeric;
+
+-- Two-truck jobs, and the crew that ACTUALLY went out — calibration reads the
+-- actuals first and only falls back to what was planned.
+alter table public.job_evaluations add column if not exists trucks smallint not null default 1;
+alter table public.job_evaluations add column if not exists actual_trucks smallint;
+alter table public.job_evaluations add column if not exists actual_drivers smallint;
+alter table public.job_evaluations add column if not exists actual_helpers smallint;
 
 create table if not exists public.zip_distances (
   origin_zip text not null,
@@ -177,7 +184,7 @@ const SETTING_GROUPS = [
   { section: "Crew", keys: ["driverDayRate", "helperDayRate", "baselineCrewSize", "crewScalingExponent", "teamDrivingBonusHours"] },
   { section: "Operation", keys: ["fuelCostPerMile", "avgSpeedMph", "usefulHoursPerDay"] },
   { section: "Productivity", keys: ["cuFtPerHour", "longCarryUplift", "shuttleUplift"] },
-  { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks"] },
+  { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks", "truckCapacityCuFt"] },
   { section: "Per-unit cost", keys: ["hotelPerNight", "tollPerMile", "materialsPerCuFt", "extraCuFtRate", "damagesReservePct", "contingencyPct"] },
   { section: "Decision", keys: ["workedDaysPerMonth", "targetMarginPct", "longDistanceThresholdMiles"] },
   { section: "Base", keys: ["baseZip"] },
@@ -200,6 +207,7 @@ const SETTING_LABELS = {
   depreciationMonthlyPerTruck: { label: "Depreciation per month" },
   overheadMonthly: { label: "Overhead per month" },
   activeTrucks: { label: "Active trucks" },
+  truckCapacityCuFt: { label: "Cu ft per truck" },
   hotelPerNight: { label: "Hotel per night" },
   tollPerMile: { label: "Tolls per mile" },
   materialsPerCuFt: { label: "Materials per cu ft" },
@@ -302,13 +310,14 @@ const EMPTY_EXTRAS = () => EXTRA_ROWS.map((r) => ({ ...r, amount: "", cuFt: "", 
 const EMPTY_INPUTS = {
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
-  drivers: 1, helpers: 1,
+  trucks: 1, drivers: 1, helpers: 1,
   extras: EMPTY_EXTRAS(),
 };
 
 const EMPTY_ACTUALS = {
   actual_truck_days: "", actual_hotel_nights: "", actual_fuel: "",
   actual_tolls: "", actual_materials: "", actual_extra_labor: "", actual_miles: "",
+  actual_trucks: "", actual_drivers: "", actual_helpers: "",
 };
 
 /** Prefill the actuals modal from a row, so "Edit actuals" edits instead of blanking. */
@@ -469,6 +478,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     () => (ready ? compareCrews(inputs, settings, effMiles) : []),
     [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
   );
+  const capacity = useMemo(() => capacityCheck(inputs, settings), [inputs, settings]);
   const u = (k) => (v) => setInputs((p) => ({ ...p, [k]: v }));
 
   const setExtra = (i, patch) =>
@@ -508,7 +518,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   // Columns added after the first release. If the operator has not run the
   // migration yet, PostgREST rejects the WHOLE row for an unknown column, so a
   // perfectly good evaluation would be lost. Retry without them and say why.
-  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft"];
+  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft", "trucks", "actual_trucks", "actual_drivers", "actual_helpers"];
 
   async function saveEvaluation(decision) {
     setSavingEval(true); setErr(null);
@@ -519,7 +529,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       cu_ft: num(inputs.cuFt), broker_price: num(inputs.brokerPrice),
       origin_access: inputs.originAccess, dest_access: inputs.destAccess,
       long_carry: inputs.longCarry, shuttle: inputs.shuttle,
-      drivers: r.drivers, helpers: r.helpers, hotel_rooms: r.hotelRooms,
+      trucks: r.trucks, drivers: r.drivers, helpers: r.helpers, hotel_rooms: r.hotelRooms,
       extras: r.extrasTotal !== 0 ? inputs.extras.filter((e) => num(e.amount) !== 0 || num(e.cuFt) !== 0) : null,
       total_revenue: r.totalRevenue, effective_cu_ft: r.effectiveCuFt,
       loaded_miles: r.loadedMiles, deadhead_miles: r.deadheadMiles, total_miles: r.totalMiles,
@@ -698,6 +708,12 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             {/* Crew for this job. A bigger crew costs more per day and finishes sooner. */}
             <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
               <div>
+                <label style={lbl}>Trucks</label>
+                <select style={inp} value={inputs.trucks} onChange={(e) => u("trucks")(Number(e.target.value))}>
+                  {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div>
                 <label style={lbl}>Drivers</label>
                 <select style={inp} value={inputs.drivers} onChange={(e) => u("drivers")(Number(e.target.value))}>
                   {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
@@ -724,10 +740,21 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             </div>
             <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 7 }}>
               {tr(
-                `Crew of ${result.crewSize}: ${money(crewCostPerDay(inputs, settings))} per worked day, ${result.hotelRooms} hotel room(s) per night.`,
-                `Crew de ${result.crewSize}: ${money(crewCostPerDay(inputs, settings))} por día trabajado, ${result.hotelRooms} habitación(es) de hotel por noche.`
+                `${result.trucks} truck(s), crew of ${result.crewSize}: ${money(crewCostPerDay(result, settings))} per worked day, ${result.hotelRooms} hotel room(s) per night.`,
+                `${result.trucks} camión(es), crew de ${result.crewSize}: ${money(crewCostPerDay(result, settings))} por día trabajado, ${result.hotelRooms} habitación(es) de hotel por noche.`
               )}
+              {result.drivers > num(inputs.drivers) && " " + tr(
+                `Raised to ${result.drivers} drivers — every truck needs one.`,
+                `Subido a ${result.drivers} drivers — cada camión necesita uno.`)}
             </div>
+            {capacity.overCapacity && (
+              <div style={{ background: "#FAEEDA", border: "1px solid #EF9F27", borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: "#854F0B", marginTop: 9 }}>
+                {tr(
+                  `${int(result.effectiveCuFt)} cu ft does not fit on ${result.trucks} truck(s). You need ${capacity.trucksNeeded}.`,
+                  `${int(result.effectiveCuFt)} pies cúbicos no entran en ${result.trucks} camión(es). Necesitás ${capacity.trucksNeeded}.`
+                )}
+              </div>
+            )}
 
             {/* Billable extras */}
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
@@ -1221,9 +1248,15 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
               <input style={inp} inputMode="decimal" value={actuals.actual_materials} onChange={(e) => setActuals((a) => ({ ...a, actual_materials: e.target.value }))} /></div>
             <div><label style={lbl}>Extra labor hired</label>
               <input style={inp} inputMode="decimal" value={actuals.actual_extra_labor} onChange={(e) => setActuals((a) => ({ ...a, actual_extra_labor: e.target.value }))} /></div>
+            <div><label style={lbl}>Actual trucks</label>
+              <input style={inp} inputMode="decimal" value={actuals.actual_trucks} onChange={(e) => setActuals((a) => ({ ...a, actual_trucks: e.target.value }))} /></div>
+            <div><label style={lbl}>Actual drivers</label>
+              <input style={inp} inputMode="decimal" value={actuals.actual_drivers} onChange={(e) => setActuals((a) => ({ ...a, actual_drivers: e.target.value }))} /></div>
+            <div><label style={lbl}>Actual helpers</label>
+              <input style={inp} inputMode="decimal" value={actuals.actual_helpers} onChange={(e) => setActuals((a) => ({ ...a, actual_helpers: e.target.value }))} /></div>
           </div>
           <div style={{ fontSize: 11.5, color: "#999", marginTop: 12, lineHeight: 1.45 }}>
-            Actual miles should come off the ELD, not off the estimate.
+            Actual miles should come off the ELD, not off the estimate. The crew that really went out is what calibration learns from.
           </div>
         </Modal>
       )}
