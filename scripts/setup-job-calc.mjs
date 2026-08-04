@@ -113,6 +113,12 @@ alter table public.job_evaluations add column if not exists rented boolean not n
 alter table public.job_evaluations add column if not exists rental_cost numeric;
 alter table public.job_evaluations add column if not exists subcontract_cost numeric;
 
+-- Storage billed to the client while the goods sit in the warehouse, mirroring
+-- the CRM's own client_monthly_rate billing.
+alter table public.job_evaluations add column if not exists storage_months numeric;
+alter table public.job_evaluations add column if not exists storage_monthly_rate numeric;
+alter table public.job_evaluations add column if not exists storage_revenue numeric;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,

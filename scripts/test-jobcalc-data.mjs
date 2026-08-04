@@ -6,7 +6,7 @@ import {
   roundHalf, mergeSettings, crewDayRate, DEFAULT_SETTINGS, SETTING_FLAGS,
   assembleMiles, computeTime, hotelNightsFor, computeVariable, computeFixed,
   computeMetrics, verdictFor, evaluateJob, calibrate, calibrationPatch,
-  VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, capacityCheck, deadheadFor, compareDeadhead, compareRental, DEADHEAD_MODES, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
+  VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, capacityCheck, storageBillableMonths, deadheadFor, compareDeadhead, compareRental, DEADHEAD_MODES, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
 } from "../src/jobCalcData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -1102,5 +1102,53 @@ t("subcontract: garbage and negatives never create money", () => {
   for (const v of ["", null, "abc", -5000]) {
     const r = evaluateJob({ ...JOB, subcontractCost: v }, {}, MILES);
     assert.equal(r.subcontract, 0, `broke on ${JSON.stringify(v)}`);
+  }
+});
+
+// ── Storage billed to the client ─────────────────────────────────────────────
+
+t("storage: months billed honour a free first month", () => {
+  assert.equal(storageBillableMonths({ storageMonths: 3 }), 3);
+  assert.equal(storageBillableMonths({ storageMonths: 3, storageFirstMonthFree: true }), 2);
+  assert.equal(storageBillableMonths({ storageMonths: 1, storageFirstMonthFree: true }), 0);
+  assert.equal(storageBillableMonths({ storageMonths: -5 }), 0);
+});
+
+t("storage: it is revenue, so the verdict sees it", () => {
+  const bare = evaluateJob(JOB, {}, MILES);
+  const stored = evaluateJob({ ...JOB, storageMonths: 4, storageMonthlyRate: 350 }, {}, MILES);
+  assert.equal(stored.storageRevenue, 1400);
+  near(stored.totalRevenue, bare.totalRevenue + 1400, 0.01);
+  assert.ok(stored.contributionMargin > bare.contributionMargin);
+});
+
+t("storage: the space it occupies is a cost, counted on the real volume", () => {
+  const s = { storageCostPerCuFtPerMonth: 0.4 };
+  const r = evaluateJob({ ...JOB, storageMonths: 3, storageMonthlyRate: 400 }, s, MILES);
+  near(r.storage, 3 * 1200 * 0.4, 0.01);
+  // Extras that add cargo also add stored volume.
+  const bigger = evaluateJob({ ...JOB, storageMonths: 3, extras: [{ amount: 0, cuFt: 300 }] }, s, MILES);
+  near(bigger.storage, 3 * 1500 * 0.4, 0.01);
+});
+
+t("storage: both sides ship at zero — revenue is never counted without its cost", () => {
+  assert.equal(DEFAULT_SETTINGS.storageCostPerCuFtPerMonth, 0);
+  assert.equal(SETTING_FLAGS.storageCostPerCuFtPerMonth, "pending");
+  const r = evaluateJob(JOB, {}, MILES);
+  assert.equal(r.storage, 0);
+  assert.equal(r.storageRevenue, 0);
+});
+
+t("storage: a job that sits long enough can pay for the detour through the warehouse", () => {
+  const viaWarehouse = evaluateJob({ ...JOB, subcontractCost: 1500 }, {}, MILES);
+  const withStorage = evaluateJob({ ...JOB, subcontractCost: 1500, storageMonths: 6, storageMonthlyRate: 400 }, {}, MILES);
+  assert.ok(withStorage.operatingMargin > viaWarehouse.operatingMargin);
+  near(withStorage.operatingMargin - viaWarehouse.operatingMargin, 2400, 0.01);
+});
+
+t("storage: garbage in the fields never invents revenue", () => {
+  for (const v of ["", null, "abc"]) {
+    const r = evaluateJob({ ...JOB, storageMonths: v, storageMonthlyRate: v }, {}, MILES);
+    assert.equal(r.storageRevenue, 0, `broke on ${JSON.stringify(v)}`);
   }
 });

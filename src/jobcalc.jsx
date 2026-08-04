@@ -103,6 +103,12 @@ alter table public.job_evaluations add column if not exists rented boolean not n
 alter table public.job_evaluations add column if not exists rental_cost numeric;
 alter table public.job_evaluations add column if not exists subcontract_cost numeric;
 
+-- Storage billed to the client while the goods sit in the warehouse, mirroring
+-- the CRM's own client_monthly_rate billing.
+alter table public.job_evaluations add column if not exists storage_months numeric;
+alter table public.job_evaluations add column if not exists storage_monthly_rate numeric;
+alter table public.job_evaluations add column if not exists storage_revenue numeric;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,
@@ -191,7 +197,7 @@ const SETTING_GROUPS = [
   { section: "Crew", keys: ["driverDayRate", "helperDayRate", "baselineCrewSize", "crewScalingExponent", "teamDrivingBonusHours"] },
   { section: "Operation", keys: ["fuelCostPerMile", "avgSpeedMph", "usefulHoursPerDay"] },
   { section: "Productivity", keys: ["cuFtPerHour", "longCarryUplift", "shuttleUplift"] },
-  { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks", "truckCapacityCuFt", "rentalDayRate", "rentalPerMile"] },
+  { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks", "truckCapacityCuFt", "rentalDayRate", "rentalPerMile", "storageCostPerCuFtPerMonth"] },
   { section: "Per-unit cost", keys: ["hotelPerNight", "tollPerMile", "materialsPerCuFt", "extraCuFtRate", "damagesReservePct", "contingencyPct"] },
   { section: "Decision", keys: ["workedDaysPerMonth", "targetMarginPct", "longDistanceThresholdMiles"] },
   { section: "Base", keys: ["baseZip"] },
@@ -215,6 +221,7 @@ const SETTING_LABELS = {
   overheadMonthly: { label: "Overhead per month" },
   activeTrucks: { label: "Active trucks" },
   truckCapacityCuFt: { label: "Cu ft per truck" },
+  storageCostPerCuFtPerMonth: { label: "Warehouse cost per cu ft/month" },
   rentalDayRate: { label: "Truck rental per day" },
   rentalPerMile: { label: "Truck rental per mile" },
   hotelPerNight: { label: "Hotel per night" },
@@ -327,6 +334,7 @@ const EMPTY_INPUTS = {
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
   trucks: 1, drivers: 1, helpers: 1, deadheadMode: "roundTrip", rented: false, subcontractCost: "",
+  storageMonths: "", storageMonthlyRate: "", storageFirstMonthFree: false,
   extras: EMPTY_EXTRAS(),
 };
 
@@ -544,7 +552,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   // Columns added after the first release. If the operator has not run the
   // migration yet, PostgREST rejects the WHOLE row for an unknown column, so a
   // perfectly good evaluation would be lost. Retry without them and say why.
-  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft", "trucks", "actual_trucks", "actual_drivers", "actual_helpers", "deadhead_mode", "rented", "rental_cost", "subcontract_cost"];
+  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft", "trucks", "actual_trucks", "actual_drivers", "actual_helpers", "deadhead_mode", "rented", "rental_cost", "subcontract_cost", "storage_months", "storage_monthly_rate", "storage_revenue"];
 
   async function saveEvaluation(decision) {
     setSavingEval(true); setErr(null);
@@ -558,6 +566,8 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       trucks: r.trucks, drivers: r.drivers, helpers: r.helpers, hotel_rooms: r.hotelRooms,
       deadhead_mode: inputs.deadheadMode, rented: inputs.rented, rental_cost: r.rental,
       subcontract_cost: r.subcontract,
+      storage_months: num(inputs.storageMonths), storage_monthly_rate: num(inputs.storageMonthlyRate),
+      storage_revenue: r.storageRevenue,
       extras: r.extrasTotal !== 0 ? inputs.extras.filter((e) => num(e.amount) !== 0 || num(e.cuFt) !== 0) : null,
       total_revenue: r.totalRevenue, effective_cu_ft: r.effectiveCuFt,
       loaded_miles: r.loadedMiles, deadhead_miles: r.deadheadMiles, total_miles: r.totalMiles,
@@ -835,6 +845,31 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                       "Llená los cu ft solo si el extra es carga real — eso suma horas, no solo plata.")}
                 </span>
               </div>
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
+                <div style={{ ...lbl, marginBottom: 8 }}>Storage billed to the client</div>
+                <div style={grid}>
+                  <div>
+                    <label style={lbl}>Months in storage</label>
+                    <input style={inp} inputMode="decimal" placeholder="0"
+                      value={inputs.storageMonths} onChange={(e) => u("storageMonths")(e.target.value)} />
+                  </div>
+                  <div>
+                    <label style={lbl}>Monthly rate</label>
+                    <input style={inp} inputMode="decimal" placeholder="0"
+                      value={inputs.storageMonthlyRate} onChange={(e) => u("storageMonthlyRate")(e.target.value)} />
+                  </div>
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer", marginTop: 9 }}>
+                  <input type="checkbox" checked={inputs.storageFirstMonthFree}
+                    onChange={(e) => u("storageFirstMonthFree")(e.target.checked)} /> First month free
+                </label>
+                {result.storageRevenue > 0 && (
+                  <div style={{ fontSize: 12.5, color: "#111", marginTop: 8, fontWeight: 600 }}>
+                    {tr(`${result.storageMonthsBilled} month(s) billed = ${money(result.storageRevenue)}`,
+                        `${result.storageMonthsBilled} mes(es) facturados = ${money(result.storageRevenue)}`)}
+                  </div>
+                )}
+              </div>
               {result.extrasTotal !== 0 && (
                 <div style={{ fontSize: 12.5, color: "#111", marginTop: 9, fontWeight: 600 }}>
                   {tr(`Extras ${money(result.extrasTotal)} · total revenue ${money(result.totalRevenue)}${result.extrasCuFt > 0 ? ` · ${int(result.effectiveCuFt)} cu ft to move` : ""}`,
@@ -1096,6 +1131,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             </div>
             <Row label="Broker price" value={money(result.brokerPrice)} />
             {result.extrasTotal !== 0 && <Row label="Extras" value={money(result.extrasTotal)} />}
+            {result.storageRevenue > 0 && <Row label="Storage billed" value={money(result.storageRevenue)} />}
             <Row label="Total revenue" value={money(result.totalRevenue)} strong />
             <Row label="Crew" value={money(result.crew)} />
             <Row label="Fuel" value={money(result.fuel)} />
@@ -1104,6 +1140,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             <Row label="Materials" value={money(result.materials)} />
             {result.rental > 0 && <Row label="Truck rental" value={money(result.rental)} />}
             {result.subcontract > 0 && <Row label="Third party" value={money(result.subcontract)} />}
+            {result.storage > 0 && <Row label="Warehouse space" value={money(result.storage)} />}
             <Row label="Damages reserve" value={money(result.damages)} />
             <Row label="Contingency" value={money(result.contingency)} />
             <Row label="Variable cost" value={money(result.variableCost)} strong />

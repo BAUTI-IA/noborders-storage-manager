@@ -69,6 +69,10 @@ export const DEFAULT_SETTINGS = {
   rentalDayRate: 0,
   rentalPerMile: 0,
 
+  // Warehousing the goods costs space. Zero until somebody measures it — the
+  // revenue side would otherwise be counted while the cost side stays invisible.
+  storageCostPerCuFtPerMonth: 0,
+
   // How much a single truck holds. Zero means no check at all — inventing a
   // capacity would tell the operator a job does not fit on no evidence.
   truckCapacityCuFt: 0,
@@ -113,6 +117,7 @@ export const SETTING_FLAGS = {
   materialsPerCuFt: "pending",
   extraCuFtRate: "pending",
   truckCapacityCuFt: "pending",
+  storageCostPerCuFtPerMonth: "pending",
   rentalDayRate: "pending",
   rentalPerMile: "pending",
   damagesReservePct: "pending",
@@ -218,8 +223,28 @@ export const extrasCuFt = (job) => extrasOf(job).reduce((a, e) => a + Math.max(0
 /** The volume actually being moved: what was quoted plus any extra that is real cargo. */
 export const effectiveCuFt = (job) => num(job?.cuFt) + extrasCuFt(job);
 
+// ── Storage billing ──────────────────────────────────────────────────────────
+//
+// A job parked in the warehouse is billed to the client monthly, the same way the
+// CRM's storage billing works: a flat rate per job, with an optional free first
+// month. On a job that sits for months this is real money the decision was
+// ignoring — and the space it occupies is a real cost, so both sides are counted.
+
+/** Months billed, honouring a free first month. */
+export function storageBillableMonths(job) {
+  const months = Math.max(0, num(job?.storageMonths));
+  return job?.storageFirstMonthFree ? Math.max(0, months - 1) : months;
+}
+
+/** What the client pays for the months in storage. */
+export const storageRevenue = (job) => storageBillableMonths(job) * Math.max(0, num(job?.storageMonthlyRate));
+
+/** What holding that volume costs you. Zero until the rate is supplied. */
+export const storageCost = (job, s) =>
+  Math.max(0, num(job?.storageMonths)) * effectiveCuFt(job) * num(s?.storageCostPerCuFtPerMonth);
+
 /** Everything this job brings in. The traffic light runs on this, not on the broker price alone. */
-export const totalRevenue = (job) => num(job?.brokerPrice) + extrasTotal(job);
+export const totalRevenue = (job) => num(job?.brokerPrice) + extrasTotal(job) + storageRevenue(job);
 
 /**
  * Does the load fit on the trucks assigned? Silent until truckCapacityCuFt is
@@ -362,14 +387,15 @@ export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brok
   // crew does the local pickup into the warehouse and a carrier takes the
   // linehaul. It is a real cost of the job even though no truck of yours moves.
   const subcontract = Math.max(0, num(job?.subcontractCost));
+  const storage = storageCost(job, s);
   const materials = num(cuFt) * num(s.materialsPerCuFt);
   // Reserve rides on everything invoiced, not just the broker's share.
   const damages = num(brokerPrice) * num(s.damagesReservePct);
   // Contingency does not pad the subcontract: it is an agreed price, not an
   // estimate that can run over. Same reasoning as the damages reserve.
-  const contingency = (crew + fuel + hotel + tolls + materials + rental) * num(s.contingencyPct);
-  const variableCost = crew + fuel + hotel + tolls + materials + rental + subcontract + damages + contingency;
-  return { crew, fuel, hotel, hotelRooms, tolls, materials, rental, subcontract, damages, contingency, variableCost };
+  const contingency = (crew + fuel + hotel + tolls + materials + rental + storage) * num(s.contingencyPct);
+  const variableCost = crew + fuel + hotel + tolls + materials + rental + storage + subcontract + damages + contingency;
+  return { crew, fuel, hotel, hotelRooms, tolls, materials, rental, storage, subcontract, damages, contingency, variableCost };
 }
 
 // ── 4. Fixed costs ───────────────────────────────────────────────────────────
@@ -575,6 +601,8 @@ export function evaluateJob(job, settings, miles, opts = {}) {
     ...time,
     brokerPrice,
     extrasTotal: extrasTotal(job),
+    storageRevenue: storageRevenue(job),
+    storageMonthsBilled: storageBillableMonths(job),
     extrasCuFt: extrasCuFt(job),
     totalRevenue: revenue,
     effectiveCuFt: cuFt,
