@@ -367,21 +367,24 @@ export function hotelNightsFor(truckDays, totalMiles, s) {
 // Wages sit here, not in fixed costs: the crew is paid only for days actually
 // worked. A day is paid in full even when the job only fills half of it.
 
-export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brokerPrice, job }, s) {
+export function computeVariable({ truckDays, hotelNights, totalMiles, fleetMiles, cuFt, brokerPrice, job }, s) {
   const crew = num(truckDays) * crewCostPerDay(job, s);
-  // Every truck drives the whole route, so fuel and tolls are per truck. Handling
-  // is NOT: a second truck splits the load, it does not carry it twice. Hotel is
-  // not either — rooms come from how many people there are, not how many trucks.
+  // Fuel and tolls are bought by the FLEET: trucks starting from different places
+  // drive different distances, so summing their routes is not the same as
+  // multiplying one route by the truck count. When they do start together the two
+  // are identical. Handling is NOT per truck — a second truck splits the load, it
+  // does not carry it twice — and hotel rooms come from people, not trucks.
   const trucks = trucksOf(job);
-  const fuel = num(totalMiles) * num(s.fuelCostPerMile) * trucks;
+  const fleet = num(fleetMiles, num(totalMiles) * trucks);
+  const fuel = fleet * num(s.fuelCostPerMile);
   // A room sleeps two, so a crew of three needs two rooms every night.
   const hotelRooms = hotelRoomsFor(job);
   const hotel = num(hotelNights) * hotelRooms * num(s.hotelPerNight);
-  const tolls = num(totalMiles) * num(s.tollPerMile) * trucks;
+  const tolls = fleet * num(s.tollPerMile);
   // A rented truck costs a daily rate plus mileage instead of your own truck's
   // insurance and maintenance. The crew is paid either way.
   const rental = isRented(job)
-    ? trucks * (num(truckDays) * num(s.rentalDayRate) + num(totalMiles) * num(s.rentalPerMile))
+    ? trucks * num(truckDays) * num(s.rentalDayRate) + fleet * num(s.rentalPerMile)
     : 0;
   // Paid to a third party for a leg you are not running. Common pattern: your
   // crew does the local pickup into the warehouse and a carrier takes the
@@ -395,7 +398,7 @@ export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brok
   // estimate that can run over. Same reasoning as the damages reserve.
   const contingency = (crew + fuel + hotel + tolls + materials + rental + storage) * num(s.contingencyPct);
   const variableCost = crew + fuel + hotel + tolls + materials + rental + storage + subcontract + damages + contingency;
-  return { crew, fuel, hotel, hotelRooms, tolls, materials, rental, storage, subcontract, damages, contingency, variableCost };
+  return { crew, fuel, hotel, hotelRooms, tolls, materials, rental, storage, subcontract, damages, contingency, variableCost, fleetMiles: fleet };
 }
 
 // ── 4. Fixed costs ───────────────────────────────────────────────────────────
@@ -495,7 +498,9 @@ function runScenario(base, s, sc) {
   const totalMiles = base.totalMiles * sc.milesFactor;
 
   const v = computeVariable(
-    { truckDays, hotelNights, totalMiles, cuFt: base.cuFt, brokerPrice: base.brokerPrice, job: base.job },
+    { truckDays, hotelNights, totalMiles,
+      fleetMiles: base.fleetMiles * (base.totalMiles > 0 ? totalMiles / base.totalMiles : 1),
+      cuFt: base.cuFt, brokerPrice: base.brokerPrice, job: base.job },
     s
   );
   const f = computeFixed(truckDays, s, trucksOf(base.job), isRented(base.job));
@@ -561,8 +566,12 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   const cuFt = effectiveCuFt(job);
   const revenue = totalRevenue(job);
 
+  // Miles the whole fleet buys fuel for. Defaults to one route times the truck
+  // count, which is exactly right when they all leave from the same yard.
+  const fleetMiles = num(miles?.fleetMiles, dist.totalMiles * trucksOf(job));
+
   const variable = computeVariable(
-    { truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice: revenue, job },
+    { truckDays, hotelNights, totalMiles: dist.totalMiles, fleetMiles, cuFt, brokerPrice: revenue, job },
     s
   );
   const fixed = computeFixed(truckDays, s, trucksOf(job), isRented(job));
@@ -570,7 +579,7 @@ export function evaluateJob(job, settings, miles, opts = {}) {
   // Stress first: the ask price has to know the worst case before it can name a
   // number. The scenarios call computeMetrics themselves without a stress input,
   // which is what stops this from recursing — a scenario has no sub-scenarios.
-  const base = { ...dist, cuFt, brokerPrice: revenue, truckDays, hotelNights, job };
+  const base = { ...dist, fleetMiles, cuFt, brokerPrice: revenue, truckDays, hotelNights, job };
   const stress = STRESS_SCENARIOS.map((sc) => runScenario(base, s, sc));
   const worstStress = stress.reduce((w, x) => (w == null || x.operatingMargin < w.operatingMargin ? x : w), null);
 

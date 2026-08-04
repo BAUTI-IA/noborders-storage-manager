@@ -1152,3 +1152,48 @@ t("storage: garbage in the fields never invents revenue", () => {
     assert.equal(r.storageRevenue, 0, `broke on ${JSON.stringify(v)}`);
   }
 });
+
+// ── Trucks starting from different places ────────────────────────────────────
+
+t("fleet miles: same yard means fleet = route x trucks, exactly as before", () => {
+  const a = evaluateJob({ ...JOB, trucks: 2, drivers: 2, helpers: 2 }, {}, MILES);
+  const b = evaluateJob({ ...JOB, trucks: 2, drivers: 2, helpers: 2 }, {},
+    { ...MILES, fleetMiles: (663 + 671) * 2 });
+  near(a.fuel, b.fuel, 0.01);
+  near(a.variableCost, b.variableCost, 0.01);
+});
+
+t("fleet miles: a truck already on site burns less than one driving out", () => {
+  const job = { ...JOB, trucks: 2, drivers: 2, helpers: 2 };
+  // Truck 1 drives the full route, truck 2 is already at the pickup.
+  const split = evaluateJob(job, {}, { loadedMiles: 663, deadheadMiles: 671, fleetMiles: (663 + 671) + 663 });
+  const both = evaluateJob(job, {}, MILES);
+  assert.ok(split.fuel < both.fuel, "the local truck saves its empty leg");
+  near(both.fuel - split.fuel, 671 * 0.87, 0.01);
+});
+
+t("fleet miles: time follows the SLOWEST truck, not the fleet total", () => {
+  const job = { ...JOB, trucks: 2, drivers: 2, helpers: 2 };
+  const a = evaluateJob(job, {}, { loadedMiles: 663, deadheadMiles: 671, fleetMiles: 9999 });
+  const b = evaluateJob(job, {}, { loadedMiles: 663, deadheadMiles: 671, fleetMiles: 1334 });
+  near(a.drivingHours, b.drivingHours, 0.001, "fleet miles must not stretch the clock");
+  assert.equal(a.truckDays, b.truckDays);
+  assert.ok(a.fuel > b.fuel, "...but they do buy the fuel");
+});
+
+t("fleet miles: tolls and rental mileage ride on the fleet too", () => {
+  const job = { ...JOB, trucks: 2, drivers: 2, helpers: 2, rented: true };
+  const s = { tollPerMile: 0.3, rentalDayRate: 100, rentalPerMile: 1 };
+  const a = evaluateJob(job, s, { ...MILES, fleetMiles: 2000 });
+  const b = evaluateJob(job, s, { ...MILES, fleetMiles: 4000 });
+  near(b.tolls - a.tolls, 2000 * 0.3, 0.01);
+  near(b.rental - a.rental, 2000 * 1, 0.01);
+});
+
+t("fleet miles: stress scenarios scale it with the route, not independently", () => {
+  const job = { ...JOB, trucks: 2, drivers: 2, helpers: 2 };
+  const r = evaluateJob(job, {}, { loadedMiles: 663, deadheadMiles: 671, fleetMiles: 2668 });
+  const milesScenario = r.stress.find((x) => x.id === "extraMiles");
+  // +20% miles has to raise the fleet's fuel by 20% as well.
+  near(milesScenario.fuel, r.fuel * 1.2, 1);
+});

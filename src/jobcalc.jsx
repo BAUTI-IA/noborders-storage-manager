@@ -11,7 +11,7 @@ import { tr } from "./i18n.js";
 import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
   mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews,
-  applyOverrides, overrideDiff, capacityCheck, deadheadFor, compareDeadhead, compareRental, num,
+  applyOverrides, overrideDiff, capacityCheck, deadheadFor, trucksOf, compareDeadhead, compareRental, num,
 } from "./jobCalcData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -333,7 +333,7 @@ const EMPTY_EXTRAS = () => EXTRA_ROWS.map((r) => ({ ...r, amount: "", cuFt: "", 
 const EMPTY_INPUTS = {
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
-  trucks: 1, drivers: 1, helpers: 1, deadheadMode: "roundTrip", rented: false, subcontractCost: "",
+  trucks: 1, drivers: 1, helpers: 1, truckZips: ["", "", ""], deadheadMode: "roundTrip", rented: false, subcontractCost: "",
   storageMonths: "", storageMonthlyRate: "", storageFirstMonthFree: false,
   extras: EMPTY_EXTRAS(),
 };
@@ -451,47 +451,81 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   const originZip = inputs.originZip.trim();
   const destZip = inputs.destZip.trim();
   const baseZip = (settings.baseZip || "").trim();
+  // Truck 1 uses the base ZIP field; the rest use their own, falling back to it.
+  const truckStarts = useMemo(
+    () => Array.from({ length: trucksOf(inputs) }, (_, i) => ((inputs.truckZips?.[i] || "").trim() || baseZip)),
+    [inputs.truckZips, inputs.trucks, baseZip]
+  );
+  const truckStartsKey = truckStarts.join(",");
 
   useEffect(() => {
     if (miles.manual) return;
     if (!/^\d{5}$/.test(originZip) || !/^\d{5}$/.test(destZip)) {
-      setMiles((m) => ({ ...m, loading: false, error: null, loadedMiles: null, deadheadMiles: 0, deadheadKnown: false }));
+      setMiles((m) => ({ ...m, loading: false, error: null, loadedMiles: null, perTruck: [], deadheadKnown: false }));
       return;
     }
     const seq = ++reqSeq.current;
     // Drop the previous route's miles the moment the ZIPs change. Keeping them
     // while a new lookup is in flight — or after it fails — would price THIS job
     // off a route nobody measured, and it would look just as confident.
-    setMiles((m) => ({ ...m, loading: true, error: null, loadedMiles: null, deadheadMiles: 0, deadheadKnown: false }));
+    setMiles((m) => ({ ...m, loading: true, error: null, loadedMiles: null, perTruck: [], deadheadKnown: false }));
     const timer = setTimeout(async () => {
       try {
         const token = session?.access_token || "";
-        const qs = new URLSearchParams({ origin: originZip, dest: destZip, ...(baseZip ? { base: baseZip } : {}) });
-        const res = await fetch(`/api/distance?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-        const body = await res.json();
+        // One lookup per truck START, because trucks leaving from different places
+        // drive different empty miles. Every leg is cached per ZIP pair, so the
+        // second truck from the same yard costs nothing.
+        const starts = truckStarts;
+        const results = await Promise.all(starts.map(async (start) => {
+          const qs = new URLSearchParams({ origin: originZip, dest: destZip, ...(start ? { base: start } : {}) });
+          const res = await fetch(`/api/distance?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+          const body = await res.json();
+          if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+          return body;
+        }));
         if (seq !== reqSeq.current) return;
-        if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
-        setMiles({ loading: false, error: null, loadedMiles: body.loadedMiles,
-          deadheadOutMiles: body.deadheadOutMiles ?? 0, deadheadBackMiles: body.deadheadBackMiles ?? 0,
-          deadheadMiles: body.deadheadMiles, deadheadKnown: body.deadheadKnown, manual: false });
+        setMiles({
+          loading: false, error: null,
+          loadedMiles: results[0].loadedMiles,
+          perTruck: results.map((b) => ({
+            deadheadOutMiles: b.deadheadOutMiles ?? 0,
+            deadheadBackMiles: b.deadheadBackMiles ?? 0,
+          })),
+          deadheadKnown: results.some((b) => b.deadheadKnown),
+          manual: false,
+        });
       } catch (e) {
         if (seq !== reqSeq.current) return;
         // Never invent a distance and never inherit one — surface the failure
         // and let them type it in.
         setMiles((m) => ({
-          ...m, loading: false, loadedMiles: null, deadheadMiles: 0, deadheadKnown: false,
+          ...m, loading: false, loadedMiles: null, perTruck: [], deadheadKnown: false,
           error: e?.message || "Could not compute the route.",
         }));
       }
     }, 600);
     return () => clearTimeout(timer);
-  }, [originZip, destZip, baseZip, miles.manual, session]);
+  }, [originZip, destZip, truckStartsKey, miles.manual, session]);
 
   // ── Live evaluation ────────────────────────────────────────────────────────
   // Manual entry, when active, is the source of truth for miles.
-  const effMiles = miles.manual
-    ? { loadedMiles: num(manualMiles.loaded), deadheadMiles: num(manualMiles.deadhead) }
-    : { loadedMiles: miles.loadedMiles || 0, deadheadMiles: deadheadFor(inputs.deadheadMode, miles) };
+  const effMiles = useMemo(() => {
+    if (miles.manual) {
+      const dh = num(manualMiles.deadhead);
+      const loaded = num(manualMiles.loaded);
+      return { loadedMiles: loaded, deadheadMiles: dh, fleetMiles: (loaded + dh) * trucksOf(inputs) };
+    }
+    const loaded = miles.loadedMiles || 0;
+    const per = (miles.perTruck || []).map((t) => deadheadFor(inputs.deadheadMode, t));
+    if (!per.length) return { loadedMiles: loaded, deadheadMiles: 0, fleetMiles: loaded * trucksOf(inputs) };
+    // The job is not done until the LAST truck is back, so elapsed time follows
+    // the longest route. Fuel is bought by all of them, so that is the sum.
+    return {
+      loadedMiles: loaded,
+      deadheadMiles: Math.max(...per),
+      fleetMiles: per.reduce((a, d) => a + loaded + d, 0),
+    };
+  }, [miles.manual, miles.loadedMiles, miles.perTruck, manualMiles, inputs.deadheadMode, inputs.trucks]);
   const hasMiles = miles.manual ? num(manualMiles.loaded) > 0 : miles.loadedMiles != null;
 
   const result = useMemo(
@@ -756,11 +790,25 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                   value={inputs.subcontractCost} onChange={(e) => u("subcontractCost")(e.target.value)} />
               </div>
               <div>
-                <label style={lbl}>Truck is at (base ZIP)</label>
+                <label style={lbl}>{trucksOf(inputs) > 1 ? "Truck 1 is at" : "Truck is at (base ZIP)"}</label>
                 <input style={{ ...inp, borderColor: jobOverrides.baseZip ? "#185FA5" : "#e5e5e5" }}
                   inputMode="numeric" placeholder={companySettings.baseZip || "33166"}
                   value={jobOverrides.baseZip ?? ""} onChange={(e) => setOverride("baseZip", e.target.value)} />
               </div>
+              {/* Trucks leaving from different places drive different empty miles,
+                  and empty miles are the costliest thing on this screen. */}
+              {Array.from({ length: trucksOf(inputs) - 1 }, (_, i) => (
+                <div key={i}>
+                  <label style={lbl}>Truck {i + 2} is at</label>
+                  <input style={inp} inputMode="numeric" placeholder={baseZip || companySettings.baseZip || "same as truck 1"}
+                    value={inputs.truckZips?.[i + 1] ?? ""}
+                    onChange={(e) => setInputs((p) => {
+                      const z = [...(p.truckZips || [])];
+                      z[i + 1] = e.target.value;
+                      return { ...p, truckZips: z };
+                    })} />
+                </div>
+              ))}
             </div>
 
             {/* Crew for this job. A bigger crew costs more per day and finishes sooner. */}
@@ -1095,6 +1143,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             <Row label="Loaded miles" value={int(result.loadedMiles)} />
             <Row label="Deadhead miles" value={int(result.deadheadMiles)} />
             <Row label="Total miles" value={int(result.totalMiles)} strong />
+            {result.fleetMiles > result.totalMiles && <Row label="Fleet miles (all trucks)" value={int(result.fleetMiles)} />}
             <Row label="Handling hours" value={dec(result.handlingHours)} />
             <Row label="Driving hours" value={dec(result.drivingHours)} />
             <Row label="Hotel nights" value={int(result.hotelNights)} />
