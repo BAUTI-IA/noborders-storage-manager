@@ -11,7 +11,7 @@ import { tr } from "./i18n.js";
 import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
   mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews,
-  applyOverrides, overrideDiff, capacityCheck, num,
+  applyOverrides, overrideDiff, capacityCheck, deadheadFor, compareDeadhead, compareRental, num,
 } from "./jobCalcData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -95,6 +95,12 @@ alter table public.job_evaluations add column if not exists trucks smallint not 
 alter table public.job_evaluations add column if not exists actual_trucks smallint;
 alter table public.job_evaluations add column if not exists actual_drivers smallint;
 alter table public.job_evaluations add column if not exists actual_helpers smallint;
+
+-- Which empty-miles assumption the verdict was based on, and whether the truck
+-- was rented. A saved evaluation is meaningless without the assumption behind it.
+alter table public.job_evaluations add column if not exists deadhead_mode text;
+alter table public.job_evaluations add column if not exists rented boolean not null default false;
+alter table public.job_evaluations add column if not exists rental_cost numeric;
 
 create table if not exists public.zip_distances (
   origin_zip text not null,
@@ -184,7 +190,7 @@ const SETTING_GROUPS = [
   { section: "Crew", keys: ["driverDayRate", "helperDayRate", "baselineCrewSize", "crewScalingExponent", "teamDrivingBonusHours"] },
   { section: "Operation", keys: ["fuelCostPerMile", "avgSpeedMph", "usefulHoursPerDay"] },
   { section: "Productivity", keys: ["cuFtPerHour", "longCarryUplift", "shuttleUplift"] },
-  { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks", "truckCapacityCuFt"] },
+  { section: "Fixed cost per truck", keys: ["insuranceMonthlyPerTruck", "maintenanceReserveMonthlyPerTruck", "depreciationMonthlyPerTruck", "overheadMonthly", "activeTrucks", "truckCapacityCuFt", "rentalDayRate", "rentalPerMile"] },
   { section: "Per-unit cost", keys: ["hotelPerNight", "tollPerMile", "materialsPerCuFt", "extraCuFtRate", "damagesReservePct", "contingencyPct"] },
   { section: "Decision", keys: ["workedDaysPerMonth", "targetMarginPct", "longDistanceThresholdMiles"] },
   { section: "Base", keys: ["baseZip"] },
@@ -208,6 +214,8 @@ const SETTING_LABELS = {
   overheadMonthly: { label: "Overhead per month" },
   activeTrucks: { label: "Active trucks" },
   truckCapacityCuFt: { label: "Cu ft per truck" },
+  rentalDayRate: { label: "Truck rental per day" },
+  rentalPerMile: { label: "Truck rental per mile" },
   hotelPerNight: { label: "Hotel per night" },
   tollPerMile: { label: "Tolls per mile" },
   materialsPerCuFt: { label: "Materials per cu ft" },
@@ -289,6 +297,13 @@ function reasonText(reason, r) {
   );
 }
 
+// The i18n checker audits `label` props, so these get dictionary coverage.
+const DEADHEAD_LABELS = {
+  roundTrip: { label: "Drives out and comes back" },
+  oneWay: { label: "Drives out, stays out" },
+  none: { label: "Truck is already there" },
+};
+
 const SCENARIO_LABELS = {
   extraDay: { label: "+1 day" },
   extraMiles: { label: "+20% miles" },
@@ -310,7 +325,7 @@ const EMPTY_EXTRAS = () => EXTRA_ROWS.map((r) => ({ ...r, amount: "", cuFt: "", 
 const EMPTY_INPUTS = {
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
-  trucks: 1, drivers: 1, helpers: 1,
+  trucks: 1, drivers: 1, helpers: 1, deadheadMode: "roundTrip", rented: false,
   extras: EMPTY_EXTRAS(),
 };
 
@@ -447,7 +462,9 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
         const body = await res.json();
         if (seq !== reqSeq.current) return;
         if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
-        setMiles({ loading: false, error: null, loadedMiles: body.loadedMiles, deadheadMiles: body.deadheadMiles, deadheadKnown: body.deadheadKnown, manual: false });
+        setMiles({ loading: false, error: null, loadedMiles: body.loadedMiles,
+          deadheadOutMiles: body.deadheadOutMiles ?? 0, deadheadBackMiles: body.deadheadBackMiles ?? 0,
+          deadheadMiles: body.deadheadMiles, deadheadKnown: body.deadheadKnown, manual: false });
       } catch (e) {
         if (seq !== reqSeq.current) return;
         // Never invent a distance and never inherit one — surface the failure
@@ -465,7 +482,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   // Manual entry, when active, is the source of truth for miles.
   const effMiles = miles.manual
     ? { loadedMiles: num(manualMiles.loaded), deadheadMiles: num(manualMiles.deadhead) }
-    : { loadedMiles: miles.loadedMiles || 0, deadheadMiles: miles.deadheadMiles || 0 };
+    : { loadedMiles: miles.loadedMiles || 0, deadheadMiles: deadheadFor(inputs.deadheadMode, miles) };
   const hasMiles = miles.manual ? num(manualMiles.loaded) > 0 : miles.loadedMiles != null;
 
   const result = useMemo(
@@ -479,6 +496,14 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
   );
   const capacity = useMemo(() => capacityCheck(inputs, settings), [inputs, settings]);
+  const dhRows = useMemo(
+    () => (ready && !miles.manual ? compareDeadhead(inputs, settings, miles) : []),
+    [ready, inputs, settings, miles]
+  );
+  const rentRows = useMemo(
+    () => (ready ? compareRental(inputs, settings, effMiles) : []),
+    [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
+  );
   const u = (k) => (v) => setInputs((p) => ({ ...p, [k]: v }));
 
   const setExtra = (i, patch) =>
@@ -518,7 +543,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   // Columns added after the first release. If the operator has not run the
   // migration yet, PostgREST rejects the WHOLE row for an unknown column, so a
   // perfectly good evaluation would be lost. Retry without them and say why.
-  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft", "trucks", "actual_trucks", "actual_drivers", "actual_helpers"];
+  const LATER_COLUMNS = ["drivers", "helpers", "hotel_rooms", "overrides", "extras", "total_revenue", "effective_cu_ft", "trucks", "actual_trucks", "actual_drivers", "actual_helpers", "deadhead_mode", "rented", "rental_cost"];
 
   async function saveEvaluation(decision) {
     setSavingEval(true); setErr(null);
@@ -530,6 +555,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
       origin_access: inputs.originAccess, dest_access: inputs.destAccess,
       long_carry: inputs.longCarry, shuttle: inputs.shuttle,
       trucks: r.trucks, drivers: r.drivers, helpers: r.helpers, hotel_rooms: r.hotelRooms,
+      deadhead_mode: inputs.deadheadMode, rented: inputs.rented, rental_cost: r.rental,
       extras: r.extrasTotal !== 0 ? inputs.extras.filter((e) => num(e.amount) !== 0 || num(e.cuFt) !== 0) : null,
       total_revenue: r.totalRevenue, effective_cu_ft: r.effectiveCuFt,
       loaded_miles: r.loadedMiles, deadhead_miles: r.deadheadMiles, total_miles: r.totalMiles,
@@ -697,6 +723,21 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                 adjust panel — it just belongs up here, because it changes per job
                 and it is what makes deadhead miles real. */}
             <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
+              <div>
+                <label style={lbl}>Empty miles</label>
+                <select style={inp} value={inputs.deadheadMode} onChange={(e) => u("deadheadMode")(e.target.value)}>
+                  <option value="roundTrip">Drives out and comes back</option>
+                  <option value="oneWay">Drives out, stays out</option>
+                  <option value="none">Truck is already there</option>
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>Truck</label>
+                <select style={inp} value={inputs.rented ? "rented" : "own"} onChange={(e) => u("rented")(e.target.value === "rented")}>
+                  <option value="own">Mine</option>
+                  <option value="rented">Rented near pickup</option>
+                </select>
+              </div>
               <div>
                 <label style={lbl}>Truck is at (base ZIP)</label>
                 <input style={{ ...inp, borderColor: jobOverrides.baseZip ? "#185FA5" : "#e5e5e5" }}
@@ -941,6 +982,57 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             </Collapsible>
           )}
 
+          {/* The honest answer for a job a week out: not one number, a range. Which
+              end you land on is a logistics decision still to be made. */}
+          {dhRows.length > 0 && miles.deadheadKnown && (
+            <Collapsible title="What it costs, depending on the empty miles" defaultOpen>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 380 }}>
+                  <thead>
+                    <tr style={{ color: "#999", textAlign: "right" }}>
+                      <th style={{ textAlign: "left", fontWeight: 600, padding: "4px 6px" }}>Assumption</th>
+                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Empty mi</th>
+                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Cost</th>
+                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dhRows.map((d) => {
+                      const ds = VERDICT_STYLE[d.verdict];
+                      const on = d.mode === inputs.deadheadMode;
+                      return (
+                        <tr key={d.mode} style={{ fontWeight: on ? 800 : 500, background: on ? "#fafafa" : "transparent" }}>
+                          <td style={{ padding: "6px", textAlign: "left" }}>{DEADHEAD_LABELS[d.mode].label}{on ? " ←" : ""}</td>
+                          <td style={{ padding: "6px", textAlign: "right" }}>{int(d.deadheadMiles)}</td>
+                          <td style={{ padding: "6px", textAlign: "right" }}>{money(d.variableCost + d.absorbedFixed)}</td>
+                          <td style={{ padding: "6px", textAlign: "right", color: ds.fg, fontWeight: 800 }}>{money(d.operatingMargin)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 11.5, color: "#777", marginTop: 8, lineHeight: 1.45 }}>
+                {tr("This job does not have one cost. Where it lands depends on whether the truck drives out for it alone — which is a logistics decision, not a broker one.",
+                    "Este job no tiene un costo único. Dónde cae depende de si el camión sale solo para esto — y eso es una decisión de logística, no del broker.")}
+              </div>
+            </Collapsible>
+          )}
+
+          {/* Send your own truck, or rent one near the pickup? */}
+          {rentRows.length > 0 && num(settings.rentalDayRate) > 0 && (
+            <Collapsible title="Mine or rented">
+              {rentRows.map((r) => (
+                <Row key={String(r.rented)} label={r.rented ? "Rented near pickup" : "My truck"}
+                  value={money(r.operatingMargin)} strong={r.rented === inputs.rented}
+                  tone={r.operatingMargin < 0 ? "#A32D2D" : "#3B6D11"} />
+              ))}
+              <div style={{ fontSize: 11.5, color: "#777", marginTop: 8, lineHeight: 1.45 }}>
+                Renting frees your own truck to earn somewhere else, so it absorbs none of your insurance or maintenance.
+              </div>
+            </Collapsible>
+          )}
+
           {/* 5. What the app worked out on its own */}
           <Collapsible title="Estimate" defaultOpen>
             <Row label="Loaded miles" value={int(result.loadedMiles)} />
@@ -988,6 +1080,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             <Row label="Hotel" value={`${money(result.hotel)}  (${result.hotelRooms}x)`} />
             <Row label="Tolls" value={money(result.tolls)} />
             <Row label="Materials" value={money(result.materials)} />
+            {result.rental > 0 && <Row label="Truck rental" value={money(result.rental)} />}
             <Row label="Damages reserve" value={money(result.damages)} />
             <Row label="Contingency" value={money(result.contingency)} />
             <Row label="Variable cost" value={money(result.variableCost)} strong />

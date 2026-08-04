@@ -6,7 +6,7 @@ import {
   roundHalf, mergeSettings, crewDayRate, DEFAULT_SETTINGS, SETTING_FLAGS,
   assembleMiles, computeTime, hotelNightsFor, computeVariable, computeFixed,
   computeMetrics, verdictFor, evaluateJob, calibrate, calibrationPatch,
-  VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, capacityCheck, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
+  VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, capacityCheck, deadheadFor, compareDeadhead, compareRental, DEADHEAD_MODES, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
 } from "../src/jobCalcData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -957,4 +957,94 @@ t("calibration: rows with no actual crew still fall back to the planned one", ()
   const b = calibrate([row({ actual_truck_days: 3, actual_miles: 1000, drivers: 1, helpers: 1 })]);
   near(a.cuFtPerHour, b.cuFtPerHour, 0.01);
   near(a.cuFtPerHour, 150, 0.01, "and it is still the old, correct number");
+});
+
+// ── Deadhead assumptions ─────────────────────────────────────────────────────
+
+const LEGS = { loadedMiles: 1405, deadheadOutMiles: 450, deadheadBackMiles: 1230 };
+
+t("deadheadFor: each assumption counts exactly the legs it claims to", () => {
+  assert.equal(deadheadFor("roundTrip", LEGS), 1680);
+  assert.equal(deadheadFor("oneWay", LEGS), 450, "drives out, does not come home empty");
+  assert.equal(deadheadFor("none", LEGS), 0, "truck is already there");
+  assert.equal(deadheadFor("roundTrip", {}), 0, "no route, no invented miles");
+  assert.equal(deadheadFor("roundTrip", { deadheadOutMiles: -50, deadheadBackMiles: -50 }), 0);
+});
+
+t("compareDeadhead: the spread between assumptions is the real answer", () => {
+  const job = { originZip: "54962", destZip: "87114", cuFt: 3456, brokerPrice: 9955,
+    originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
+    drivers: 2, helpers: 2, trucks: 2 };
+  const s = { fuelCostPerMile: 0.8, tollPerMile: 0.3, driverDayRate: 250, helperDayRate: 250, cuFtPerHour: 575.6 };
+  const rows = compareDeadhead(job, s, LEGS);
+  assert.equal(rows.length, 3);
+  const [round, oneWay, none] = rows;
+  assert.deepEqual(rows.map(r => r.mode), ["roundTrip", "oneWay", "none"]);
+  // More empty miles can only cost more.
+  assert.ok(round.variableCost > oneWay.variableCost);
+  assert.ok(oneWay.variableCost > none.variableCost);
+  assert.ok(round.operatingMargin < none.operatingMargin);
+  // The real job: fine if the truck is already there, a loss if it drives out for it.
+  assert.ok(none.operatingMargin > 0, "already-there case is positive");
+  assert.ok(round.operatingMargin < 0, "dedicated round trip loses money");
+});
+
+t("compareDeadhead: with no base ZIP every assumption collapses to the same thing", () => {
+  const rows = compareDeadhead(JOB, {}, { loadedMiles: 1405 });
+  for (const r of rows) assert.equal(r.deadheadMiles, 0);
+  assert.equal(new Set(rows.map(r => Math.round(r.variableCost))).size, 1);
+});
+
+// ── Rented truck ─────────────────────────────────────────────────────────────
+
+t("rented: your own truck absorbs nothing, because it is not tied up", () => {
+  const own = evaluateJob(JOB, {}, MILES);
+  const rent = evaluateJob({ ...JOB, rented: true }, {}, MILES);
+  assert.ok(own.absorbedFixed > 0);
+  assert.equal(rent.absorbedFixed, 0);
+});
+
+t("rented: a rental charge takes the place of the fixed cost", () => {
+  const s = { rentalDayRate: 120, rentalPerMile: 0.99 };
+  const r = evaluateJob({ ...JOB, rented: true }, s, MILES);
+  near(r.rental, r.truckDays * 120 + r.totalMiles * 0.99, 0.01);
+  assert.ok(r.variableCost > evaluateJob({ ...JOB, rented: true }, {}, MILES).variableCost);
+});
+
+t("rented: the rental rides inside the contingency base, like every other cost", () => {
+  const s = { rentalDayRate: 100, rentalPerMile: 0 };
+  const r = evaluateJob({ ...JOB, rented: true }, s, MILES);
+  near(r.contingency, (r.crew + r.fuel + r.hotel + r.tolls + r.materials + r.rental) * 0.1, 0.01);
+});
+
+t("rented: two rented trucks cost two rentals", () => {
+  const s = { rentalDayRate: 120, rentalPerMile: 0.99 };
+  const one = evaluateJob({ ...JOB, rented: true, trucks: 1, drivers: 2, helpers: 2 }, s, MILES);
+  const two = evaluateJob({ ...JOB, rented: true, trucks: 2, drivers: 2, helpers: 2 }, s, MILES);
+  near(two.rental, one.rental * 2, 0.01);
+});
+
+t("rented: ships pending at zero — no invented U-Haul pricing", () => {
+  assert.equal(DEFAULT_SETTINGS.rentalDayRate, 0);
+  assert.equal(DEFAULT_SETTINGS.rentalPerMile, 0);
+  assert.equal(SETTING_FLAGS.rentalDayRate, "pending");
+  assert.equal(evaluateJob({ ...JOB, rented: true }, {}, MILES).rental, 0);
+});
+
+t("compareRental: own versus rented, side by side on the same job", () => {
+  const s = { rentalDayRate: 120, rentalPerMile: 0.99 };
+  const [own, rent] = compareRental(JOB, s, MILES);
+  assert.equal(own.rented, false);
+  assert.equal(rent.rented, true);
+  assert.ok(own.absorbedFixed > 0 && rent.absorbedFixed === 0);
+  assert.ok(rent.rental > 0 && own.rental === 0);
+  for (const r of [own, rent]) assert.ok(Number.isFinite(r.contributionPerTruckDay));
+});
+
+t("not renting leaves every number exactly where it was", () => {
+  const a = evaluateJob(JOB, { rentalDayRate: 999, rentalPerMile: 9 }, MILES);
+  const b = evaluateJob(JOB, {}, MILES);
+  assert.equal(a.rental, 0);
+  near(a.variableCost, b.variableCost, 0.001);
+  assert.equal(a.verdict, b.verdict);
 });

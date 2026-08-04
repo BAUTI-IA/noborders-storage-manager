@@ -106,6 +106,12 @@ alter table public.job_evaluations add column if not exists actual_trucks smalli
 alter table public.job_evaluations add column if not exists actual_drivers smallint;
 alter table public.job_evaluations add column if not exists actual_helpers smallint;
 
+-- Which empty-miles assumption the verdict was based on, and whether the truck
+-- was rented. A saved evaluation is meaningless without the assumption behind it.
+alter table public.job_evaluations add column if not exists deadhead_mode text;
+alter table public.job_evaluations add column if not exists rented boolean not null default false;
+alter table public.job_evaluations add column if not exists rental_cost numeric;
+
 create table if not exists public.zip_distances (
   origin_zip text not null,
   dest_zip text not null,

@@ -198,17 +198,23 @@ export default async function handler(req, res) {
 
     // Without a base ZIP there is no deadhead to compute. Say so rather than
     // silently returning a total that pretends the truck teleports home.
-    let deadheadMiles = 0;
+    // Outbound and return are reported SEPARATELY: whether the truck comes home
+    // empty is a logistics decision the operator has not made yet a week out, and
+    // it is worth thousands. The client picks which legs to count.
+    let deadheadOutMiles = 0;
+    let deadheadBackMiles = 0;
     let deadheadKnown = false;
     if (base) {
-      const out = await legMiles(base, origin, state);
-      const back = await legMiles(dest, base, state);
-      deadheadMiles = round1(out + back);
+      deadheadOutMiles = await legMiles(base, origin, state);
+      deadheadBackMiles = await legMiles(dest, base, state);
       deadheadKnown = true;
     }
+    const deadheadMiles = round1(deadheadOutMiles + deadheadBackMiles);
 
     res.status(200).json({
       loadedMiles,
+      deadheadOutMiles,
+      deadheadBackMiles,
       deadheadMiles,
       totalMiles: round1(loadedMiles + deadheadMiles),
       deadheadKnown,

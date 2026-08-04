@@ -64,6 +64,11 @@ export const DEFAULT_SETTINGS = {
   overheadMonthly: 0,
   activeTrucks: 11,
 
+  // Renting a truck near the pickup instead of sending your own. Both pending at
+  // zero — U-Haul pricing varies by market and nobody has supplied it.
+  rentalDayRate: 0,
+  rentalPerMile: 0,
+
   // How much a single truck holds. Zero means no check at all — inventing a
   // capacity would tell the operator a job does not fit on no evidence.
   truckCapacityCuFt: 0,
@@ -108,6 +113,8 @@ export const SETTING_FLAGS = {
   materialsPerCuFt: "pending",
   extraCuFtRate: "pending",
   truckCapacityCuFt: "pending",
+  rentalDayRate: "pending",
+  rentalPerMile: "pending",
   damagesReservePct: "pending",
   baseZip: "pending",
 };
@@ -274,6 +281,28 @@ export function assembleMiles({ loadedMiles, deadheadMiles }) {
   return { loadedMiles: loaded, deadheadMiles: deadhead, totalMiles: loaded + deadhead };
 }
 
+// ── Deadhead assumptions ─────────────────────────────────────────────────────
+//
+// A job a week out does not have ONE cost. What the empty miles cost depends on
+// logistics nobody has planned yet: does the truck drive out for this alone, is
+// it already nearby, does it come home empty or find a backhaul? On a long lane
+// that spread is thousands of dollars, so the app names the assumption instead of
+// quietly picking the flattering one.
+
+export const DEADHEAD_MODES = ["roundTrip", "oneWay", "none"];
+
+/** Empty miles implied by an assumption, given the two legs the router returned. */
+export function deadheadFor(mode, legs) {
+  const out = Math.max(0, num(legs?.deadheadOutMiles));
+  const back = Math.max(0, num(legs?.deadheadBackMiles));
+  if (mode === "none") return 0;             // truck is already there and stays out
+  if (mode === "oneWay") return out;         // drives out for it, does not come home empty
+  return out + back;                          // dedicated round trip — the conservative read
+}
+
+/** Is this job being run on a rented truck rather than one of yours? */
+export const isRented = (job) => job?.rented === true;
+
 // ── 2. Time ──────────────────────────────────────────────────────────────────
 
 export function computeTime(job, s, totalMiles) {
@@ -324,12 +353,17 @@ export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brok
   const hotelRooms = hotelRoomsFor(job);
   const hotel = num(hotelNights) * hotelRooms * num(s.hotelPerNight);
   const tolls = num(totalMiles) * num(s.tollPerMile) * trucks;
+  // A rented truck costs a daily rate plus mileage instead of your own truck's
+  // insurance and maintenance. The crew is paid either way.
+  const rental = isRented(job)
+    ? trucks * (num(truckDays) * num(s.rentalDayRate) + num(totalMiles) * num(s.rentalPerMile))
+    : 0;
   const materials = num(cuFt) * num(s.materialsPerCuFt);
   // Reserve rides on everything invoiced, not just the broker's share.
   const damages = num(brokerPrice) * num(s.damagesReservePct);
-  const contingency = (crew + fuel + hotel + tolls + materials) * num(s.contingencyPct);
-  const variableCost = crew + fuel + hotel + tolls + materials + damages + contingency;
-  return { crew, fuel, hotel, hotelRooms, tolls, materials, damages, contingency, variableCost };
+  const contingency = (crew + fuel + hotel + tolls + materials + rental) * num(s.contingencyPct);
+  const variableCost = crew + fuel + hotel + tolls + materials + rental + damages + contingency;
+  return { crew, fuel, hotel, hotelRooms, tolls, materials, rental, damages, contingency, variableCost };
 }
 
 // ── 4. Fixed costs ───────────────────────────────────────────────────────────
@@ -338,7 +372,7 @@ export function computeVariable({ truckDays, hotelNights, totalMiles, cuFt, brok
 // not work all 30. Dividing by days WORKED is what makes the number honest: at
 // 15 worked days, insurance really costs $70 per working day, not $35.
 
-export function computeFixed(truckDays, s, trucksOnJob = 1) {
+export function computeFixed(truckDays, s, trucksOnJob = 1, rented = false) {
   const fleet = num(s.activeTrucks);
   const fixedMonthlyPerTruck =
     num(s.insuranceMonthlyPerTruck) +
@@ -350,7 +384,9 @@ export function computeFixed(truckDays, s, trucksOnJob = 1) {
   const fixedPerWorkedDay = worked > 0 ? fixedMonthlyPerTruck / worked : 0;
   // Each truck on the job carries its own insurance and maintenance for every
   // day it is tied up — two trucks for three days absorb six days of fixed cost.
-  const absorbedFixed = fixedPerWorkedDay * num(truckDays) * Math.max(1, num(trucksOnJob, 1));
+  // A rented truck absorbs none of YOUR fixed cost — your own truck stays free to
+  // earn elsewhere. That is the whole point of comparing the two.
+  const absorbedFixed = rented ? 0 : fixedPerWorkedDay * num(truckDays) * Math.max(1, num(trucksOnJob, 1));
 
   return { fixedMonthlyPerTruck, fixedPerWorkedDay, absorbedFixed };
 }
@@ -423,7 +459,7 @@ function runScenario(base, s, sc) {
     { truckDays, hotelNights, totalMiles, cuFt: base.cuFt, brokerPrice: base.brokerPrice, job: base.job },
     s
   );
-  const f = computeFixed(truckDays, s, trucksOf(base.job));
+  const f = computeFixed(truckDays, s, trucksOf(base.job), isRented(base.job));
   const m = computeMetrics(
     {
       brokerPrice: base.brokerPrice,
@@ -490,7 +526,7 @@ export function evaluateJob(job, settings, miles, opts = {}) {
     { truckDays, hotelNights, totalMiles: dist.totalMiles, cuFt, brokerPrice: revenue, job },
     s
   );
-  const fixed = computeFixed(truckDays, s, trucksOf(job));
+  const fixed = computeFixed(truckDays, s, trucksOf(job), isRented(job));
 
   // Stress first: the ask price has to know the worst case before it can name a
   // number. The scenarios call computeMetrics themselves without a stress input,
@@ -544,6 +580,50 @@ export function evaluateJob(job, settings, miles, opts = {}) {
     verdict,
     reason,
   };
+}
+
+// ── The cost of a job you have not planned the logistics for yet ─────────────
+//
+// A broker sends a job a week out. The honest answer to "what will this cost me"
+// is not one number: it is a range, and which end you land on is a logistics
+// decision still to be made. Showing only the optimistic end is how an operator
+// takes a job that loses money; showing only the pessimistic end is how he turns
+// down a good one. So show all three and name each assumption.
+
+const scenarioSummary = (r) => ({
+  totalMiles: r.totalMiles,
+  truckDays: r.truckDays,
+  variableCost: r.variableCost,
+  absorbedFixed: r.absorbedFixed,
+  operatingMargin: r.operatingMargin,
+  contributionPerTruckDay: r.contributionPerTruckDay,
+  profitPerTruckDay: r.profitPerTruckDay,
+  verdict: r.verdict,
+});
+
+/**
+ * The same job under each deadhead assumption.
+ * @param legs { loadedMiles, deadheadOutMiles, deadheadBackMiles } from /api/distance
+ */
+export function compareDeadhead(job, settings, legs, opts = {}) {
+  const loadedMiles = num(legs?.loadedMiles);
+  return DEADHEAD_MODES.map((mode) => {
+    const deadheadMiles = deadheadFor(mode, legs);
+    const r = evaluateJob(job, settings, { loadedMiles, deadheadMiles }, opts);
+    return { mode, deadheadMiles, ...scenarioSummary(r) };
+  });
+}
+
+/**
+ * Send your own truck, or rent one near the pickup?
+ * Renting frees your truck to earn elsewhere, which is why its absorbed fixed
+ * cost drops to zero and a rental charge takes its place.
+ */
+export function compareRental(job, settings, miles, opts = {}) {
+  return [false, true].map((rented) => {
+    const r = evaluateJob({ ...job, rented }, settings, miles, opts);
+    return { rented, rental: r.rental, ...scenarioSummary(r) };
+  });
 }
 
 // ── Crew comparison ──────────────────────────────────────────────────────────
