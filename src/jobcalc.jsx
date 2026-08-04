@@ -12,6 +12,7 @@ import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
   mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews,
   applyOverrides, overrideDiff, capacityCheck, deadheadFor, trucksOf, compareDeadhead, compareRental, num,
+  profitRange, estimateConfidence, RANGE_LEVER, CONFIDENCE,
 } from "./jobCalcData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -180,16 +181,30 @@ const VERDICT_STYLE = {
   [VERDICT.RED]: { bg: "#FCEBEB", bd: "#E24B4A", fg: "#A32D2D" },
 };
 
+// Nothing has been entered yet. A dimmed red "DO NOT TAKE IT" reads as a
+// verdict on a job nobody described, so the empty state gets its own neutral
+// colours instead of a faded version of the worst answer.
+const NEUTRAL_STYLE = { bg: "#fafafa", bd: "#e8e8e8", fg: "#999" };
+
 // Rounded for display — nobody negotiates in cents.
 const money = (v) => (Number.isFinite(Number(v)) ? "$" + Math.round(Number(v)).toLocaleString() : "—");
 const dec = (v, d = 1) => (Number.isFinite(Number(v)) ? Number(Number(v).toFixed(d)).toLocaleString() : "—");
 const int = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)).toLocaleString() : "—");
+const pct = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) + "%" : "—");
 
 const ACCESS_LABELS = [
   { value: "direct", label: "Direct" },
   { value: "elevator", label: "Elevator" },
   { value: "stairs", label: "Stairs" },
 ];
+
+// Same three words, for the interpolated section summaries the DOM pass cannot
+// reach.
+const ACCESS_SHORT = {
+  direct: { en: "Direct", es: "Directo" },
+  elevator: { en: "Elevator", es: "Ascensor" },
+  stairs: { en: "Stairs", es: "Escalera" },
+};
 
 // The settings editor. Grouped, English labels (the i18n checker audits every
 // `label` property here), and each one carries its trust flag from jobCalcData.
@@ -261,17 +276,132 @@ function Row({ label, value, strong, tone }) {
   );
 }
 
-function Collapsible({ title, defaultOpen = false, children }) {
+/**
+ * `summary` is what the section says while it is CLOSED — the current value of
+ * everything inside it. Without it, progressive disclosure just hides state, and
+ * the operator has to open all five sections to find out how the job is set up.
+ */
+function Collapsible({ title, summary, defaultOpen = false, children }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div style={{ ...card, padding: "12px 16px" }}>
       <button type="button" onClick={() => setOpen((o) => !o)}
-        style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "4px 0", textAlign: "left" }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: "0.07em" }}>{title}</span>
-        <span style={{ flex: 1 }} />
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", padding: "4px 0", textAlign: "left" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>{title}</span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "#aaa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {!open && summary ? summary : ""}
+        </span>
         <span style={{ color: "#bbb", fontSize: 11, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
       </button>
       {open && <div style={{ paddingTop: 10 }}>{children}</div>}
+    </div>
+  );
+}
+
+/** Two-column only when there is room for it; below that everything stacks. */
+function useWide(minWidth = 900) {
+  const [wide, setWide] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(`(min-width:${minWidth}px)`).matches
+      : true
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(`(min-width:${minWidth}px)`);
+    const on = (e) => setWide(e.matches);
+    setWide(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [minWidth]);
+  return wide;
+}
+
+/**
+ * The range this job can land in, in dollars of operating margin.
+ *
+ * The track is the decision itself: red below break-even, amber between
+ * break-even and the target margin, green above it. The dark band is where this
+ * job can land, and the white tick is the plan as entered. Whether the band
+ * straddles a zone boundary IS the answer — which is why it is drawn rather
+ * than left to be worked out from three numbers in a table.
+ */
+function RangeBar({ low, mid, high, target, targetLabel }) {
+  const lo = Math.min(low, 0, target);
+  const hi = Math.max(high, target, 0);
+  const span = hi - lo || 1;
+  const min = lo - span * 0.08;
+  const max = hi + span * 0.08;
+  const at = (v) => ((v - min) / (max - min)) * 100;
+  const zero = at(0);
+  const tgt = at(target);
+  const bandLeft = at(low);
+  const bandWidth = Math.max(1.5, at(high) - bandLeft);
+
+  return (
+    <div style={{ marginTop: 13 }}>
+      <div style={{ position: "relative", height: 26, borderRadius: 7, overflow: "hidden", background: "#FCEBEB" }}>
+        <div style={{ position: "absolute", top: 0, bottom: 0, left: `${zero}%`, width: `${Math.max(0, tgt - zero)}%`, background: "#FAEEDA" }} />
+        <div style={{ position: "absolute", top: 0, bottom: 0, left: `${tgt}%`, right: 0, background: "#EAF3DE" }} />
+        {/* Hollow on purpose. A solid band hides the zone it sits on, and which
+            zone each end falls in — loss, thin, or past the target — is the
+            entire question the bar is drawn to answer. */}
+        <div style={{ position: "absolute", top: 3, bottom: 3, left: `${bandLeft}%`, width: `${bandWidth}%`, borderRadius: 6, border: "2px solid #111", background: "rgba(17,17,17,.09)", boxSizing: "border-box" }} />
+        <div style={{ position: "absolute", top: 3, bottom: 3, left: `${at(mid)}%`, width: 3, marginLeft: -1.5, borderRadius: 2, background: "#111" }} />
+      </div>
+      <div style={{ position: "relative", height: 15, marginTop: 3, fontSize: 9.5, color: "#999" }}>
+        <span style={{ position: "absolute", left: `${zero}%`, transform: "translateX(-50%)", whiteSpace: "nowrap" }}>$0</span>
+        {tgt - zero > 14 && (
+          <span style={{ position: "absolute", left: `${tgt}%`, transform: "translateX(-50%)", whiteSpace: "nowrap" }}>{targetLabel}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// The chip text is interpolated, so the DOM pass cannot reach it — each level
+// carries both wordings and tr() picks one.
+const CONFIDENCE_STYLE = {
+  [CONFIDENCE.LOW]: { bg: "#FCEBEB", fg: "#A32D2D", en: "Low", es: "Baja" },
+  [CONFIDENCE.MEDIUM]: { bg: "#FAEEDA", fg: "#854F0B", en: "Medium", es: "Media" },
+  [CONFIDENCE.HIGH]: { bg: "#EAF3DE", fg: "#3B6D11", en: "High", es: "Alta" },
+};
+
+/**
+ * How much the number above can be trusted. A green light resting on parameters
+ * nobody has measured is worth nothing, and until now the only sign of that was
+ * a note buried inside the cost breakdown.
+ */
+function ConfidenceChip({ conf, labelFor, onCalibrate }) {
+  const [open, setOpen] = useState(false);
+  const st = CONFIDENCE_STYLE[conf.level] || CONFIDENCE_STYLE[CONFIDENCE.LOW];
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        style={{ background: st.bg, color: st.fg, border: "none", borderRadius: 20, padding: "4px 11px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+        {tr(`Estimate quality: ${st.en}`, `Calidad del estimado: ${st.es}`)} {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <div style={{ background: "#fff", border: "1px solid #eee", borderRadius: 9, padding: "10px 12px", marginTop: 8, fontSize: 11.5, color: "#777", lineHeight: 1.5 }}>
+          {conf.understated && (
+            <div style={{ marginBottom: 7 }}>
+              {tr(
+                `Still at zero, so the real cost is higher than this: ${conf.missingCost.map(labelFor).join(", ")}.`,
+                `Siguen en cero, así que el costo real es más alto que este: ${conf.missingCost.map(labelFor).join(", ")}.`
+              )}
+            </div>
+          )}
+          <div style={{ marginBottom: conf.sampleSize > 0 ? 7 : 0 }}>
+            {conf.sampleSize === 0
+              ? tr("No executed job has been recorded yet, so how fast the crew really loads is still a guess.",
+                   "Todavía no se cargó ningún job ejecutado, así que a qué velocidad carga la crew de verdad sigue siendo un supuesto.")
+              : tr(`Calibrated on ${conf.sampleSize} executed job(s).`,
+                   `Calibrado sobre ${conf.sampleSize} job(s) ejecutado(s).`)}
+          </div>
+          <button type="button" onClick={onCalibrate} style={{ ...btn(false), padding: "4px 10px", fontSize: 11.5 }}>
+            Open Calibration
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -312,6 +442,55 @@ const DEADHEAD_LABELS = {
   none: { label: "Truck is already there" },
 };
 
+// Short forms for the range sentences, where the full label reads like a menu
+// option rather than a description of what happens.
+const DEADHEAD_SHORT = {
+  roundTrip: { en: "the truck goes out for this alone", es: "el camión sale solo para esto" },
+  oneWay: { en: "the truck goes out and stays out", es: "el camión sale y se queda" },
+  none: { en: "the truck is already out there", es: "el camión ya está por la zona" },
+};
+
+const crewShort = (d, h) => `${d}D + ${h}H`;
+
+/**
+ * What has to be true for this end of the range to happen. A bare "between $780
+ * and $1,940" tells the operator the spread without telling him which decision
+ * moves him from one end to the other, which is the only part he can act on.
+ */
+function rangeEndText(point, deadheadKnown) {
+  const dh = DEADHEAD_SHORT[point.detail?.deadheadMode] || DEADHEAD_SHORT.roundTrip;
+  const crew = crewShort(point.detail?.drivers ?? 1, point.detail?.helpers ?? 1);
+  if (point.id === "high") {
+    return deadheadKnown
+      ? tr(`Best case: ${dh.en}, crew of ${crew}, and it runs to plan.`,
+           `Mejor caso: ${dh.es}, crew de ${crew}, y sale como está planeado.`)
+      : tr(`Best case: crew of ${crew} and it runs to plan.`,
+           `Mejor caso: crew de ${crew} y sale como está planeado.`);
+  }
+  return deadheadKnown
+    ? tr(`Worst case: ${dh.en}, and it runs a day long with 20% more miles.`,
+         `Peor caso: ${dh.es}, y se estira un día con 20% más de millas.`)
+    : tr("Worst case: it runs a day long with 20% more miles.",
+         "Peor caso: se estira un día con 20% más de millas.");
+}
+
+/** One lever, named by what it actually is on this job, and what it is worth. */
+function leverText(l) {
+  if (l.id === RANGE_LEVER.DEADHEAD) {
+    const b = DEADHEAD_SHORT[l.detail.bestMode] || DEADHEAD_SHORT.none;
+    const w = DEADHEAD_SHORT[l.detail.worstMode] || DEADHEAD_SHORT.roundTrip;
+    return tr(`Empty miles — ${b.en} vs ${w.en}`, `Millas vacías — ${b.es} contra ${w.es}`);
+  }
+  if (l.id === RANGE_LEVER.CREW) {
+    const b = crewShort(l.detail.best.drivers, l.detail.best.helpers);
+    const w = crewShort(l.detail.worst.drivers, l.detail.worst.helpers);
+    return tr(`Crew — ${b} vs ${w}`, `Crew — ${b} contra ${w}`);
+  }
+  if (l.id === RANGE_LEVER.EXTRA_DAY) return tr("If it runs one day longer", "Si se estira un día");
+  if (l.id === RANGE_LEVER.EXTRA_MILES) return tr("If it runs 20% more miles", "Si hace 20% más de millas");
+  return tr("Renting a truck instead of sending yours", "Alquilar un camión en vez de mandar el tuyo");
+}
+
 const SCENARIO_LABELS = {
   extraDay: { label: "+1 day" },
   extraMiles: { label: "+20% miles" },
@@ -331,6 +510,7 @@ const EXTRA_ROWS = [
 const EMPTY_EXTRAS = () => EXTRA_ROWS.map((r) => ({ ...r, amount: "", cuFt: "", fixed: true }));
 
 const EMPTY_INPUTS = {
+  label: "",
   originZip: "", destZip: "", cuFt: "", brokerPrice: "",
   originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
   trucks: 1, drivers: 1, helpers: 1, truckZips: ["", "", ""], deadheadMode: "roundTrip", rented: false, subcontractCost: "",
@@ -377,6 +557,7 @@ function parseDraft(d) {
 // ── Section ──────────────────────────────────────────────────────────────────
 
 export function JobCalcSection({ supabase, session, profile, can = () => true, isAdmin = false, Btn, Modal }) {
+  const wide = useWide();
   const [tab, setTab] = useState("evaluate");
   const [missing, setMissing] = useState(false);
   const [sqlCopied, setSqlCopied] = useState(false);
@@ -539,13 +720,32 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
   );
   const capacity = useMemo(() => capacityCheck(inputs, settings), [inputs, settings]);
+
+  // The routed legs, in the shape the math expects. `miles` nests the empty legs
+  // under perTruck, so handing the state object straight to compareDeadhead read
+  // every assumption as zero empty miles and made all three rows identical —
+  // teaching the operator that the assumption did not matter, which is the exact
+  // opposite of why the comparison exists.
+  const legs = useMemo(
+    () => ({ loadedMiles: miles.loadedMiles || 0, perTruck: miles.perTruck || [] }),
+    [miles.loadedMiles, miles.perTruck]
+  );
+
   const dhRows = useMemo(
-    () => (ready && !miles.manual ? compareDeadhead(inputs, settings, miles) : []),
-    [ready, inputs, settings, miles]
+    () => (ready && !miles.manual ? compareDeadhead(inputs, settings, legs) : []),
+    [ready, inputs, settings, legs, miles.manual]
   );
   const rentRows = useMemo(
     () => (ready ? compareRental(inputs, settings, effMiles) : []),
     [ready, inputs, settings, effMiles.loadedMiles, effMiles.deadheadMiles]
+  );
+
+  // The whole answer: what this job is worth, and what decides where inside the
+  // range it lands. Manual miles have no base leg to reason about, so the empty
+  // miles stop being a lever and the range narrows to the execution risk.
+  const range = useMemo(
+    () => (ready ? profitRange(inputs, settings, miles.manual ? effMiles : legs, { truckDaysOverride }) : null),
+    [ready, inputs, settings, legs, effMiles.loadedMiles, effMiles.deadheadMiles, miles.manual, truckDaysOverride]
   );
   const u = (k) => (v) => setInputs((p) => ({ ...p, [k]: v }));
 
@@ -563,13 +763,6 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     setExtra(i, patch);
   };
 
-  // Parameters flagged as unmeasured AND still sitting at zero. Checking the
-  // value matters: once the operator fills one in, the warning has to stop
-  // claiming it is missing, or the banner cries wolf forever.
-  const pendingKeys = useMemo(
-    () => Object.keys(SETTING_FLAGS).filter((k) => SETTING_FLAGS[k] === "pending" && k !== "baseZip" && !num(settings[k])),
-    [settings]
-  );
 
   // ── Persistence ────────────────────────────────────────────────────────────
 
@@ -593,6 +786,9 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
     const r = result;
     const payload = {
       created_by: session.user.id,
+      // The column has existed since the first migration and was never written,
+      // so every saved job showed up in History as an anonymous ZIP pair.
+      label: inputs.label.trim() || null,
       origin_zip: originZip, dest_zip: destZip,
       cu_ft: num(inputs.cuFt), broker_price: num(inputs.brokerPrice),
       origin_access: inputs.originAccess, dest_access: inputs.destAccess,
@@ -688,6 +884,39 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
 
   const cal = useMemo(() => calibrate(rows), [rows]);
 
+  // How much any of the above can be trusted: costs nobody supplied still sitting
+  // at zero, and how many executed jobs the productivity figure rests on.
+  const confidence = useMemo(() => estimateConfidence(settings, cal), [settings, cal]);
+  const settingLabel = (k) => SETTING_LABELS[k]?.label || k;
+
+  /** Reopen a saved evaluation in the form — the way to re-price a counter-offer. */
+  function reopen(r) {
+    setInputs({
+      ...EMPTY_INPUTS,
+      label: r.label || "",
+      originZip: r.origin_zip || "", destZip: r.dest_zip || "",
+      cuFt: r.cu_ft == null ? "" : String(r.cu_ft),
+      brokerPrice: r.broker_price == null ? "" : String(r.broker_price),
+      originAccess: r.origin_access || "direct", destAccess: r.dest_access || "direct",
+      longCarry: !!r.long_carry, shuttle: !!r.shuttle,
+      trucks: r.trucks || 1, drivers: r.drivers || 1, helpers: r.helpers == null ? 1 : r.helpers,
+      deadheadMode: r.deadhead_mode || "roundTrip", rented: !!r.rented,
+      subcontractCost: r.subcontract_cost ? String(r.subcontract_cost) : "",
+      storageMonths: r.storage_months ? String(r.storage_months) : "",
+      storageMonthlyRate: r.storage_monthly_rate ? String(r.storage_monthly_rate) : "",
+      // Extras are stored as they were typed, so they come back editable.
+      extras: Array.isArray(r.extras) && r.extras.length ? r.extras : EMPTY_EXTRAS(),
+    });
+    // The job was priced with these adjustments; reopening it without them would
+    // show a different verdict for the same job.
+    setJobOverrides(r.overrides || {});
+    setTruckDaysOverride(r.truck_days_overridden && r.truck_days != null ? String(r.truck_days) : "");
+    setManualMiles({ loaded: "", deadhead: "" });
+    setMiles((m) => ({ ...m, manual: false, error: null }));
+    setErr(null);
+    setTab("evaluate");
+  }
+
   // ── Missing-tables banner ──────────────────────────────────────────────────
   if (missing) return (
     <div style={{ background: "#FAEEDA", border: "1px solid #EF9F27", borderRadius: 10, padding: "14px 16px", fontSize: 13, color: "#854F0B" }}>
@@ -707,268 +936,377 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
 
   if (loading) return <div style={{ color: "#999", fontSize: 13 }}>Loading…</div>;
 
-  const vs = VERDICT_STYLE[result.verdict];
+  // Before anything is entered there is no verdict to give, so the panel takes
+  // neutral colours instead of a faded "DO NOT TAKE IT".
+  const vs = ready ? VERDICT_STYLE[result.verdict] : NEUTRAL_STYLE;
+  const targetPct = num(settings.targetMarginPct);
+  const targetProfit = targetPct * result.totalRevenue;
+  const accessOf = (v) => ACCESS_SHORT[v] || ACCESS_SHORT.direct;
 
-  return (
-    <div style={{ maxWidth: 720 }}>
-      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #eee", marginBottom: 14, flexWrap: "wrap" }}>
-        <button style={tabBtn(tab === "evaluate")} onClick={() => setTab("evaluate")}>Evaluate</button>
-        <button style={tabBtn(tab === "history")} onClick={() => setTab("history")}>History</button>
-        <button style={tabBtn(tab === "calibration")} onClick={() => setTab("calibration")}>Calibration</button>
+  // What each collapsed section says about itself. Progressive disclosure has to
+  // hide the controls without hiding the state, or the operator ends up opening
+  // all five sections to find out how the job is set up.
+  const handlingSummary = tr(
+    `${accessOf(inputs.originAccess).en} → ${accessOf(inputs.destAccess).en}${inputs.longCarry ? " · long carry" : ""}${inputs.shuttle ? " · shuttle" : ""}`,
+    `${accessOf(inputs.originAccess).es} → ${accessOf(inputs.destAccess).es}${inputs.longCarry ? " · long carry" : ""}${inputs.shuttle ? " · shuttle" : ""}`
+  );
+  const crewSummary = tr(
+    `${result.trucks} truck(s) · ${crewShort(result.drivers, result.helpers)} · ${money(crewCostPerDay(result, settings))}/day`,
+    `${result.trucks} camión(es) · ${crewShort(result.drivers, result.helpers)} · ${money(crewCostPerDay(result, settings))}/día`
+  );
+  const extrasSummary =
+    result.extrasTotal === 0 && result.storageRevenue === 0
+      ? tr("Nothing charged on top", "Nada cobrado aparte")
+      : tr(
+          `${money(result.extrasTotal)} in extras${result.storageRevenue > 0 ? ` · ${money(result.storageRevenue)} storage` : ""}`,
+          `${money(result.extrasTotal)} de extras${result.storageRevenue > 0 ? ` · ${money(result.storageRevenue)} de storage` : ""}`
+        );
+  const truckSummary = inputs.rented
+    ? tr("Rented near pickup", "Alquilado cerca del pickup")
+    : num(inputs.subcontractCost) > 0
+      ? tr(`Mine · ${money(num(inputs.subcontractCost))} to a third party`, `Propio · ${money(num(inputs.subcontractCost))} a un tercero`)
+      : tr("Mine", "Propio");
+
+  /** Take the good end of a lever and make it the plan. */
+  const applyLever = (l) => {
+    if (l.id === RANGE_LEVER.DEADHEAD) u("deadheadMode")(l.detail.bestMode);
+    if (l.id === RANGE_LEVER.CREW) setInputs((p) => ({ ...p, drivers: l.detail.best.drivers, helpers: l.detail.best.helpers }));
+  };
+  const leverApplicable = (l) =>
+    (l.id === RANGE_LEVER.DEADHEAD && l.detail.bestMode !== l.detail.current) ||
+    (l.id === RANGE_LEVER.CREW &&
+      (l.detail.best.drivers !== l.detail.current.drivers || l.detail.best.helpers !== l.detail.current.helpers));
+
+  // ── The four things that decide the job, and nothing else ──────────────────
+  const essentials = (
+    <div style={card}>
+      <div style={{ marginBottom: 12 }}>
+        <label style={lbl}>Job or broker</label>
+        <input style={inp} placeholder="Atlas — Miami to Atlanta"
+          value={inputs.label} onChange={(e) => u("label")(e.target.value)} />
+      </div>
+      <div style={grid}>
+        <div>
+          <label style={lbl}>Origin ZIP</label>
+          <input style={inp} value={inputs.originZip} inputMode="numeric" placeholder="33125"
+            onChange={(e) => { u("originZip")(e.target.value); setMiles((m) => ({ ...m, manual: false })); }} />
+        </div>
+        <div>
+          <label style={lbl}>Destination ZIP</label>
+          <input style={inp} value={inputs.destZip} inputMode="numeric" placeholder="30301"
+            onChange={(e) => { u("destZip")(e.target.value); setMiles((m) => ({ ...m, manual: false })); }} />
+        </div>
+        <div>
+          <label style={lbl}>Cu ft</label>
+          <input style={inp} value={inputs.cuFt} inputMode="decimal" placeholder="1200" onChange={(e) => u("cuFt")(e.target.value)} />
+        </div>
+        <div>
+          <label style={lbl}>Broker price</label>
+          <input style={inp} value={inputs.brokerPrice} inputMode="decimal" placeholder="4800" onChange={(e) => u("brokerPrice")(e.target.value)} />
+        </div>
       </div>
 
-      {err && <div style={{ background: "#FCEBEB", border: "1px solid #E24B4A", color: "#A32D2D", borderRadius: 9, padding: "9px 12px", fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
+      {/* The empty-miles assumption belongs up here with the essentials: on a long
+          lane it moves the answer more than anything else on the screen. */}
+      <div style={{ marginTop: 12, maxWidth: 300 }}>
+        <label style={lbl}>Empty miles</label>
+        <select style={inp} value={inputs.deadheadMode} onChange={(e) => u("deadheadMode")(e.target.value)}>
+          <option value="roundTrip">Drives out and comes back</option>
+          <option value="oneWay">Drives out, stays out</option>
+          <option value="none">Truck is already there</option>
+        </select>
+      </div>
 
-      {/* ── EVALUATE ─────────────────────────────────────────────────────── */}
-      {tab === "evaluate" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* The route, next to the ZIPs that produced it. It used to sit below the
+          whole form, so a failed lookup was invisible until you opened Estimate. */}
+      <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 9, minHeight: 16 }}>
+        {miles.loading
+          ? tr("Looking up the route…", "Buscando la ruta…")
+          : hasMiles
+            ? tr(`${int(result.loadedMiles)} mi loaded · ${int(result.deadheadMiles)} mi empty · ${dec(result.truckDays)} truck-days`,
+                 `${int(result.loadedMiles)} mi cargado · ${int(result.deadheadMiles)} mi vacío · ${dec(result.truckDays)} días-camión`)
+            : ""}
+      </div>
+    </div>
+  );
 
-          {/* 1. Inputs — above the fold, no scrolling */}
-          <div style={card}>
-            <div style={grid}>
-              <div>
-                <label style={lbl}>Origin ZIP</label>
-                <input style={inp} value={inputs.originZip} inputMode="numeric" placeholder="33125"
-                  onChange={(e) => { u("originZip")(e.target.value); setMiles((m) => ({ ...m, manual: false })); }} />
-              </div>
-              <div>
-                <label style={lbl}>Destination ZIP</label>
-                <input style={inp} value={inputs.destZip} inputMode="numeric" placeholder="30301"
-                  onChange={(e) => { u("destZip")(e.target.value); setMiles((m) => ({ ...m, manual: false })); }} />
-              </div>
-              <div>
-                <label style={lbl}>Cu ft</label>
-                <input style={inp} value={inputs.cuFt} inputMode="decimal" placeholder="1200" onChange={(e) => u("cuFt")(e.target.value)} />
-              </div>
-              <div>
-                <label style={lbl}>Broker price</label>
-                <input style={inp} value={inputs.brokerPrice} inputMode="decimal" placeholder="4800" onChange={(e) => u("brokerPrice")(e.target.value)} />
-              </div>
-              <div>
-                <label style={lbl}>Origin access</label>
-                <select style={inp} value={inputs.originAccess} onChange={(e) => u("originAccess")(e.target.value)}>
-                  {ACCESS_LABELS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={lbl}>Destination access</label>
-                <select style={inp} value={inputs.destAccess} onChange={(e) => u("destAccess")(e.target.value)}>
-                  {ACCESS_LABELS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-                </select>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 18, marginTop: 12, flexWrap: "wrap" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer" }}>
-                <input type="checkbox" checked={inputs.longCarry} onChange={(e) => u("longCarry")(e.target.checked)} /> Long carry
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer" }}>
-                <input type="checkbox" checked={inputs.shuttle} onChange={(e) => u("shuttle")(e.target.checked)} /> Shuttle
-              </label>
-            </div>
-            {/* Where the truck is standing. Same per-job override mechanism as the
-                adjust panel — it just belongs up here, because it changes per job
-                and it is what makes deadhead miles real. */}
-            <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
-              <div>
-                <label style={lbl}>Empty miles</label>
-                <select style={inp} value={inputs.deadheadMode} onChange={(e) => u("deadheadMode")(e.target.value)}>
-                  <option value="roundTrip">Drives out and comes back</option>
-                  <option value="oneWay">Drives out, stays out</option>
-                  <option value="none">Truck is already there</option>
-                </select>
-              </div>
-              <div>
-                <label style={lbl}>Truck</label>
-                <select style={inp} value={inputs.rented ? "rented" : "own"} onChange={(e) => u("rented")(e.target.value === "rented")}>
-                  <option value="own">Mine</option>
-                  <option value="rented">Rented near pickup</option>
-                </select>
-              </div>
-              <div>
-                <label style={lbl}>Paid to a third party</label>
-                <input style={inp} inputMode="decimal" placeholder="0"
-                  value={inputs.subcontractCost} onChange={(e) => u("subcontractCost")(e.target.value)} />
-              </div>
-              <div>
-                <label style={lbl}>{trucksOf(inputs) > 1 ? "Truck 1 is at" : "Truck is at (base ZIP)"}</label>
-                <input style={{ ...inp, borderColor: jobOverrides.baseZip ? "#185FA5" : "#e5e5e5" }}
-                  inputMode="numeric" placeholder={companySettings.baseZip || "33166"}
-                  value={jobOverrides.baseZip ?? ""} onChange={(e) => setOverride("baseZip", e.target.value)} />
-              </div>
-              {/* Trucks leaving from different places drive different empty miles,
-                  and empty miles are the costliest thing on this screen. */}
-              {Array.from({ length: trucksOf(inputs) - 1 }, (_, i) => (
-                <div key={i}>
-                  <label style={lbl}>Truck {i + 2} is at</label>
-                  <input style={inp} inputMode="numeric" placeholder={baseZip || companySettings.baseZip || "same as truck 1"}
-                    value={inputs.truckZips?.[i + 1] ?? ""}
-                    onChange={(e) => setInputs((p) => {
-                      const z = [...(p.truckZips || [])];
-                      z[i + 1] = e.target.value;
-                      return { ...p, truckZips: z };
-                    })} />
-                </div>
-              ))}
-            </div>
+  // ── The rest of the form, each section reporting its own state when closed ──
+  const detailInputs = (
+    <>
+      <Collapsible title="Access and handling" summary={handlingSummary}>
+        <div style={grid}>
+          <div>
+            <label style={lbl}>Origin access</label>
+            <select style={inp} value={inputs.originAccess} onChange={(e) => u("originAccess")(e.target.value)}>
+              {ACCESS_LABELS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Destination access</label>
+            <select style={inp} value={inputs.destAccess} onChange={(e) => u("destAccess")(e.target.value)}>
+              {ACCESS_LABELS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 18, marginTop: 12, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={inputs.longCarry} onChange={(e) => u("longCarry")(e.target.checked)} /> Long carry
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={inputs.shuttle} onChange={(e) => u("shuttle")(e.target.checked)} /> Shuttle
+          </label>
+        </div>
+      </Collapsible>
 
-            {/* Crew for this job. A bigger crew costs more per day and finishes sooner. */}
-            <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
-              <div>
-                <label style={lbl}>Trucks</label>
-                <select style={inp} value={inputs.trucks} onChange={(e) => u("trucks")(Number(e.target.value))}>
-                  {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={lbl}>Drivers</label>
-                <select style={inp} value={inputs.drivers} onChange={(e) => u("drivers")(Number(e.target.value))}>
-                  {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={lbl}>Helpers</label>
-                <select style={inp} value={inputs.helpers} onChange={(e) => u("helpers")(Number(e.target.value))}>
-                  {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={lbl}>Driver rate / day</label>
-                <input style={{ ...inp, borderColor: jobOverrides.driverDayRate ? "#185FA5" : "#e5e5e5" }}
-                  inputMode="decimal" placeholder={String(companySettings.driverDayRate ?? "")}
-                  value={jobOverrides.driverDayRate ?? ""} onChange={(e) => setOverride("driverDayRate", e.target.value)} />
-              </div>
-              <div>
-                <label style={lbl}>Helper rate / day</label>
-                <input style={{ ...inp, borderColor: jobOverrides.helperDayRate ? "#185FA5" : "#e5e5e5" }}
-                  inputMode="decimal" placeholder={String(companySettings.helperDayRate ?? "")}
-                  value={jobOverrides.helperDayRate ?? ""} onChange={(e) => setOverride("helperDayRate", e.target.value)} />
-              </div>
+      <Collapsible title="Crew and trucks" summary={crewSummary}>
+        <div style={grid}>
+          <div>
+            <label style={lbl}>Trucks</label>
+            <select style={inp} value={inputs.trucks} onChange={(e) => u("trucks")(Number(e.target.value))}>
+              {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Drivers</label>
+            <select style={inp} value={inputs.drivers} onChange={(e) => u("drivers")(Number(e.target.value))}>
+              {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Helpers</label>
+            <select style={inp} value={inputs.helpers} onChange={(e) => u("helpers")(Number(e.target.value))}>
+              {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Driver rate / day</label>
+            <input style={{ ...inp, borderColor: jobOverrides.driverDayRate ? "#185FA5" : "#e5e5e5" }}
+              inputMode="decimal" placeholder={String(companySettings.driverDayRate ?? "")}
+              value={jobOverrides.driverDayRate ?? ""} onChange={(e) => setOverride("driverDayRate", e.target.value)} />
+          </div>
+          <div>
+            <label style={lbl}>Helper rate / day</label>
+            <input style={{ ...inp, borderColor: jobOverrides.helperDayRate ? "#185FA5" : "#e5e5e5" }}
+              inputMode="decimal" placeholder={String(companySettings.helperDayRate ?? "")}
+              value={jobOverrides.helperDayRate ?? ""} onChange={(e) => setOverride("helperDayRate", e.target.value)} />
+          </div>
+        </div>
+        {/* Where the truck is standing is what makes deadhead miles real. */}
+        <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
+          <div>
+            <label style={lbl}>{trucksOf(inputs) > 1 ? "Truck 1 is at" : "Truck is at (base ZIP)"}</label>
+            <input style={{ ...inp, borderColor: jobOverrides.baseZip ? "#185FA5" : "#e5e5e5" }}
+              inputMode="numeric" placeholder={companySettings.baseZip || "33166"}
+              value={jobOverrides.baseZip ?? ""} onChange={(e) => setOverride("baseZip", e.target.value)} />
+          </div>
+          {/* Trucks leaving from different places drive different empty miles,
+              and empty miles are the costliest thing on this screen. */}
+          {Array.from({ length: trucksOf(inputs) - 1 }, (_, i) => (
+            <div key={i}>
+              <label style={lbl}>{tr(`Truck ${i + 2} is at`, `Camión ${i + 2} está en`)}</label>
+              <input style={inp} inputMode="numeric" placeholder={baseZip || companySettings.baseZip || "same as truck 1"}
+                value={inputs.truckZips?.[i + 1] ?? ""}
+                onChange={(e) => setInputs((p) => {
+                  const z = [...(p.truckZips || [])];
+                  z[i + 1] = e.target.value;
+                  return { ...p, truckZips: z };
+                })} />
             </div>
-            <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 7 }}>
-              {tr(
-                `${result.trucks} truck(s), crew of ${result.crewSize}: ${money(crewCostPerDay(result, settings))} per worked day, ${result.hotelRooms} hotel room(s) per night.`,
-                `${result.trucks} camión(es), crew de ${result.crewSize}: ${money(crewCostPerDay(result, settings))} por día trabajado, ${result.hotelRooms} habitación(es) de hotel por noche.`
+          ))}
+        </div>
+        <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 9 }}>
+          {tr(
+            `${result.trucks} truck(s), crew of ${result.crewSize}: ${money(crewCostPerDay(result, settings))} per worked day, ${result.hotelRooms} hotel room(s) per night.`,
+            `${result.trucks} camión(es), crew de ${result.crewSize}: ${money(crewCostPerDay(result, settings))} por día trabajado, ${result.hotelRooms} habitación(es) de hotel por noche.`
+          )}
+          {result.drivers > num(inputs.drivers) && " " + tr(
+            `Raised to ${result.drivers} drivers — every truck needs one.`,
+            `Subido a ${result.drivers} drivers — cada camión necesita uno.`)}
+        </div>
+        {capacity.overCapacity && (
+          <div style={{ background: "#FAEEDA", border: "1px solid #EF9F27", borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: "#854F0B", marginTop: 9 }}>
+            {tr(
+              `${int(result.effectiveCuFt)} cu ft does not fit on ${result.trucks} truck(s). You need ${capacity.trucksNeeded}.`,
+              `${int(result.effectiveCuFt)} pies cúbicos no entran en ${result.trucks} camión(es). Necesitás ${capacity.trucksNeeded}.`
+            )}
+          </div>
+        )}
+      </Collapsible>
+
+      <Collapsible title="Extras and storage" summary={extrasSummary}>
+        <div style={{ ...lbl, marginBottom: 8 }}>Extras you are charging</div>
+        {/* Only the lines that carry something, plus a menu for the rest. Four
+            named rows rendered blank meant eight empty boxes on every job. */}
+        {inputs.extras.map((ex, i) =>
+          ex.fixed && ex.amount === "" && ex.cuFt === "" ? null : (
+            <div key={ex.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 7, flexWrap: "wrap" }}>
+              {ex.fixed ? (
+                <span style={{ flex: "1 1 110px", fontSize: 12.5, color: "#666" }}>{ex.concept}</span>
+              ) : (
+                <input style={{ ...inp, flex: "1 1 110px", width: "auto" }} placeholder="Concept"
+                  value={ex.concept} onChange={(e) => setExtra(i, { concept: e.target.value })} />
               )}
-              {result.drivers > num(inputs.drivers) && " " + tr(
-                `Raised to ${result.drivers} drivers — every truck needs one.`,
-                `Subido a ${result.drivers} drivers — cada camión necesita uno.`)}
+              <input style={{ ...inp, width: 100, flex: "0 0 100px" }} inputMode="decimal" placeholder="$"
+                value={ex.amount} onChange={(e) => setExtra(i, { amount: e.target.value })} />
+              <input style={{ ...inp, width: 100, flex: "0 0 100px" }} inputMode="decimal" placeholder="cu ft"
+                value={ex.cuFt} onChange={(e) => onExtraCuFt(i, e.target.value)} />
+              <button onClick={() => (ex.fixed
+                ? setExtra(i, { amount: "", cuFt: "" })
+                : setInputs((p) => ({ ...p, extras: p.extras.filter((_, j) => j !== i) })))}
+                style={{ ...btn(false), padding: "0 9px", color: "#999" }}>x</button>
             </div>
-            {capacity.overCapacity && (
-              <div style={{ background: "#FAEEDA", border: "1px solid #EF9F27", borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: "#854F0B", marginTop: 9 }}>
-                {tr(
-                  `${int(result.effectiveCuFt)} cu ft does not fit on ${result.trucks} truck(s). You need ${capacity.trucksNeeded}.`,
-                  `${int(result.effectiveCuFt)} pies cúbicos no entran en ${result.trucks} camión(es). Necesitás ${capacity.trucksNeeded}.`
-                )}
+          )
+        )}
+        <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          {inputs.extras.map((ex, i) =>
+            ex.fixed && ex.amount === "" && ex.cuFt === "" ? (
+              <button key={ex.id} style={{ ...btn(false), padding: "5px 10px", fontSize: 12 }}
+                onClick={() => setExtra(i, { amount: "0" })}>+ {ex.concept}</button>
+            ) : null
+          )}
+          <button style={{ ...btn(false), padding: "5px 10px", fontSize: 12 }}
+            onClick={() => setInputs((p) => ({ ...p, extras: [...p.extras, { id: "x" + p.extras.length, concept: "", amount: "", cuFt: "", fixed: false }] }))}>
+            + Add line
+          </button>
+        </div>
+        <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 8, lineHeight: 1.45 }}>
+          {tr("Fill cu ft only when the extra is real cargo to load — that adds hours, not just money.",
+              "Llená los cu ft solo si el extra es carga real — eso suma horas, no solo plata.")}
+        </div>
+
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
+          <div style={{ ...lbl, marginBottom: 8 }}>Storage billed to the client</div>
+          <div style={grid}>
+            <div>
+              <label style={lbl}>Months in storage</label>
+              <input style={inp} inputMode="decimal" placeholder="0"
+                value={inputs.storageMonths} onChange={(e) => u("storageMonths")(e.target.value)} />
+            </div>
+            <div>
+              <label style={lbl}>Monthly rate</label>
+              <input style={inp} inputMode="decimal" placeholder="0"
+                value={inputs.storageMonthlyRate} onChange={(e) => u("storageMonthlyRate")(e.target.value)} />
+            </div>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer", marginTop: 9 }}>
+            <input type="checkbox" checked={inputs.storageFirstMonthFree}
+              onChange={(e) => u("storageFirstMonthFree")(e.target.checked)} /> First month free
+          </label>
+          {result.storageRevenue > 0 && (
+            <div style={{ fontSize: 12.5, color: "#111", marginTop: 8, fontWeight: 600 }}>
+              {tr(`${result.storageMonthsBilled} month(s) billed = ${money(result.storageRevenue)}`,
+                  `${result.storageMonthsBilled} mes(es) facturados = ${money(result.storageRevenue)}`)}
+            </div>
+          )}
+        </div>
+        {result.extrasTotal !== 0 && (
+          <div style={{ fontSize: 12.5, color: "#111", marginTop: 9, fontWeight: 600 }}>
+            {tr(`Extras ${money(result.extrasTotal)} · total revenue ${money(result.totalRevenue)}${result.extrasCuFt > 0 ? ` · ${int(result.effectiveCuFt)} cu ft to move` : ""}`,
+                `Extras ${money(result.extrasTotal)} · revenue total ${money(result.totalRevenue)}${result.extrasCuFt > 0 ? ` · ${int(result.effectiveCuFt)} cu ft a mover` : ""}`)}
+          </div>
+        )}
+      </Collapsible>
+
+      <Collapsible title="Truck source" summary={truckSummary}>
+        <div style={grid}>
+          <div>
+            <label style={lbl}>Truck</label>
+            <select style={inp} value={inputs.rented ? "rented" : "own"} onChange={(e) => u("rented")(e.target.value === "rented")}>
+              <option value="own">Mine</option>
+              <option value="rented">Rented near pickup</option>
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Paid to a third party</label>
+            <input style={inp} inputMode="decimal" placeholder="0"
+              value={inputs.subcontractCost} onChange={(e) => u("subcontractCost")(e.target.value)} />
+          </div>
+        </div>
+      </Collapsible>
+
+      {/* Manual fallback. It stays mounted while manual entry is on — clearing
+          the error here would unmount the very input being typed into. */}
+      {(miles.error || miles.manual) && (
+        <div style={{ background: "#FCEBEB", border: "1px solid #E24B4A", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#A32D2D" }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not get the distance</div>
+          {miles.error && <div style={{ marginBottom: 8 }}>{miles.error}</div>}
+          <div style={{ marginBottom: 6 }}>Enter the miles by hand:</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div>
+              <label style={lbl}>Loaded miles</label>
+              <input style={{ ...inp, width: 120 }} inputMode="decimal" value={manualMiles.loaded}
+                onChange={(e) => { setManualMiles((p) => ({ ...p, loaded: e.target.value })); setMiles((m) => ({ ...m, manual: true })); }} />
+            </div>
+            <div>
+              <label style={lbl}>Deadhead miles</label>
+              <input style={{ ...inp, width: 120 }} inputMode="decimal" value={manualMiles.deadhead}
+                onChange={(e) => { setManualMiles((p) => ({ ...p, deadhead: e.target.value })); setMiles((m) => ({ ...m, manual: true })); }} />
+            </div>
+            {miles.manual && (
+              <button style={btn(false)} onClick={() => { setManualMiles({ loaded: "", deadhead: "" }); setMiles((m) => ({ ...m, manual: false, error: null })); }}>
+                Retry the lookup
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {!baseZip && (
+        <div style={{ background: "#FAEEDA", border: "1px solid #EF9F27", borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: "#854F0B" }}>
+          No base ZIP set in the settings, so deadhead miles are counted as zero and every cost below is understated.
+        </div>
+      )}
+    </>
+  );
+
+  // ── The answer. Sticky beside the form, so it never scrolls out of sight ────
+  const answer = (
+    <>
+      <div style={{ background: vs.bg, border: `2px solid ${vs.bd}`, borderRadius: 14, padding: "17px 19px" }}>
+        {!ready ? (
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#888" }}>Nothing to price yet</div>
+            <div style={{ fontSize: 12.5, color: "#aaa", marginTop: 6, lineHeight: 1.45 }}>
+              {tr("Enter the ZIPs, the volume and the broker price.", "Cargá los ZIP, el volumen y el precio del broker.")}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 28, fontWeight: 900, color: vs.fg, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+              {result.verdict === VERDICT.GREEN ? "TAKE IT" : result.verdict === VERDICT.YELLOW ? "CAREFUL" : "DO NOT TAKE IT"}
+            </div>
+            <div style={{ fontSize: 12.5, color: vs.fg, marginTop: 6, lineHeight: 1.45 }}>
+              {reasonText(result.reason, result)}
+            </div>
+
+            {/* The answer to the question actually being asked: not one number,
+                a range, with each end named by the plan that produces it. */}
+            {range && (
+              <div style={{ marginTop: 14, paddingTop: 13, borderTop: `1px solid ${vs.bd}` }}>
+                <div style={lbl}>What you make on it</div>
+                <div style={{ fontSize: 25, fontWeight: 900, color: "#111", letterSpacing: "-0.02em" }}>
+                  {money(range.low.operatingMargin)} – {money(range.high.operatingMargin)}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#777", marginTop: 1 }}>
+                  {tr(`${pct(range.low.marginPct)} – ${pct(range.high.marginPct)} margin`,
+                      `${pct(range.low.marginPct)} – ${pct(range.high.marginPct)} de margen`)}
+                </div>
+                <RangeBar
+                  low={range.low.operatingMargin} mid={range.mid.operatingMargin} high={range.high.operatingMargin}
+                  target={targetProfit}
+                  targetLabel={tr(`target ${pct(targetPct)}`, `objetivo ${pct(targetPct)}`)} />
+                <div style={{ fontSize: 11.5, color: "#777", lineHeight: 1.5, marginTop: 9 }}>
+                  <div style={{ fontWeight: 700, color: "#444" }}>
+                    {tr(`As you have it set: ${money(range.mid.operatingMargin)} (${pct(range.mid.marginPct)}).`,
+                        `Como lo tenés cargado: ${money(range.mid.operatingMargin)} (${pct(range.mid.marginPct)}).`)}
+                  </div>
+                  <div style={{ marginTop: 4 }}>{rangeEndText(range.high, range.deadheadKnown)}</div>
+                  <div style={{ marginTop: 3 }}>{rangeEndText(range.low, range.deadheadKnown)}</div>
+                </div>
               </div>
             )}
 
-            {/* Billable extras */}
-            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
-              <div style={{ ...lbl, marginBottom: 8 }}>Extras you are charging</div>
-              {inputs.extras.map((ex, i) => (
-                <div key={ex.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 7, flexWrap: "wrap" }}>
-                  {ex.fixed ? (
-                    <span style={{ flex: "1 1 110px", fontSize: 12.5, color: "#666" }}>{ex.concept}</span>
-                  ) : (
-                    <input style={{ ...inp, flex: "1 1 110px", width: "auto" }} placeholder="Concept"
-                      value={ex.concept} onChange={(e) => setExtra(i, { concept: e.target.value })} />
-                  )}
-                  <input style={{ ...inp, width: 100, flex: "0 0 100px" }} inputMode="decimal" placeholder="$"
-                    value={ex.amount} onChange={(e) => setExtra(i, { amount: e.target.value })} />
-                  <input style={{ ...inp, width: 100, flex: "0 0 100px" }} inputMode="decimal" placeholder="cu ft"
-                    value={ex.cuFt} onChange={(e) => onExtraCuFt(i, e.target.value)} />
-                  {!ex.fixed && (
-                    <button onClick={() => setInputs((p) => ({ ...p, extras: p.extras.filter((_, j) => j !== i) }))}
-                      style={{ ...btn(false), padding: "0 9px", color: "#999" }}>x</button>
-                  )}
-                </div>
-              ))}
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-                <button style={btn(false)}
-                  onClick={() => setInputs((p) => ({ ...p, extras: [...p.extras, { id: "x" + p.extras.length, concept: "", amount: "", cuFt: "", fixed: false }] }))}>
-                  + Add line
-                </button>
-                <span style={{ fontSize: 11.5, color: "#aaa" }}>
-                  {tr("Fill cu ft only when the extra is real cargo to load — that adds hours, not just money.",
-                      "Llená los cu ft solo si el extra es carga real — eso suma horas, no solo plata.")}
-                </span>
-              </div>
-              <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
-                <div style={{ ...lbl, marginBottom: 8 }}>Storage billed to the client</div>
-                <div style={grid}>
-                  <div>
-                    <label style={lbl}>Months in storage</label>
-                    <input style={inp} inputMode="decimal" placeholder="0"
-                      value={inputs.storageMonths} onChange={(e) => u("storageMonths")(e.target.value)} />
-                  </div>
-                  <div>
-                    <label style={lbl}>Monthly rate</label>
-                    <input style={inp} inputMode="decimal" placeholder="0"
-                      value={inputs.storageMonthlyRate} onChange={(e) => u("storageMonthlyRate")(e.target.value)} />
-                  </div>
-                </div>
-                <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer", marginTop: 9 }}>
-                  <input type="checkbox" checked={inputs.storageFirstMonthFree}
-                    onChange={(e) => u("storageFirstMonthFree")(e.target.checked)} /> First month free
-                </label>
-                {result.storageRevenue > 0 && (
-                  <div style={{ fontSize: 12.5, color: "#111", marginTop: 8, fontWeight: 600 }}>
-                    {tr(`${result.storageMonthsBilled} month(s) billed = ${money(result.storageRevenue)}`,
-                        `${result.storageMonthsBilled} mes(es) facturados = ${money(result.storageRevenue)}`)}
-                  </div>
-                )}
-              </div>
-              {result.extrasTotal !== 0 && (
-                <div style={{ fontSize: 12.5, color: "#111", marginTop: 9, fontWeight: 600 }}>
-                  {tr(`Extras ${money(result.extrasTotal)} · total revenue ${money(result.totalRevenue)}${result.extrasCuFt > 0 ? ` · ${int(result.effectiveCuFt)} cu ft to move` : ""}`,
-                      `Extras ${money(result.extrasTotal)} · revenue total ${money(result.totalRevenue)}${result.extrasCuFt > 0 ? ` · ${int(result.effectiveCuFt)} cu ft a mover` : ""}`)}
-                </div>
-              )}
-            </div>
-          </div>
+            <ConfidenceChip conf={confidence} labelFor={settingLabel} onCalibrate={() => setTab("calibration")} />
 
-          {/* Distance status: loading, failure + manual fallback, missing base ZIP */}
-          {miles.loading && <div style={{ fontSize: 12.5, color: "#999" }}>Looking up the route…</div>}
-          {/* Manual fallback. It stays mounted while manual entry is on — clearing
-              the error here would unmount the very input being typed into. */}
-          {(miles.error || miles.manual) && (
-            <div style={{ background: "#FCEBEB", border: "1px solid #E24B4A", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#A32D2D" }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not get the distance</div>
-              {miles.error && <div style={{ marginBottom: 8 }}>{miles.error}</div>}
-              <div style={{ marginBottom: 6 }}>Enter the miles by hand:</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div>
-                  <label style={lbl}>Loaded miles</label>
-                  <input style={{ ...inp, width: 120 }} inputMode="decimal" value={manualMiles.loaded}
-                    onChange={(e) => { setManualMiles((p) => ({ ...p, loaded: e.target.value })); setMiles((m) => ({ ...m, manual: true })); }} />
-                </div>
-                <div>
-                  <label style={lbl}>Deadhead miles</label>
-                  <input style={{ ...inp, width: 120 }} inputMode="decimal" value={manualMiles.deadhead}
-                    onChange={(e) => { setManualMiles((p) => ({ ...p, deadhead: e.target.value })); setMiles((m) => ({ ...m, manual: true })); }} />
-                </div>
-                {miles.manual && (
-                  <button style={btn(false)} onClick={() => { setManualMiles({ loaded: "", deadhead: "" }); setMiles((m) => ({ ...m, manual: false, error: null })); }}>
-                    Retry the lookup
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-          {!baseZip && (
-            <div style={{ background: "#FAEEDA", border: "1px solid #EF9F27", borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: "#854F0B" }}>
-              No base ZIP set in the settings, so deadhead miles are counted as zero and every cost below is understated.
-            </div>
-          )}
-
-          {/* 2. Traffic light — the first thing anyone looks at */}
-          <div style={{ background: vs.bg, border: `2px solid ${vs.bd}`, borderRadius: 14, padding: "18px 20px", opacity: ready ? 1 : 0.45 }}>
-            <div style={{ fontSize: 32, fontWeight: 900, color: vs.fg, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
-              {result.verdict === VERDICT.GREEN ? "TAKE IT" : result.verdict === VERDICT.YELLOW ? "CAREFUL" : "DO NOT TAKE IT"}
-            </div>
-            <div style={{ fontSize: 13, color: vs.fg, marginTop: 7, lineHeight: 1.45 }}>
-              {ready ? reasonText(result.reason, result) : tr("Enter the ZIPs, the volume and the broker price.", "Cargá los ZIP, el volumen y el precio del broker.")}
-            </div>
             {/* A verdict must never rest on adjustments nobody can see. */}
             {overrides.length > 0 && (
               <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -979,372 +1317,436 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                 <button onClick={clearOverrides} style={{ ...btn(false), padding: "4px 10px", fontSize: 11.5 }}>Back to standard</button>
               </div>
             )}
+          </>
+        )}
+      </div>
+
+      {/* What to counter-offer. Loudest when the light is not green, and never
+          shown before there is a real job to price. */}
+      {ready && result.verdict !== VERDICT.GREEN && (
+        <div style={{ ...card, background: "#111", border: "none" }}>
+          <div style={{ ...lbl, color: "#888" }}>Ask the broker for</div>
+          <div style={{ fontSize: 28, fontWeight: 900, color: "#fff", letterSpacing: "-0.02em" }}>{money(result.askPrice)}</div>
+          <div style={{ fontSize: 12, color: "#999", marginTop: 4, lineHeight: 1.45 }}>
+            {(() => {
+              const gap = result.askPrice - num(inputs.brokerPrice);
+              // Never render a negative "above" — asking for less than the
+              // broker already offers is not advice, it is a bug.
+              if (gap <= 0) {
+                return tr(`They are already offering enough. Break-even is ${money(result.breakevenPrice)}.`,
+                          `Ya te están ofreciendo lo suficiente. El punto de equilibrio es ${money(result.breakevenPrice)}.`);
+              }
+              if (result.askDrivenByStress) {
+                return tr(
+                  `${money(gap)} above what they are offering. That extra covers the bad case — an extra day plus 20% more miles — not extra profit.`,
+                  `${money(gap)} más de lo que están ofreciendo. Ese plus cubre el peor caso — un día más y 20% más de millas — no es margen extra.`
+                );
+              }
+              return tr(
+                `${money(gap)} above what they are offering. Break-even is ${money(result.breakevenPrice)}.`,
+                `${money(gap)} más de lo que están ofreciendo. El punto de equilibrio es ${money(result.breakevenPrice)}.`
+              );
+            })()}
           </div>
+        </div>
+      )}
 
-          {/* 3. The headline metric, next to the threshold it has to beat */}
-          <div style={{ ...card, display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <div style={{ flex: "1 1 150px" }}>
-              <div style={lbl}>Contribution per truck-day</div>
-              <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.contributionPerTruckDay)}</div>
+      {/* One table instead of four. Sorted by how much money each lever moves,
+          because that is the order the operator should spend attention in. */}
+      {range && range.levers.length > 0 && (
+        <Collapsible title="What decides where you land" defaultOpen>
+          {range.levers.map((l) => (
+            <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid #f6f6f6" }}>
+              <span style={{ fontSize: 12, color: "#555", lineHeight: 1.35 }}>{leverText(l)}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                <span style={{ fontSize: 13, fontWeight: 800 }}>{money(l.swing)}</span>
+                {leverApplicable(l) && (
+                  <button onClick={() => applyLever(l)} style={{ ...btn(false), padding: "3px 8px", fontSize: 11 }}>Use</button>
+                )}
+              </span>
             </div>
-            <div style={{ flex: "1 1 150px" }}>
-              <div style={lbl}>Threshold to beat</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: "#999", letterSpacing: "-0.02em" }}>{money(result.hurdlePerTruckDay)}</div>
-              <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>Fixed floor {money(result.fixedPerWorkedDay)}</div>
-            </div>
+          ))}
+          <div style={{ fontSize: 11.5, color: "#777", marginTop: 9, lineHeight: 1.45 }}>
+            {tr("How much each decision is worth on this job. The empty miles and the crew are yours to choose; the last two are what happens if it runs long.",
+                "Cuánto vale cada decisión en este job. Las millas vacías y la crew las elegís vos; las dos últimas son lo que pasa si se estira.")}
           </div>
+        </Collapsible>
+      )}
 
-          {/* 4. Ask price — what to counter-offer. Loudest when the light is not
-              green, and never shown before there is a real job to price. */}
-          {ready && result.verdict !== VERDICT.GREEN && (
-            <div style={{ ...card, background: "#111", border: "none" }}>
-              <div style={{ ...lbl, color: "#888" }}>Ask the broker for</div>
-              <div style={{ fontSize: 30, fontWeight: 900, color: "#fff", letterSpacing: "-0.02em" }}>{money(result.askPrice)}</div>
-              <div style={{ fontSize: 12, color: "#999", marginTop: 4 }}>
-                {(() => {
-                  const gap = result.askPrice - num(inputs.brokerPrice);
-                  // Never render a negative "above" — asking for less than the
-                  // broker already offers is not advice, it is a bug.
-                  if (gap <= 0) {
-                    return tr(`They are already offering enough. Break-even is ${money(result.breakevenPrice)}.`,
-                              `Ya te están ofreciendo lo suficiente. El punto de equilibrio es ${money(result.breakevenPrice)}.`);
-                  }
-                  if (result.askDrivenByStress) {
-                    return tr(
-                      `${money(gap)} above what they are offering. That extra covers the bad case — an extra day plus 20% more miles — not extra profit.`,
-                      `${money(gap)} más de lo que están ofreciendo. Ese plus cubre el peor caso — un día más y 20% más de millas — no es margen extra.`
-                    );
-                  }
-                  return tr(
-                    `${money(gap)} above what they are offering. Break-even is ${money(result.breakevenPrice)}.`,
-                    `${money(gap)} más de lo que están ofreciendo. El punto de equilibrio es ${money(result.breakevenPrice)}.`
-                  );
-                })()}
-              </div>
-            </div>
-          )}
+      {ready && can("jobcalc", "create") && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn primary disabled={savingEval} onClick={() => saveEvaluation("accepted")}>Save as accepted</Btn>
+          <Btn disabled={savingEval} onClick={() => saveEvaluation("rejected")}>Save as rejected</Btn>
+        </div>
+      )}
+    </>
+  );
 
-          {/* Crew comparison — the same job under each crew, so the trade between
-              paying more per day and finishing sooner is visible instead of guessed. */}
-          {ready && (
-            <Collapsible title="Which crew pays best" defaultOpen>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 380 }}>
-                  <thead>
-                    <tr style={{ color: "#999", textAlign: "right" }}>
-                      <th style={{ textAlign: "left", fontWeight: 600, padding: "4px 6px" }}>Crew</th>
-                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Days</th>
-                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Cost</th>
-                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Per truck-day</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {crewRows.map((c) => {
-                      const cs = VERDICT_STYLE[c.verdict];
-                      return (
-                        <tr key={`${c.drivers}-${c.helpers}`} style={{ background: c.isBest ? "#EAF3DE" : "transparent", fontWeight: c.isCurrent ? 800 : 500 }}>
-                          <td style={{ padding: "6px", textAlign: "left", whiteSpace: "nowrap" }}>
-                            {c.drivers}D + {c.helpers}H{c.isCurrent ? " ←" : ""}
-                          </td>
-                          <td style={{ padding: "6px", textAlign: "right" }}>{dec(c.truckDays)}</td>
-                          <td style={{ padding: "6px", textAlign: "right" }}>{money(c.variableCost)}</td>
-                          <td style={{ padding: "6px", textAlign: "right", color: cs.fg, fontWeight: 800 }}>{money(c.contributionPerTruckDay)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {crewRows.some((c) => c.isBest && !c.isCurrent) && (
-                <div style={{ fontSize: 12, color: "#3B6D11", marginTop: 8, lineHeight: 1.45 }}>
-                  {(() => {
-                    const b = crewRows.find((c) => c.isBest);
-                    return tr(
-                      `A crew of ${b.drivers} driver(s) + ${b.helpers} helper(s) would leave ${money(b.contributionPerTruckDay)} per truck-day instead of ${money(result.contributionPerTruckDay)}.`,
-                      `Una crew de ${b.drivers} driver(s) + ${b.helpers} helper(s) dejaría ${money(b.contributionPerTruckDay)} por día-camión en vez de ${money(result.contributionPerTruckDay)}.`
-                    );
-                  })()}
-                </div>
-              )}
-              <div style={{ fontSize: 11.5, color: "#854F0B", background: "#FAEEDA", borderRadius: 8, padding: "8px 10px", marginTop: 8, lineHeight: 1.45 }}>
-                How much faster a bigger crew works is an assumption, not a measurement. Until the Calibration tab has real jobs with different crews, treat this ranking as a hint.
-              </div>
-            </Collapsible>
-          )}
+  // ── The working, for whoever wants to check it ─────────────────────────────
+  const workings = (
+    <>
+      {/* Everything below is the working behind the answer, not more of the
+          form. Without the break the two read as one wall of grey headers. */}
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: "#c4c4c4", textTransform: "uppercase", letterSpacing: "0.09em", marginTop: 6, paddingLeft: 2 }}>
+        How it got there
+      </div>
 
-          {/* The honest answer for a job a week out: not one number, a range. Which
-              end you land on is a logistics decision still to be made. */}
-          {dhRows.length > 0 && miles.deadheadKnown && (
-            <Collapsible title="What it costs, depending on the empty miles" defaultOpen>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 380 }}>
-                  <thead>
-                    <tr style={{ color: "#999", textAlign: "right" }}>
-                      <th style={{ textAlign: "left", fontWeight: 600, padding: "4px 6px" }}>Assumption</th>
-                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Empty mi</th>
-                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Cost</th>
-                      <th style={{ fontWeight: 600, padding: "4px 6px" }}>Result</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dhRows.map((d) => {
-                      const ds = VERDICT_STYLE[d.verdict];
-                      const on = d.mode === inputs.deadheadMode;
-                      return (
-                        <tr key={d.mode} style={{ fontWeight: on ? 800 : 500, background: on ? "#fafafa" : "transparent" }}>
-                          <td style={{ padding: "6px", textAlign: "left" }}>{DEADHEAD_LABELS[d.mode].label}{on ? " ←" : ""}</td>
-                          <td style={{ padding: "6px", textAlign: "right" }}>{int(d.deadheadMiles)}</td>
-                          <td style={{ padding: "6px", textAlign: "right" }}>{money(d.variableCost + d.absorbedFixed)}</td>
-                          <td style={{ padding: "6px", textAlign: "right", color: ds.fg, fontWeight: 800 }}>{money(d.operatingMargin)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ fontSize: 11.5, color: "#777", marginTop: 8, lineHeight: 1.45 }}>
-                {tr("This job does not have one cost. Where it lands depends on whether the truck drives out for it alone — which is a logistics decision, not a broker one.",
-                    "Este job no tiene un costo único. Dónde cae depende de si el camión sale solo para esto — y eso es una decisión de logística, no del broker.")}
-              </div>
-            </Collapsible>
-          )}
+      {/* The decision rule the traffic light actually runs on. Demoted from the
+          headline — it explains the verdict, it is not the answer to "how much
+          do I make on this". */}
+      <Collapsible title="Per truck-day">
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 130px" }}>
+            <div style={lbl}>Contribution per truck-day</div>
+            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.contributionPerTruckDay)}</div>
+          </div>
+          <div style={{ flex: "1 1 130px" }}>
+            <div style={lbl}>Threshold to beat</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#999", letterSpacing: "-0.02em" }}>{money(result.hurdlePerTruckDay)}</div>
+            <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>Fixed floor {money(result.fixedPerWorkedDay)}</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11.5, color: "#777", marginTop: 10, lineHeight: 1.45 }}>
+          {tr("A $2,000 job that eats three days can be a worse deal than a $900 one done in a day. This is the comparison the traffic light makes.",
+              "Un job de $2.000 que come tres días puede ser peor negocio que uno de $900 hecho en un día. Esta es la comparación que hace el semáforo.")}
+        </div>
+      </Collapsible>
 
-          {/* Send your own truck, or rent one near the pickup? */}
-          {rentRows.length > 0 && num(settings.rentalDayRate) > 0 && (
-            <Collapsible title="Mine or rented">
-              {rentRows.map((r) => (
-                <Row key={String(r.rented)} label={r.rented ? "Rented near pickup" : "My truck"}
-                  value={money(r.operatingMargin)} strong={r.rented === inputs.rented}
-                  tone={r.operatingMargin < 0 ? "#A32D2D" : "#3B6D11"} />
-              ))}
-              <div style={{ fontSize: 11.5, color: "#777", marginTop: 8, lineHeight: 1.45 }}>
-                Renting frees your own truck to earn somewhere else, so it absorbs none of your insurance or maintenance.
-              </div>
-            </Collapsible>
-          )}
-
-          {/* What is left over reads like profit but is really a budget: this is what
-              you can pay somebody else to run the rest of the job. */}
-          {ready && result.maxSubcontract > 0 && (
-            <div style={{ ...card, borderColor: "#e5e5e5" }}>
-              <div style={lbl}>Room to pay a third party</div>
-              <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.maxSubcontract)}</div>
-              <div style={{ fontSize: 12, color: "#777", marginTop: 4, lineHeight: 1.45 }}>
-                {tr(
-                  `That is break-even. To keep your ${Math.round(num(settings.targetMarginPct) * 100)}% target margin, do not pay more than ${money(result.maxSubcontractAtTarget)}.`,
-                  `Ese es el punto de equilibrio. Para conservar tu margen objetivo del ${Math.round(num(settings.targetMarginPct) * 100)}%, no pagues más de ${money(result.maxSubcontractAtTarget)}.`
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* 5. What the app worked out on its own */}
-          <Collapsible title="Estimate" defaultOpen>
-            <Row label="Loaded miles" value={int(result.loadedMiles)} />
-            <Row label="Deadhead miles" value={int(result.deadheadMiles)} />
-            <Row label="Total miles" value={int(result.totalMiles)} strong />
-            {result.fleetMiles > result.totalMiles && <Row label="Fleet miles (all trucks)" value={int(result.fleetMiles)} />}
-            <Row label="Handling hours" value={dec(result.handlingHours)} />
-            <Row label="Driving hours" value={dec(result.drivingHours)} />
-            <Row label="Hotel nights" value={int(result.hotelNights)} />
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-              <label style={lbl}>Truck-days</label>
-              <input style={{ ...inp, width: 90 }} inputMode="decimal" value={truckDaysOverride}
-                placeholder={String(result.truckDaysEstimated)} onChange={(e) => setTruckDaysOverride(e.target.value)} />
-              {result.truckDaysOverridden && (
-                <button style={btn(false)} onClick={() => setTruckDaysOverride("")}>Reset to {result.truckDaysEstimated}</button>
-              )}
-              <span style={{ fontSize: 11.5, color: "#aaa" }}>Override it if you know this job is unusual.</span>
-            </div>
-          </Collapsible>
-
-          {/* 6. The money */}
-          <Collapsible title="Cost breakdown" defaultOpen>
-            {/* The three figures in the unit the whole screen decides in. They
-                reconcile on sight: revenue - cost = profit. */}
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "4px 0 14px", borderBottom: "1px solid #f0f0f0", marginBottom: 8 }}>
-              <div style={{ flex: "1 1 90px" }}>
-                <div style={lbl}>Revenue / day</div>
-                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.revenuePerTruckDay)}</div>
-              </div>
-              <div style={{ flex: "1 1 90px" }}>
-                <div style={lbl}>Cost / day</div>
-                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em", color: "#777" }}>{money(result.costPerTruckDay)}</div>
-              </div>
-              <div style={{ flex: "1 1 90px" }}>
-                <div style={lbl}>Profit / day</div>
-                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em", color: result.profitPerTruckDay < 0 ? "#A32D2D" : "#3B6D11" }}>
-                  {money(result.profitPerTruckDay)}
-                </div>
-              </div>
-            </div>
-            <Row label="Broker price" value={money(result.brokerPrice)} />
-            {result.extrasTotal !== 0 && <Row label="Extras" value={money(result.extrasTotal)} />}
-            {result.storageRevenue > 0 && <Row label="Storage billed" value={money(result.storageRevenue)} />}
-            <Row label="Total revenue" value={money(result.totalRevenue)} strong />
-            <Row label="Crew" value={money(result.crew)} />
-            <Row label="Fuel" value={money(result.fuel)} />
-            <Row label="Hotel" value={`${money(result.hotel)}  (${result.hotelRooms}x)`} />
-            <Row label="Tolls" value={money(result.tolls)} />
-            <Row label="Materials" value={money(result.materials)} />
-            {result.rental > 0 && <Row label="Truck rental" value={money(result.rental)} />}
-            {result.subcontract > 0 && <Row label="Third party" value={money(result.subcontract)} />}
-            {result.storage > 0 && <Row label="Warehouse space" value={money(result.storage)} />}
-            <Row label="Damages reserve" value={money(result.damages)} />
-            <Row label="Contingency" value={money(result.contingency)} />
-            <Row label="Variable cost" value={money(result.variableCost)} strong />
-            <Row label="Absorbed fixed cost" value={money(result.absorbedFixed)} />
-            <Row label="Contribution margin" value={money(result.contributionMargin)} />
-            <Row label="Operating margin" value={money(result.operatingMargin)} strong
-              tone={result.operatingMargin < 0 ? "#A32D2D" : "#3B6D11"} />
-            <Row label="Break-even price" value={money(result.breakevenPrice)} />
-            {pendingKeys.length > 0 && (
-              <div style={{ fontSize: 11.5, color: "#854F0B", background: "#FAEEDA", borderRadius: 8, padding: "8px 10px", marginTop: 10, lineHeight: 1.45 }}>
-                {tr(
-                  `${pendingKeys.length} cost parameters are still at zero because nobody has measured them yet, so the real cost is higher than this.`,
-                  `${pendingKeys.length} parámetros de costo siguen en cero porque nadie los midió todavía, así que el costo real es más alto que este.`
-                )}
-              </div>
-            )}
-          </Collapsible>
-
-          {/* 7. Stress */}
-          <Collapsible title="Stress scenarios">
-            {result.stress.map((s) => (
-              <Row key={s.id} label={SCENARIO_LABELS[s.id].label} value={money(s.operatingMargin)}
-                tone={s.operatingMargin < 0 ? "#A32D2D" : "#3B6D11"} />
-            ))}
-            <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 8, lineHeight: 1.45 }}>
-              Operating margin if the job runs longer or longer-distance than estimated.
-            </div>
-          </Collapsible>
-
-          {ready && can("jobcalc", "create") && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn primary disabled={savingEval} onClick={() => saveEvaluation("accepted")}>Save as accepted</Btn>
-              <Btn disabled={savingEval} onClick={() => saveEvaluation("rejected")}>Save as rejected</Btn>
-            </div>
-          )}
-
-          {/* Per-job adjustments. Same parameters as Settings, but they apply to
-              this job only and never reach the company row. */}
-          <Collapsible title="Adjust for this job">
-            <div style={{ fontSize: 12, color: "#777", marginBottom: 12, lineHeight: 1.5 }}>
-              Anything you type here applies to this job only. The company settings stay untouched, and the next job starts from them again.
-            </div>
-            {SETTING_GROUPS.map((g) => (
-              <div key={g.section} style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>{g.section}</div>
-                <div style={grid}>
-                  {g.keys.map((k) => {
-                    const on = jobOverrides[k] != null && jobOverrides[k] !== "";
-                    return (
-                      <div key={k}>
-                        <label style={lbl}>
-                          {SETTING_LABELS[k].label}
-                          {on && <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 5, background: "#EAF1F8", color: "#185FA5", marginLeft: 6 }}>ADJUSTED</span>}
-                        </label>
-                        <div style={{ display: "flex", gap: 5 }}>
-                          <input style={{ ...inp, borderColor: on ? "#185FA5" : "#e5e5e5" }}
-                            inputMode={k === "baseZip" ? "numeric" : "decimal"}
-                            placeholder={String(companySettings[k] ?? "")}
-                            value={jobOverrides[k] ?? ""}
-                            onChange={(e) => setOverride(k, e.target.value)} />
-                          {on && (
-                            <button onClick={() => setOverride(k, "")} title="Back to standard"
-                              style={{ ...btn(false), padding: "0 9px", color: "#999" }}>x</button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>Access multipliers</div>
-              <div style={grid}>
-                {ACCESS_TYPES.map((a) => {
-                  const on = jobOverrides.accessMultiplier?.[a] != null && jobOverrides.accessMultiplier[a] !== "";
+      {/* Crew comparison — the same job under each crew, so the trade between
+          paying more per day and finishing sooner is visible instead of guessed. */}
+      {ready && (
+        <Collapsible title="Which crew pays best">
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 380 }}>
+              <thead>
+                <tr style={{ color: "#999", textAlign: "right" }}>
+                  <th style={{ textAlign: "left", fontWeight: 600, padding: "4px 6px" }}>Crew</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>Days</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>Cost</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>Per truck-day</th>
+                </tr>
+              </thead>
+              <tbody>
+                {crewRows.map((c) => {
+                  const cs = VERDICT_STYLE[c.verdict];
                   return (
-                    <div key={a}>
+                    <tr key={`${c.drivers}-${c.helpers}`} style={{ background: c.isBest ? "#EAF3DE" : "transparent", fontWeight: c.isCurrent ? 800 : 500 }}>
+                      <td style={{ padding: "6px", textAlign: "left", whiteSpace: "nowrap" }}>
+                        {c.drivers}D + {c.helpers}H{c.isCurrent ? " ←" : ""}
+                      </td>
+                      <td style={{ padding: "6px", textAlign: "right" }}>{dec(c.truckDays)}</td>
+                      <td style={{ padding: "6px", textAlign: "right" }}>{money(c.variableCost)}</td>
+                      <td style={{ padding: "6px", textAlign: "right", color: cs.fg, fontWeight: 800 }}>{money(c.contributionPerTruckDay)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#854F0B", background: "#FAEEDA", borderRadius: 8, padding: "8px 10px", marginTop: 8, lineHeight: 1.45 }}>
+            How much faster a bigger crew works is an assumption, not a measurement. Until the Calibration tab has real jobs with different crews, treat this ranking as a hint.
+          </div>
+        </Collapsible>
+      )}
+
+      {/* The honest answer for a job a week out: not one number, a range. Which
+          end you land on is a logistics decision still to be made. */}
+      {dhRows.length > 0 && miles.deadheadKnown && (
+        <Collapsible title="What it costs, depending on the empty miles">
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 380 }}>
+              <thead>
+                <tr style={{ color: "#999", textAlign: "right" }}>
+                  <th style={{ textAlign: "left", fontWeight: 600, padding: "4px 6px" }}>Assumption</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>Empty mi</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>Cost</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dhRows.map((d) => {
+                  const ds = VERDICT_STYLE[d.verdict];
+                  const on = d.mode === inputs.deadheadMode;
+                  return (
+                    <tr key={d.mode} style={{ fontWeight: on ? 800 : 500, background: on ? "#fafafa" : "transparent" }}>
+                      <td style={{ padding: "6px", textAlign: "left" }}>{DEADHEAD_LABELS[d.mode].label}{on ? " ←" : ""}</td>
+                      <td style={{ padding: "6px", textAlign: "right" }}>{int(d.deadheadMiles)}</td>
+                      <td style={{ padding: "6px", textAlign: "right" }}>{money(d.variableCost + d.absorbedFixed)}</td>
+                      <td style={{ padding: "6px", textAlign: "right", color: ds.fg, fontWeight: 800 }}>{money(d.operatingMargin)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#777", marginTop: 8, lineHeight: 1.45 }}>
+            {tr("This job does not have one cost. Where it lands depends on whether the truck drives out for it alone — which is a logistics decision, not a broker one.",
+                "Este job no tiene un costo único. Dónde cae depende de si el camión sale solo para esto — y eso es una decisión de logística, no del broker.")}
+          </div>
+        </Collapsible>
+      )}
+
+      {/* Send your own truck, or rent one near the pickup? */}
+      {rentRows.length > 0 && num(settings.rentalDayRate) > 0 && (
+        <Collapsible title="Mine or rented">
+          {rentRows.map((r) => (
+            <Row key={String(r.rented)} label={r.rented ? "Rented near pickup" : "My truck"}
+              value={money(r.operatingMargin)} strong={r.rented === inputs.rented}
+              tone={r.operatingMargin < 0 ? "#A32D2D" : "#3B6D11"} />
+          ))}
+          <div style={{ fontSize: 11.5, color: "#777", marginTop: 8, lineHeight: 1.45 }}>
+            Renting frees your own truck to earn somewhere else, so it absorbs none of your insurance or maintenance.
+          </div>
+        </Collapsible>
+      )}
+
+      {/* What is left over reads like profit but is really a budget: this is what
+          you can pay somebody else to run the rest of the job. */}
+      {ready && result.maxSubcontract > 0 && (
+        <Collapsible title="Room to pay a third party">
+          <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.maxSubcontract)}</div>
+          <div style={{ fontSize: 12, color: "#777", marginTop: 4, lineHeight: 1.45 }}>
+            {tr(
+              `That is break-even. To keep your ${Math.round(num(settings.targetMarginPct) * 100)}% target margin, do not pay more than ${money(result.maxSubcontractAtTarget)}.`,
+              `Ese es el punto de equilibrio. Para conservar tu margen objetivo del ${Math.round(num(settings.targetMarginPct) * 100)}%, no pagues más de ${money(result.maxSubcontractAtTarget)}.`
+            )}
+          </div>
+        </Collapsible>
+      )}
+
+      {/* What the app worked out on its own */}
+      <Collapsible title="Estimate">
+        <Row label="Loaded miles" value={int(result.loadedMiles)} />
+        <Row label="Deadhead miles" value={int(result.deadheadMiles)} />
+        <Row label="Total miles" value={int(result.totalMiles)} strong />
+        {result.fleetMiles > result.totalMiles && <Row label="Fleet miles (all trucks)" value={int(result.fleetMiles)} />}
+        <Row label="Handling hours" value={dec(result.handlingHours)} />
+        <Row label="Driving hours" value={dec(result.drivingHours)} />
+        <Row label="Hotel nights" value={int(result.hotelNights)} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+          <label style={lbl}>Truck-days</label>
+          <input style={{ ...inp, width: 90 }} inputMode="decimal" value={truckDaysOverride}
+            placeholder={String(result.truckDaysEstimated)} onChange={(e) => setTruckDaysOverride(e.target.value)} />
+          {result.truckDaysOverridden && (
+            <button style={btn(false)} onClick={() => setTruckDaysOverride("")}>Reset to {result.truckDaysEstimated}</button>
+          )}
+          <span style={{ fontSize: 11.5, color: "#aaa" }}>Override it if you know this job is unusual.</span>
+        </div>
+      </Collapsible>
+
+      {/* The money */}
+      <Collapsible title="Cost breakdown">
+        {/* The three figures in the unit the whole screen decides in. They
+            reconcile on sight: revenue - cost = profit. */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "4px 0 14px", borderBottom: "1px solid #f0f0f0", marginBottom: 8 }}>
+          <div style={{ flex: "1 1 90px" }}>
+            <div style={lbl}>Revenue / day</div>
+            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>{money(result.revenuePerTruckDay)}</div>
+          </div>
+          <div style={{ flex: "1 1 90px" }}>
+            <div style={lbl}>Cost / day</div>
+            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em", color: "#777" }}>{money(result.costPerTruckDay)}</div>
+          </div>
+          <div style={{ flex: "1 1 90px" }}>
+            <div style={lbl}>Profit / day</div>
+            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em", color: result.profitPerTruckDay < 0 ? "#A32D2D" : "#3B6D11" }}>
+              {money(result.profitPerTruckDay)}
+            </div>
+          </div>
+        </div>
+        <Row label="Broker price" value={money(result.brokerPrice)} />
+        {result.extrasTotal !== 0 && <Row label="Extras" value={money(result.extrasTotal)} />}
+        {result.storageRevenue > 0 && <Row label="Storage billed" value={money(result.storageRevenue)} />}
+        <Row label="Total revenue" value={money(result.totalRevenue)} strong />
+        <Row label="Crew" value={money(result.crew)} />
+        <Row label="Fuel" value={money(result.fuel)} />
+        <Row label="Hotel" value={`${money(result.hotel)}  (${result.hotelRooms}x)`} />
+        <Row label="Tolls" value={money(result.tolls)} />
+        <Row label="Materials" value={money(result.materials)} />
+        {result.rental > 0 && <Row label="Truck rental" value={money(result.rental)} />}
+        {result.subcontract > 0 && <Row label="Third party" value={money(result.subcontract)} />}
+        {result.storage > 0 && <Row label="Warehouse space" value={money(result.storage)} />}
+        <Row label="Damages reserve" value={money(result.damages)} />
+        <Row label="Contingency" value={money(result.contingency)} />
+        <Row label="Variable cost" value={money(result.variableCost)} strong />
+        <Row label="Absorbed fixed cost" value={money(result.absorbedFixed)} />
+        <Row label="Contribution margin" value={money(result.contributionMargin)} />
+        <Row label="Operating margin" value={money(result.operatingMargin)} strong
+          tone={result.operatingMargin < 0 ? "#A32D2D" : "#3B6D11"} />
+        <Row label="Break-even price" value={money(result.breakevenPrice)} />
+        {confidence.understated && (
+          <div style={{ fontSize: 11.5, color: "#854F0B", background: "#FAEEDA", borderRadius: 8, padding: "8px 10px", marginTop: 10, lineHeight: 1.45 }}>
+            {tr(
+              `${confidence.missingCost.length} cost parameters are still at zero because nobody has measured them yet, so the real cost is higher than this.`,
+              `${confidence.missingCost.length} parámetros de costo siguen en cero porque nadie los midió todavía, así que el costo real es más alto que este.`
+            )}
+          </div>
+        )}
+      </Collapsible>
+
+      <Collapsible title="Stress scenarios">
+        {result.stress.map((s) => (
+          <Row key={s.id} label={SCENARIO_LABELS[s.id].label} value={money(s.operatingMargin)}
+            tone={s.operatingMargin < 0 ? "#A32D2D" : "#3B6D11"} />
+        ))}
+        <div style={{ fontSize: 11.5, color: "#aaa", marginTop: 8, lineHeight: 1.45 }}>
+          Operating margin if the job runs longer or longer-distance than estimated.
+        </div>
+      </Collapsible>
+
+      {/* Per-job adjustments. Same parameters as Settings, but they apply to
+          this job only and never reach the company row. */}
+      <Collapsible title="Adjust for this job" summary={overrides.length ? tr(`${overrides.length} adjusted`, `${overrides.length} ajustado(s)`) : ""}>
+        <div style={{ fontSize: 12, color: "#777", marginBottom: 12, lineHeight: 1.5 }}>
+          Anything you type here applies to this job only. The company settings stay untouched, and the next job starts from them again.
+        </div>
+        {SETTING_GROUPS.map((g) => (
+          <div key={g.section} style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>{g.section}</div>
+            <div style={grid}>
+                {g.keys.map((k) => {
+                  const on = jobOverrides[k] != null && jobOverrides[k] !== "";
+                  return (
+                    <div key={k}>
                       <label style={lbl}>
-                        {ACCESS_LABELS.find((x) => x.value === a).label}
+                        {SETTING_LABELS[k].label}
                         {on && <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 5, background: "#EAF1F8", color: "#185FA5", marginLeft: 6 }}>ADJUSTED</span>}
                       </label>
-                      <input style={{ ...inp, borderColor: on ? "#185FA5" : "#e5e5e5" }} inputMode="decimal"
-                        placeholder={String(companySettings.accessMultiplier[a] ?? "")}
-                        value={jobOverrides.accessMultiplier?.[a] ?? ""}
-                        onChange={(e) => setAccessOverride(a, e.target.value)} />
+                      <div style={{ display: "flex", gap: 5 }}>
+                        <input style={{ ...inp, borderColor: on ? "#185FA5" : "#e5e5e5" }}
+                          inputMode={k === "baseZip" ? "numeric" : "decimal"}
+                          placeholder={String(companySettings[k] ?? "")}
+                          value={jobOverrides[k] ?? ""}
+                          onChange={(e) => setOverride(k, e.target.value)} />
+                        {on && (
+                          <button onClick={() => setOverride(k, "")} title="Back to standard"
+                            style={{ ...btn(false), padding: "0 9px", color: "#999" }}>x</button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
-            {overrides.length > 0 && (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <Btn onClick={clearOverrides}>Back to standard</Btn>
-                {canEditSettings && <Btn disabled={savingSettings} onClick={promoteOverrides}>Make this the standard</Btn>}
-              </div>
-            )}
-          </Collapsible>
-
-          {/* 8. Settings, collapsed at the end */}
-          <Collapsible title="Settings">
-            {!canEditSettings && <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>Only an admin can change these.</div>}
-            {SETTING_GROUPS.map((g) => (
-              <div key={g.section} style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>{g.section}</div>
-                <div style={grid}>
-                  {g.keys.map((k) => (
-                    <div key={k}>
-                      <label style={lbl}>
-                        {SETTING_LABELS[k].label}
-                        <FlagBadge flag={SETTING_FLAGS[k]} />
-                      </label>
-                      <input style={inp} disabled={!canEditSettings}
-                        value={(draft ?? draftFrom(savedSettings))[k] ?? ""}
-                        inputMode={k === "baseZip" ? "numeric" : "decimal"}
-                        onChange={(e) => setDraft({ ...(draft ?? draftFrom(savedSettings)), [k]: e.target.value })} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>
-                Access multipliers <FlagBadge flag="uncalibrated" />
-              </div>
-              <div style={grid}>
-                {ACCESS_TYPES.map((a) => (
+          ))}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>Access multipliers</div>
+            <div style={grid}>
+              {ACCESS_TYPES.map((a) => {
+                const on = jobOverrides.accessMultiplier?.[a] != null && jobOverrides.accessMultiplier[a] !== "";
+                return (
                   <div key={a}>
-                    <label style={lbl}>{ACCESS_LABELS.find((x) => x.value === a).label}</label>
-                    <input style={inp} disabled={!canEditSettings} inputMode="decimal"
-                      value={(draft ?? draftFrom(savedSettings)).accessMultiplier[a] ?? ""}
-                      onChange={(e) => {
-                        const base = draft ?? draftFrom(savedSettings);
-                        setDraft({ ...base, accessMultiplier: { ...base.accessMultiplier, [a]: e.target.value } });
-                      }} />
+                    <label style={lbl}>
+                      {ACCESS_LABELS.find((x) => x.value === a).label}
+                      {on && <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 5, background: "#EAF1F8", color: "#185FA5", marginLeft: 6 }}>ADJUSTED</span>}
+                    </label>
+                    <input style={{ ...inp, borderColor: on ? "#185FA5" : "#e5e5e5" }} inputMode="decimal"
+                      placeholder={String(companySettings.accessMultiplier[a] ?? "")}
+                      value={jobOverrides.accessMultiplier?.[a] ?? ""}
+                      onChange={(e) => setAccessOverride(a, e.target.value)} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {overrides.length > 0 && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <Btn onClick={clearOverrides}>Back to standard</Btn>
+              {canEditSettings && <Btn disabled={savingSettings} onClick={promoteOverrides}>Make this the standard</Btn>}
+            </div>
+          )}
+        </Collapsible>
+        {/* 8. Settings, collapsed at the end */}
+        <Collapsible title="Settings">
+          {!canEditSettings && <div style={{ fontSize: 12, color: "#999", marginBottom: 10 }}>Only an admin can change these.</div>}
+          {SETTING_GROUPS.map((g) => (
+            <div key={g.section} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>{g.section}</div>
+              <div style={grid}>
+                {g.keys.map((k) => (
+                  <div key={k}>
+                    <label style={lbl}>
+                      {SETTING_LABELS[k].label}
+                      <FlagBadge flag={SETTING_FLAGS[k]} />
+                    </label>
+                    <input style={inp} disabled={!canEditSettings}
+                      value={(draft ?? draftFrom(savedSettings))[k] ?? ""}
+                      inputMode={k === "baseZip" ? "numeric" : "decimal"}
+                      onChange={(e) => setDraft({ ...(draft ?? draftFrom(savedSettings)), [k]: e.target.value })} />
                   </div>
                 ))}
               </div>
             </div>
-            <div style={{ fontSize: 11.5, color: "#854F0B", background: "#FAEEDA", borderRadius: 8, padding: "9px 11px", lineHeight: 1.45, marginBottom: 12 }}>
-              Anything flagged above is an assumption, not a measurement. The traffic light is only as good as these numbers — the Calibration tab replaces them with what really happened.
+          ))}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>
+              Access multipliers <FlagBadge flag="uncalibrated" />
             </div>
-            <div style={{ fontSize: 12, color: "#777", marginBottom: 10 }}>
-              {tr(`Baseline crew day rate: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, companySettings))} (1 driver + 1 helper).`,
-                  `Costo de la crew base por día: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, companySettings))} (1 driver + 1 helper).`)}
+            <div style={grid}>
+              {ACCESS_TYPES.map((a) => (
+                <div key={a}>
+                  <label style={lbl}>{ACCESS_LABELS.find((x) => x.value === a).label}</label>
+                  <input style={inp} disabled={!canEditSettings} inputMode="decimal"
+                    value={(draft ?? draftFrom(savedSettings)).accessMultiplier[a] ?? ""}
+                    onChange={(e) => {
+                      const base = draft ?? draftFrom(savedSettings);
+                      setDraft({ ...base, accessMultiplier: { ...base.accessMultiplier, [a]: e.target.value } });
+                    }} />
+                </div>
+              ))}
             </div>
-            {canEditSettings && draft && (
-              <div style={{ display: "flex", gap: 8 }}>
-                <Btn primary disabled={savingSettings} onClick={saveSettings}>Save settings</Btn>
-                <Btn onClick={() => setDraft(null)}>Discard</Btn>
-              </div>
-            )}
-          </Collapsible>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#854F0B", background: "#FAEEDA", borderRadius: 8, padding: "9px 11px", lineHeight: 1.45, marginBottom: 12 }}>
+            Anything flagged above is an assumption, not a measurement. The traffic light is only as good as these numbers — the Calibration tab replaces them with what really happened.
+          </div>
+          <div style={{ fontSize: 12, color: "#777", marginBottom: 10 }}>
+            {tr(`Baseline crew day rate: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, companySettings))} (1 driver + 1 helper).`,
+                `Costo de la crew base por día: ${money(crewCostPerDay({ drivers: 1, helpers: 1 }, companySettings))} (1 driver + 1 helper).`)}
+          </div>
+          {canEditSettings && draft && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn primary disabled={savingSettings} onClick={saveSettings}>Save settings</Btn>
+              <Btn onClick={() => setDraft(null)}>Discard</Btn>
+            </div>
+          )}
+        </Collapsible>
+    </>
+  );
+
+  return (
+    <div style={{ maxWidth: wide ? 1120 : 720 }}>
+      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #eee", marginBottom: 14, flexWrap: "wrap" }}>
+        <button style={tabBtn(tab === "evaluate")} onClick={() => setTab("evaluate")}>Evaluate</button>
+        <button style={tabBtn(tab === "history")} onClick={() => setTab("history")}>History</button>
+        <button style={tabBtn(tab === "calibration")} onClick={() => setTab("calibration")}>Calibration</button>
+      </div>
+
+      {err && <div style={{ background: "#FCEBEB", border: "1px solid #E24B4A", color: "#A32D2D", borderRadius: 9, padding: "9px 12px", fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
+
+      {/* ── EVALUATE ─────────────────────────────────────────────────────── */}
+      {/* Two columns when there is room: the answer sits beside the form and
+          stays put while it is filled in. Narrow, it stacks essentials → answer
+          → everything else, so the verdict is still above the fold. */}
+      {tab === "evaluate" && (wide ? (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 380px", gap: 14, alignItems: "start" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+            {essentials}
+            {detailInputs}
+            {workings}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0, position: "sticky", top: 16 }}>
+            {answer}
+          </div>
         </div>
-      )}
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {essentials}
+          {answer}
+          {detailInputs}
+          {workings}
+        </div>
+      ))}
+
 
       {/* ── HISTORY ──────────────────────────────────────────────────────── */}
       {tab === "history" && (
@@ -1355,10 +1757,20 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
             return (
               <div key={r.id} style={card}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>{r.origin_zip} → {r.dest_zip}</div>
+                  <div style={{ minWidth: 0 }}>
+                    {/* The label the operator gave it, when there is one. A list
+                        of bare ZIP pairs is not something anybody can search. */}
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      {r.label || `${r.origin_zip} → ${r.dest_zip}`}
+                    </div>
                     <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>
+                      {r.label ? `${r.origin_zip} → ${r.dest_zip} · ` : ""}
                       {int(r.cu_ft)} cu ft · {money(r.broker_price)} · {dec(r.truck_days)} truck-days
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "#bbb", marginTop: 2 }}>
+                      {new Date(r.created_at).toLocaleDateString()}
+                      {r.decision === "accepted" ? " · " + tr("accepted", "aceptado")
+                        : r.decision === "rejected" ? " · " + tr("rejected", "rechazado") : ""}
                     </div>
                   </div>
                   <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 20, background: st.bg, color: st.fg }}>
@@ -1369,6 +1781,10 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
                     filters everyone else out, and a filtered-out update returns
                     no error, so offering the button would fake a save. */}
                 <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                  {/* Reopening is what makes a counter-offer cheap to price: the
+                      broker comes back with a number, this comes back with the
+                      job already loaded. */}
+                  <Btn onClick={() => reopen(r)}>Open in Evaluate</Btn>
                   {(r.created_by === session.user.id || isAdmin) ? (
                     <>
                       <Btn onClick={() => { setActualsFor(r); setActuals(actualsOf(r)); }}>

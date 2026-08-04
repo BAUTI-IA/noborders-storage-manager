@@ -325,6 +325,35 @@ export function deadheadFor(mode, legs) {
   return out + back;                          // dedicated round trip — the conservative read
 }
 
+/**
+ * The same assumption applied across every truck on the job.
+ *
+ * Trucks leaving from different yards drive different empty miles, so elapsed
+ * time follows the LONGEST route while fuel is bought for the SUM — the same
+ * split evaluateJob makes between totalMiles and fleetMiles. Accepts either the
+ * flat single-route shape from /api/distance or `{ perTruck: [...] }` with one
+ * entry per truck; trucks the router did not answer for start where truck 1 does.
+ */
+export function deadheadAcross(mode, legs, trucks = 1) {
+  const loaded = num(legs?.loadedMiles);
+  const n = Math.max(1, Math.round(num(trucks, 1)));
+  const per = Array.isArray(legs?.perTruck) && legs.perTruck.length ? legs.perTruck : [legs];
+  const each = per.slice(0, n).map((t) => deadheadFor(mode, t));
+  while (each.length < n) each.push(each[0] ?? 0);
+  return {
+    deadheadMiles: Math.max(...each),
+    fleetMiles: each.reduce((a, d) => a + loaded + d, 0),
+  };
+}
+
+/**
+ * Are the empty miles actually in play? Without a routed base leg every
+ * assumption collapses to the same number, and spreading a range over a
+ * difference that does not exist would manufacture uncertainty out of nothing.
+ */
+export const deadheadKnownFor = (legs, trucks = 1) =>
+  DEADHEAD_MODES.some((m) => deadheadAcross(m, legs, trucks).deadheadMiles > 0);
+
 /** Is this job being run on a rented truck rather than one of yours? */
 export const isRented = (job) => job?.rented === true;
 
@@ -654,14 +683,15 @@ const scenarioSummary = (r) => ({
 
 /**
  * The same job under each deadhead assumption.
- * @param legs { loadedMiles, deadheadOutMiles, deadheadBackMiles } from /api/distance
+ * @param legs { loadedMiles, deadheadOutMiles, deadheadBackMiles } from /api/distance,
+ *             or { loadedMiles, perTruck: [{ deadheadOutMiles, deadheadBackMiles }] }
  */
 export function compareDeadhead(job, settings, legs, opts = {}) {
   const loadedMiles = num(legs?.loadedMiles);
   return DEADHEAD_MODES.map((mode) => {
-    const deadheadMiles = deadheadFor(mode, legs);
-    const r = evaluateJob(job, settings, { loadedMiles, deadheadMiles }, opts);
-    return { mode, deadheadMiles, ...scenarioSummary(r) };
+    const { deadheadMiles, fleetMiles } = deadheadAcross(mode, legs, trucksOf(job));
+    const r = evaluateJob(job, settings, { loadedMiles, deadheadMiles, fleetMiles }, opts);
+    return { mode, deadheadMiles, fleetMiles, ...scenarioSummary(r) };
   });
 }
 
@@ -730,6 +760,233 @@ export function compareCrews(job, settings, miles, opts = {}) {
 
   const best = rows.reduce((b, x) => (b == null || x.contributionPerTruckDay > b.contributionPerTruckDay ? x : b), null);
   return rows.map((r) => ({ ...r, isBest: best != null && r.drivers === best.drivers && r.helpers === best.helpers }));
+}
+
+// ── Profit range ─────────────────────────────────────────────────────────────
+//
+// What the operator actually asks is "how much do I make on this", and the
+// honest answer is a range, because the logistics that decide it have not been
+// arranged yet. The three ends below are not a confidence interval — they are
+// three concrete plans:
+//
+//   high — the truck is already out there and the crew that ranks best loads it
+//   mid  — exactly what the operator entered
+//   low  — it goes out for this alone AND runs long
+//
+// Every end carries the assumption that produces it. A bare "between $780 and
+// $1,940" is worse than no number at all: it tells the operator the spread
+// without telling him which decision moves him from one end to the other.
+
+/** Reason codes for the ends of the range. The UI owns the wording. */
+export const RANGE_END = { LOW: "low", MID: "mid", HIGH: "high" };
+
+/** What can move a job from one end of the range to the other. */
+export const RANGE_LEVER = {
+  DEADHEAD: "deadhead",
+  CREW: "crew",
+  EXTRA_DAY: "extraDay",
+  EXTRA_MILES: "extraMiles",
+  RENTAL: "rental",
+};
+
+/** One end of the range, in the two units the decision is made in. */
+function rangePoint(id, r, detail) {
+  const revenue = num(r.totalRevenue);
+  return {
+    id,
+    detail,                       // what has to be true for this end to happen
+    operatingMargin: num(r.operatingMargin),
+    // Margin over EVERYTHING billed — extras and storage are revenue too, so
+    // dividing by the broker price alone would flatter every job that has them.
+    marginPct: revenue > 0 ? num(r.operatingMargin) / revenue : 0,
+    totalRevenue: revenue,
+    contributionPerTruckDay: num(r.contributionPerTruckDay),
+    truckDays: num(r.truckDays),
+    totalMiles: num(r.totalMiles),
+    deadheadMiles: num(r.deadheadMiles),
+    verdict: r.verdict,
+  };
+}
+
+const richer = (a, b) => (b == null ? a : a == null ? b : a.operatingMargin >= b.operatingMargin ? a : b);
+const poorer = (a, b) => (b == null ? a : a == null ? b : a.operatingMargin <= b.operatingMargin ? a : b);
+
+/**
+ * The spread this job can land in, and what decides where inside it.
+ *
+ * @param legs  the same shape compareDeadhead takes
+ * @param opts  { truckDaysOverride } — honoured on every end, because a measured
+ *              day count describes the job, not the assumption
+ * @returns { low, mid, high, spread, levers[] } — levers sorted by how much
+ *          money each one moves, largest first
+ */
+export function profitRange(job, settings, legs, opts = {}) {
+  const s = mergeSettings(settings);
+  const trucks = trucksOf(job);
+  const loadedMiles = num(legs?.loadedMiles);
+  const milesFor = (mode) => ({ loadedMiles, ...deadheadAcross(mode, legs, trucks) });
+
+  const chosenMode = DEADHEAD_MODES.includes(job?.deadheadMode) ? job.deadheadMode : "roundTrip";
+  // With no routed base leg the three assumptions are the same number, so the
+  // range must not pretend the empty miles are a lever on this job.
+  const deadheadKnown = deadheadKnownFor(legs, trucks);
+  const bestMode = deadheadKnown ? "none" : chosenMode;
+  const worstMode = deadheadKnown ? "roundTrip" : chosenMode;
+
+  // ── mid: what was entered, override included ───────────────────────────────
+  const midR = evaluateJob(job, s, milesFor(chosenMode), opts);
+  const mid = rangePoint(RANGE_END.MID, midR, {
+    deadheadMode: chosenMode, drivers: midR.drivers, helpers: midR.helpers, stressed: false,
+  });
+
+  // ── high: best empty-miles assumption, and the crew that leaves the most ────
+  // Ranked by operating margin, not by contribution per truck-day: the range is
+  // stated in dollars of profit, and the crew that wins per truck-day can finish
+  // so much faster that it takes home less in total.
+  const bestMiles = milesFor(bestMode);
+  const crewRows = compareCrews(job, s, bestMiles);
+  const bestCrew = crewRows.reduce((b, x) => (b == null || x.operatingMargin > b.operatingMargin ? x : b), null);
+  const highJob = bestCrew ? { ...job, drivers: bestCrew.drivers, helpers: bestCrew.helpers } : job;
+  const highR = evaluateJob(highJob, s, bestMiles, opts);
+  const highCandidate = rangePoint(RANGE_END.HIGH, highR, {
+    deadheadMode: bestMode, drivers: highR.drivers, helpers: highR.helpers, stressed: false,
+  });
+
+  // ── low: worst empty-miles assumption, the planned crew, and it runs long ───
+  const lowR = evaluateJob(job, s, milesFor(worstMode), opts);
+  const w = lowR.worstStress;
+  const lowCandidate = w
+    ? rangePoint(
+        RANGE_END.LOW,
+        {
+          ...w,
+          totalRevenue: lowR.totalRevenue,
+          deadheadMiles: lowR.deadheadMiles,
+          verdict: verdictFor(
+            {
+              contributionMargin: w.contributionMargin,
+              contributionPerTruckDay: w.contributionPerTruckDay,
+              fixedPerWorkedDay: w.fixedPerWorkedDay,
+              hurdlePerTruckDay: w.hurdlePerTruckDay,
+            },
+            null
+          ).verdict,
+        },
+        { deadheadMode: worstMode, drivers: lowR.drivers, helpers: lowR.helpers, stressed: true }
+      )
+    : rangePoint(RANGE_END.LOW, lowR, {
+        deadheadMode: worstMode, drivers: lowR.drivers, helpers: lowR.helpers, stressed: false,
+      });
+
+  // The ends have to bracket what was entered. If the operator already picked
+  // the best plan available, HE is the high end — clamping keeps the bar from
+  // rendering backwards and keeps the labels honest about which plan wins.
+  const high = { ...richer(highCandidate, mid), id: RANGE_END.HIGH };
+  const low = { ...poorer(lowCandidate, mid), id: RANGE_END.LOW };
+
+  // ── What moves the number, biggest first ───────────────────────────────────
+  const levers = [];
+
+  if (deadheadKnown) {
+    const dh = compareDeadhead(job, s, legs, opts);
+    const bestDh = dh.reduce((b, x) => (x.operatingMargin > b.operatingMargin ? x : b), dh[0]);
+    const worstDh = dh.reduce((b, x) => (x.operatingMargin < b.operatingMargin ? x : b), dh[0]);
+    levers.push({
+      id: RANGE_LEVER.DEADHEAD,
+      best: bestDh.operatingMargin, worst: worstDh.operatingMargin,
+      swing: bestDh.operatingMargin - worstDh.operatingMargin,
+      detail: { bestMode: bestDh.mode, worstMode: worstDh.mode, current: chosenMode },
+    });
+  }
+
+  if (crewRows.length > 1) {
+    const bestC = crewRows.reduce((b, x) => (x.operatingMargin > b.operatingMargin ? x : b), crewRows[0]);
+    const worstC = crewRows.reduce((b, x) => (x.operatingMargin < b.operatingMargin ? x : b), crewRows[0]);
+    levers.push({
+      id: RANGE_LEVER.CREW,
+      best: bestC.operatingMargin, worst: worstC.operatingMargin,
+      swing: bestC.operatingMargin - worstC.operatingMargin,
+      detail: {
+        best: { drivers: bestC.drivers, helpers: bestC.helpers },
+        worst: { drivers: worstC.drivers, helpers: worstC.helpers },
+        current: { drivers: midR.drivers, helpers: midR.helpers },
+      },
+    });
+  }
+
+  for (const id of [RANGE_LEVER.EXTRA_DAY, RANGE_LEVER.EXTRA_MILES]) {
+    const sc = (midR.stress || []).find((x) => x.id === id);
+    if (!sc) continue;
+    levers.push({
+      id,
+      best: mid.operatingMargin, worst: sc.operatingMargin,
+      swing: mid.operatingMargin - sc.operatingMargin,
+      detail: { truckDays: sc.truckDays, totalMiles: sc.totalMiles },
+    });
+  }
+
+  if (num(s.rentalDayRate) > 0) {
+    const rent = compareRental(job, s, milesFor(chosenMode), opts);
+    const bestR = rent.reduce((b, x) => (x.operatingMargin > b.operatingMargin ? x : b), rent[0]);
+    const worstR = rent.reduce((b, x) => (x.operatingMargin < b.operatingMargin ? x : b), rent[0]);
+    levers.push({
+      id: RANGE_LEVER.RENTAL,
+      best: bestR.operatingMargin, worst: worstR.operatingMargin,
+      swing: bestR.operatingMargin - worstR.operatingMargin,
+      detail: { bestRented: bestR.rented, current: isRented(job) },
+    });
+  }
+
+  levers.sort((a, b) => b.swing - a.swing);
+
+  return {
+    low, mid, high,
+    spread: high.operatingMargin - low.operatingMargin,
+    deadheadKnown,
+    levers: levers.filter((l) => Math.abs(l.swing) >= 1),
+  };
+}
+
+// ── How much the estimate can be trusted ─────────────────────────────────────
+//
+// Every number on the screen rests on parameters, and a green light built on
+// unmeasured ones is worth exactly nothing. Two independent things break trust:
+// costs nobody has supplied (which make the job look cheaper than it is), and a
+// productivity figure nobody has checked against a job that actually ran.
+
+/**
+ * Pending settings that, left at zero, push the COST down — so the profit on
+ * screen comes out higher than reality. Pending settings that only gate a
+ * feature (truck capacity, the extra-cu-ft rate) are deliberately not here:
+ * counting them would cry wolf about numbers that are not wrong.
+ */
+export const UNDERSTATING_COST_KEYS = [
+  "depreciationMonthlyPerTruck",
+  "overheadMonthly",
+  "tollPerMile",
+  "materialsPerCuFt",
+  "damagesReservePct",
+];
+
+export const CONFIDENCE = { LOW: "low", MEDIUM: "medium", HIGH: "high" };
+
+/**
+ * @param calibration the output of calibrate(rows), or null
+ * @returns { level, missingCost[], assumed[], sampleSize, understated }
+ */
+export function estimateConfidence(settings, calibration) {
+  const s = mergeSettings(settings);
+  const missingCost = UNDERSTATING_COST_KEYS.filter((k) => !num(s[k]));
+  const assumed = Object.keys(SETTING_FLAGS).filter(isAssumption);
+  const sampleSize = Math.max(0, Math.round(num(calibration?.sampleSize)));
+
+  // Nothing measured yet, or half the cost model still blank: low. One executed
+  // job is not a measurement either — it is an anecdote.
+  let level = CONFIDENCE.HIGH;
+  if (sampleSize < 2 || missingCost.length >= 3) level = CONFIDENCE.LOW;
+  else if (sampleSize < 5 || missingCost.length > 0) level = CONFIDENCE.MEDIUM;
+
+  return { level, missingCost, assumed, sampleSize, understated: missingCost.length > 0 };
 }
 
 // ── Calibration ──────────────────────────────────────────────────────────────

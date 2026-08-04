@@ -7,6 +7,8 @@ import {
   assembleMiles, computeTime, hotelNightsFor, computeVariable, computeFixed,
   computeMetrics, verdictFor, evaluateJob, calibrate, calibrationPatch,
   VERDICT, REASON, ACCESS_TYPES, applyOverrides, overrideDiff, capacityCheck, storageBillableMonths, deadheadFor, compareDeadhead, compareRental, DEADHEAD_MODES, crewCostPerDay, crewFactor, crewSizeOf, hotelRoomsFor, usefulHoursFor, compareCrews, CREW_OPTIONS,
+  deadheadAcross, deadheadKnownFor, profitRange, RANGE_END, RANGE_LEVER,
+  estimateConfidence, CONFIDENCE, UNDERSTATING_COST_KEYS,
 } from "../src/jobCalcData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -1196,4 +1198,183 @@ t("fleet miles: stress scenarios scale it with the route, not independently", ()
   const milesScenario = r.stress.find((x) => x.id === "extraMiles");
   // +20% miles has to raise the fleet's fuel by 20% as well.
   near(milesScenario.fuel, r.fuel * 1.2, 1);
+});
+
+// ── Empty miles across a fleet ───────────────────────────────────────────────
+
+t("deadheadAcross: one route behaves exactly as the flat shape always did", () => {
+  const { deadheadMiles, fleetMiles } = deadheadAcross("roundTrip", LEGS, 1);
+  assert.equal(deadheadMiles, 1680);
+  assert.equal(fleetMiles, 1405 + 1680);
+});
+
+t("deadheadAcross: trucks the router did not answer for start where truck 1 does", () => {
+  const one = deadheadAcross("roundTrip", LEGS, 1);
+  const two = deadheadAcross("roundTrip", LEGS, 2);
+  assert.equal(two.deadheadMiles, one.deadheadMiles, "the clock follows the longest route");
+  assert.equal(two.fleetMiles, one.fleetMiles * 2, "but both trucks buy fuel");
+});
+
+t("deadheadAcross: time follows the FARTHEST truck, fuel follows the sum", () => {
+  const legs = { loadedMiles: 1000, perTruck: [
+    { deadheadOutMiles: 100, deadheadBackMiles: 100 },   // near the pickup
+    { deadheadOutMiles: 400, deadheadBackMiles: 400 },   // the far one
+  ] };
+  const { deadheadMiles, fleetMiles } = deadheadAcross("roundTrip", legs, 2);
+  assert.equal(deadheadMiles, 800, "the job is not done until the last truck is back");
+  assert.equal(fleetMiles, (1000 + 200) + (1000 + 800));
+});
+
+t("deadheadAcross: the assumption still rules — 'already there' is zero for everyone", () => {
+  const legs = { loadedMiles: 1000, perTruck: [
+    { deadheadOutMiles: 100, deadheadBackMiles: 100 },
+    { deadheadOutMiles: 400, deadheadBackMiles: 400 },
+  ] };
+  assert.equal(deadheadAcross("none", legs, 2).deadheadMiles, 0);
+  assert.equal(deadheadAcross("oneWay", legs, 2).deadheadMiles, 400);
+});
+
+t("deadheadKnownFor: no routed base leg means the empty miles are not a lever", () => {
+  assert.equal(deadheadKnownFor({ loadedMiles: 1405 }, 1), false);
+  assert.equal(deadheadKnownFor(LEGS, 1), true);
+  assert.equal(deadheadKnownFor(undefined, 1), false);
+});
+
+t("compareDeadhead: reads per-truck legs, which is what the UI actually holds", () => {
+  const job = { ...JOB, trucks: 2, drivers: 2, helpers: 2 };
+  const legs = { loadedMiles: 1405, perTruck: [
+    { deadheadOutMiles: 450, deadheadBackMiles: 1230 },
+    { deadheadOutMiles: 450, deadheadBackMiles: 1230 },
+  ] };
+  const rows = compareDeadhead(job, {}, legs);
+  // The bug this replaces: every row came back with 0 empty miles and an
+  // identical cost, which taught the operator the assumption did not matter.
+  assert.deepEqual(rows.map((r) => r.deadheadMiles), [1680, 450, 0]);
+  assert.equal(new Set(rows.map((r) => Math.round(r.variableCost))).size, 3);
+});
+
+// ── Profit range ─────────────────────────────────────────────────────────────
+
+const RANGE_JOB = { ...JOB, deadheadMode: "roundTrip" };
+
+t("profitRange: the ends bracket what the operator entered", () => {
+  const r = profitRange(RANGE_JOB, {}, LEGS);
+  assert.ok(r.low.operatingMargin <= r.mid.operatingMargin, "low is never above the plan");
+  assert.ok(r.high.operatingMargin >= r.mid.operatingMargin, "high is never below it");
+  assert.equal(r.spread, r.high.operatingMargin - r.low.operatingMargin);
+  assert.ok(r.spread >= 0);
+});
+
+t("profitRange: margin is a share of EVERYTHING billed, not of the broker price", () => {
+  const job = { ...RANGE_JOB, extras: [{ amount: 900 }], storageMonths: 2, storageMonthlyRate: 300 };
+  const r = profitRange(job, {}, LEGS);
+  const revenue = 4800 + 900 + 600;
+  near(r.mid.totalRevenue, revenue, 0.01);
+  near(r.mid.marginPct, r.mid.operatingMargin / revenue, 0.0001);
+});
+
+t("profitRange: the ends name the plan that produces them", () => {
+  const r = profitRange(RANGE_JOB, {}, LEGS);
+  assert.equal(r.high.detail.deadheadMode, "none", "best case: the truck is already out there");
+  assert.equal(r.low.detail.deadheadMode, "roundTrip", "worst case: it drives out for this alone");
+  assert.equal(r.low.detail.stressed, true, "...and it runs long");
+  assert.equal(r.mid.detail.deadheadMode, "roundTrip", "the plan as entered");
+});
+
+t("profitRange: with no routed base leg the empty miles stop being a lever", () => {
+  const r = profitRange(RANGE_JOB, {}, { loadedMiles: 1405 });
+  assert.equal(r.deadheadKnown, false);
+  assert.equal(r.low.detail.deadheadMode, r.mid.detail.deadheadMode);
+  assert.equal(r.high.detail.deadheadMode, r.mid.detail.deadheadMode);
+  assert.ok(!r.levers.some((l) => l.id === RANGE_LEVER.DEADHEAD), "no spread invented out of nothing");
+});
+
+t("profitRange: on a long dedicated lane the empty miles are the biggest lever", () => {
+  const job = { originZip: "54962", destZip: "87114", cuFt: 3456, brokerPrice: 9955,
+    originAccess: "direct", destAccess: "direct", longCarry: false, shuttle: false,
+    drivers: 2, helpers: 2, trucks: 2, deadheadMode: "roundTrip" };
+  const s = { fuelCostPerMile: 0.8, tollPerMile: 0.3, driverDayRate: 250, helperDayRate: 250, cuFtPerHour: 575.6 };
+  const r = profitRange(job, s, LEGS);
+  assert.equal(r.levers[0].id, RANGE_LEVER.DEADHEAD, "sorted by how much money each one moves");
+  assert.ok(r.levers[0].swing > 0);
+  // The whole point of the range: the same job is a loss one way and a profit the other.
+  assert.ok(r.low.operatingMargin < 0);
+  assert.ok(r.high.operatingMargin > 0);
+});
+
+t("profitRange: levers come out sorted, biggest swing first, and none of them is noise", () => {
+  const r = profitRange(RANGE_JOB, {}, LEGS);
+  for (let i = 1; i < r.levers.length; i++) {
+    assert.ok(r.levers[i - 1].swing >= r.levers[i].swing, "out of order at " + i);
+  }
+  for (const l of r.levers) assert.ok(Math.abs(l.swing) >= 1, `${l.id} is rounding noise`);
+});
+
+t("profitRange: renting only shows up as a lever once somebody priced a rental", () => {
+  const without = profitRange(RANGE_JOB, {}, LEGS);
+  assert.ok(!without.levers.some((l) => l.id === RANGE_LEVER.RENTAL));
+  const with_ = profitRange(RANGE_JOB, { rentalDayRate: 140, rentalPerMile: 0.8 }, LEGS);
+  assert.ok(with_.levers.some((l) => l.id === RANGE_LEVER.RENTAL));
+});
+
+t("profitRange: a truck-days override describes the job, so every end honours it", () => {
+  const r = profitRange(RANGE_JOB, {}, LEGS, { truckDaysOverride: 6 });
+  assert.equal(r.mid.truckDays, 6);
+  assert.equal(r.high.truckDays, 6);
+  // The low end adds the extra day of the stress scenario on top of the override.
+  assert.equal(r.low.truckDays, 7);
+});
+
+t("profitRange: an operator already on the best plan IS the high end", () => {
+  // Nothing left to improve — the truck is already there and cannot be cheaper.
+  const r = profitRange({ ...RANGE_JOB, deadheadMode: "none" }, {}, { loadedMiles: 1405 });
+  near(r.high.operatingMargin, r.mid.operatingMargin, 0.01);
+  assert.equal(r.high.id, RANGE_END.HIGH, "still labelled as the high end");
+});
+
+t("profitRange: garbage inputs never produce a backwards bar", () => {
+  for (const job of [{}, { cuFt: "", brokerPrice: "" }, { ...JOB, deadheadMode: "nonsense" }]) {
+    const r = profitRange(job, {}, LEGS);
+    assert.ok(r.low.operatingMargin <= r.mid.operatingMargin, `broke on ${JSON.stringify(job)}`);
+    assert.ok(r.high.operatingMargin >= r.mid.operatingMargin, `broke on ${JSON.stringify(job)}`);
+    assert.ok(Number.isFinite(r.mid.marginPct));
+  }
+});
+
+// ── How much the estimate can be trusted ─────────────────────────────────────
+
+t("estimateConfidence: out of the box it is low, and it says why", () => {
+  const c = estimateConfidence({}, null);
+  assert.equal(c.level, CONFIDENCE.LOW);
+  assert.equal(c.sampleSize, 0);
+  assert.ok(c.understated, "costs left at zero make the profit read high");
+  assert.deepEqual(c.missingCost.sort(), [...UNDERSTATING_COST_KEYS].sort());
+});
+
+t("estimateConfidence: only costs that push the number DOWN are counted", () => {
+  // Neither of these makes the job look cheaper — they just gate a feature.
+  for (const k of ["truckCapacityCuFt", "extraCuFtRate"]) {
+    assert.ok(!UNDERSTATING_COST_KEYS.includes(k), `${k} must not cry wolf`);
+  }
+});
+
+t("estimateConfidence: filling the cost model in stops the warning", () => {
+  const full = Object.fromEntries(UNDERSTATING_COST_KEYS.map((k) => [k, 1]));
+  const c = estimateConfidence(full, { sampleSize: 9 });
+  assert.equal(c.understated, false);
+  assert.deepEqual(c.missingCost, []);
+  assert.equal(c.level, CONFIDENCE.HIGH);
+});
+
+t("estimateConfidence: one executed job is an anecdote, not a measurement", () => {
+  const full = Object.fromEntries(UNDERSTATING_COST_KEYS.map((k) => [k, 1]));
+  assert.equal(estimateConfidence(full, { sampleSize: 1 }).level, CONFIDENCE.LOW);
+  assert.equal(estimateConfidence(full, { sampleSize: 3 }).level, CONFIDENCE.MEDIUM);
+  assert.equal(estimateConfidence(full, { sampleSize: 5 }).level, CONFIDENCE.HIGH);
+});
+
+t("estimateConfidence: a calibrated productivity figure is still an assumption until measured", () => {
+  const c = estimateConfidence({}, null);
+  assert.ok(c.assumed.includes("cuFtPerHour"), "the most sensitive parameter in the model");
+  assert.ok(c.assumed.includes("fuelCostPerMile"));
 });
