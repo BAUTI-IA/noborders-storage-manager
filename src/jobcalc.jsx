@@ -7,7 +7,7 @@
 // renders it, persists evaluations, and edits the settings.
 // Tables: job_calc_settings, job_evaluations, zip_distances, zip_geo.
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { tr } from "./i18n.js";
+import { tr, t } from "./i18n.js";
 import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
   mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews,
@@ -1094,7 +1094,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
         {/* Where the truck is standing is what makes deadhead miles real. */}
         <div style={{ ...grid, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f3f3" }}>
           <div>
-            <label style={lbl}>{trucksOf(inputs) > 1 ? "Truck 1 is at" : "Truck is at (base ZIP)"}</label>
+            <label style={lbl}>{trucksOf(inputs) > 1 ? t("Truck 1 is at") : t("Truck is at (base ZIP)")}</label>
             <input style={{ ...inp, borderColor: jobOverrides.baseZip ? "#185FA5" : "#e5e5e5" }}
               inputMode="numeric" placeholder={companySettings.baseZip || "33166"}
               value={jobOverrides.baseZip ?? ""} onChange={(e) => setOverride("baseZip", e.target.value)} />
@@ -1103,7 +1103,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
               and empty miles are the costliest thing on this screen. */}
           {Array.from({ length: trucksOf(inputs) - 1 }, (_, i) => (
             <div key={i}>
-              <label style={lbl}>{tr(`Truck ${i + 2} is at`, `Camión ${i + 2} está en`)}</label>
+              <label style={lbl}>{tr(`Truck ${i + 2} is at`, `El camión ${i + 2} está en`)}</label>
               <input style={inp} inputMode="numeric" placeholder={baseZip || companySettings.baseZip || "same as truck 1"}
                 value={inputs.truckZips?.[i + 1] ?? ""}
                 onChange={(e) => setInputs((p) => {
