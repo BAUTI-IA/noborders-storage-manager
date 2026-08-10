@@ -1099,6 +1099,9 @@ create table if not exists public.job_extras (
   payment_id bigint,
   created_at timestamptz default now()
 );
+-- The month an extra is reported/paid in: a July job can be charged an extra in August.
+alter table public.job_extras add column if not exists extra_date date;
+update public.job_extras set extra_date = created_at::date where extra_date is null;
 alter table public.job_extras add column if not exists extra_cf_count numeric;
 alter table public.job_extras add column if not exists extra_cf_rate numeric;
 alter table public.job_extras add column if not exists extra_cf_subtotal numeric;
@@ -3193,6 +3196,7 @@ export default function App() {
   const [extrasMissing, setExtrasMissing] = useState(false);
   const [extrasColsMissing, setExtrasColsMissing] = useState(false);  // extra-CF / fuel columns
   const [brokerShareMissing, setBrokerShareMissing] = useState(false);  // broker-share columns (job_extras + storage_jobs)
+  const [extraDateMissing, setExtraDateMissing] = useState(false);      // job_extras.extra_date (month the extra is charged in)
   const [extrasTabExpanded, setExtrasTabExpanded] = useState(() => new Set());  // collapsible driver/month cards
   const [jobExtras, setJobExtras] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -3924,6 +3928,28 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session, extrasMissing]);
+
+  // Probe job_extras.extra_date — the date the extra is charged on, which is
+  // what the month grouping uses. Existing rows are backfilled with the day they
+  // were loaded, so an extra added in August stops being reported under the
+  // month of its job.
+  useEffect(() => {
+    if (!session || extrasMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("job_extras").select("extra_date").limit(1);
+      if (cancelled || !error) return;
+      let created = false;
+      const sql = "alter table public.job_extras add column if not exists extra_date date; update public.job_extras set extra_date = created_at::date where extra_date is null;";
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (cancelled) return;
+      if (created) loadExtras(); else setExtraDateMissing(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session, extrasMissing, loadExtras]);
 
   // Probe the broker-share columns (job_extras + storage_jobs).
   useEffect(() => {
@@ -5139,7 +5165,11 @@ export default function App() {
   }, [jobs]);
   // Expected to be collected for a job = pickup + delivery balances (+ broker BOL balance).
   const jobExpected = useCallback((g) => g ? jobToCollect(g) : 0, []);
-  const groupMonth = useCallback((g) => (g.date_in || g.created_at || "").slice(0, 7), []);
+  // An extra belongs to the month it was charged, not to the month of the job it
+  // hangs from: a job from July can perfectly get an extra in August. Rows
+  // created before extra_date existed fall back to when they were loaded, and
+  // only then to the job's own month.
+  const extraMonth = useCallback((e, g) => (e?.extra_date || e?.created_at || g?.date_in || g?.created_at || "").slice(0, 7), []);
   const jobKeysWithExtras = useMemo(() => {
     const s = new Set();
     for (const e of jobExtras) { if (e.active === false) continue; const k = jobKeyByRowId[e.job_id]; if (k) s.add(k); }
@@ -5150,13 +5180,12 @@ export default function App() {
     for (const e of jobExtras) {
       if (e.active === false) continue;
       const k = jobKeyByRowId[e.job_id]; const g = k ? extraJobGroups.get(k) : null;
-      const mo = g ? groupMonth(g) : (e.created_at || "").slice(0, 7);
-      if (exMonth && mo !== exMonth) continue;
+      if (exMonth && extraMonth(e, g) !== exMonth) continue;
       total += numv(e.amount); driverComm += numv(e.driver_commission_amount);
       repComm += numv(e.rep_commission_amount); company += numv(e.company_amount);
     }
     return { total, driverComm, repComm, company };
-  }, [jobExtras, jobKeyByRowId, extraJobGroups, groupMonth, exMonth]);
+  }, [jobExtras, jobKeyByRowId, extraJobGroups, extraMonth, exMonth]);
 
   // ── Payments derived data ──
   const paymentsByJobKey = useMemo(() => {
@@ -7016,6 +7045,9 @@ export default function App() {
       company_amount: netAmount - dc - rc, active: o.active !== false,
       notes: o.notes || null,
     };
+    // The month the extra is reported under. Defaults to today so an extra
+    // loaded now counts this month, whatever month its job is from.
+    if (!extraDateMissing) payload.extra_date = o.extra_date || today();
     if (!extrasColsMissing) {
       payload.extra_cf_count = isCf ? ((o.extra_cf_count === "" || o.extra_cf_count == null) ? null : cf.cfCount) : null;
       payload.extra_cf_rate = isCf ? ((o.extra_cf_rate === "" || o.extra_cf_rate == null) ? null : cf.cfRate) : null;
@@ -7098,13 +7130,14 @@ export default function App() {
   // (the drawer flow pre-selects it). Creating the charge is a first-class
   // action — payments get allocated against it afterwards.
   function openAddExtraFromPayments() {
-    setQuickExtra({ jobId:"", _pickJob:true, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id:"", rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct:"", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false });
+    setQuickExtra({ jobId:"", _pickJob:true, extra_date: today(), extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id:"", rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct:"", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false });
   }
   // Open the extra modal pre-filled from an existing extra (used to edit Extra CF details).
   function openEditExtra(e) {
     const isCf = (e.extra_type || "extra_cf") === "extra_cf";
     setQuickExtra({
-      id: e.id, jobId: e.job_id, extra_type: e.extra_type || "extra_cf", description: e.description || "",
+      id: e.id, jobId: e.job_id, extra_date: e.extra_date || (e.created_at || "").slice(0, 10) || today(),
+      extra_type: e.extra_type || "extra_cf", description: e.description || "",
       amount: e.amount ?? "", generated_by: e.generated_by || "driver_only",
       driver_id: e.driver_id || "", rep_id: e.rep_id || "",
       driver_commission_pct: e.driver_commission_pct ?? "", rep_commission_pct: e.rep_commission_pct ?? "",
@@ -9404,16 +9437,21 @@ export default function App() {
           let totalAmt = 0, totalComm = 0;
           for (const g of allGroups) {
             if (searchQ && !((g.job_number || "").toLowerCase().includes(searchQ) || (g.customer || "").toLowerCase().includes(searchQ))) continue;
-            const mo = groupMonth(g);
-            if (exMonth && mo !== exMonth) continue;
             const exs = (extrasByJobKey[g.key] || []).filter(e => e.driver_id === did && e.active !== false
               && (!exRep || String(e.rep_id) === String(exRep)) && (!exType || e.extra_type === exType));
             if (!exs.length) continue;
-            const amt = exs.reduce((s, e) => s + numv(e.amount), 0);
-            const comm = exs.reduce((s, e) => s + numv(e.driver_commission_amount), 0);
-            const pending = exs.some(e => extraPending(e));
-            totalAmt += amt; totalComm += comm;
-            (byMonth[mo] = byMonth[mo] || []).push({ g, exs, amt, comm, pending });
+            // Extras of the same job can land in different months, so bucket by
+            // extra and let the job appear under each month it was charged in.
+            const perMonth = {};
+            for (const e of exs) (perMonth[extraMonth(e, g)] = perMonth[extraMonth(e, g)] || []).push(e);
+            for (const [mo, list] of Object.entries(perMonth)) {
+              if (exMonth && mo !== exMonth) continue;
+              const amt = list.reduce((s, e) => s + numv(e.amount), 0);
+              const comm = list.reduce((s, e) => s + numv(e.driver_commission_amount), 0);
+              const pending = list.some(e => extraPending(e));
+              totalAmt += amt; totalComm += comm;
+              (byMonth[mo] = byMonth[mo] || []).push({ g, exs: list, amt, comm, pending });
+            }
           }
           const months = Object.keys(byMonth).sort().reverse().map(mo => {
             const mjobs = byMonth[mo].sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
@@ -9429,10 +9467,10 @@ export default function App() {
           if (!emp) return null;
           const jobsForRep = [];
           for (const g of allGroups) {
-            if (exMonth && groupMonth(g) !== exMonth) continue;
             if (searchQ && !((g.job_number || "").toLowerCase().includes(searchQ) || (g.customer || "").toLowerCase().includes(searchQ))) continue;
             const exs = (extrasByJobKey[g.key] || []).filter(e => e.active !== false && String(e.rep_id) === String(rid)
-              && (!exType || e.extra_type === exType) && (!exDriver || String(e.driver_id) === String(exDriver)));
+              && (!exType || e.extra_type === exType) && (!exDriver || String(e.driver_id) === String(exDriver))
+              && (!exMonth || extraMonth(e, g) === exMonth));
             if (exs.length) jobsForRep.push({ g, extras: exs });
           }
           jobsForRep.sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
@@ -9540,11 +9578,12 @@ export default function App() {
                               <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
                                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
                                   <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                    {["Type", "Amount", "Generated by", "Driver", "Rep %", "Rep comm."].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                    {["Date", "Type", "Amount", "Generated by", "Driver", "Rep %", "Rep comm."].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
                                   </tr></thead>
                                   <tbody>
                                     {jf.extras.map(e => (
                                       <tr key={e.id} style={{ borderBottom:"1px solid #f6f6f6" }}>
+                                        <td style={{ padding:"6px 6px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{e.extra_date || (e.created_at || "").slice(0, 10) || "—"}</td>
                                         <td style={{ padding:"6px 6px", fontSize:12, fontWeight:600, whiteSpace:"nowrap" }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</td>
                                         <td style={{ padding:"6px 6px", fontSize:12 }}>{money(e.amount) || "$0"}</td>
                                         <td style={{ padding:"6px 6px", fontSize:12 }}>{genByLabel(e.generated_by)}</td>
@@ -9618,7 +9657,10 @@ export default function App() {
                                       <div key={j.g.key} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", borderTop:"1px solid #f6f6f6", flexWrap:"wrap" }}>
                                         <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:12.5, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(view)"}</button>
                                         <span style={{ fontSize:12.5, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.g.customer || "—"}</span>
-                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title="Edit extra"><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>)}</span>
+                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => {
+                                          const d = e.extra_date || (e.created_at || "").slice(0, 10);
+                                          return <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title={d ? tr(`Extra of ${d} — click to edit`, `Extra del ${d} — clic para editar`) : "Edit extra"}><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>;
+                                        })}</span>
                                         <span style={{ flex:1 }} />
                                         <span style={{ fontSize:12.5, color:"#666" }} title="Total collected">${Math.round(j.amt).toLocaleString()}</span>
                                         <span style={{ fontSize:12.5, fontWeight:700, color:"#1A8A4E" }} title="Driver commission">${Math.round(j.comm).toLocaleString()}</span>
@@ -10947,7 +10989,7 @@ export default function App() {
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8 }}>
                   {exs.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total extras: <b>${Math.round(totAmt).toLocaleString()}</b></span>}
                   <span style={{ flex:1 }} />
-                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add extra</Btn>
+                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_date: today(), extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add extra</Btn>
                 </div>
               </>
             );
@@ -12216,7 +12258,7 @@ export default function App() {
             const byMonth = {}; const history = [];
             for (const e of mine) {
               const k = jobKeyByRowId[e.job_id]; const g = k ? extraJobGroups.get(k) : null;
-              const mo = g ? groupMonth(g) : (e.created_at || "").slice(0, 7);
+              const mo = extraMonth(e, g);
               if (!byMonth[mo]) byMonth[mo] = { amount:0, comm:0 };
               byMonth[mo].amount += numv(e.amount); byMonth[mo].comm += numv(e.rep_commission_amount);
               history.push({ e, g, mo });
@@ -12333,6 +12375,11 @@ export default function App() {
                   {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
                 </select>
               </Field>
+              {!extraDateMissing && (
+                <Field label="Date">
+                  <input style={inp} type="date" title="Month this extra is reported and paid in" value={quickExtra.extra_date || ""} onChange={e => setQ({ extra_date:e.target.value })} />
+                </Field>
+              )}
               {!isCf && <Field label="Amount ($)"><input style={inp} type="number" value={quickExtra.amount} onChange={e => setQ({ amount:e.target.value })} placeholder="0" /></Field>}
               {quickExtra.extra_type === "other" && <Field label="Description" full><input style={inp} value={quickExtra.description} onChange={e => setQ({ description:e.target.value })} placeholder="Extra detail" /></Field>}
               <Field label="Generated by">

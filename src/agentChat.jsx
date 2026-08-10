@@ -146,9 +146,9 @@ export function AgentChatWidget({ session }) {
       {open && (
         <div style={S.panel}>
           <div style={S.head}>
-            <span>🤖 Agente CRM</span>
+            <span>🤖 CRM Agent</span>
             <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button onClick={linkTelegram} title="Vincular Telegram" style={{ background: "none", border: "1px solid rgba(255,255,255,.4)", color: "#fff", fontSize: 11, borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Vincular Telegram</button>
+              <button onClick={linkTelegram} title="Link Telegram" style={{ background: "none", border: "1px solid rgba(255,255,255,.4)", color: "#fff", fontSize: 11, borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Link Telegram</button>
               <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
             </span>
           </div>
@@ -158,7 +158,7 @@ export function AgentChatWidget({ session }) {
                 {m.text}{m.live && <span style={{ color: "#9fb0c4" }}> ▍</span>}
               </div>
             ))}
-            {busy && !msgs[msgs.length - 1]?.live && <div style={{ ...S.rowBot, color: "#7a8aa0" }}>Escribiendo…</div>}
+            {busy && !msgs[msgs.length - 1]?.live && <div style={{ ...S.rowBot, color: "#7a8aa0" }}>Typing…</div>}
           </div>
           {files.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "8px 10px 0", background: "#fff", borderTop: "1px solid #e7edf4" }}>
@@ -172,14 +172,14 @@ export function AgentChatWidget({ session }) {
           )}
           <div style={S.foot}>
             <input ref={fileRef} type="file" accept={ACCEPTED.join(",")} multiple style={{ display: "none" }} onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
-            <button title="Adjuntar foto o PDF" onClick={() => fileRef.current?.click()} disabled={busy || files.length >= 3} style={{ background: "none", border: "1px solid #cfdae7", borderRadius: 9, padding: "0 10px", fontSize: 16, cursor: "pointer", opacity: busy || files.length >= 3 ? 0.5 : 1 }}>📎</button>
+            <button title="Attach photo or PDF" onClick={() => fileRef.current?.click()} disabled={busy || files.length >= 3} style={{ background: "none", border: "1px solid #cfdae7", borderRadius: 9, padding: "0 10px", fontSize: 16, cursor: "pointer", opacity: busy || files.length >= 3 ? 0.5 : 1 }}>📎</button>
             <textarea
               rows={1}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
               onPaste={(e) => { const items = [...(e.clipboardData?.files || [])]; if (items.length) { e.preventDefault(); addFiles(items); } }}
-              placeholder="Escribí al agente… / Ask the agent…"
+              placeholder="Message the agent…"
               style={S.input}
               disabled={busy}
               autoFocus
@@ -188,7 +188,7 @@ export function AgentChatWidget({ session }) {
           </div>
         </div>
       )}
-      <button title="Agente CRM" onClick={() => setOpen((o) => !o)} style={S.fab}>{open ? "×" : "🤖"}</button>
+      <button title="CRM Agent" onClick={() => setOpen((o) => !o)} style={S.fab}>{open ? "×" : "🤖"}</button>
     </>
   );
 }
