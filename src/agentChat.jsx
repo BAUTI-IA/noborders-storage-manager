@@ -35,7 +35,7 @@ export function AgentChatWidget({ session }) {
     setMsgs((m) => [...m, { role: "user", text }]);
     setBusy(true);
     try {
-      const res = await fetch("/api/agent-chat", {
+      const res = await fetch("/api/agent-hub", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
         body: JSON.stringify({ message: text }),
