@@ -38,8 +38,34 @@ async function transcribeTelegramAudio(fileId) {
   return transcribeAudio(buffer, filePath.split("/").pop() || "audio.ogg");
 }
 
+// Which CRM user is this Telegram account? Drives what the agent may write.
+// Unlinked users stay read-only (see /link below).
+async function actorFor(from) {
+  const tgId = String(from?.id || "");
+  if (!tgId) return {};
+  const { data: profile } = await admin.from("profiles").select("*").eq("telegram_user_id", tgId).maybeSingle();
+  if (!profile?.active) return {};
+  return { profile, userEmail: profile.email };
+}
+
+// `/link 123456` — the code comes from the "Vincular Telegram" button inside
+// the CRM chat widget, which proves the person is that CRM user.
+async function handleLink(chatId, from, text) {
+  const code = (text.match(/\/link\s+(\d{6})/) || [])[1];
+  if (!code) return "Mandame: /link 123456 (el código sale del botón \"Vincular Telegram\" en el chat del agente dentro del CRM).";
+  const { data: profile } = await admin.from("profiles")
+    .select("*").eq("link_code", code).gt("link_code_expires_at", new Date().toISOString()).maybeSingle();
+  if (!profile) return "Ese código no existe o ya venció. Generá uno nuevo desde el CRM.";
+  const { error } = await admin.from("profiles")
+    .update({ telegram_user_id: String(from.id), link_code: null, link_code_expires_at: null })
+    .eq("id", profile.id);
+  if (error) return "No pude vincular la cuenta: " + error.message;
+  const scope = profile.role === "admin" ? "acceso total" : "tus permisos del CRM";
+  return `✅ Vinculado como ${profile.full_name || profile.email}. Ya podés pedirme que cargue cosas: uso ${scope}.`;
+}
+
 // Full voice pipeline: transcribe, echo what was heard, then run the agent.
-async function processVoice(chatId, fileId) {
+async function processVoice(chatId, fileId, from) {
   let text;
   try {
     text = await transcribeTelegramAudio(fileId);
@@ -50,7 +76,7 @@ async function processVoice(chatId, fileId) {
   }
   if (!text) { await sendTelegram(chatId, "🎤 No se escucha nada en el audio. ¿Probás de nuevo?"); return; }
   await sendTelegram(chatId, `🎤 «${text}»`); // language-neutral echo of the transcript
-  const reply = await handleIncoming(`tg:${chatId}`, text);
+  const reply = await handleIncoming(`tg:${chatId}`, text, [], await actorFor(from));
   await sendTelegram(chatId, reply);
 }
 
@@ -93,19 +119,27 @@ export default async function handler(req, res) {
   if (isGroup) { res.status(200).json({ ok: true }); return; }
 
   if (audioFileId) {
-    waitUntil(processVoice(chatId, audioFileId).catch((e) => console.error("telegram-webhook voice bg:", e)));
+    waitUntil(processVoice(chatId, audioFileId, msg.from).catch((e) => console.error("telegram-webhook voice bg:", e)));
+    res.status(200).json({ ok: true }); return;
+  }
+
+  // Account linking: ties this Telegram user to a CRM user so the agent can
+  // apply that person's permissions to writes.
+  if (/^\/link\b/.test(text)) {
+    waitUntil(handleLink(chatId, msg.from, text).then((r) => sendTelegram(chatId, r)).catch((e) => console.error("telegram-webhook link:", e)));
     res.status(200).json({ ok: true }); return;
   }
 
   // /start greeting without burning an AI call
   if (/^\/start\b/.test(text)) {
-    waitUntil(sendTelegram(chatId, "¡Hola! Soy el agente del CRM de No Borders Moving 🚚\n\nPuedo:\n📦 Cargar jobs: \"Tenemos un job del cliente García, pickup el 28 en Miami, entrega en Orlando\"\n✏️ Actualizar: \"El job 1234 se entrega el viernes\"\n🔎 Consultar CUALQUIER dato del CRM: \"¿Qué entregas hay esta semana?\", \"¿Cuánto facturamos este mes?\", \"¿Qué camiones están en ruta?\", \"¿Balances pendientes de cobro?\"\n\nAntes de cargar algo al CRM siempre te muestro lo que entendí y confirmás con \"sí\".").catch((e) => console.error("telegram-webhook bg:", e)));
+    waitUntil(sendTelegram(chatId, "¡Hola! Soy el agente del CRM de No Borders Moving 🚚\n\nPuedo:\n📦 Cargar jobs: \"Tenemos un job del cliente García, pickup el 28 en Miami, entrega en Orlando\"\n✏️ Actualizar: \"El job 1234 se entrega el viernes\"\n🔎 Consultar CUALQUIER dato del CRM: \"¿Qué entregas hay esta semana?\", \"¿Cuánto facturamos este mes?\", \"¿Qué camiones están en ruta?\", \"¿Balances pendientes de cobro?\"\n\nAntes de escribir algo en el CRM siempre te muestro qué voy a hacer y confirmás con \"sí\".\n\n🔗 Para poder cargar datos, vinculá tu cuenta: abrí el chat del agente dentro del CRM, tocá \"Vincular Telegram\" y mandame /link con el código.").catch((e) => console.error("telegram-webhook bg:", e)));
     res.status(200).json({ ok: true }); return;
   }
 
   // ACK immediately (Telegram retries on slow responses) and reply async.
   waitUntil(
-    handleIncoming(`tg:${chatId}`, text)
+    actorFor(msg.from)
+      .then((actor) => handleIncoming(`tg:${chatId}`, text, [], actor))
       .then((reply) => sendTelegram(chatId, reply))
       .catch((e) => console.error("telegram-webhook bg:", e))
   );

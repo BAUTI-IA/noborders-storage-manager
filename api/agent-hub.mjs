@@ -55,6 +55,20 @@ async function appChat(req, res) {
   const { data: { user } = {}, error: uErr } = await admin.auth.getUser(token);
   if (uErr || !user) { res.status(401).json({ error: "No autorizado.", detail: uErr?.message || "token inválido" }); return; }
 
+  // The caller's CRM profile drives what the agent is allowed to write.
+  const { data: profile } = await admin.from("profiles").select("*").eq("id", user.id).maybeSingle();
+
+  // Issue a one-time code so this user can link their Telegram account.
+  if (req.body?.action === "link_code") {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const { error } = await admin.from("profiles")
+      .update({ link_code: code, link_code_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString() })
+      .eq("id", user.id);
+    if (error) { res.status(500).json({ error: "no pude generar el código: " + error.message }); return; }
+    res.status(200).json({ code, expires_in_minutes: 15 });
+    return;
+  }
+
   const message = String(req.body?.message || "").trim();
   const rawAttach = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
   if (!message && !rawAttach.length) { res.status(400).json({ error: "mensaje vacío" }); return; }
@@ -70,7 +84,9 @@ async function appChat(req, res) {
   }
 
   try {
-    const reply = await handleIncoming(`app:${(user.email || user.id).toLowerCase()}`, message, attachments);
+    const reply = await handleIncoming(`app:${(user.email || user.id).toLowerCase()}`, message, attachments, {
+      profile, userEmail: user.email || profile?.email || null,
+    });
     res.status(200).json({ reply });
   } catch (e) {
     console.error("agent-chat:", e);

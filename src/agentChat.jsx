@@ -71,6 +71,26 @@ export function AgentChatWidget({ session }) {
     }
   }
 
+  // One-time code that proves, from an authenticated CRM session, that a
+  // Telegram account belongs to this user — so the agent can apply their
+  // permissions to writes made from Telegram.
+  async function linkTelegram() {
+    try {
+      const res = await fetch("/api/agent-hub", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
+        body: JSON.stringify({ action: "link_code" }),
+      });
+      const j = await res.json().catch(() => ({}));
+      setMsgs((m) => [...m, { role: "bot", text: res.ok
+        ? `🔗 Tu código es ${j.code} (vence en ${j.expires_in_minutes} min).\nMandale al bot de Telegram: /link ${j.code}`
+        : `⚠️ ${j.error || "No pude generar el código"}` }]);
+      setOpen(true);
+    } catch {
+      setMsgs((m) => [...m, { role: "bot", text: "⚠️ No pude generar el código. Probá de nuevo." }]);
+    }
+  }
+
   function onKey(e) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   }
@@ -81,7 +101,10 @@ export function AgentChatWidget({ session }) {
         <div style={S.panel}>
           <div style={S.head}>
             <span>🤖 Agente CRM</span>
-            <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button onClick={linkTelegram} title="Vincular Telegram" style={{ background: "none", border: "1px solid rgba(255,255,255,.4)", color: "#fff", fontSize: 11, borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Vincular Telegram</button>
+              <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
+            </span>
           </div>
           <div ref={bodyRef} style={S.body}>
             {msgs.map((m, i) => (

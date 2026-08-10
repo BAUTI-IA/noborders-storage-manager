@@ -75,6 +75,9 @@ async function processIncoming(phone, text, mediaUrl) {
       return;
     }
   }
-  const reply = await handleIncoming(phone, text);
+  // Which CRM user is this number? Unlinked numbers stay read-only.
+  const { data: profile } = await admin.from("profiles").select("*").eq("whatsapp_phone", phone).maybeSingle();
+  const actor = profile?.active ? { profile, userEmail: profile.email } : {};
+  const reply = await handleIncoming(phone, text, [], actor);
   await sendWhatsApp(phone, reply);
 }

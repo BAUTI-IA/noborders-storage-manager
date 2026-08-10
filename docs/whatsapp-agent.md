@@ -10,6 +10,27 @@ Antes de escribir en el CRM siempre te muestra lo que entendió y espera tu **"s
 
 **Audios**: también entiende notas de voz (Telegram y WhatsApp). Las transcribe con OpenAI Whisper (requiere `OPENAI_API_KEY` en Vercel; ~US$0.006/min), responde "🎤 Escuché: ..." con la transcripción y sigue el flujo normal.
 
+## Qué puede hacer (agente ejecutivo)
+
+El agente no está limitado a jobs: puede operar sobre **todo el CRM** — armar y editar trips, imputar pagos, cargar gastos, marcar facturas de storage, registrar eventos de jobs, asignar drivers, y crear/editar/borrar en el resto de las tablas (brokers, drivers, trucks, claims, equipos, materiales…).
+
+Cómo funciona por dentro (`lib/agent.mjs`): un loop con dos herramientas — `sql` (solo lectura, para investigar y resolver nombres → ids) y `stage_plan` (propone un plan de operaciones). **Nada se escribe al proponer**: el plan se valida, se muestra en texto y solo se ejecuta con un "sí" explícito.
+
+Garantías de seguridad:
+- **Permisos por usuario**: cada escritura se chequea contra el rol/permisos del usuario en el CRM (`lib/acl.mjs`, mismo mapa que las políticas RLS). El agente nunca puede hacer más que la persona que se lo pide.
+- **Validación doble** (al proponer y antes de ejecutar): tablas y columnas existentes, FKs vivas, valores de enum válidos, ids explícitos para update/delete, máximo 10 pasos y 50 filas por paso.
+- **Borrado siempre recuperable** (`deleted_at`); las tablas sin papelera no se pueden borrar.
+- **Auditoría**: todo queda en `action_log` con el email del usuario, igual que las acciones de la app → aparece en **Trash / History** y se puede deshacer.
+- **Recetas de dominio** (`lib/recipes.mjs`) para las operaciones con reglas finas (trips, pagos con imputación, gastos), para que el agente produzca exactamente los mismos datos que la app.
+- **Tablas privadas**: `profiles`, chats del equipo, `action_log` y el estado del agente no se pueden leer ni escribir.
+- **Kill switch**: `AGENT_WRITES_ENABLED=false` deja al agente en modo solo lectura.
+
+### Vincular la cuenta (necesario para escribir desde Telegram/WhatsApp)
+En el CRM, el chat del agente tiene el botón **"Vincular Telegram"** → da un código de 6 dígitos (15 min). El empleado le manda al bot `/link 123456` y queda atado a su usuario del CRM. Sin vincular, por Telegram solo puede consultar.
+
+Migraciones necesarias: `scripts/setup-agent-query.mjs` (lectura) y `scripts/setup-agent-writes.mjs` (columnas de vinculación en `profiles`).
+Tests de permisos: `node scripts/test-agent-acl.mjs`.
+
 ## Cómo funciona
 
 Twilio recibe tu mensaje de WhatsApp y lo reenvía a `api/whatsapp-webhook.mjs` (Vercel). Ahí Claude extrae la intención y los campos, el código valida todo y responde por el mismo canal. El borrador pendiente de confirmación se guarda en la tabla `wa_conversations` (una fila por teléfono).

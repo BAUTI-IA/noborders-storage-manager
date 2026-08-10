@@ -24,39 +24,8 @@ if (!TOKEN) {
 }
 
 // table -> { view: [sections that read it], owner: section that governs writes }
-const MAP = {
-  storages:             { view: ["storage", "jobs", "dispatching", "calendario", "calendario_entregas", "billing"], owner: "storage" },
-  storage_jobs:         { view: ["jobs", "dispatching", "calendario", "calendario_entregas", "storage", "billing", "brokers", "settlements", "clientes"], owner: "jobs" },
-  job_events:           { view: ["dispatching", "jobs"], owner: "dispatching" },
-  brokers:              { view: ["brokers"], owner: "brokers" },
-  storage_billing:      { view: ["billing"], owner: "billing" },
-  closing_sheets:       { view: ["settlements"], owner: "settlements" },
-  job_extras:           { view: ["extras", "payments", "analytics"], owner: "extras" },
-  employees:            { view: ["extras", "settings", "drivers"], owner: "settings" },
-  drivers:              { view: ["drivers", "dispatching", "jobs"], owner: "drivers" },
-  trucks:               { view: ["trucks", "trips"], owner: "trucks" },
-  trip_events:          { view: ["trips", "trucks"], owner: "trips" },
-  trips:                { view: ["trips"], owner: "trips" },
-  payments:             { view: ["payments", "analytics"], owner: "payments" },
-  payment_accounts:     { view: ["payments"], owner: "payments" },
-  companies:            { view: ["compliance"], owner: "compliance" },
-  compliance_documents: { view: ["compliance"], owner: "compliance" },
-  claims:               { view: ["claims", "trips", "jobs"], owner: "claims" },
-  // Adding a follow-up note to an existing claim is an edit-level action, not a create-level one.
-  claim_notes:          { view: ["claims"], owner: "claims", insertLevel: "edit" },
-  // Expenses module (run scripts/setup-expenses.mjs first, then re-run this script).
-  expenses:             { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
-  driver_work_days:     { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
-  driver_adjustments:   { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
-  material_items:       { view: ["expenses", "drivers", "analytics"], owner: "expenses" },
-  // Logging a movement against the ledger is an edit-level action, not a create-level one.
-  material_movements:   { view: ["expenses", "drivers", "analytics"], owner: "expenses", insertLevel: "edit" },
-  // Bancos module (run scripts/setup-bank.mjs first, then re-run this script).
-  bank_accounts:        { view: ["bancos", "payments"], owner: "bancos" },
-  bank_categories:      { view: ["bancos"], owner: "bancos" },
-  bank_import_batches:  { view: ["bancos"], owner: "bancos" },
-  bank_transactions:    { view: ["bancos", "analytics"], owner: "bancos" },
-};
+// Single source of truth, shared with the agent's permission checks.
+import { TABLE_ACL as MAP } from "../lib/acl.mjs";
 
 function policiesFor(table, { view, owner, insertLevel = "create" }) {
   const viewExpr = view.map((s) => `public.has_perm('${s}','view')`).join(" or ");
