@@ -83,10 +83,35 @@ async function appChat(req, res) {
     attachments.push({ media_type, data });
   }
 
-  try {
-    const reply = await handleIncoming(`app:${(user.email || user.id).toLowerCase()}`, message, attachments, {
-      profile, userEmail: user.email || profile?.email || null,
+  const convoKey = `app:${(user.email || user.id).toLowerCase()}`;
+  const actor = { profile, userEmail: user.email || profile?.email || null };
+
+  // Streaming (the CRM widget): the answer is pushed as it's written, so the
+  // user reads the first line in a second or two instead of waiting for the
+  // whole turn. Everything that could fail with an HTTP status was validated
+  // above — once the stream is open, errors travel as events.
+  if (req.body?.stream) {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no", // don't let a proxy buffer the stream
     });
+    const send = (ev) => { try { res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch { /* client gone */ } };
+    send({ type: "open" });
+    try {
+      const reply = await handleIncoming(convoKey, message, attachments, actor, send);
+      send({ type: "done", reply });
+    } catch (e) {
+      console.error("agent-chat:", e);
+      send({ type: "error", error: e?.message || "agent error" });
+    }
+    res.end();
+    return;
+  }
+
+  try {
+    const reply = await handleIncoming(convoKey, message, attachments, actor);
     res.status(200).json({ reply });
   } catch (e) {
     console.error("agent-chat:", e);

@@ -5,6 +5,7 @@
 //   node scripts/test-agent-acl.mjs
 import { checkPermission, canRead } from "../lib/acl.mjs";
 import { referencedTables, checkSqlAccess } from "../lib/agentWrite.mjs";
+import { RECIPES } from "../lib/recipes.mjs";
 
 let failed = 0;
 const eq = (name, got, want) => {
@@ -53,6 +54,25 @@ eq("permite information_schema", checkSqlAccess("select * from information_schem
 eq("admin lee pagos", checkSqlAccess("select * from payments", admin), null);
 eq("viewer no lee pagos por sql", !!checkSqlAccess("select * from payments", viewer), true);
 eq("sin perfil lee tablas de negocio", checkSqlAccess("select * from payments", null), null);
+
+// ── Recipes ──────────────────────────────────────────────────────────────────
+// Every recipe must declare permissions the ACL actually recognises: a typo in a
+// table name would otherwise only surface when a user tries the operation.
+const badPerms = [];
+for (const [name, r] of Object.entries(RECIPES)) {
+  if (!Array.isArray(r.perms) || !r.perms.length) { badPerms.push(`${name}: sin perms`); continue; }
+  for (const [table, op] of r.perms) {
+    if (!checkPermission(admin, table, op).ok) badPerms.push(`${name}: ${table}/${op}`);
+  }
+  if (typeof r.run !== "function") badPerms.push(`${name}: sin run()`);
+  if (typeof r.describe !== "function") badPerms.push(`${name}: sin describe()`);
+}
+eq("todas las recetas declaran permisos válidos", badPerms, []);
+// The capabilities the owner asks for by name — a guard against silently
+// dropping one in a refactor.
+for (const n of ["create_trip", "assign_jobs_to_trip", "record_payment", "set_truck_location"]) {
+  eq(`existe la receta ${n}`, !!RECIPES[n], true);
+}
 
 console.log(failed ? `\n${failed} test(s) fallaron` : "\nTodo OK");
 process.exit(failed ? 1 : 0);

@@ -38,6 +38,19 @@ async function transcribeTelegramAudio(fileId) {
   return transcribeAudio(buffer, filePath.split("/").pop() || "audio.ogg");
 }
 
+// "typing…" in the chat while the agent works. Telegram clears the indicator
+// after ~5s, so it's refreshed until the reply is ready.
+function keepTyping(chatId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const ping = () => fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+  }).catch(() => {});
+  ping();
+  const timer = setInterval(ping, 4000);
+  return () => clearInterval(timer);
+}
+
 // Which CRM user is this Telegram account? Drives what the agent may write.
 // Unlinked users stay read-only (see /link below).
 async function actorFor(from) {
@@ -76,8 +89,11 @@ async function processVoice(chatId, fileId, from) {
   }
   if (!text) { await sendTelegram(chatId, "🎤 No se escucha nada en el audio. ¿Probás de nuevo?"); return; }
   await sendTelegram(chatId, `🎤 «${text}»`); // language-neutral echo of the transcript
-  const reply = await handleIncoming(`tg:${chatId}`, text, [], await actorFor(from));
-  await sendTelegram(chatId, reply);
+  const stopTyping = keepTyping(chatId);
+  try {
+    const reply = await handleIncoming(`tg:${chatId}`, text, [], await actorFor(from));
+    await sendTelegram(chatId, reply);
+  } finally { stopTyping(); }
 }
 
 export default async function handler(req, res) {
@@ -137,9 +153,11 @@ export default async function handler(req, res) {
   }
 
   // ACK immediately (Telegram retries on slow responses) and reply async.
+  const stopTyping = keepTyping(chatId);
   waitUntil(
     actorFor(msg.from)
       .then((actor) => handleIncoming(`tg:${chatId}`, text, [], actor))
+      .finally(stopTyping)
       .then((reply) => sendTelegram(chatId, reply))
       .catch((e) => console.error("telegram-webhook bg:", e))
   );

@@ -12,7 +12,11 @@ Antes de escribir en el CRM siempre te muestra lo que entendió y espera tu **"s
 
 ## Qué puede hacer (agente ejecutivo)
 
-El agente no está limitado a jobs: puede operar sobre **todo el CRM** — armar y editar trips, imputar pagos, cargar gastos, marcar facturas de storage, registrar eventos de jobs, asignar drivers, y crear/editar/borrar en el resto de las tablas (brokers, drivers, trucks, claims, equipos, materiales…).
+El agente no está limitado a jobs: puede operar sobre **todo el CRM** — armar y editar trips, imputar pagos, cargar gastos, marcar facturas de storage, registrar eventos de jobs, asignar drivers, ubicar camiones en el mapa de live load, y crear/editar/borrar en el resto de las tablas (brokers, drivers, trucks, claims, equipos, materiales…).
+
+Ejemplos que ya funcionan:
+- **Trip / live load**: "Armá un trip con los jobs 1201 y 1198, camión 3, driver Pedro, sale el jueves" → crea el trip en `loading` y engancha los jobs en orden. "El camión 3 está en Ocala, FL" → `set_truck_location` geocodifica la dirección y lo pone en el mapa.
+- **Pago**: "Imputá $1,800 en Zelle al job 1201" → método digital ⇒ `received` + `banked`, reparte primero el balance del job, después los extras más viejos, el resto a cuenta, y sincroniza `bol_collected`.
 
 Cómo funciona por dentro (`lib/agent.mjs`): un loop con dos herramientas — `sql` (solo lectura, para investigar y resolver nombres → ids) y `stage_plan` (propone un plan de operaciones). **Nada se escribe al proponer**: el plan se valida, se muestra en texto y solo se ejecuta con un "sí" explícito.
 
@@ -78,6 +82,15 @@ Setup:
 4. Probar sin enviar: `GET /api/agent-hub?dry=1` con header `Authorization: Bearer <CRON_SECRET>` devuelve el brief como JSON.
 
 En grupos el bot solo responde a `/chatid` — la conversación normal del grupo no lo activa; el agente completo funciona por chat privado.
+
+## Velocidad
+
+El chat del CRM (`src/agentChat.jsx` → `POST /api/agent-hub` con `stream:true`) recibe la respuesta **en streaming** por SSE: el texto aparece mientras se escribe, y entre medio muestra en qué anda ("🔎 Consultando la base…", "📝 Armando el plan…", "⚙️ Ejecutando…"). Telegram y WhatsApp no soportan streaming; ahí el bot muestra "escribiendo…" hasta que llega la respuesta.
+
+Además:
+- Modelo por defecto `claude-sonnet-5` con `effort: medium` — se puede cambiar sin tocar código con `AGENT_MODEL` / `AGENT_EFFORT` en Vercel (ej. `AGENT_MODEL=claude-opus-4-8` si preferís profundidad sobre velocidad).
+- Brokers, drivers, camiones, trips abiertos y storages van **precargados** en el prompt (cache de 5 min), así resolver "el camión 3" o "Full Value" no cuesta una vuelta extra al modelo.
+- El esquema de la base y ese directorio se piden en paralelo y se cachean por instancia.
 
 ## Notas
 

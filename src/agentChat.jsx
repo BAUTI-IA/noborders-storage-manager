@@ -47,6 +47,25 @@ export function AgentChatWidget({ session }) {
     }
   }
 
+  // The live bubble is the last message while it's still being written; `done`
+  // replaces it with the server's authoritative reply.
+  function putLive(text) {
+    setMsgs((m) => {
+      const copy = [...m];
+      if (copy.length && copy[copy.length - 1].live) copy[copy.length - 1] = { role: "bot", text, live: true };
+      else copy.push({ role: "bot", text, live: true });
+      return copy;
+    });
+  }
+  function settleLive(text) {
+    setMsgs((m) => {
+      const copy = [...m];
+      if (copy.length && copy[copy.length - 1].live) copy[copy.length - 1] = { role: "bot", text };
+      else copy.push({ role: "bot", text });
+      return copy;
+    });
+  }
+
   async function send() {
     const text = input.trim();
     if ((!text && !files.length) || busy) return;
@@ -60,14 +79,41 @@ export function AgentChatWidget({ session }) {
       const res = await fetch("/api/agent-hub", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
-        body: JSON.stringify({ message: text, attachments }),
+        body: JSON.stringify({ message: text, attachments, stream: true }),
       });
-      const j = await res.json().catch(() => ({}));
-      setMsgs((m) => [...m, { role: "bot", text: res.ok ? (j.reply || "…") : `⚠️ ${j.error || `Error ${res.status}`}` }]);
+      // Errors (auth, validation) still come back as plain JSON with a status.
+      if (!res.ok || !res.body || !(res.headers.get("content-type") || "").includes("text/event-stream")) {
+        const j = await res.json().catch(() => ({}));
+        setMsgs((m) => [...m, { role: "bot", text: res.ok ? (j.reply || "…") : `⚠️ ${j.error || `Error ${res.status}`}` }]);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "", answer = "", status = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split("\n\n");
+        buf = chunks.pop() || ""; // keep the incomplete event for the next read
+        for (const chunk of chunks) {
+          const line = chunk.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+          if (ev.type === "delta") { answer += ev.text; putLive(answer); }
+          else if (ev.type === "status") { status = ev.text; if (!answer) putLive(status); }
+          else if (ev.type === "reset") { answer = ""; putLive(status || "…"); }
+          else if (ev.type === "done") { settleLive(ev.reply || answer || "…"); answer = ""; }
+          else if (ev.type === "error") { settleLive(`⚠️ ${ev.error}`); answer = ""; }
+        }
+      }
+      // Stream cut off mid-answer: keep whatever arrived rather than losing it.
+      if (answer) settleLive(answer);
     } catch (e) {
       setMsgs((m) => [...m, { role: "bot", text: "⚠️ No pude conectar con el agente. Probá de nuevo." }]);
     } finally {
       setBusy(false);
+      setMsgs((m) => m.map((x) => (x.live ? { ...x, live: false } : x)));
     }
   }
 
@@ -108,9 +154,11 @@ export function AgentChatWidget({ session }) {
           </div>
           <div ref={bodyRef} style={S.body}>
             {msgs.map((m, i) => (
-              <div key={i} style={m.role === "user" ? S.rowUser : S.rowBot}>{m.text}</div>
+              <div key={i} style={m.role === "user" ? S.rowUser : S.rowBot}>
+                {m.text}{m.live && <span style={{ color: "#9fb0c4" }}> ▍</span>}
+              </div>
             ))}
-            {busy && <div style={{ ...S.rowBot, color: "#7a8aa0" }}>Escribiendo…</div>}
+            {busy && !msgs[msgs.length - 1]?.live && <div style={{ ...S.rowBot, color: "#7a8aa0" }}>Escribiendo…</div>}
           </div>
           {files.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "8px 10px 0", background: "#fff", borderTop: "1px solid #e7edf4" }}>
