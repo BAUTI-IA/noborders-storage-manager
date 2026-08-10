@@ -92,20 +92,6 @@ const EXTRA_TYPES = [
   { v:"other", l:"Other" },
 ];
 const extraTypeLabel = (v) => EXTRA_TYPES.find(t => t.v === v)?.l || v;
-// Colored pill per extra type (for the commissions page chips).
-const EXTRA_TYPE_COLORS = {
-  extra_cf:     { bg:"#E6F1FB", fg:"#185FA5" },
-  shuttle:      { bg:"#EDE9FE", fg:"#6D28D9" },
-  long_carry:   { bg:"#FDE3CF", fg:"#C2410C" },
-  stairs:       { bg:"#FCE7F3", fg:"#BE185D" },
-  packing:      { bg:"#EAF3DE", fg:"#3B6D11" },
-  flight_charge:{ bg:"#FEF3C7", fg:"#92760B" },
-  other:        { bg:"#F1F1F1", fg:"#666" },
-};
-function ExtraTypeChip({ type, amount }) {
-  const c = EXTRA_TYPE_COLORS[type] || EXTRA_TYPE_COLORS.other;
-  return <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.fg, whiteSpace:"nowrap" }}>{extraTypeLabel(type)}{amount != null ? ` $${Math.round(amount).toLocaleString()}` : ""}</span>;
-}
 const GEN_BY = [
   { v:"driver_only", l:"Driver only" },
   { v:"driver_and_rep", l:"Driver + Rep" },
@@ -9654,18 +9640,39 @@ export default function App() {
                                 {open && (
                                   <div>
                                     {mn.jobs.map(j => (
-                                      <div key={j.g.key} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", borderTop:"1px solid #f6f6f6", flexWrap:"wrap" }}>
-                                        <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:12.5, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(view)"}</button>
-                                        <span style={{ fontSize:12.5, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{j.g.customer || "—"}</span>
-                                        <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>{j.exs.map(e => {
-                                          const d = e.extra_date || (e.created_at || "").slice(0, 10);
-                                          return <span key={e.id} onClick={() => openEditExtra(e)} style={{ cursor:"pointer" }} title={d ? tr(`Extra of ${d} — click to edit`, `Extra del ${d} — clic para editar`) : "Edit extra"}><ExtraTypeChip type={e.extra_type} amount={numv(e.amount)} /></span>;
-                                        })}</span>
-                                        <span style={{ flex:1 }} />
-                                        <span style={{ fontSize:12.5, color:"#666" }} title="Total collected">${Math.round(j.amt).toLocaleString()}</span>
-                                        <span style={{ fontSize:12.5, fontWeight:700, color:"#1A8A4E" }} title="Driver commission">${Math.round(j.comm).toLocaleString()}</span>
-                                        <span title={j.pending ? "Commission pending" : "Commission assigned"}>{j.pending ? "⚠️" : "✅"}</span>
-                                        <button onClick={() => setJobDetailKey(j.g.key)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
+                                      <div key={j.g.key} style={{ padding:"10px 11px", borderTop:"1px solid #f6f6f6" }}>
+                                        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4, paddingLeft:2 }}>
+                                          <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(view)"}</button>
+                                          <span style={{ fontSize:13 }}>{j.g.customer || "—"}</span>
+                                          {brokerName(j.g.broker_id) && <span style={{ fontSize:11, color:"#888" }}>· {brokerName(j.g.broker_id)}</span>}
+                                          {j.g.date_in && <span style={{ fontSize:11, color:"#aaa" }}>· {j.g.date_in}</span>}
+                                          <span style={{ flex:1 }} />
+                                          <span style={{ fontSize:12, color:"#666" }}>Extras <b>${Math.round(j.amt).toLocaleString()}</b></span>
+                                          <span style={{ fontSize:12, color:"#1A8A4E" }}>Commission <b>${Math.round(j.comm).toLocaleString()}</b></span>
+                                          <span title={j.pending ? "Commission pending" : "Commission assigned"}>{j.pending ? "⚠️" : "✅"}</span>
+                                        </div>
+                                        <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
+                                          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                                            <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
+                                              {["Date", "Type", "Amount", "Generated by", "Rep", "Driver %", "Driver comm."].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
+                                            </tr></thead>
+                                            <tbody>
+                                              {j.exs.map(e => (
+                                                <tr key={e.id} style={{ borderBottom:"1px solid #f6f6f6" }}>
+                                                  <td style={{ padding:"6px 6px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{e.extra_date || (e.created_at || "").slice(0, 10) || "—"}</td>
+                                                  <td style={{ padding:"6px 6px", fontSize:12, whiteSpace:"nowrap" }}>
+                                                    <button onClick={() => openEditExtra(e)} title="Edit extra" style={{ background:"none", border:"none", padding:0, cursor:"pointer", font:"inherit", fontWeight:600, color:"#185FA5", textDecoration:"underline" }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</button>
+                                                  </td>
+                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{money(e.amount) || "$0"}</td>
+                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{genByLabel(e.generated_by)}</td>
+                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{empById[e.rep_id]?.name || "—"}</td>
+                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{numv(e.driver_commission_pct)}%</td>
+                                                  <td style={{ padding:"6px 6px", fontSize:12, color:"#1A8A4E", fontWeight:700, whiteSpace:"nowrap" }}>{money(e.driver_commission_amount) || "$0"}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
                                       </div>
                                     ))}
                                     <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 11px", borderTop:"2px solid #eee", fontSize:12.5, fontWeight:700, background:"#FEF9C3" }}>

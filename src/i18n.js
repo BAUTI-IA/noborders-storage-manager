@@ -99,6 +99,8 @@ export const I18N_ES = {
   "Estimate": "Estimado",
   "Evaluate": "Evaluar",
   "Extra CF": "CF extra",
+  "Driver %": "% driver",
+  "Driver comm.": "Comisión driver",
   "Month this extra is reported and paid in": "Mes en el que se reporta y se paga este extra",
   "🤖 CRM Agent": "🤖 Agente CRM",
   "CRM Agent": "Agente CRM",
