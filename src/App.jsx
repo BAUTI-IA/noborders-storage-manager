@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
 import { MessagesSection } from "./messages.jsx";
+import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
@@ -8115,6 +8116,9 @@ export default function App() {
           <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
         </div>
       )}
+
+      {/* ───────────────────────── AI AGENT (floating chat, all pages) ───────────────────────── */}
+      {session && <AgentChatWidget session={session} />}
 
       {/* ───────────────────────── USERS (admin) ───────────────────────── */}
       {page === "users" && isAdmin && <UsersSection session={session} />}
