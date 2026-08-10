@@ -46,6 +46,9 @@ async function dailyBrief(req, res) {
   }
 }
 
+const ATTACH_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]);
+const MAX_ATTACH_B64 = 4_200_000; // ~3MB binary; Vercel caps request bodies at 4.5MB
+
 async function appChat(req, res) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   if (!token) { res.status(401).json({ error: "No autorizado." }); return; }
@@ -53,11 +56,21 @@ async function appChat(req, res) {
   if (uErr || !user) { res.status(401).json({ error: "No autorizado.", detail: uErr?.message || "token inválido" }); return; }
 
   const message = String(req.body?.message || "").trim();
-  if (!message) { res.status(400).json({ error: "mensaje vacío" }); return; }
+  const rawAttach = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+  if (!message && !rawAttach.length) { res.status(400).json({ error: "mensaje vacío" }); return; }
   if (message.length > 4000) { res.status(400).json({ error: "mensaje demasiado largo" }); return; }
+  if (rawAttach.length > 3) { res.status(400).json({ error: "máximo 3 archivos por mensaje" }); return; }
+  const attachments = [];
+  for (const a of rawAttach) {
+    const media_type = String(a?.media_type || "");
+    const data = String(a?.data || "");
+    if (!ATTACH_TYPES.has(media_type)) { res.status(400).json({ error: `tipo de archivo no soportado: ${media_type || "?"} (imágenes o PDF)` }); return; }
+    if (!data || data.length > MAX_ATTACH_B64) { res.status(400).json({ error: "archivo demasiado grande (máx ~3MB)" }); return; }
+    attachments.push({ media_type, data });
+  }
 
   try {
-    const reply = await handleIncoming(`app:${(user.email || user.id).toLowerCase()}`, message);
+    const reply = await handleIncoming(`app:${(user.email || user.id).toLowerCase()}`, message, attachments);
     res.status(200).json({ reply });
   } catch (e) {
     console.error("agent-chat:", e);
