@@ -63,6 +63,7 @@
  "Ref #",
  "Rep %",
  "SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-bank.mjs",
+ "SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-inbound-jobs.mjs",
  "Sales rep / Manager",
  "Split (",
  "Storage Manager",

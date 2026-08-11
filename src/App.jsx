@@ -6,6 +6,7 @@ import { MessagesSection } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
+import { InboundJobsSection } from "./inboundJobs.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, materialShortages, computeDriverPnl } from "./analyticsData.js";
 import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
@@ -2564,6 +2565,7 @@ const NAV = [
     { id:"storage", label:"Storage", icon:"🏬" },
     { id:"jobs", label:"Jobs", icon:"💼" },
     { id:"jobcalc", label:"Job Calculator", icon:"🧮" },
+    { id:"inbound", label:"Incoming Jobs", icon:"📥" },
     { id:"messages", label:"Chats", icon:"💬" },
   ]},
   { section:"Finance", items:[
@@ -2638,6 +2640,7 @@ const PAGE_META = {
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
   jobs:        { title:"Jobs", sub:"All jobs with full detail" },
   jobcalc:     { title:"Job Calculator", sub:"Take it or leave it: broker price against real cost per truck-day" },
+  inbound:     { title:"Incoming Jobs", sub:"Jobs offered by email, already priced: accept or reject" },
   messages:    { title:"Chats", sub:"Team conversations and direct messages" },
   brokers:     { title:"Brokers", sub:"Brokers and outstanding balances" },
   billing:     { title:"Storage Billing", sub:"Monthly storage billing for clients" },
@@ -2992,6 +2995,9 @@ export default function App() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [showAddJob, setShowAddJob] = useState(false);
   const [jobForm, setJobForm] = useState(EMPTY_JOB);
+  // Set while the job form was opened from an Incoming Jobs card, so that a
+  // successful save can close that evaluation out. Cleared on cancel too.
+  const [inboundEvalId, setInboundEvalId] = useState(null);
   const [jobSaving, setJobSaving] = useState(false);
   const [jobErr, setJobErr] = useState(null);
   const [editingJobKey, setEditingJobKey] = useState(null);
@@ -5409,6 +5415,18 @@ export default function App() {
   }
 
   function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
+  // Accepting a job offered by email: pre-fill the normal "+ New job" form and
+  // open it. The write itself stays in saveJob(), so the emailed job goes
+  // through exactly the same normalization, validation and undo as a typed one,
+  // and the operator sees every field before anything is created.
+  function openJobFromInbound(patch, evalId) {
+    setEditingJobKey(null);
+    setJobForm({ ...EMPTY_JOB, ...patch });
+    setJobErr(null);
+    setInboundEvalId(evalId || null);
+    setPage("jobs");
+    setShowAddJob(true);
+  }
   function openAddJobWarehouse(name) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, warehouses: [name] }); setJobErr(null); setShowAddJob(true); }
   // Warehouse "+ Job": open a small picker first — add an existing job or create a new one.
   function openWarehouseJobPicker(name) { setWhPickerKey(""); setWhPicker({ name }); }
@@ -5706,6 +5724,7 @@ export default function App() {
 
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
     const jobEntries = [];
+    let createdJobId = null; // set on create, to link back an accepted Incoming Job
     if (editingJobKey) {
       const current = jobs.filter(j => jobKey(j) === editingJobKey);
       const created = { ...fields, created_by: userEmail };
@@ -5767,12 +5786,22 @@ export default function App() {
       const { data, error } = await supabase.from("storage_jobs").insert(rows).select("*");
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
+      createdJobId = (data || [])[0]?.id ?? null;
       undoMgr.record(`Job ${jobForm.job_number || ""} creado`.replace(/\s+/g, " ").trim(), (data || []).map(r => undoMgr.createEntry("storage_jobs", r)));
     }
     // Mirror the form's collected amount into Payments (concept "job"), same as
     // the "Record payment" flow, so both modules stay connected.
     if (!settlementsMissing && !paymentsMissing && editingJobKey && numv(jobForm.bol_collected) > 0 && numv(jobForm.bol_collected) !== prevBolCollected) {
       await upsertJobPayment(editingJobKey, { amount: jobForm.bol_collected, method: jobForm.bol_payment_method, date: jobForm.bol_collected_date });
+    }
+    // The job exists now, so the Incoming Jobs card that produced it is settled.
+    // Done after the save, never before: if the insert failed we returned above
+    // and the card is still waiting.
+    if (inboundEvalId) {
+      await supabase.from("job_evaluations")
+        .update({ decision: "accepted", created_job_id: createdJobId })
+        .eq("id", inboundEvalId).select("id");
+      setInboundEvalId(null);
     }
     setShowAddJob(false);
     loadJobs();
@@ -8150,6 +8179,7 @@ export default function App() {
 
       {/* ───────────────────────── JOB CALCULATOR (take it or leave it) ───────────────────────── */}
       {page === "jobcalc" && can("jobcalc","view") && <JobCalcSection supabase={supabase} session={session} profile={profile} can={can} isAdmin={isAdmin} Btn={Btn} Modal={Modal} />}
+      {page === "inbound" && can("inbound","view") && <InboundJobsSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} brokers={brokers} onPrefillJob={openJobFromInbound} />}
 
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
@@ -11466,9 +11496,9 @@ export default function App() {
       })()}
 
       {showAddJob && (
-        <Modal title={editingJobKey ? "Edit job" : "New job"} onClose={() => setShowAddJob(false)}
+        <Modal title={editingJobKey ? "Edit job" : "New job"} onClose={() => { setShowAddJob(false); setInboundEvalId(null); }}
           footer={<>
-            <Btn onClick={() => setShowAddJob(false)}>Cancel</Btn>
+            <Btn onClick={() => { setShowAddJob(false); setInboundEvalId(null); }}>Cancel</Btn>
             <Btn primary disabled={jobSaving} onClick={saveJob}>{jobSaving ? "Saving..." : (editingJobKey ? "Save changes" : "Save job")}</Btn>
           </>}>
           {(() => {
