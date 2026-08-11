@@ -6,8 +6,11 @@
 //          Telegram group (TELEGRAM_BRIEF_CHAT_ID).
 //   POST → in-app chat for the CRM widget (src/agentChat.jsx). Auth: the
 //          caller's Supabase JWT, verified server-side (admin-users pattern).
+//          Also POST {action:"inbound_sync"} → pull broker estimate mails into
+//          the Incoming Jobs queue (src/inboundJobs.jsx).
 import { admin, handleIncoming } from "../lib/agent.mjs";
 import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from "../lib/brief.mjs";
+import { syncInboundJobs } from "../lib/inboundMail.mjs";
 
 export const maxDuration = 300;
 
@@ -39,7 +42,13 @@ async function dailyBrief(req, res) {
     // Telegram caps messages at 4096 chars — split if the brief ran long.
     for (let i = 0; i < brief.length; i += 3900) await sendTelegram(chatId, brief.slice(i, i + 3900));
     await saveSnapshot(data); // after a real send only, so ?dry runs don't overwrite the day
-    res.status(200).json({ ok: true, sent: true, chars: brief.length, deltas });
+    // Same daily cron pulls the broker estimates in, so the Incoming Jobs queue
+    // is already populated when the team reads the brief. Best-effort on
+    // purpose: a Google outage must never cost them the brief.
+    let inbound = null;
+    try { inbound = await syncInboundJobs({ days: 30, max: 25 }); }
+    catch (e) { inbound = { error: e?.message || "inbound sync failed" }; }
+    res.status(200).json({ ok: true, sent: true, chars: brief.length, deltas, inbound });
   } catch (e) {
     console.error("daily-brief:", e);
     res.status(500).json({ error: e?.message || "brief error" });
@@ -66,6 +75,25 @@ async function appChat(req, res) {
       .eq("id", user.id);
     if (error) { res.status(500).json({ error: "no pude generar el código: " + error.message }); return; }
     res.status(200).json({ code, expires_in_minutes: 15 });
+    return;
+  }
+
+  // Pull broker estimate mails into the Incoming Jobs queue. Read-only against
+  // Gmail; the only writes are 'pending' rows in job_evaluations, which a human
+  // still has to accept before any job exists.
+  if (req.body?.action === "inbound_sync") {
+    const canSync = profile?.role === "admin" || !!profile?.permissions?.jobcalc?.create;
+    if (!canSync) { res.status(403).json({ error: "No tenés permiso para importar jobs entrantes." }); return; }
+    try {
+      const summary = await syncInboundJobs({
+        days: Math.min(90, Math.max(1, Number(req.body?.days) || 30)),
+        max: Math.min(50, Math.max(1, Number(req.body?.max) || 25)),
+      });
+      res.status(200).json({ ok: true, ...summary });
+    } catch (e) {
+      console.error("inbound-sync:", e);
+      res.status(e?.status || 500).json({ error: e?.message || "inbound sync error", setup: !!e?.setup });
+    }
     return;
   }
 

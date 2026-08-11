@@ -172,10 +172,18 @@ export default async function handler(req, res) {
     return;
   }
   const token = (req.headers?.authorization || "").replace(/^Bearer\s+/i, "");
-  const { data: authData, error: authErr } = token ? await admin.auth.getUser(token) : { data: null, error: true };
-  if (authErr || !authData?.user) {
-    res.status(401).json({ error: "Not authorized." });
-    return;
+  // Server-to-server callers (the inbound-mail sync, which runs under Vercel
+  // Cron and has no user session) present CRON_SECRET instead of a user JWT.
+  // Only honoured when that secret is actually configured — an unset env var
+  // must never degrade into an empty password.
+  const cronSecret = process.env.CRON_SECRET;
+  const isInternal = !!cronSecret && token === cronSecret;
+  if (!isInternal) {
+    const { data: authData, error: authErr } = token ? await admin.auth.getUser(token) : { data: null, error: true };
+    if (authErr || !authData?.user) {
+      res.status(401).json({ error: "Not authorized." });
+      return;
+    }
   }
 
   const origin = normZip(req.query?.origin);
