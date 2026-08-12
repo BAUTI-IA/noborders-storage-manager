@@ -1499,6 +1499,25 @@ drop policy if exists "equipment_items_all" on public.equipment_items;
 create policy "equipment_items_all" on public.equipment_items for all to anon, authenticated using (true) with check (true);
 do $$ begin alter publication supabase_realtime add table public.equipment_items; exception when others then null; end $$;`;
 
+// Parámetros que usa la calculadora de la app mobile de los drivers. Una sola
+// fila: se editan acá y todos los teléfonos los toman.
+const DRIVER_APP_SETTINGS_SQL = `create table if not exists public.driver_app_settings (
+  id boolean primary key default true check (id),
+  cost_per_mile numeric not null default 0.70,
+  crew_rate_per_day numeric,
+  carrier_rate_per_cf numeric not null default 0.55,
+  price_per_cf numeric not null default 0.65,
+  fuel_surcharge_pct numeric not null default 5,
+  updated_at timestamptz not null default now(),
+  updated_by text
+);
+insert into public.driver_app_settings (id) values (true) on conflict (id) do nothing;
+alter table public.driver_app_settings enable row level security;
+drop policy if exists "driver_app_settings_select" on public.driver_app_settings;
+create policy "driver_app_settings_select" on public.driver_app_settings for select to authenticated using (true);
+drop policy if exists "driver_app_settings_update" on public.driver_app_settings;
+create policy "driver_app_settings_update" on public.driver_app_settings for update to authenticated using (public.is_admin()) with check (public.is_admin());`;
+
 // Per-driver expense tracking: every cost (fuel, hotels, materials, tolls…) linked
 // to driver/truck/trip/job, with bank-vs-driver-cash source so cash taken from
 // customer collections reconciles against the "in circulation" money. Also the
@@ -3556,6 +3575,10 @@ export default function App() {
   const [pwForm, setPwForm] = useState({ current:"", next:"", confirm:"" }); // change-password form in Settings
   const [pwSaving, setPwSaving] = useState(false);
   const [pwNotice, setPwNotice] = useState(null); // { ok, text }
+  const [driverAppForm, setDriverAppForm] = useState(null); // parámetros de la app mobile (Settings)
+  const [driverAppSaving, setDriverAppSaving] = useState(false);
+  const [driverAppNotice, setDriverAppNotice] = useState(null); // { ok, text }
+  const [driverAppMissing, setDriverAppMissing] = useState(false); // driver_app_settings no está en la DB
   const [pwRecovery, setPwRecovery] = useState(false); // invite / reset-password landing
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3922,6 +3945,43 @@ export default function App() {
     setPwSaving(false);
     if (error) setPwNotice({ ok:false, text: error.message });
     else { setPwNotice({ ok:true, text:"Password updated." }); setPwForm({ current:"", next:"", confirm:"" }); }
+  }
+
+  // ── Parámetros de la app mobile de los drivers ──────────────────────────
+  // Una sola fila (id = true) que la app lee para su calculadora: costo de
+  // combustible por milla, tarifa del crew, etc. Si la tabla todavía no existe,
+  // se muestra el aviso para correr el SQL en vez de romper la pantalla.
+  const loadDriverAppSettings = useCallback(async () => {
+    const { data, error } = await supabase.from("driver_app_settings").select("*").limit(1).maybeSingle();
+    if (error) { setDriverAppMissing(error.code === "42P01"); return; }
+    setDriverAppMissing(false);
+    setDriverAppForm({
+      cost_per_mile: data?.cost_per_mile ?? "",
+      crew_rate_per_day: data?.crew_rate_per_day ?? "",
+      carrier_rate_per_cf: data?.carrier_rate_per_cf ?? "",
+      price_per_cf: data?.price_per_cf ?? "",
+      fuel_surcharge_pct: data?.fuel_surcharge_pct ?? "",
+    });
+  }, [supabase]);
+
+  useEffect(() => { if (session && page === "settings") loadDriverAppSettings(); }, [session, page, loadDriverAppSettings]);
+
+  async function saveDriverAppSettings() {
+    setDriverAppSaving(true); setDriverAppNotice(null);
+    const numOrNull = (v) => (v === "" || v == null ? null : Number(v));
+    const { error } = await supabase.from("driver_app_settings").upsert({
+      id: true,
+      cost_per_mile: numOrNull(driverAppForm.cost_per_mile),
+      crew_rate_per_day: numOrNull(driverAppForm.crew_rate_per_day),
+      carrier_rate_per_cf: numOrNull(driverAppForm.carrier_rate_per_cf),
+      price_per_cf: numOrNull(driverAppForm.price_per_cf),
+      fuel_surcharge_pct: numOrNull(driverAppForm.fuel_surcharge_pct),
+      updated_at: new Date().toISOString(),
+      updated_by: session?.user?.email || null,
+    });
+    setDriverAppSaving(false);
+    if (error) setDriverAppNotice({ ok:false, text: error.code === "42P01" ? "Run the setup SQL in Supabase first." : error.message });
+    else setDriverAppNotice({ ok:true, text:"Saved. The app will pick it up." });
   }
 
   // Keep `page` pointed at a section the user is actually allowed to see.
@@ -10891,6 +10951,53 @@ export default function App() {
               {pwNotice && <span style={{ fontSize:13, color: pwNotice.ok ? "#3B6D11" : "#b91c1c" }}>{pwNotice.text}</span>}
             </div>
           </div>
+
+          {/* Parámetros de la calculadora de la app mobile. Se editan acá y
+              todos los teléfonos los toman la próxima vez que abren la app. */}
+          {(() => {
+            const canEditDriverApp = can("settings", "edit");
+            const rows = [
+              ["cost_per_mile", "Fuel cost per mile ($)", "0.70", "What a loaded truck burns per mile. Used to price the trip."],
+              ["crew_rate_per_day", "Crew rate per day ($)", "180", "Paid to each crew member per day."],
+              ["carrier_rate_per_cf", "Carrier rate per CF ($)", "0.55", "What the carrier charges us per cubic foot."],
+              ["price_per_cf", "Default price per CF ($)", "0.65", "Starting rate when quoting a new job."],
+              ["fuel_surcharge_pct", "Default fuel surcharge (%)", "5", "Broker surcharge suggested on new quotes."],
+            ];
+            return (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Driver app · calculator</div>
+                <div style={{ fontSize:12.5, color:"#888", marginBottom:16 }}>These values feed the job calculator in the mobile app. Change them once here and every phone picks them up.</div>
+
+                {driverAppMissing ? (
+                  <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                    <span>Run the setup SQL once in Supabase to enable this.</span>
+                    <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+                  </div>
+                ) : !driverAppForm ? (
+                  <div style={{ fontSize:13, color:"#888" }}>Loading…</div>
+                ) : (
+                  <>
+                    {rows.map(([field, label, placeholder, help]) => (
+                      <div key={field} style={{ marginBottom:16 }}>
+                        <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>{label}</label>
+                        <input type="number" step="0.01" inputMode="decimal" disabled={!canEditDriverApp}
+                          value={driverAppForm[field] ?? ""} placeholder={placeholder}
+                          onChange={e => { const v = e.target.value; setDriverAppForm(f => ({ ...f, [field]: v })); setDriverAppNotice(null); }}
+                          style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box", background: canEditDriverApp ? "#fff" : "#fafafa" }} />
+                        <div style={{ fontSize:11.5, color:"#aaa", marginTop:4 }}>{help}</div>
+                      </div>
+                    ))}
+                    {canEditDriverApp && (
+                      <div style={{ marginTop:20, display:"flex", alignItems:"center", gap:12 }}>
+                        <Btn primary disabled={driverAppSaving} onClick={saveDriverAppSettings}>{driverAppSaving ? "Saving…" : "Save changes"}</Btn>
+                        {driverAppNotice && <span style={{ fontSize:13, color: driverAppNotice.ok ? "#3B6D11" : "#b91c1c" }}>{driverAppNotice.text}</span>}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -12534,7 +12641,7 @@ export default function App() {
       })()}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL, DRIVER_APP_SETTINGS_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
