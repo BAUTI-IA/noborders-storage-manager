@@ -3952,7 +3952,16 @@ export default function App() {
   // combustible por milla, tarifa del crew, etc. Si la tabla todavía no existe,
   // se muestra el aviso para correr el SQL en vez de romper la pantalla.
   const loadDriverAppSettings = useCallback(async () => {
-    const { data, error } = await supabase.from("driver_app_settings").select("*").limit(1).maybeSingle();
+    let { data, error } = await supabase.from("driver_app_settings").select("*").limit(1).maybeSingle();
+    // Si la tabla no existe todavía, intentamos crearla sola (mismo mecanismo
+    // que usan Equipment y las demás secciones); si no se puede, avisamos.
+    if (error?.code === "42P01") {
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: DRIVER_APP_SETTINGS_SQL });
+        if (!rpcErr) break;
+      }
+      ({ data, error } = await supabase.from("driver_app_settings").select("*").limit(1).maybeSingle());
+    }
     if (error) { setDriverAppMissing(error.code === "42P01"); return; }
     setDriverAppMissing(false);
     setDriverAppForm({
