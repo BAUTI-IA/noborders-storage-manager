@@ -3,3 +3,7 @@ dist/
 .DS_Store
 *.log
 *.pdf.tmp
+
+# G&S Solar prototype
+apps/*/node_modules
+apps/*/dist
