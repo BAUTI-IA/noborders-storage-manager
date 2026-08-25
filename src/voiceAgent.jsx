@@ -249,21 +249,32 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
   const conn = useRef(null);
   const turn = useRef({ spokeAt: 0, awaitingAudio: false, replies: [], openCalls: 0, responseActive: false, wantResponse: false });
   const alive = useRef(true);
+  const injected = useRef(new Set()); // texts we pushed ourselves, hidden from the transcript
 
   useEffect(() => {
     alive.current = true;
     return () => { alive.current = false; conn.current?.close(); conn.current = null; };
   }, []);
 
-  // Transcripts arrive as deltas and are settled by a final full text, so the
-  // same line is appended to while it's being spoken and replaced when it ends.
-  const putLine = useCallback((id, role, text, { append = false } = {}) => {
+  // Bubbles are ordered by where the item sits in the CONVERSATION, never by
+  // when its text showed up. Input transcription runs asynchronously — the
+  // agent starts answering (and its transcript streams) while what you said is
+  // still being transcribed — so arrival order puts the answer above the
+  // question. The item.added/created events fire in true conversation order and
+  // carry previous_item_id, so each line gets its slot reserved first and the
+  // transcript fills it in later.
+  const upsertLine = useCallback((id, role, { text = "", append = false, after = null } = {}) => {
+    if (!id) return;
     setLines((prev) => {
       const i = prev.findIndex((l) => l.id === id);
-      if (i === -1) return [...prev, { id, role, text, partial: append }];
-      const copy = [...prev];
-      copy[i] = { ...copy[i], text: append ? copy[i].text + text : text, partial: append };
-      return copy;
+      if (i !== -1) {
+        const copy = [...prev];
+        copy[i] = { ...copy[i], text: append ? copy[i].text + text : text, partial: append };
+        return copy;
+      }
+      const line = { id, role, text, partial: append };
+      const at = after ? prev.findIndex((l) => l.id === after) : -1;
+      return at === -1 ? [...prev, line] : [...prev.slice(0, at + 1), line, ...prev.slice(at + 1)];
     });
   }, []);
 
@@ -340,18 +351,33 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
         setStatus("thinking");
         break;
 
+      // Reserves the slot, in order, before any text exists for it.
+      case "conversation.item.added":
+      case "conversation.item.created": {
+        const it = ev.item;
+        if (it?.type !== "message" || !it.id) break;
+        const role = it.role === "assistant" ? "agent" : it.role === "user" ? "user" : null;
+        if (!role) break;
+        const text = (it.content || []).map((c) => c.transcript || c.text || "").join("");
+        // The confirm/cancel buttons inject a user message to keep the agent in
+        // the loop. It's plumbing, not something anyone said — don't show it.
+        if (injected.current.has(text)) { injected.current.delete(text); break; }
+        upsertLine(it.id, role, { text, after: ev.previous_item_id || null });
+        break;
+      }
+
       case "conversation.item.input_audio_transcription.delta":
-        putLine(`u-${ev.item_id}`, "user", ev.delta || "", { append: true });
+        upsertLine(ev.item_id, "user", { text: ev.delta || "", append: true });
         break;
       case "conversation.item.input_audio_transcription.completed":
-        putLine(`u-${ev.item_id}`, "user", ev.transcript || "");
+        upsertLine(ev.item_id, "user", { text: ev.transcript || "" });
         break;
 
       case "response.output_audio_transcript.delta":
-        putLine(`a-${ev.item_id}`, "agent", ev.delta || "", { append: true });
+        upsertLine(ev.item_id, "agent", { text: ev.delta || "", append: true });
         break;
       case "response.output_audio_transcript.done":
-        putLine(`a-${ev.item_id}`, "agent", ev.transcript || "");
+        upsertLine(ev.item_id, "agent", { text: ev.transcript || "" });
         break;
 
       // First audio of the turn — this is the number a caller actually feels.
@@ -398,7 +424,7 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
       default:
         break;
     }
-  }, [putLine, relayTool]);
+  }, [upsertLine, relayTool]);
 
   const disconnect = useCallback(() => {
     conn.current?.close();
@@ -447,15 +473,13 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
     try {
       const j = await post({ action: "voice_tool", tool, input: {} });
       setActivity((a) => [...a.slice(-6), { id: `ui-${Date.now()}`, kind: "result", text: j.ui?.text || "", ms: j.ms }]);
+      const text = which === "confirm"
+        ? `(The user confirmed on screen. Result: ${j.output}) Tell them what happened in one short sentence.`
+        : `(The user cancelled on screen. ${j.output}) Acknowledge it in one short sentence.`;
+      injected.current.add(text);
       conn.current?.send({
         type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: which === "confirm"
-            ? `(The user confirmed on screen. Result: ${j.output}) Tell them what happened in one short sentence.`
-            : `(The user cancelled on screen. ${j.output}) Acknowledge it in one short sentence.` }],
-        },
+        item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
       });
       requestResponse();
     } catch (e) {
@@ -549,7 +573,7 @@ export function VoiceAgentPanel({ session }) {
         )}
         {v.lines.map((l) => (
           <div key={l.id} style={l.role === "user" ? S.user : S.agent}>
-            {l.text}{l.partial && <span style={{ opacity: .5 }}> ▍</span>}
+            {l.text || <span style={{ opacity: .45 }}>…</span>}{l.partial && <span style={{ opacity: .5 }}> ▍</span>}
           </div>
         ))}
         {v.activity.map((a) => (
