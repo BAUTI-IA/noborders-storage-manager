@@ -9,6 +9,7 @@ import {
   buildVoiceInstructions, buildVoiceSession, dropSessionParam, langLocked, runVoiceTool, voiceLang,
   voiceSchema, voiceTools, vt, VOICE_TOOL_NAMES,
 } from "../lib/voice.mjs";
+import { idleState, IDLE_HANGUP_MS, IDLE_WARN_MS } from "../src/voiceData.js";
 
 let failed = 0;
 const eq = (name, got, want) => {
@@ -169,6 +170,32 @@ eq("el idioma cambia la copia", vt("es").readOnly === vt("en").readOnly, false);
   for (const [what, example] of paired) {
     eq(`el ejemplo de ${what} va en los dos idiomas`, text.includes(example), true);
   }
+}
+
+// ── Colgar por inactividad ───────────────────────────────────────────────────
+// Una sesión abierta sigue subiendo micrófono aunque nadie hable, y el silencio
+// se factura igual: un panel olvidado abierto gasta hasta que alguien se avive.
+{
+  const sec = (n) => n * 1000;
+  eq("recién conectado no avisa nada", idleState(0), { hangUp: false, warnSeconds: null });
+  eq("en silencio pero lejos del límite, tampoco",
+    idleState(IDLE_HANGUP_MS - IDLE_WARN_MS - sec(5)), { hangUp: false, warnSeconds: null });
+
+  // Dentro de la ventana de aviso aparece la cuenta regresiva.
+  eq("a 20s del corte avisa", idleState(IDLE_HANGUP_MS - IDLE_WARN_MS).warnSeconds, IDLE_WARN_MS / 1000);
+  eq("a 5s avisa 5", idleState(IDLE_HANGUP_MS - sec(5)).warnSeconds, 5);
+  eq("redondea para arriba: nunca muestra 0 antes de tiempo",
+    idleState(IDLE_HANGUP_MS - 200).warnSeconds, 1);
+  eq("y todavía no cuelga", idleState(IDLE_HANGUP_MS - 200).hangUp, false);
+
+  eq("cumplido el tiempo, cuelga", idleState(IDLE_HANGUP_MS).hangUp, true);
+  eq("y pasado también", idleState(IDLE_HANGUP_MS + sec(30)).hangUp, true);
+
+  // Lo peor sería cortarle la llamada a alguien que está esperando una consulta.
+  eq("no cuelga con una herramienta corriendo",
+    idleState(IDLE_HANGUP_MS + sec(60), { busy: true }), { hangUp: false, warnSeconds: null });
+  eq("ni avisa mientras está ocupado",
+    idleState(IDLE_HANGUP_MS - sec(5), { busy: true }).warnSeconds, null);
 }
 
 // ── El candado de idioma ─────────────────────────────────────────────────────
