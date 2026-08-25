@@ -128,6 +128,11 @@ eq("el idioma cambia la copia", vt("es").readOnly === vt("en").readOnly, false);
   for (const [name, text] of [["es", es], ["en", en]]) {
     eq(`${name}: sigue el idioma del que habla`, text.includes("switch the moment they switch"), true);
     eq(`${name}: nunca pregunta qué idioma`, text.includes("Never ask which language"), true);
+    // El bug que motivó esto: derivaba al castellano después de una consulta,
+    // porque las instrucciones, el directorio y los resultados están salpicados
+    // de castellano y los tomaba como pista.
+    eq(`${name}: solo el que habla define el idioma`, text.includes("ONLY the person's own words decide"), true);
+    eq(`${name}: los datos no son una pista de idioma`, text.includes("that is stored data, not a hint"), true);
     // Convención del CRM (CLAUDE.md): en español los términos del negocio
     // quedan en inglés, porque así habla el equipo.
     eq(`${name}: mantiene el vocabulario del CRM en inglés`, text.includes("Keep the CRM's vocabulary in English"), true);
@@ -146,6 +151,20 @@ eq("el idioma cambia la copia", vt("es").readOnly === vt("en").readOnly, false);
   eq("pero el panel la muestra traducida", es.ui.text === en.ui.text, false);
   eq("y en español dice solo lectura", es.ui.text.includes("solo lectura"), true);
   eq("y en inglés read-only", en.ui.text.includes("read-only"), true);
+}
+
+{
+  const text = await buildVoiceInstructions({ actor: { profile: admin }, canWrite: true, lang: "en" });
+  // Cada ejemplo hablado va en los dos idiomas, o sesga hacia uno.
+  const paired = [
+    ["relleno antes de una herramienta", '"Let me check…" / "Dejame ver…"'],
+    ["números", '"twelve hundred dollars" / "mil doscientos dólares"'],
+    ["titular + detalle", '"There are seven deliveries. Want me to go through them?" / "Hay siete entregas. ¿Te las paso una por una?"'],
+    ["fechas relativas", '"next Friday" / "el viernes"'],
+  ];
+  for (const [what, example] of paired) {
+    eq(`el ejemplo de ${what} va en los dos idiomas`, text.includes(example), true);
+  }
 }
 
 // ── Degrading on a knob the model doesn't take ───────────────────────────────

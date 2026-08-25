@@ -34,6 +34,15 @@ Tres piezas hacen que funcione:
   settlement, pads. Es la misma convención que el resto del CRM (CLAUDE.md):
   traducir "job" a "trabajo" en voz alta suena mal y nadie habla así.
 
+Un detalle que costó encontrar: el agente derivaba al castellano a mitad de una
+conversación en inglés, justo después de una consulta. La causa era que las
+instrucciones, el directorio del CRM y los resultados de las queries estaban
+salpicados de castellano, y el modelo los leía de nuevo en cada turno y los
+tomaba como pista de idioma. Ahora los ejemplos hablados van **en los dos
+idiomas** (ninguno sesga), el directorio se generó en inglés como el resto del
+código fuente, y la instrucción dice explícitamente que solo las palabras de la
+persona definen el idioma — los datos no.
+
 El panel en sí (botones, estados, métricas, mensajes de error) se traduce con el
 sistema de siempre — `I18N_ES` y `tr()`. Lo que lee el **modelo** queda siempre
 en inglés: son directivas de prompt, no copy de interfaz, y el modelo las dice
@@ -164,7 +173,12 @@ npm run i18n:check              # el panel es UI: tiene que pasar
 - `lib/voice.mjs` — instrucciones, catálogo de herramientas, emisión del
   `client_secret` y ejecución de cada llamada con los permisos del usuario.
 - `src/voiceAgent.jsx` — los dos transportes, el audio, el manejo de eventos, las
-  métricas y el panel.
+  métricas y el panel. El orden de los globos sale de `conversation.item.added`
+  / `.created` (que llegan en el orden real de la conversación y traen
+  `previous_item_id`), NO del orden en que llega el texto: la transcripción de
+  lo que decís corre asincrónica y termina después de que el agente ya empezó a
+  contestar, así que ordenar por llegada pone la respuesta arriba de la
+  pregunta.
 - `api/agent-hub.mjs` — acciones `voice_token` y `voice_tool`.
 - `lib/agent.mjs` — el cerebro compartido; la voz entra por `handleIncoming` con
   `readOnly` / `decision` / `detail`.
