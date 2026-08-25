@@ -6,8 +6,8 @@
 //
 //   node scripts/test-voice.mjs
 import {
-  buildVoiceInstructions, buildVoiceSession, dropSessionParam, runVoiceTool, voiceLang, voiceSchema,
-  voiceTools, vt, VOICE_TOOL_NAMES,
+  buildVoiceInstructions, buildVoiceSession, dropSessionParam, langLocked, runVoiceTool, voiceLang,
+  voiceSchema, voiceTools, vt, VOICE_TOOL_NAMES,
 } from "../lib/voice.mjs";
 
 let failed = 0;
@@ -133,6 +133,10 @@ eq("el idioma cambia la copia", vt("es").readOnly === vt("en").readOnly, false);
     // de castellano y los tomaba como pista.
     eq(`${name}: solo el que habla define el idioma`, text.includes("ONLY the person's own words decide"), true);
     eq(`${name}: los datos no son una pista de idioma`, text.includes("that is stored data, not a hint"), true);
+    // Volvió a derivar aun con lo de arriba: el equipo habla inglés con acento
+    // español y el modelo estaba leyendo el ACENTO como pedido de cambio.
+    eq(`${name}: el acento no es motivo para cambiar`, text.includes("never by the ACCENT"), true);
+    eq(`${name}: cambiar es deliberado, no deriva`, text.includes("Switching is deliberate, never a drift"), true);
     // Convención del CRM (CLAUDE.md): en español los términos del negocio
     // quedan en inglés, porque así habla el equipo.
     eq(`${name}: mantiene el vocabulario del CRM en inglés`, text.includes("Keep the CRM's vocabulary in English"), true);
@@ -165,6 +169,29 @@ eq("el idioma cambia la copia", vt("es").readOnly === vt("en").readOnly, false);
   for (const [what, example] of paired) {
     eq(`el ejemplo de ${what} va en los dos idiomas`, text.includes(example), true);
   }
+}
+
+// ── El candado de idioma ─────────────────────────────────────────────────────
+// La detección automática es la que queremos por defecto, pero cuando falla el
+// usuario necesita poder fijarlo y que deje de adivinar.
+eq("auto no es un candado", langLocked("auto"), false);
+eq("sin valor tampoco", langLocked(undefined), false);
+eq("es es un candado", langLocked("es"), true);
+eq("en también", langLocked("en"), true);
+
+{
+  const auto = await buildVoiceSession({ actor: { profile: admin }, canWrite: true, transport: "webrtc", lang: "en" });
+  const es = await buildVoiceSession({ actor: { profile: admin }, canWrite: true, transport: "webrtc", lang: "en", langLock: "es" });
+
+  eq("en auto no hay candado en las instrucciones", auto.instructions.includes("LANGUAGE LOCK"), false);
+  eq("con candado sí", es.instructions.includes("LANGUAGE LOCK"), true);
+  eq("y nombra el idioma elegido", es.instructions.includes("Speak Argentine Spanish and ONLY Argentine Spanish"), true);
+  // El candado manda por encima del idioma del CRM: acá el CRM está en inglés.
+  eq("el candado gana sobre el idioma del CRM", es.instructions.includes("greeting in English"), false);
+
+  // Con el idioma fijado, la transcripción también puede dejar de adivinar.
+  eq("auto no fija idioma de transcripción", "language" in auto.audio.input.transcription, false);
+  eq("con candado la transcripción se fija", es.audio.input.transcription.language, "es");
 }
 
 // ── Degrading on a knob the model doesn't take ───────────────────────────────

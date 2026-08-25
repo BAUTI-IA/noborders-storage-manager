@@ -43,6 +43,23 @@ idiomas** (ninguno sesga), el directorio se generó en inglés como el resto del
 código fuente, y la instrucción dice explícitamente que solo las palabras de la
 persona definen el idioma — los datos no.
 
+Y una segunda causa, que costó más: el equipo **habla inglés con acento
+español**, y el modelo estaba leyendo el acento como un pedido de cambio de
+idioma — derivaba un turno y volvía solo. Ahora la instrucción dice
+explícitamente que el idioma se juzga por las PALABRAS y nunca por el acento, y
+que cambiar es deliberado: hace falta una frase entera en el otro idioma, nunca
+a mitad de un intercambio.
+
+Como eso sigue siendo prompting y no una garantía, el panel tiene un **candado
+de idioma** (`Auto` / `EN` / `ES`) al lado del transporte:
+
+- En `Auto` sigue al que habla, que es lo que querés con un equipo bilingüe.
+- Fijado, el modelo habla solo ese idioma pase lo que pase — y la transcripción
+  también deja de adivinar, porque se le pasa el idioma.
+- Se puede cambiar **en medio de una llamada**: no reconecta (perderías el hilo
+  de la conversación), le manda una instrucción a la sesión viva, igual que los
+  botones de Confirm / Cancel.
+
 El panel en sí (botones, estados, métricas, mensajes de error) se traduce con el
 sistema de siempre — `I18N_ES` y `tr()`. Lo que lee el **modelo** queda siempre
 en inglés: son directivas de prompt, no copy de interfaz, y el modelo las dice
@@ -137,7 +154,7 @@ Variables de entorno en Vercel (todas opcionales salvo la primera):
 | `VOICE_MODEL` | `gpt-realtime` | Modelo de voz a voz. |
 | `VOICE_VOICE` | `marin` | Voz: `marin`, `cedar`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. |
 | `VOICE_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Solo llena la transcripción en pantalla; no frena la respuesta hablada. |
-| `VOICE_TRANSCRIBE_LANGUAGE` | (vacío) | Vacío = detección automática, que es lo que querés con un equipo bilingüe. Un código ISO (`es` / `en`) lo fija. |
+| `VOICE_TRANSCRIBE_LANGUAGE` | (vacío) | Default para todos: vacío = detección automática. Un código ISO (`es` / `en`) lo fija. El candado del panel lo pisa por sesión. |
 | `VOICE_SPEED` | `1.05` | Velocidad al hablar (0.25–1.5). |
 | `VOICE_SCHEMA_BUDGET` | `7000` | Caracteres de esquema que entran en las instrucciones. |
 | `AGENT_WRITES_ENABLED` | `true` | En `false` la voz queda en solo lectura, igual que el resto de los canales. |

@@ -102,6 +102,7 @@ export const I18N_ES = {
   "Driver %": "% driver",
   "Driver comm.": "Comisión driver",
   "Hang up": "Cortar",
+  "Language": "Idioma",
   "Month this extra is reported and paid in": "Mes en el que se reporta y se paga este extra",
   "Mute the agent": "Silenciar al agente",
   "Start talking": "Empezar a hablar",
