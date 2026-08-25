@@ -237,7 +237,7 @@ async function openWebSocket({ token, onEvent, onError }) {
 
 // ── The hook ─────────────────────────────────────────────────────────────────
 // status: "idle" | "connecting" | "listening" | "thinking" | "speaking" | "error"
-export function useVoiceAgent({ session, transport = "webrtc" }) {
+export function useVoiceAgent({ session, transport = "webrtc", langLock = "auto" }) {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [lines, setLines] = useState([]);      // { id, role, text, partial }
@@ -440,7 +440,7 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
     setStatus("connecting");
     const started = now();
     try {
-      const token = await post({ action: "voice_token", transport });
+      const token = await post({ action: "voice_token", transport, lang_lock: langLock });
       const open = transport === "websocket" ? openWebSocket : openWebRTC;
       const c = await open({ token, onEvent: onServerEvent, onError: (e) => setError(e.message) });
       if (!alive.current) { c.close(); return; }
@@ -459,7 +459,21 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
         ? tr("Microphone permission denied.", "No me diste permiso para usar el micrófono.")
         : (e?.message || tr("Could not start the voice session.", "No pude iniciar la sesión de voz.")));
     }
-  }, [post, transport, onServerEvent, muted]);
+  }, [post, transport, langLock, onServerEvent, muted]);
+
+  const steerLanguage = useCallback((lock) => {
+    if (!conn.current) return;
+    const name = lock === "es" ? "Argentine Spanish" : lock === "en" ? "English" : null;
+    const text = name
+      ? `(The user just locked the language to ${name}.) Speak ${name} and only ${name} from now on, whatever accent you hear and whatever language the data is in. Acknowledge in one short sentence, in ${name}.`
+      : "(The user just unlocked the language.) From now on follow whichever language they speak, judging by their words and never by their accent. Acknowledge in one short sentence.";
+    injected.current.add(text);
+    conn.current.send({
+      type: "conversation.item.create",
+      item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+    });
+    requestResponse();
+  }, [requestResponse]);
 
   const toggleMute = useCallback(() => {
     setMuted((m) => { conn.current?.setMuted(!m); return !m; });
@@ -487,7 +501,7 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
     }
   }, [post, requestResponse]);
 
-  return { status, error, lines, activity, pending, metrics, muted, connect, disconnect, toggleMute, decide };
+  return { status, error, lines, activity, pending, metrics, muted, connect, disconnect, toggleMute, decide, steerLanguage };
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────
@@ -529,7 +543,8 @@ const ms = (v) => (v == null ? "—" : `${v} ms`);
 
 export function VoiceAgentPanel({ session }) {
   const [transport, setTransport] = useState("webrtc");
-  const v = useVoiceAgent({ session, transport });
+  const [langLock, setLangLock] = useState("auto");
+  const v = useVoiceAgent({ session, transport, langLock });
   const bodyRef = useRef(null);
   const live = v.status !== "idle" && v.status !== "error";
 
@@ -556,6 +571,16 @@ export function VoiceAgentPanel({ session }) {
         >
           <option value="webrtc">WebRTC</option>
           <option value="websocket">WebSocket</option>
+        </select>
+        <select
+          value={langLock}
+          onChange={(e) => { setLangLock(e.target.value); v.steerLanguage(e.target.value); }}
+          title="Language"
+          style={S.select}
+        >
+          <option value="auto">Auto</option>
+          <option value="en">EN</option>
+          <option value="es">ES</option>
         </select>
         <span style={{ ...S.metric, marginLeft: "auto" }}>
           <span title={tr("Time to open the session", "Lo que tardó en abrir la sesión")}>conn {ms(v.metrics.connectMs)}</span>

@@ -96,6 +96,7 @@ async function appChat(req, res) {
         canWrite: !!profile && writesEnabled(),
         transport: req.body?.transport,
         lang,
+        langLock: req.body?.lang_lock,
       });
       res.status(200).json(out);
     } catch (e) {
