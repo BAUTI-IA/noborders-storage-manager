@@ -2686,6 +2686,22 @@ const PERMISSION_SECTIONS = NAV.flatMap(g => g.items).filter(it => it.id !== "us
 const PERM_LEVELS = ["view", "edit", "create"];
 const EMPTY_PERMS = () => Object.fromEntries(PERMISSION_SECTIONS.map(s => [s.id, { view:false, edit:false, create:false }]));
 
+// Rol de cada usuario en la app mobile (NBM Driver App). Lo decide el
+// servidor a partir de profiles.app_role; acá se elige. Sin elegir nada, la
+// app lo deduce de los permisos del CRM (admin -> maestro, edita jobs ->
+// oficina), así que ningún usuario existente pierde lo que ya tenía.
+const APP_ROLES = [
+  { value: "",       label: () => tr("Auto (from CRM permissions)", "Automático (según permisos del CRM)") },
+  { value: "driver", label: () => tr("Driver — read only", "Driver — solo lectura") },
+  { value: "office", label: () => tr("Back office", "Back office") },
+  { value: "master", label: () => tr("Master — sees everything", "Maestro — ve todo") },
+];
+const APP_ROLE_COLORS = {
+  driver: { bg:"#E4F3EA", fg:"#0E7A3C" },
+  office: { bg:"#E4ECFB", fg:"#0B57D0" },
+  master: { bg:"#ECE6FB", fg:"#5B3FBF" },
+};
+
 // Admin-only section: list users, invite new ones (email + per-section permissions),
 // edit roles/permissions, activate/deactivate, and send password-reset emails.
 function UsersSection({ session }) {
@@ -2694,8 +2710,18 @@ function UsersSection({ session }) {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [warn, setWarn] = useState(null); // non-fatal: the admin service is down but the RLS fallback works
-  const [modal, setModal] = useState(null); // null | { mode, id, email, full_name, role, permissions, active }
+  const [modal, setModal] = useState(null); // null | { mode, id, email, full_name, role, permissions, active, app_role, driver_id }
   const [busy, setBusy] = useState(false);
+  const [drivers, setDrivers] = useState([]);   // para vincular un usuario con su driver
+  const [appRoleMissing, setAppRoleMissing] = useState(false); // la columna todavía no está en la DB
+
+  // La lista de drivers alimenta el desplegable "Driver vinculado".
+  useEffect(() => {
+    let vivo = true;
+    supabase.from("drivers").select("id, name").is("deleted_at", null).order("name")
+      .then(({ data }) => { if (vivo) setDrivers(data || []); });
+    return () => { vivo = false; };
+  }, []);
 
   const api = useCallback(async (action, payload) => {
     const res = await fetch("/api/admin-users", {
@@ -2752,14 +2778,15 @@ function UsersSection({ session }) {
   useEffect(() => { load(); }, [load]);
 
   function openNew() {
-    setModal({ mode:"new", email:"", full_name:"", role:"member", permissions: EMPTY_PERMS(), active:true });
+    setModal({ mode:"new", email:"", full_name:"", role:"member", permissions: EMPTY_PERMS(), active:true, app_role:"", driver_id:"" });
   }
   function openEdit(u) {
     const permissions = EMPTY_PERMS();
     for (const s of PERMISSION_SECTIONS) {
       const p = u.permissions?.[s.id]; if (p) permissions[s.id] = { view:!!p.view, edit:!!p.edit, create:!!p.create };
     }
-    setModal({ mode:"edit", id:u.id, email:u.email, full_name:u.full_name || "", role:u.role, permissions, active:u.active !== false });
+    setModal({ mode:"edit", id:u.id, email:u.email, full_name:u.full_name || "", role:u.role, permissions, active:u.active !== false,
+               app_role: u.app_role || "", driver_id: u.driver_id == null ? "" : String(u.driver_id) });
   }
 
   function togglePerm(sectionId, level) {
@@ -2794,7 +2821,11 @@ function UsersSection({ session }) {
     // with no identities instead of an error — detect it so we don't mislead.
     if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0)
       throw new Error(`${email} already has an account. Use Send reset instead.`);
-    await writeProfile(data.user.id, { email, full_name, role: modal.role, permissions: modal.permissions, active: true });
+    await writeProfile(data.user.id, {
+      email, full_name, role: modal.role, permissions: modal.permissions, active: true,
+      app_role: modal.app_role || null,
+      driver_id: modal.driver_id === "" ? null : Number(modal.driver_id),
+    });
     if (!data.session) {
       // Email confirmation is on → Supabase already sent the confirmation link;
       // opening it lands on /?invited=1 where they set their password.
@@ -2813,7 +2844,9 @@ function UsersSection({ session }) {
         const email = modal.email.trim(), full_name = modal.full_name.trim();
         // Preferred path: the serverless invite (needs the service role key).
         try {
-          await api("invite", { email, full_name, role: modal.role, permissions: modal.permissions });
+          await api("invite", { email, full_name, role: modal.role, permissions: modal.permissions,
+                                app_role: modal.app_role || null,
+                                driver_id: modal.driver_id === "" ? null : Number(modal.driver_id) });
           setNotice(`Invitation sent to ${email}.`);
         } catch (e) {
           // Admin service down/misconfigured → create the login from the browser.
@@ -2824,7 +2857,12 @@ function UsersSection({ session }) {
           }
         }
       } else {
-        const patch = { full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions, active: modal.active };
+        const patch = {
+          full_name: modal.full_name.trim(), role: modal.role, permissions: modal.permissions, active: modal.active,
+          // Lo de la app mobile: rol y vínculo con la fila de drivers.
+          app_role: modal.app_role || null,
+          driver_id: modal.driver_id === "" ? null : Number(modal.driver_id),
+        };
         // Try the API; fall back to a direct RLS-protected update if it's down.
         try { await api("update", { id: modal.id, ...patch }); }
         catch { await writeProfile(modal.id, patch); }
@@ -2865,6 +2903,32 @@ function UsersSection({ session }) {
   const td = { padding:"10px 12px", fontSize:13, borderBottom:"1px solid #f3f3f3", textAlign:"left", verticalAlign:"middle" };
   const th = { ...td, fontSize:11, fontWeight:600, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em" };
 
+  // Qué ve este usuario en la app del teléfono. Si nadie eligió un rol, se
+  // muestra el que va a deducir el servidor, para que no parezca vacío.
+  function appRoleCell(u) {
+    const explicito = u.app_role || null;
+    const deducido = u.role === "admin" ? "master"
+      : (u.permissions?.jobs?.edit || u.permissions?.jobs?.create) ? "office"
+      : "driver";
+    const valor = explicito || deducido;
+    const c = APP_ROLE_COLORS[valor] || { bg:"#f1f1f1", fg:"#888" };
+    const nombre = valor === "driver" ? "Driver" : valor === "office" ? "Back office" : tr("Master", "Maestro");
+    return (
+      <span>
+        <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.fg }}>
+          {nombre}{explicito ? "" : " *"}
+        </span>
+        {valor === "driver" && (
+          <span style={{ marginLeft:6, fontSize:11, color: u.driver_id ? "#888" : "#b91c1c" }}>
+            {u.driver_id
+              ? (drivers.find(d => d.id === u.driver_id)?.name || `#${u.driver_id}`)
+              : tr("no driver linked", "sin driver vinculado")}
+          </span>
+        )}
+      </span>
+    );
+  }
+
   function permSummary(u) {
     if (u.role === "admin") return "Full access (admin)";
     const ids = PERMISSION_SECTIONS.filter(s => u.permissions?.[s.id]?.view).map(s => s.label);
@@ -2883,13 +2947,13 @@ function UsersSection({ session }) {
       <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead><tr>
-            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>Last login</th><th style={th}>Status</th><th style={th}></th>
+            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>{tr("Mobile app", "App mobile")}</th><th style={th}>Last login</th><th style={th}>Status</th><th style={th}></th>
           </tr></thead>
           <tbody>
             {loading ? (
-              <tr><td style={td} colSpan={7}>Loading…</td></tr>
+              <tr><td style={td} colSpan={8}>Loading…</td></tr>
             ) : users.length === 0 ? (
-              <tr><td style={td} colSpan={7}>No users yet.</td></tr>
+              <tr><td style={td} colSpan={8}>No users yet.</td></tr>
             ) : users.map(u => (
               <tr key={u.id}>
                 <td style={td}>{u.email}</td>
@@ -2898,6 +2962,7 @@ function UsersSection({ session }) {
                   <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: u.role==="admin" ? "#EAF3DE" : "#f1f1f1", color: u.role==="admin" ? "#3B6D11" : "#888" }}>{u.role}</span>
                 </td>
                 <td style={{ ...td, color:"#888", maxWidth:280 }}>{permSummary(u)}</td>
+                <td style={{ ...td, whiteSpace:"nowrap" }}>{appRoleCell(u)}</td>
                 <td style={{ ...td, color:"#888", whiteSpace:"nowrap" }}>{fmtTs(u.last_login) || "—"}</td>
                 <td style={td}>{u.active !== false ? <span style={{ color:"#3B6D11" }}>Active</span> : <span style={{ color:"#b91c1c" }}>Inactive</span>}</td>
                 <td style={{ ...td, whiteSpace:"nowrap", textAlign:"right" }}>
@@ -2927,6 +2992,51 @@ function UsersSection({ session }) {
               <option value="member">Member</option>
               <option value="admin">Admin (full access)</option>
             </select>
+
+            {/* Lo que este usuario ve en la app del teléfono. Es aparte de los
+                permisos del CRM: un driver entra a la app y no al CRM. */}
+            <div style={{ borderTop:"1px solid #f1f1f1", margin:"14px 0 0", paddingTop:12 }}>
+              <label style={{ fontSize:12, fontWeight:600, color:"#888" }}>
+                {tr("Mobile app role (NBM Driver App)", "Rol en la app mobile (NBM Driver App)")}
+              </label>
+              <select style={{ ...authInp, marginTop:4 }} value={modal.app_role}
+                      onChange={e => setModal(m => ({ ...m, app_role: e.target.value }))}>
+                {APP_ROLES.map(r => <option key={r.value} value={r.value}>{r.label()}</option>)}
+              </select>
+
+              {modal.app_role === "driver" && (
+                <>
+                  <label style={{ fontSize:12, fontWeight:600, color:"#888" }}>
+                    {tr("Linked driver", "Driver vinculado")}
+                  </label>
+                  <select style={{ ...authInp, marginTop:4 }} value={modal.driver_id}
+                          onChange={e => setModal(m => ({ ...m, driver_id: e.target.value }))}>
+                    <option value="">{tr("— none —", "— ninguno —")}</option>
+                    {drivers.map(d => <option key={d.id} value={String(d.id)}>{d.name}</option>)}
+                  </select>
+                  {!modal.driver_id && (
+                    <div style={{ background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:8, padding:"8px 10px", fontSize:12, color:"#92400e", margin:"2px 0 10px" }}>
+                      {tr("Without a linked driver they see no jobs in the app.",
+                          "Sin driver vinculado no ve ningún job en la app.")}
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div style={{ fontSize:12, color:"#999", margin:"0 0 4px" }}>
+                {modal.app_role === "driver"
+                  ? tr("Sees only their assigned jobs and the balances to collect. Can't edit anything: they clock in/out, move a job one step forward and request a new job for the office to approve.",
+                       "Ve solo los jobs que tiene asignados y los balances a cobrar. No edita nada: ficha entrada y salida, mueve el job un paso adelante y pide altas que aprueba la oficina.")
+                  : modal.app_role === "office"
+                    ? tr("Everything in the app plus the driver request inbox.",
+                         "Todo lo de la app más la bandeja de pedidos de los drivers.")
+                    : modal.app_role === "master"
+                      ? tr("Everything, plus the fleet board and the team's hours.",
+                           "Todo, más el tablero de flota y las horas del equipo.")
+                      : tr("The app works it out from the CRM permissions: admin → master, can edit jobs → back office.",
+                           "La app lo deduce de los permisos del CRM: admin → maestro, edita jobs → back office.")}
+              </div>
+            </div>
 
             {modal.role === "admin" ? (
               <div style={{ background:"#EAF3DE", border:"1px solid #cfe3b6", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#3B6D11", margin:"6px 0 12px" }}>

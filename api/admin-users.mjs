@@ -125,9 +125,13 @@ export default async function handler(req, res) {
     }
 
     if (action === "invite") {
-      const { email, role = "member", permissions = {}, full_name = "" } = payload || {};
+      const { email, role = "member", permissions = {}, full_name = "",
+              app_role = null, driver_id = null } = payload || {};
       if (!email) { res.status(400).json({ error: "Falta el email." }); return; }
       if (role !== "admin" && role !== "member") { res.status(400).json({ error: "Rol inválido." }); return; }
+      if (app_role !== null && !["driver", "office", "master"].includes(app_role)) {
+        res.status(400).json({ error: "Rol de la app inválido." }); return;
+      }
 
       const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
         redirectTo: APP_URL ? `${APP_URL}/?invited=1` : undefined,
@@ -138,6 +142,8 @@ export default async function handler(req, res) {
       // The on_auth_user_created trigger creates the base row; set role + perms.
       const { error: pErr } = await admin.from("profiles").upsert({
         id: data.user.id, email, full_name, role, permissions, active: true,
+        app_role: app_role || null,
+        driver_id: driver_id === "" || driver_id == null ? null : Number(driver_id),
       });
       if (pErr) throw pErr;
       res.status(200).json({ ok: true, user: { id: data.user.id, email } });
@@ -145,10 +151,16 @@ export default async function handler(req, res) {
     }
 
     if (action === "update") {
-      const { id, role, permissions, active, full_name } = payload || {};
+      const { id, role, permissions, active, full_name, app_role, driver_id } = payload || {};
       if (!id) { res.status(400).json({ error: "Falta el id." }); return; }
       if (role !== undefined && role !== "admin" && role !== "member") {
         res.status(400).json({ error: "Rol inválido." }); return;
+      }
+      // Rol en la app mobile (NBM Driver App). null = lo deduce el servidor
+      // a partir de los permisos del CRM.
+      if (app_role !== undefined && app_role !== null
+          && !["driver", "office", "master"].includes(app_role)) {
+        res.status(400).json({ error: "Rol de la app inválido." }); return;
       }
       // Guard: an admin cannot strip their own admin role / deactivate themselves
       // (prevents locking everyone out by mistake).
@@ -161,6 +173,8 @@ export default async function handler(req, res) {
       if (permissions !== undefined) patch.permissions = permissions;
       if (active !== undefined) patch.active = active;
       if (full_name !== undefined) patch.full_name = full_name;
+      if (app_role !== undefined) patch.app_role = app_role || null;
+      if (driver_id !== undefined) patch.driver_id = driver_id === "" || driver_id == null ? null : Number(driver_id);
       const { error } = await admin.from("profiles").update(patch).eq("id", id);
       if (error) throw error;
       res.status(200).json({ ok: true });
