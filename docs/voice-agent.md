@@ -98,9 +98,23 @@ Variables de entorno en Vercel (todas opcionales salvo la primera):
 | `VOICE_MODEL` | `gpt-realtime` | Modelo de voz a voz. |
 | `VOICE_VOICE` | `marin` | Voz: `marin`, `cedar`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. |
 | `VOICE_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Solo llena la transcripción en pantalla; no frena la respuesta hablada. |
+| `VOICE_TRANSCRIBE_LANGUAGE` | (vacío) | Vacío = detección automática, que es lo que querés con un equipo bilingüe. Un código ISO (`es` / `en`) lo fija. |
 | `VOICE_SPEED` | `1.05` | Velocidad al hablar (0.25–1.5). |
 | `VOICE_SCHEMA_BUDGET` | `7000` | Caracteres de esquema que entran en las instrucciones. |
 | `AGENT_WRITES_ENABLED` | `true` | En `false` la voz queda en solo lectura, igual que el resto de los canales. |
+
+### Parámetros que un modelo no acepta
+
+Qué knobs acepta cada modelo de voz varía, y la API contesta con un 400 que
+nombra el path exacto (`session.audio.input.transcription.languages`). Como son
+todos de afinado, `mintVoiceSession` **saca el parámetro rechazado y reintenta**
+en vez de dejarte sin sesión: perdés un poco de pulido, no la feature. Lo que se
+quitó viaja en el campo `dropped` de la respuesta del token (visible en la
+pestaña Network) y queda en los logs de Vercel.
+
+Lo único que nunca se saca es lo que hace que el agente sea el agente:
+`instructions`, `tools`, `tool_choice`, `model` y `type`. Si el modelo rechaza
+alguno de esos, la sesión falla — como corresponde.
 
 No hace falta ninguna función nueva en Vercel: las dos acciones (`voice_token` y
 `voice_tool`) viven dentro de `api/agent-hub.mjs`, que ya existía.
