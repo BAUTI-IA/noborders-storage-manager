@@ -27,6 +27,7 @@
 //   · every leg is measured and shown in the panel — reply, tool, connect.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getI18nLang, tr } from "./i18n.js";
+import { idleState, IDLE_HANGUP_MS } from "./voiceData.js";
 
 const SAMPLE_RATE = 24000;          // the only PCM rate the realtime API accepts
 const JITTER_S = 0.06;              // playback lead so a late chunk doesn't click
@@ -244,11 +245,14 @@ export function useVoiceAgent({ session, transport = "webrtc", langLock = "auto"
   const [activity, setActivity] = useState([]); // { id, kind, text, rows, ms, pending }
   const [pending, setPending] = useState(null); // staged plan awaiting confirmation
   const [muted, setMuted] = useState(false);
+  const [notice, setNotice] = useState("");      // why the session ended, when it wasn't the user
+  const [idleSecs, setIdleSecs] = useState(null); // countdown, only inside the warning window
   const [metrics, setMetrics] = useState({ connectMs: null, replyMs: null, replyMedian: null, toolMs: null });
 
   const conn = useRef(null);
   const turn = useRef({ spokeAt: 0, awaitingAudio: false, replies: [], openCalls: 0, responseActive: false, wantResponse: false });
   const alive = useRef(true);
+  const lastActive = useRef(0);
   const injected = useRef(new Set()); // texts we pushed ourselves, hidden from the transcript
 
   useEffect(() => {
@@ -328,8 +332,20 @@ export function useVoiceAgent({ session, transport = "webrtc", langLock = "auto"
     requestResponse();
   }, [post, requestResponse]);
 
+  const touch = useCallback(() => {
+    lastActive.current = now();
+    setIdleSecs((v) => (v === null ? v : null));
+  }, []);
+
   const onServerEvent = useCallback((ev) => {
     const t = turn.current;
+    // Someone talking, the agent answering, or a tool running all mean the
+    // session is in use. Silence between them is what we're timing.
+    if (ev.type === "input_audio_buffer.speech_started" || ev.type === "input_audio_buffer.speech_stopped" ||
+        ev.type === "response.created" || ev.type === "response.done" ||
+        ev.type === "response.function_call_arguments.done" || ev.type === "output_audio_buffer.started") {
+      touch();
+    }
     switch (ev.type) {
       case "session.created":
         setStatus("listening");
@@ -424,7 +440,7 @@ export function useVoiceAgent({ session, transport = "webrtc", langLock = "auto"
       default:
         break;
     }
-  }, [upsertLine, relayTool]);
+  }, [upsertLine, relayTool, touch]);
 
   const disconnect = useCallback(() => {
     conn.current?.close();
@@ -437,6 +453,9 @@ export function useVoiceAgent({ session, transport = "webrtc", langLock = "auto"
   const connect = useCallback(async () => {
     if (conn.current) return;
     setError("");
+    setNotice("");
+    setIdleSecs(null);
+    lastActive.current = now();
     setStatus("connecting");
     const started = now();
     try {
@@ -460,6 +479,27 @@ export function useVoiceAgent({ session, transport = "webrtc", langLock = "auto"
         : (e?.message || tr("Could not start the voice session.", "No pude iniciar la sesión de voz.")));
     }
   }, [post, transport, langLock, onServerEvent, muted]);
+
+  useEffect(() => {
+    if (status === "idle" || status === "error") return undefined;
+    const id = setInterval(() => {
+      const t = turn.current;
+      const { hangUp, warnSeconds } = idleState(now() - lastActive.current, {
+        busy: t.openCalls > 0 || t.responseActive,
+      });
+      if (hangUp) {
+        disconnect();
+        const mins = Math.round(IDLE_HANGUP_MS / 60000);
+        setNotice(tr(
+          `Hung up after ${mins} min with nothing said. The mic keeps streaming while the panel is connected, so an idle session still costs money.`,
+          `Colgué después de ${mins} min sin que nadie hablara. Mientras el panel está conectado el micrófono sigue transmitiendo, así que una sesión ociosa igual gasta.`,
+        ));
+      } else {
+        setIdleSecs(warnSeconds);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [status, disconnect]);
 
   const steerLanguage = useCallback((lock) => {
     if (!conn.current) return;
@@ -501,7 +541,7 @@ export function useVoiceAgent({ session, transport = "webrtc", langLock = "auto"
     }
   }, [post, requestResponse]);
 
-  return { status, error, lines, activity, pending, metrics, muted, connect, disconnect, toggleMute, decide, steerLanguage };
+  return { status, error, notice, idleSecs, lines, activity, pending, metrics, muted, connect, disconnect, toggleMute, decide, steerLanguage };
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────
@@ -617,6 +657,7 @@ export function VoiceAgentPanel({ session }) {
             </div>
           </div>
         )}
+        {v.notice && <div style={{ ...S.chip, whiteSpace: "normal", lineHeight: 1.4 }}>💤 {v.notice}</div>}
         {v.error && <div style={{ ...S.chip, background: "#FDE7E7", borderColor: "#f2c2c2", color: "#a32020", whiteSpace: "normal" }}>⚠️ {v.error}</div>}
       </div>
 
@@ -631,7 +672,9 @@ export function VoiceAgentPanel({ session }) {
         <button onClick={v.toggleMute} disabled={!live} style={{ ...S.ghost, opacity: live ? 1 : .5 }} title="Mute the agent">
           {v.muted ? "🔇" : "🔊"}
         </button>
-        <span style={{ fontSize: 11, color: "#7a8aa0", flex: 1, minWidth: 150, lineHeight: 1.35 }}>{hint}</span>
+        <span style={{ fontSize: 11, flex: 1, minWidth: 150, lineHeight: 1.35, color: v.idleSecs == null ? "#7a8aa0" : "#a35a20", fontWeight: v.idleSecs == null ? 400 : 600 }}>
+          {v.idleSecs == null ? hint : tr(`Nobody's talking — hanging up in ${v.idleSecs}s`, `Nadie habla — cuelgo en ${v.idleSecs}s`)}
+        </span>
       </div>
     </div>
   );

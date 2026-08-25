@@ -131,6 +131,22 @@ respuesta. Lo que hacemos para achicarlo:
   `reply` (fin de tu frase → primera palabra suya), `p50` (mediana de la
   sesión), `tool` (última llamada al CRM).
 
+## Corte por inactividad
+
+Mientras el panel está conectado el micrófono **sigue transmitiendo, hable
+alguien o no**, y el silencio se factura como cualquier otro audio. Un panel
+abierto y olvidado gasta hasta que alguien se avive. Que el `client_secret`
+venza a los 10 minutos no lo corta: eso solo impide abrir sesiones nuevas, la
+que ya está abierta sigue.
+
+Así que a los **2 minutos sin que nadie hable** corta sola y lo dice en el
+panel. Los últimos 20 segundos aparece una cuenta regresiva abajo, y cualquier
+cosa que alguien diga la resetea. Nunca corta con una consulta o una respuesta
+en vuelo: ahí la persona está esperando, no ociosa.
+
+La decisión vive en `src/voiceData.js` (`idleState`), separada del JSX para
+poder testearla; los tiempos son `IDLE_HANGUP_MS` y `IDLE_WARN_MS`.
+
 ## Los dos transportes
 
 El selector del panel cambia el transporte sin tocar nada más — el protocolo de
@@ -189,6 +205,7 @@ npm run i18n:check              # el panel es UI: tiene que pasar
 
 - `lib/voice.mjs` — instrucciones, catálogo de herramientas, emisión del
   `client_secret` y ejecución de cada llamada con los permisos del usuario.
+- `src/voiceData.js` — la lógica pura del corte por inactividad.
 - `src/voiceAgent.jsx` — los dos transportes, el audio, el manejo de eventos, las
   métricas y el panel. El orden de los globos sale de `conversation.item.added`
   / `.created` (que llegan en el orden real de la conversación y traen
