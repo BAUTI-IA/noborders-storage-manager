@@ -6,7 +6,8 @@
 //
 //   node scripts/test-voice.mjs
 import {
-  buildVoiceInstructions, buildVoiceSession, runVoiceTool, voiceSchema, voiceTools, VOICE_TOOL_NAMES,
+  buildVoiceInstructions, buildVoiceSession, dropSessionParam, runVoiceTool, voiceSchema, voiceTools,
+  VOICE_TOOL_NAMES,
 } from "../lib/voice.mjs";
 
 let failed = 0;
@@ -76,8 +77,10 @@ eq("todas las herramientas tienen forma de función realtime", badTools, []);
   eq("interrumpir al agente está habilitado", rtc.audio.input.turn_detection.interrupt_response, true);
   eq("el servidor crea la respuesta al terminar el turno", rtc.audio.input.turn_detection.create_response, true);
   eq("detección de turno semántica", rtc.audio.input.turn_detection.type, "semantic_vad");
-  // The team switches between Spanish and English mid-sentence.
-  eq("transcribe en los dos idiomas", rtc.audio.input.transcription.languages, ["es", "en"]);
+  // The team switches between Spanish and English mid-sentence, so the language
+  // is auto-detected. Pinning one is opt-in through VOICE_TRANSCRIBE_LANGUAGE.
+  eq("no fuerza un idioma de transcripción",
+    "language" in rtc.audio.input.transcription || "languages" in rtc.audio.input.transcription, false);
   eq("responde con audio", rtc.output_modalities, ["audio"]);
 
   const ro = await buildVoiceSession({ actor: { profile: viewer }, canWrite: false, transport: "webrtc" });
@@ -98,6 +101,33 @@ eq("todas las herramientas tienen forma de función realtime", badTools, []);
   eq("exige confirmación hablada antes de escribir", write.includes("crm_confirm ONLY after"), true);
   eq("pide un relleno hablado antes de cada herramienta", write.toLowerCase().includes("filler"), true);
   eq("sin base de datos igual arma instrucciones", write.length > 1500, true);
+}
+
+// ── Degrading on a knob the model doesn't take ───────────────────────────────
+// Which parameters a realtime model accepts varies by model, and the API says
+// so with a 400 naming the path. Tuning knobs get dropped and the mint retried;
+// anything the agent can't work without does not.
+{
+  const session = () => ({
+    type: "realtime",
+    model: "gpt-realtime",
+    instructions: "…",
+    tools: [{ name: "crm_lookup" }],
+    audio: { input: { transcription: { model: "m", languages: ["es", "en"] }, noise_reduction: { type: "near_field" } } },
+  });
+
+  const s1 = session();
+  eq("quita el parámetro que el modelo rechazó",
+    dropSessionParam(s1, "session.audio.input.transcription.languages"), "session.audio.input.transcription.languages");
+  eq("y lo deja fuera del payload", "languages" in s1.audio.input.transcription, false);
+  eq("sin tocar lo que estaba al lado", s1.audio.input.transcription.model, "m");
+
+  eq("no borra las instrucciones", dropSessionParam(session(), "session.instructions"), null);
+  eq("no borra las herramientas", dropSessionParam(session(), "session.tools"), null);
+  eq("no borra el modelo", dropSessionParam(session(), "session.model"), null);
+  eq("ignora un path que no existe", dropSessionParam(session(), "session.audio.output.voice"), null);
+  eq("ignora un path que no es de session", dropSessionParam(session(), "expires_after.seconds"), null);
+  eq("ignora un param vacío", dropSessionParam(session(), undefined), null);
 }
 
 // ── The gate ─────────────────────────────────────────────────────────────────
