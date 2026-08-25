@@ -4,10 +4,14 @@
 //   GET  → daily ops brief (Vercel Cron / manual). Auth: Bearer CRON_SECRET or
 //          ?secret=; ?dry=1 returns JSON without sending. Posts to the team's
 //          Telegram group (TELEGRAM_BRIEF_CHAT_ID).
-//   POST → in-app chat for the CRM widget (src/agentChat.jsx). Auth: the
-//          caller's Supabase JWT, verified server-side (admin-users pattern).
-import { admin, handleIncoming } from "../lib/agent.mjs";
+//   POST → in-app chat for the CRM widget (src/agentChat.jsx) and the real-time
+//          voice agent (src/voiceAgent.jsx), which uses the `voice_token` and
+//          `voice_tool` actions. Auth: the caller's Supabase JWT, verified
+//          server-side (admin-users pattern).
+import { admin, handleIncoming, warmCaches } from "../lib/agent.mjs";
+import { writesEnabled } from "../lib/agentWrite.mjs";
 import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from "../lib/brief.mjs";
+import { mintVoiceSession, runVoiceTool, VOICE_TOOL_NAMES } from "../lib/voice.mjs";
 
 export const maxDuration = 300;
 
@@ -69,6 +73,43 @@ async function appChat(req, res) {
     return;
   }
 
+  // The voice agent talks to the same brain through its own conversation key:
+  // a plan staged in the chat widget must never be executable by a spoken
+  // "yes", and vice versa.
+  const actor = { profile, userEmail: user.email || profile?.email || null };
+  const identity = (user.email || user.id).toLowerCase();
+
+  // Mint a short-lived client secret so the browser can open the realtime
+  // socket itself. Our OpenAI key stays here; the session config (instructions,
+  // tools, voice, turn detection) is fixed at mint time and the caller's CRM
+  // role decides whether the write tools are even offered.
+  if (req.body?.action === "voice_token") {
+    warmCaches(); // the schema/directory round trips overlap with minting
+    try {
+      const out = await mintVoiceSession({
+        actor,
+        canWrite: !!profile && writesEnabled(),
+        transport: req.body?.transport,
+      });
+      res.status(200).json(out);
+    } catch (e) {
+      console.error("voice-token:", e);
+      res.status(500).json({ error: e?.message || "no pude abrir la sesión de voz" });
+    }
+    return;
+  }
+
+  // One function call from the voice model, relayed by the browser. The browser
+  // is only a pipe: permissions are checked here against this JWT's profile.
+  if (req.body?.action === "voice_tool") {
+    const tool = String(req.body?.tool || "");
+    if (!VOICE_TOOL_NAMES.has(tool)) { res.status(400).json({ error: `herramienta desconocida: ${tool || "?"}` }); return; }
+    const input = req.body?.input && typeof req.body.input === "object" && !Array.isArray(req.body.input) ? req.body.input : {};
+    const out = await runVoiceTool({ name: tool, input, convoKey: `voice:${identity}`, actor });
+    res.status(200).json(out);
+    return;
+  }
+
   const message = String(req.body?.message || "").trim();
   const rawAttach = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
   if (!message && !rawAttach.length) { res.status(400).json({ error: "mensaje vacío" }); return; }
@@ -83,8 +124,7 @@ async function appChat(req, res) {
     attachments.push({ media_type, data });
   }
 
-  const convoKey = `app:${(user.email || user.id).toLowerCase()}`;
-  const actor = { profile, userEmail: user.email || profile?.email || null };
+  const convoKey = `app:${identity}`;
 
   // Streaming (the CRM widget): the answer is pushed as it's written, so the
   // user reads the first line in a second or two instead of waiting for the

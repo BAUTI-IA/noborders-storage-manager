@@ -1,0 +1,126 @@
+# Agente de voz en tiempo real
+
+El mismo agente del CRM, pero hablado. Abrís el chat flotante, tocás la pestaña
+**🎙️ Voice**, apretás el micrófono y hablás normal: el audio va directo a un
+modelo de voz a voz por un socket de baja latencia y te contesta en voz. Sirve
+manejando, cargando un camión o caminando por el depósito — sin manos.
+
+- **Consultar**: "¿Qué entregas hay esta semana?", "¿Cuánto debe todavía el job
+  1201?", "¿Cuántas unidades libres quedan en Miami?"
+- **Cargar / modificar**: "El camión 3 está saliendo de Ocala", "Imputale mil
+  ochocientos en Zelle al job 1201", "Armá un trip con los jobs 1201 y 1198".
+- **Interrumpirlo**: si se está yendo por las ramas, hablale encima y corta.
+
+Antes de escribir cualquier cosa te lee el plan y espera un **"sí"** hablado (o
+el botón **Confirm** del panel). Es la misma regla que por chat, WhatsApp y
+Telegram, con la misma auditoría en **Trash / History**.
+
+## Cómo funciona
+
+```
+navegador ──(WebRTC o WebSocket: audio en los dos sentidos)──► modelo de voz
+    │                                                              │
+    │   function call: crm_lookup / crm_ask / crm_plan / …  ◄───────┘
+    ▼
+POST /api/agent-hub {action:"voice_tool"} ──► lib/voice.mjs ──► lib/agent.mjs
+```
+
+El modelo de voz **no tiene acceso al CRM**. Pone la conversación: escucha,
+decide cuándo terminó tu turno, habla. Todo lo que toca datos vuelve como una
+llamada a función que el navegador reenvía a `/api/agent-hub`, donde se
+resuelve con **tu** JWT de Supabase y **tus** permisos del CRM (`lib/acl.mjs`).
+El navegador es un caño: aunque alguien lo modifique, no puede ampliar lo que
+tiene permitido.
+
+La clave de OpenAI nunca sale del servidor. El navegador recibe un
+`client_secret` efímero (`ek_…`, 10 minutos) atado a una configuración de sesión
+que armamos nosotros: instrucciones, herramientas, voz y detección de turno
+quedan fijadas al emitirlo.
+
+### Herramientas que ve el modelo
+
+| Herramienta | Para qué | Costo |
+|---|---|---|
+| `crm_lookup` | Un `SELECT` de solo lectura. El camino rápido para un dato concreto. | 1 ida y vuelta |
+| `crm_ask` | Le pasa la pregunta al agente de texto (análisis multi-paso, deuda real, settlements). | lento: es otro agente entero |
+| `crm_plan` | Propone un cambio. **No escribe nada**: devuelve el plan para leerlo en voz alta. | — |
+| `crm_confirm` | Ejecuta el plan que ya leyó. Solo después de un sí explícito. | — |
+| `crm_cancel` | Descarta el plan pendiente. | — |
+
+A quien no tiene permisos de escritura en el CRM la sesión se le emite **sin**
+`crm_plan` / `crm_confirm` / `crm_cancel`: no puede pedir lo que no existe.
+
+La voz usa su propia clave de conversación (`voice:<email>`), separada de la del
+chat escrito (`app:<email>`). Un plan armado por chat nunca se ejecuta con un
+"sí" hablado, ni al revés.
+
+## Latencia
+
+Lo que se siente es el hueco entre que terminás de hablar y arranca la
+respuesta. Lo que hacemos para achicarlo:
+
+- **El token se pide al abrir el panel**, no al hablar; emitirlo además calienta
+  los caches de esquema y directorio del agente.
+- **El directorio del CRM viaja dentro de las instrucciones** (brokers, drivers,
+  trucks, trips abiertos, storages con sus ids), así que resolver "el broker
+  Full Value" cuesta cero consultas.
+- **El esquema va recortado** a un presupuesto de caracteres, tablas calientes
+  primero; las que no entran quedan nombradas para que sepa que existen.
+- **Detección de turno semántica** con `eagerness: high`: corta cuando la frase
+  cerró, no cuando hay silencio.
+- **Barge-in** (`interrupt_response`): si hablás encima, se calla.
+- **Relleno hablado antes de cada herramienta** ("Dejame ver…"): la consulta
+  corre mientras habla, así que el silencio desaparece.
+- **Se mide todo y se muestra** en la barra del panel: `conn` (abrir la sesión),
+  `reply` (fin de tu frase → primera palabra suya), `p50` (mediana de la
+  sesión), `tool` (última llamada al CRM).
+
+## Los dos transportes
+
+El selector del panel cambia el transporte sin tocar nada más — el protocolo de
+eventos es el mismo.
+
+- **WebRTC** (por defecto): el audio va en Opus sobre RTP y lo maneja el
+  navegador — jitter buffer, recuperación de paquetes perdidos y, lo que más
+  importa en manos libres, **cancelación de eco** contra lo que el agente está
+  diciendo. Los eventos viajan por un data channel.
+- **WebSocket**: PCM16 crudo en base64 en los dos sentidos, capturado con un
+  `AudioWorklet` y reproducido acá a mano. Más bajo nivel y más fácil de pasar
+  por un proxy, pero **sin cancelación de eco: usá auriculares**.
+
+## Configuración
+
+Variables de entorno en Vercel (todas opcionales salvo la primera):
+
+| Variable | Default | Qué hace |
+|---|---|---|
+| `OPENAI_API_KEY` | — | **Requerida.** La misma que ya usa la transcripción de audios. |
+| `VOICE_MODEL` | `gpt-realtime` | Modelo de voz a voz. |
+| `VOICE_VOICE` | `marin` | Voz: `marin`, `cedar`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. |
+| `VOICE_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Solo llena la transcripción en pantalla; no frena la respuesta hablada. |
+| `VOICE_SPEED` | `1.05` | Velocidad al hablar (0.25–1.5). |
+| `VOICE_SCHEMA_BUDGET` | `7000` | Caracteres de esquema que entran en las instrucciones. |
+| `AGENT_WRITES_ENABLED` | `true` | En `false` la voz queda en solo lectura, igual que el resto de los canales. |
+
+No hace falta ninguna función nueva en Vercel: las dos acciones (`voice_token` y
+`voice_tool`) viven dentro de `api/agent-hub.mjs`, que ya existía.
+
+**Requiere HTTPS** (o `localhost`): sin eso el navegador no da acceso al
+micrófono.
+
+## Probarlo
+
+```bash
+node scripts/test-voice.mjs     # sesión, herramientas y permisos — sin red ni DB
+npm run i18n:check              # el panel es UI: tiene que pasar
+```
+
+## Archivos
+
+- `lib/voice.mjs` — instrucciones, catálogo de herramientas, emisión del
+  `client_secret` y ejecución de cada llamada con los permisos del usuario.
+- `src/voiceAgent.jsx` — los dos transportes, el audio, el manejo de eventos, las
+  métricas y el panel.
+- `api/agent-hub.mjs` — acciones `voice_token` y `voice_tool`.
+- `lib/agent.mjs` — el cerebro compartido; la voz entra por `handleIncoming` con
+  `readOnly` / `decision` / `detail`.
