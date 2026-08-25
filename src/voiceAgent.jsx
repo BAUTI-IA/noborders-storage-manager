@@ -26,7 +26,7 @@
 //     the round trip behind speech;
 //   · every leg is measured and shown in the panel — reply, tool, connect.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { tr } from "./i18n.js";
+import { getI18nLang, tr } from "./i18n.js";
 
 const SAMPLE_RATE = 24000;          // the only PCM rate the realtime API accepts
 const JITTER_S = 0.06;              // playback lead so a late chunk doesn't click
@@ -267,11 +267,13 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
     });
   }, []);
 
+  // getI18nLang() is read per call, not captured: someone can switch the CRM to
+  // Spanish mid-session and the next thing the panel says comes back translated.
   const post = useCallback(async (body) => {
     const res = await fetch("/api/agent-hub", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, lang: getI18nLang() }),
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(j.error || `Error ${res.status}`);

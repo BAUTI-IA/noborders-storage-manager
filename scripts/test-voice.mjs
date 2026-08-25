@@ -6,8 +6,8 @@
 //
 //   node scripts/test-voice.mjs
 import {
-  buildVoiceInstructions, buildVoiceSession, dropSessionParam, runVoiceTool, voiceSchema, voiceTools,
-  VOICE_TOOL_NAMES,
+  buildVoiceInstructions, buildVoiceSession, dropSessionParam, runVoiceTool, voiceLang, voiceSchema,
+  voiceTools, vt, VOICE_TOOL_NAMES,
 } from "../lib/voice.mjs";
 
 let failed = 0;
@@ -101,6 +101,51 @@ eq("todas las herramientas tienen forma de función realtime", badTools, []);
   eq("exige confirmación hablada antes de escribir", write.includes("crm_confirm ONLY after"), true);
   eq("pide un relleno hablado antes de cada herramienta", write.toLowerCase().includes("filler"), true);
   eq("sin base de datos igual arma instrucciones", write.length > 1500, true);
+}
+
+// ── Bilingual ────────────────────────────────────────────────────────────────
+// The team speaks both, and mixes them. The agent mirrors whoever is talking;
+// the CRM's own setting only decides the greeting (nobody has spoken yet) and
+// the language of the panel's errors.
+eq("es-AR es español", voiceLang("es-AR"), "es");
+eq("es es español", voiceLang("es"), "es");
+eq("en es inglés", voiceLang("en"), "en");
+// src/i18n.js arranca en inglés, así que un idioma sin definir cae ahí.
+eq("sin idioma cae en inglés", voiceLang(undefined), "en");
+eq("basura cae en inglés", voiceLang("klingon"), "en");
+
+eq("los errores del panel salen en español", vt("es").noKey.includes("Falta"), true);
+eq("y en inglés", vt("en").noKey.includes("missing"), true);
+eq("el idioma cambia la copia", vt("es").readOnly === vt("en").readOnly, false);
+
+{
+  const es = await buildVoiceInstructions({ actor: { profile: admin }, canWrite: true, lang: "es" });
+  const en = await buildVoiceInstructions({ actor: { profile: admin }, canWrite: true, lang: "en" });
+
+  eq("saluda en español cuando el CRM está en español", es.includes("greeting in Argentine Spanish"), true);
+  eq("saluda en inglés cuando el CRM está en inglés", en.includes("greeting in English"), true);
+  // El saludo es lo único que fija el idioma: después sigue al que habla.
+  for (const [name, text] of [["es", es], ["en", en]]) {
+    eq(`${name}: sigue el idioma del que habla`, text.includes("switch the moment they switch"), true);
+    eq(`${name}: nunca pregunta qué idioma`, text.includes("Never ask which language"), true);
+    // Convención del CRM (CLAUDE.md): en español los términos del negocio
+    // quedan en inglés, porque así habla el equipo.
+    eq(`${name}: mantiene el vocabulario del CRM en inglés`, text.includes("Keep the CRM's vocabulary in English"), true);
+  }
+}
+
+{
+  // Sin perfil no hay escritura posible, que es el camino que devuelve DENIED.
+  // (Un viewer CON perfil sí llega a proponer: lo frena validatePlan por tabla.)
+  const anon = { profile: null, userEmail: null };
+  const call = (lang) => runVoiceTool({ name: "crm_plan", input: { request: "x" }, convoKey: "voice:test", actor: anon, lang });
+  const [es, en] = [await call("es"), await call("en")];
+  // El modelo siempre lee inglés — es una directiva de prompt, no copia de UI —
+  // y lo dice en el idioma de quien habla.
+  eq("la directiva al modelo va siempre en inglés", es.output, en.output);
+  eq("pero el panel la muestra traducida", es.ui.text === en.ui.text, false);
+  eq("y en español dice solo lectura", es.ui.text.includes("solo lectura"), true);
+  eq("y en inglés read-only", en.ui.text.includes("read-only"), true);
 }
 
 // ── Degrading on a knob the model doesn't take ───────────────────────────────

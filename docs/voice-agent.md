@@ -15,6 +15,36 @@ Antes de escribir cualquier cosa te lee el plan y espera un **"sí"** hablado (o
 el botón **Confirm** del panel). Es la misma regla que por chat, WhatsApp y
 Telegram, con la misma auditoría en **Trash / History**.
 
+## Bilingüe
+
+Español e inglés son los dos de primera clase, y el agente sigue al que habla —
+si arrancás en español y metés una frase en inglés, cambia ahí mismo. Nunca
+pregunta en qué idioma querés hablar.
+
+Tres piezas hacen que funcione:
+
+- **La transcripción autodetecta.** No hay idioma fijado (por eso se sacó
+  `languages`), así que una frase mezclada se transcribe como se dijo. Si algún
+  acento le cuesta, `VOICE_TRANSCRIBE_LANGUAGE` lo pinea.
+- **El saludo sale en el idioma del CRM.** Es el único momento sin señal:
+  todavía nadie habló. El panel manda el idioma que tenés elegido en Settings
+  con cada pedido, y de ahí en adelante manda lo que decís vos.
+- **El vocabulario del negocio queda en inglés**, aunque hable en español —
+  job, broker, trip, storage, warehouse, live load, BOL, CF, closing sheet,
+  settlement, pads. Es la misma convención que el resto del CRM (CLAUDE.md):
+  traducir "job" a "trabajo" en voz alta suena mal y nadie habla así.
+
+El panel en sí (botones, estados, métricas, mensajes de error) se traduce con el
+sistema de siempre — `I18N_ES` y `tr()`. Lo que lee el **modelo** queda siempre
+en inglés: son directivas de prompt, no copy de interfaz, y el modelo las dice
+en el idioma de quien está hablando.
+
+Una excepción conocida: los mensajes de permiso denegado vienen de
+`lib/agentWrite.mjs` y `lib/acl.mjs`, que están en castellano y los comparten
+todos los canales (chat, Telegram, WhatsApp). Al modelo no le molesta — los lee
+y los dice en inglés — pero el chip rojo del panel los muestra tal cual.
+Traducirlos es un cambio aparte, que toca al agente de texto también.
+
 ## Cómo funciona
 
 ```

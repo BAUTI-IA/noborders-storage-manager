@@ -11,7 +11,7 @@
 import { admin, handleIncoming, warmCaches } from "../lib/agent.mjs";
 import { writesEnabled } from "../lib/agentWrite.mjs";
 import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from "../lib/brief.mjs";
-import { mintVoiceSession, runVoiceTool, VOICE_TOOL_NAMES } from "../lib/voice.mjs";
+import { mintVoiceSession, runVoiceTool, vt, VOICE_TOOL_NAMES } from "../lib/voice.mjs";
 
 export const maxDuration = 300;
 
@@ -83,6 +83,11 @@ async function appChat(req, res) {
   // socket itself. Our OpenAI key stays here; the session config (instructions,
   // tools, voice, turn detection) is fixed at mint time and the caller's CRM
   // role decides whether the write tools are even offered.
+  // The CRM's display language rides along: it is the only clue available for
+  // the greeting, before anyone has spoken a word, and it decides which
+  // language the panel's own errors come back in.
+  const lang = req.body?.lang;
+
   if (req.body?.action === "voice_token") {
     warmCaches(); // the schema/directory round trips overlap with minting
     try {
@@ -90,11 +95,12 @@ async function appChat(req, res) {
         actor,
         canWrite: !!profile && writesEnabled(),
         transport: req.body?.transport,
+        lang,
       });
       res.status(200).json(out);
     } catch (e) {
       console.error("voice-token:", e);
-      res.status(500).json({ error: e?.message || "no pude abrir la sesión de voz" });
+      res.status(500).json({ error: e?.message || vt(lang).openFailed });
     }
     return;
   }
@@ -103,9 +109,9 @@ async function appChat(req, res) {
   // is only a pipe: permissions are checked here against this JWT's profile.
   if (req.body?.action === "voice_tool") {
     const tool = String(req.body?.tool || "");
-    if (!VOICE_TOOL_NAMES.has(tool)) { res.status(400).json({ error: `herramienta desconocida: ${tool || "?"}` }); return; }
+    if (!VOICE_TOOL_NAMES.has(tool)) { res.status(400).json({ error: vt(lang).unknownTool(tool || "?") }); return; }
     const input = req.body?.input && typeof req.body.input === "object" && !Array.isArray(req.body.input) ? req.body.input : {};
-    const out = await runVoiceTool({ name: tool, input, convoKey: `voice:${identity}`, actor });
+    const out = await runVoiceTool({ name: tool, input, convoKey: `voice:${identity}`, actor, lang });
     res.status(200).json(out);
     return;
   }
