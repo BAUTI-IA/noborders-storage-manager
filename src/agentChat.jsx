@@ -1,7 +1,12 @@
 // Floating in-app chat with the CRM agent (same brain as Telegram/WhatsApp:
 // create/update jobs with confirmation, ask anything about CRM data). Talks to
 // /api/agent-chat authenticated with the user's Supabase session token.
+//
+// The same panel has a Voice tab: the real-time agent in src/voiceAgent.jsx,
+// which speaks over a live socket and reaches the CRM through the same brain
+// and the same confirm-before-write rule.
 import React, { useEffect, useRef, useState } from "react";
+import { VoiceAgentPanel } from "./voiceAgent.jsx";
 
 const S = {
   fab: { position: "fixed", right: 22, bottom: 22, zIndex: 4000, width: 56, height: 56, borderRadius: "50%", border: "none", background: "#185FA5", color: "#fff", fontSize: 26, cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.25)" },
@@ -15,6 +20,17 @@ const S = {
   send: { border: "none", background: "#185FA5", color: "#fff", borderRadius: 9, padding: "0 16px", fontSize: 15, cursor: "pointer" },
 };
 
+const tabStyle = (active) => ({
+  background: active ? "rgba(255,255,255,.22)" : "none",
+  border: "none",
+  color: "#fff",
+  fontSize: 12.5,
+  fontWeight: 600,
+  borderRadius: 7,
+  padding: "4px 9px",
+  cursor: "pointer",
+});
+
 const WELCOME = "¡Hola! Soy el agente del CRM 🚚 Puedo cargar/actualizar jobs (con tu confirmación) y responder cualquier consulta: \"¿qué entregas hay esta semana?\", \"¿cuánto hay por cobrar?\"...\n\nI also speak English — just write to me in either language.";
 
 const MAX_FILE_BYTES = 3 * 1024 * 1024; // must fit Vercel's 4.5MB body cap after base64
@@ -22,6 +38,7 @@ const ACCEPTED = ["image/jpeg", "image/png", "image/webp", "image/gif", "applica
 
 export function AgentChatWidget({ session }) {
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState("chat"); // "chat" | "voice"
   const [msgs, setMsgs] = useState([{ role: "bot", text: WELCOME }]);
   const [input, setInput] = useState("");
   const [files, setFiles] = useState([]); // { name, media_type, data(base64) }
@@ -146,12 +163,16 @@ export function AgentChatWidget({ session }) {
       {open && (
         <div style={S.panel}>
           <div style={S.head}>
-            <span>🤖 CRM Agent</span>
+            <span style={{ display: "flex", gap: 4 }}>
+              <button onClick={() => setMode("chat")} title="Type to the agent" style={tabStyle(mode === "chat")}>💬 Chat</button>
+              <button onClick={() => setMode("voice")} title="Talk to the agent" style={tabStyle(mode === "voice")}>🎙️ Voice</button>
+            </span>
             <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button onClick={linkTelegram} title="Link Telegram" style={{ background: "none", border: "1px solid rgba(255,255,255,.4)", color: "#fff", fontSize: 11, borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Link Telegram</button>
+              {mode === "chat" && <button onClick={linkTelegram} title="Link Telegram" style={{ background: "none", border: "1px solid rgba(255,255,255,.4)", color: "#fff", fontSize: 11, borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Link Telegram</button>}
               <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
             </span>
           </div>
+          {mode === "voice" ? <VoiceAgentPanel session={session} /> : (<>
           <div ref={bodyRef} style={S.body}>
             {msgs.map((m, i) => (
               <div key={i} style={m.role === "user" ? S.rowUser : S.rowBot}>
@@ -186,6 +207,7 @@ export function AgentChatWidget({ session }) {
             />
             <button onClick={send} disabled={busy || (!input.trim() && !files.length)} style={{ ...S.send, opacity: busy || (!input.trim() && !files.length) ? 0.5 : 1 }}>➤</button>
           </div>
+          </>)}
         </div>
       )}
       <button title="CRM Agent" onClick={() => setOpen((o) => !o)} style={S.fab}>{open ? "×" : "🤖"}</button>

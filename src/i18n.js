@@ -101,7 +101,15 @@ export const I18N_ES = {
   "Extra CF": "CF extra",
   "Driver %": "% driver",
   "Driver comm.": "Comisión driver",
+  "Hang up": "Cortar",
   "Month this extra is reported and paid in": "Mes en el que se reporta y se paga este extra",
+  "Mute the agent": "Silenciar al agente",
+  "Start talking": "Empezar a hablar",
+  "Talk to the agent": "Hablale al agente",
+  "Talk to the CRM. Ask what's being delivered this week, how much a job still owes, or tell it what happened and it will propose the change before writing anything.": "Hablá con el CRM. Preguntale qué se entrega esta semana, cuánto debe todavía un job, o contale qué pasó y te propone el cambio antes de escribir nada.",
+  "Transport": "Transporte",
+  "Type to the agent": "Escribile al agente",
+  "Waiting for your confirmation": "Esperando que confirmes",
   "🤖 CRM Agent": "🤖 Agente CRM",
   "CRM Agent": "Agente CRM",
   "Link Telegram": "Vincular Telegram",
@@ -1741,6 +1749,8 @@ export const I18N_ES = {
   "Your account doesn't have access yet. Contact an administrator.": "Tu cuenta todavía no tiene acceso. Contactá a un administrador.",
   "Your name": "Tu nombre",
   "Zelle from John Smith / E-ZPass payment…": "Zelle de John Smith / Pago e-zpass…",
+  "💬 Chat": "💬 Chat",
+  "🎙️ Voice": "🎙️ Voz",
 };
 const i18nCache = new WeakMap();   // text node -> original English value
 export function i18nApply() {
