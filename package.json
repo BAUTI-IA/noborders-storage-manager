@@ -9,7 +9,8 @@
     "guide:update": "node scripts/update-guide.mjs",
     "guide:pdf": "node scripts/render-guide-pdf.mjs",
     "test:jobcalc": "node scripts/test-jobcalc-data.mjs",
-    "test:voice": "node scripts/test-voice.mjs"
+    "test:voice": "node scripts/test-voice.mjs",
+    "test:voice-layout": "node scripts/test-voice-layout.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

@@ -492,15 +492,15 @@ export function useVoiceAgent({ session, transport = "webrtc" }) {
 
 // ── UI ───────────────────────────────────────────────────────────────────────
 const S = {
-  wrap: { display: "flex", flexDirection: "column", height: "100%", background: "#F6F9FC" },
-  bar: { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid #e7edf4", background: "#fff", flexWrap: "wrap" },
+  wrap: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "#F6F9FC" },
+  bar: { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid #e7edf4", background: "#fff", flexWrap: "wrap", flexShrink: 0 },
   pill: { fontSize: 11, fontWeight: 600, borderRadius: 20, padding: "3px 10px", textTransform: "uppercase", letterSpacing: .4 },
-  body: { flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 8 },
-  user: { alignSelf: "flex-end", maxWidth: "88%", background: "#185FA5", color: "#fff", borderRadius: "14px 14px 3px 14px", padding: "7px 11px", fontSize: 13.5, whiteSpace: "pre-wrap" },
-  agent: { alignSelf: "flex-start", maxWidth: "88%", background: "#fff", border: "1px solid #e3eaf2", borderRadius: "14px 14px 14px 3px", padding: "7px 11px", fontSize: 13.5, whiteSpace: "pre-wrap" },
+  body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 8 },
+  user: { alignSelf: "flex-end", maxWidth: "88%", background: "#185FA5", color: "#fff", borderRadius: "14px 14px 3px 14px", padding: "7px 11px", fontSize: 13.5, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  agent: { alignSelf: "flex-start", maxWidth: "88%", background: "#fff", border: "1px solid #e3eaf2", borderRadius: "14px 14px 14px 3px", padding: "7px 11px", fontSize: 13.5, whiteSpace: "pre-wrap", wordBreak: "break-word" },
   chip: { alignSelf: "center", fontSize: 11, color: "#5c6f85", background: "#EDF3FA", border: "1px solid #d9e4f0", borderRadius: 12, padding: "3px 9px", maxWidth: "92%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   plan: { background: "#FFF8E6", border: "1px solid #F0D69B", borderRadius: 10, padding: "10px 12px", fontSize: 13, whiteSpace: "pre-wrap" },
-  foot: { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderTop: "1px solid #e7edf4", background: "#fff", flexWrap: "wrap" },
+  foot: { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderTop: "1px solid #e7edf4", background: "#fff", flexWrap: "wrap", flexShrink: 0 },
   mic: { width: 46, height: 46, borderRadius: "50%", border: "none", color: "#fff", fontSize: 19, cursor: "pointer", flexShrink: 0 },
   ghost: { background: "none", border: "1px solid #cfdae7", borderRadius: 8, padding: "5px 10px", fontSize: 12, cursor: "pointer", color: "#33475e" },
   metric: { fontSize: 11, color: "#7a8aa0", display: "flex", gap: 10, flexWrap: "wrap" },
