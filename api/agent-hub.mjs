@@ -7,7 +7,9 @@
 //   POST → in-app chat for the CRM widget (src/agentChat.jsx) and the real-time
 //          voice agent (src/voiceAgent.jsx), which uses the `voice_token` and
 //          `voice_tool` actions. Auth: the caller's Supabase JWT, verified
-//          server-side (admin-users pattern).
+//          server-side (admin-users pattern) — or, for the ElevenLabs agent,
+//          the `x-agent-secret` shared secret (see serverToServerAuth).
+import { createHash, timingSafeEqual } from "node:crypto";
 import { admin, handleIncoming, warmCaches } from "../lib/agent.mjs";
 import { writesEnabled } from "../lib/agentWrite.mjs";
 import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from "../lib/brief.mjs";
@@ -50,20 +52,79 @@ async function dailyBrief(req, res) {
   }
 }
 
+// ── Server-to-server auth (the ElevenLabs agent) ─────────────────────────────
+// The ElevenLabs agent runs its tools from ElevenLabs' own servers: there is no
+// browser in the loop, so there is no Supabase JWT to send. Those calls
+// authenticate with a shared secret in `x-agent-secret` instead.
+//
+// The secret authenticates the CALLER; it does not hand out authority. The
+// request still runs AS a real CRM user (VOICE_AGENT_ACTOR_EMAIL), so
+// lib/acl.mjs gates every read and every write exactly as it would for that
+// person inside the app, and action_log records a real name that a human can
+// undo from Trash/History. Skipping the user lookup instead would be far worse
+// than it looks: checkSqlAccess() only enforces per-table read permission when
+// it HAS a profile (lib/agentWrite.mjs), so a profile-less caller can read the
+// whole CRM — every job, balance, payment and bank transaction.
+//
+// There is deliberately no default secret: a secret with a fallback baked into
+// the repo is not a secret. Missing or half-set config fails closed.
+const S2S_HEADER = "x-agent-secret";
+
+// Compare digests, not the raw strings: timingSafeEqual throws when the lengths
+// differ, which would leak the secret's length through the exception.
+const sha256 = (v) => createHash("sha256").update(String(v), "utf8").digest();
+const secretMatches = (given, expected) => timingSafeEqual(sha256(given), sha256(expected));
+
+// -> null when this isn't a server-to-server call at all (fall through to the
+//    JWT path) | { ok: false, status, error } | { ok: true, actor }
+// `db` is injectable so scripts/test-agent-auth.mjs can exercise the decision
+// table without a Supabase project behind it.
+export async function serverToServerAuth(req, db = admin) {
+  const given = req.headers?.[S2S_HEADER];
+  if (!given) return null;
+
+  const expected = process.env.VOICE_AGENT_SECRET;
+  const email = String(process.env.VOICE_AGENT_ACTOR_EMAIL || "").trim().toLowerCase();
+  if (!expected || !email) {
+    return { ok: false, status: 503, error: "el agente server-to-server no está configurado (faltan VOICE_AGENT_SECRET y/o VOICE_AGENT_ACTOR_EMAIL)" };
+  }
+  if (!secretMatches(given, expected)) return { ok: false, status: 401, error: "No autorizado." };
+
+  const { data: profile } = await db.from("profiles").select("*").eq("email", email).maybeSingle();
+  if (!profile) return { ok: false, status: 503, error: `VOICE_AGENT_ACTOR_EMAIL (${email}) no existe en profiles` };
+  if (profile.active === false) return { ok: false, status: 403, error: "el usuario del agente está desactivado" };
+
+  return { ok: true, actor: { profile, userEmail: profile.email || email } };
+}
+
 const ATTACH_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]);
 const MAX_ATTACH_B64 = 4_200_000; // ~3MB binary; Vercel caps request bodies at 4.5MB
 
 async function appChat(req, res) {
-  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  if (!token) { res.status(401).json({ error: "No autorizado." }); return; }
-  const { data: { user } = {}, error: uErr } = await admin.auth.getUser(token);
-  if (uErr || !user) { res.status(401).json({ error: "No autorizado.", detail: uErr?.message || "token inválido" }); return; }
+  // ElevenLabs first: a request carrying x-agent-secret is never also a browser
+  // session, so a bad secret must 401 rather than fall through to the JWT path.
+  const s2s = await serverToServerAuth(req);
+  if (s2s && !s2s.ok) { res.status(s2s.status).json({ error: s2s.error }); return; }
 
-  // The caller's CRM profile drives what the agent is allowed to write.
-  const { data: profile } = await admin.from("profiles").select("*").eq("id", user.id).maybeSingle();
+  let user = null;
+  let profile;
+  if (s2s) {
+    profile = s2s.actor.profile;
+  } else {
+    const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+    if (!token) { res.status(401).json({ error: "No autorizado." }); return; }
+    const { data: { user: u } = {}, error: uErr } = await admin.auth.getUser(token);
+    if (uErr || !u) { res.status(401).json({ error: "No autorizado.", detail: uErr?.message || "token inválido" }); return; }
+    user = u;
+    // The caller's CRM profile drives what the agent is allowed to write.
+    ({ data: profile } = await admin.from("profiles").select("*").eq("id", user.id).maybeSingle());
+  }
 
   // Issue a one-time code so this user can link their Telegram account.
   if (req.body?.action === "link_code") {
+    // Browser-only: the code belongs to the signed-in person, not to a shared
+    // machine credential.
+    if (s2s) { res.status(403).json({ error: "acción no disponible para el agente server-to-server" }); return; }
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const { error } = await admin.from("profiles")
       .update({ link_code: code, link_code_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString() })
@@ -76,8 +137,14 @@ async function appChat(req, res) {
   // The voice agent talks to the same brain through its own conversation key:
   // a plan staged in the chat widget must never be executable by a spoken
   // "yes", and vice versa.
-  const actor = { profile, userEmail: user.email || profile?.email || null };
-  const identity = (user.email || user.id).toLowerCase();
+  const actor = { profile, userEmail: user?.email || profile?.email || null };
+  // Conversation key. For a browser it's the person; for ElevenLabs it's the
+  // individual CONVERSATION, so a plan staged in one call can never be executed
+  // by a "yes" spoken in another one running at the same time.
+  const convoId = String(req.body?.conversation_id || "").replace(/[^\w.-]/g, "").slice(0, 64);
+  const identity = s2s
+    ? `el:${convoId || actor.userEmail || "anon"}`.toLowerCase()
+    : (user.email || user.id).toLowerCase();
 
   // Mint a short-lived client secret so the browser can open the realtime
   // socket itself. Our OpenAI key stays here; the session config (instructions,
@@ -89,6 +156,9 @@ async function appChat(req, res) {
   const lang = req.body?.lang;
 
   if (req.body?.action === "voice_token") {
+    // Browser-only: this mints an OpenAI realtime client secret for our own
+    // widget. ElevenLabs runs its own speech stack and has no use for it.
+    if (s2s) { res.status(403).json({ error: "acción no disponible para el agente server-to-server" }); return; }
     warmCaches(); // the schema/directory round trips overlap with minting
     try {
       const out = await mintVoiceSession({
