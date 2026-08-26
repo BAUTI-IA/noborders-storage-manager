@@ -5696,6 +5696,13 @@ export default function App() {
   // ── Undo / redo (session-scoped, Ctrl+Z / Ctrl+Y) ──
   useEffect(() => undoMgr.subscribe(() => setUndoTick(t => t + 1)), []);
   useEffect(() => { undoMgr.setUser(userEmail); }, [userEmail]);
+  // Tables that never got the deleted_at migration are deleted for real instead
+  // of blocking the user — warn once per table that only Undo brings the row back.
+  useEffect(() => {
+    undoMgr.onFallback((table) => showToast(tr(
+      `Deleted for good (table "${table}" has no Trash yet) — press Undo to bring it back`,
+      `Eliminado definitivamente (la tabla "${table}" todavía no tiene Trash) — apretá Undo para recuperarlo`)));
+  }, []);
   const reloadTable = (t) => ({
     storages: loadData, storage_jobs: loadJobs, payments: loadPayments, job_extras: loadExtras,
     expenses: loadExpenses, claims: loadClaims, claim_notes: () => editingClaimId && loadClaimNotes(editingClaimId),
