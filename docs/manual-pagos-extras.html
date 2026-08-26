@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Manual de Pagos &amp; Extras — No Borders CRM</title>
+<style>
+  @page { size: A4; margin: 14mm 13mm 15mm 13mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html,body { margin:0; padding:0; }
+  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color:#1a1a1a; font-size:11.2px; line-height:1.55; }
+  h1,h2,h3 { margin:0; letter-spacing:-0.02em; }
+  p { margin:0 0 8px; }
+  .muted { color:#888; }
+  .break { page-break-before: always; }
+  h1.sec, h3 { break-after: avoid; }
+  table.g { break-inside: auto; }
+  tr { break-inside: avoid; }
+  .avoid { break-inside: avoid; }
+  ul, ol { margin:4px 0 10px; padding-left:18px; }
+  li { margin-bottom:4px; }
+  .mono { font-family: ui-monospace, monospace; }
+
+  .cover { page-break-after: always; height: 261mm; border-radius:20px; overflow:hidden;
+           background: linear-gradient(160deg,#2a0f2a 0%, #3a1240 55%, #260c33 100%); color:#fff; position:relative; padding:34mm 24mm; }
+  .cover .kicker { font-size:12px; font-weight:700; letter-spacing:0.22em; text-transform:uppercase; color:#d0a5e0; }
+  .cover h1 { font-size:50px; font-weight:800; margin:14px 0 6px; line-height:1.05; }
+  .cover .sub { font-size:19px; color:#e0cde8; font-weight:500; }
+  .cover .pill { display:inline-block; margin-top:30px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18);
+                 border-radius:30px; padding:9px 18px; font-size:13px; color:#f2e7f7; }
+  .cover .foot { position:absolute; left:24mm; right:24mm; bottom:26mm; display:flex; justify-content:space-between; align-items:flex-end;
+                 border-top:1px solid rgba(255,255,255,0.14); padding-top:16px; font-size:12px; color:#c8a5d4; }
+  .cover .mock { position:absolute; right:18mm; top:118mm; display:flex; gap:10px; opacity:0.96; }
+  .cover .chip { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:14px 16px; min-width:118px; }
+  .cover .chip .n { font-size:22px; font-weight:800; }
+  .cover .chip .l { font-size:11px; color:#c8a5d4; margin-top:2px; }
+
+  .sec { font-size:21px; font-weight:800; margin:24px 0 4px; }
+  .sec .num { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:9px;
+              background:#5b21b6; color:#fff; font-size:15px; margin-right:10px; vertical-align:middle; }
+  .lead { color:#666; margin:0 0 14px; font-size:12px; }
+
+  .note { background:#F6F0FC; border:1px solid #E2D3F2; border-left:4px solid #8B5CF6; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .note b { color:#5B21B6; }
+  .info { background:#F1F7FD; border:1px solid #D6E6F5; border-left:4px solid #378ADD; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .info b { color:#185FA5; }
+  .warn { background:#FFF6E8; border:1px solid #F4DDB0; border-left:4px solid #EF9F27; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .danger { background:#FCEBEB; border:1px solid #F3C9C9; border-left:4px solid #E24B4A; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .danger b { color:#A32D2D; }
+  .ok { background:#F0FAF3; border:1px solid #CBE8D4; border-left:4px solid #2F9E57; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .ok b { color:#1D7A40; }
+
+  .flow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:10px 0; }
+  .fbox { border:1.5px solid #d8d8d8; border-radius:9px; padding:8px 12px; font-size:10.5px; font-weight:700; text-align:center; background:#fff; }
+  .farrow { color:#bbb; font-weight:800; }
+
+  table.g { width:100%; border-collapse:collapse; font-size:11px; margin-top:6px; }
+  table.g th { text-align:left; background:#5b21b6; color:#fff; padding:8px 11px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  table.g td { padding:8px 11px; border-bottom:1px solid #eee; vertical-align:top; }
+  table.g tr:nth-child(even) td { background:#fafafa; }
+  table.g td:first-child { font-weight:700; }
+
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .card { border:1px solid #ececec; border-radius:11px; padding:13px 15px; }
+  .card h3 { font-size:13px; margin-bottom:4px; }
+  .tag { display:inline-block; font-size:9px; font-weight:700; padding:2px 7px; border-radius:6px; }
+
+  /* split panel mock */
+  .split { background:#F6F0FC; border:1.5px solid #C9AEE8; border-radius:12px; padding:13px 15px; font-size:10.5px; break-inside:avoid; }
+  .split .h { font-weight:800; color:#5B21B6; margin-bottom:8px; font-size:11.5px; }
+  .split .row { display:flex; align-items:center; gap:8px; background:#fff; border:1px solid #e7dbf3; border-radius:8px; padding:7px 10px; margin-bottom:6px; }
+  .split .row .c { flex:1; }
+  .split .row .amt { font-family:ui-monospace,monospace; font-weight:700; background:#faf7fd; border:1px solid #ddd; border-radius:6px; padding:3px 8px; min-width:64px; text-align:right; }
+  .split .row .rest { font-size:9px; color:#888; min-width:88px; text-align:right; }
+  .split .foot2 { display:flex; justify-content:space-between; font-weight:700; padding:4px 2px 0; }
+
+  .step { display:flex; gap:10px; align-items:flex-start; margin:9px 0; }
+  .step .n { flex-shrink:0; width:22px; height:22px; border-radius:50%; background:#5b21b6; color:#fff; font-weight:800; font-size:11px; display:inline-flex; align-items:center; justify-content:center; margin-top:1px; }
+
+  .recipe { border:1px solid #e7dbf3; border-radius:11px; padding:12px 14px; margin:10px 0; break-inside:avoid; }
+  .recipe h3 { font-size:12.5px; color:#5B21B6; }
+  .recipe .steps { font-size:10.8px; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="cover">
+  <div class="kicker">No Borders Moving &amp; Storage</div>
+  <h1>Pagos &amp;<br>Extras</h1>
+  <div class="sub">Manual paso a paso: cargar, imputar y no perder un peso</div>
+  <div class="pill">💰 + Pago · ✂️ Asignar a cargos · A cuenta · ➕ Extras · Comisiones</div>
+
+  <div class="mock">
+    <div class="chip"><div class="n" style="color:#d0a5e0">✂️</div><div class="l">Imputación por cargo</div></div>
+    <div class="chip"><div class="n" style="color:#E88">$0</div><div class="l">A cuenta al final del día</div></div>
+    <div class="chip"><div class="n" style="color:#8fd0a5">✓</div><div class="l">Cada extra cobrado</div></div>
+  </div>
+
+  <div class="foot">
+    <div>Versión 1.0 · Julio 2026 · Uso interno</div>
+    <div>La parte "quilombera" del CRM, sin quilombo 😅</div>
+  </div>
+</div>
+
+<!-- ============ 1 IDEAS CLAVE ============ -->
+<h1 class="sec"><span class="num">1</span>Las 3 ideas que ordenan todo</h1>
+<p class="lead">Si entendés esto, el resto es apretar botones.</p>
+
+<div class="card avoid" style="margin-bottom:10px">
+  <h3>💡 Idea 1 — Cargo y pago son cosas distintas</h3>
+  <p style="margin:0">Un <b>cargo</b> es algo que el cliente <b>debe</b>: el balance del job (pickup + delivery), el balance del BOL, cada <b>extra</b> y cada mes de storage billing. Un <b>pago</b> es plata que <b>entró</b>. La magia está en <b>conectarlos</b>: cada pago se aplica contra uno o varios cargos. Esa conexión es la <b>imputación</b> ("Asignar a cargos").</p>
+</div>
+<div class="card avoid" style="margin-bottom:10px">
+  <h3>💡 Idea 2 — El cliente paga UN monto, el job tiene VARIOS cargos</h3>
+  <p style="margin:0">El cliente no te paga "el shuttle" y aparte "el balance" — te da <b>$1,500 juntos</b>. Si cargás eso como un pago suelto, el sistema no sabe qué quedó pago y qué no: el job puede figurar "cobrado" con un extra impago (y la comisión del driver trabada), o al revés. <b>Por eso siempre se imputa.</b></p>
+</div>
+<div class="card avoid">
+  <h3>💡 Idea 3 — Lo que no imputás queda "A cuenta" (y no es un error… si lo resolvés)</h3>
+  <p style="margin:0">Si entra plata y todavía no sabés a qué va, queda <b>"A cuenta"</b>: recibida pero sin aplicar. No se pierde — el job la muestra como <b>"A cuenta (sin imputar)"</b> con un botón <b>Asignar</b> para repartirla después. La regla de oro: <b>a fin del día, nada a cuenta</b>.</p>
+</div>
+
+<h3 style="margin-top:14px">El recorrido de cada dólar</h3>
+<div class="flow">
+  <span class="fbox" style="border-color:#EF9F27;color:#92600B">Cargo pendiente</span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#8B5CF6;color:#5B21B6">Pago cargado<br><span style="font-weight:500;font-size:9px">+ Pago</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#8B5CF6;color:#5B21B6">Imputado a sus cargos<br><span style="font-weight:500;font-size:9px">✂️ Asignar</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#E24B4A;color:#A32D2D">En circulación<br><span style="font-weight:500;font-size:9px">si es cash/cheque</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#2F9E57;color:#1D7A40">Depositado 🏦</span>
+</div>
+<div class="danger avoid"><b>💳 Regla de métodos:</b> lo <b>digital</b> (Zelle, Venmo, tarjeta, wire, PayPal, Cash App, Apple Pay) se marca <b>depositado solo</b>. Lo <b>físico</b> (cash, cheques, money orders) queda <b>en circulación</b> — alguien lo tiene en la mano — hasta que lo deposites.</div>
+
+<!-- ============ 2 CARGAR UN PAGO ============ -->
+<h1 class="sec break"><span class="num">2</span>Cargar un pago, paso a paso 💰</h1>
+<p class="lead">Botón <b>"+ Pago"</b> en Payments, o <b>"+ Agregar pago"</b> en la sección Pagos del detalle del job (viene pre-cargado con el saldo y el driver — es el camino más rápido).</p>
+
+<div class="step"><span class="n">1</span><span><b>Job.</b> Buscalo por número o cliente y elegilo de la lista. Si el job tiene extras pendientes, el panel de imputación se arma solo (ver sección 3).</span></div>
+<div class="step"><span class="n">2</span><span><b>Fecha y monto.</b> La fecha del pago y el <b>monto total que entró</b> (lo que el cliente entregó, todo junto).</span></div>
+<div class="step"><span class="n">3</span><span><b>Concepto.</b> Job / Extra / CC Fee / Storage / <b>A cuenta</b> / Other. Si vas a repartir entre varios cargos, no te preocupes por esto: la imputación manda.</span></div>
+<div class="step"><span class="n">4</span><span><b>Descuento</b> (opcional) + razón. El neto = monto − descuento, y se ve en vivo.</span></div>
+<div class="step"><span class="n">5</span><span><b>Etapa:</b> At pick up / At delivery / Other — solo informativo, dice en qué momento se cobró.</span></div>
+<div class="step"><span class="n">6</span><span><b>Método.</b> Cash, credit card, Zelle, Venmo, check, money order, PayPal, Cash App, wire, Apple Pay. Según el método se abren campos extra (sección 6): serie y foto del cheque/money order, o el CC fee de la tarjeta.</span></div>
+<div class="step"><span class="n">7</span><span><b>Recibido:</b> por quién y cuándo (para digitales se tilda solo). Si es físico: <b>"¿Quién tiene la plata?"</b> — se autocompleta con el driver del job. <b>No lo dejes vacío:</b> es lo que alimenta la vista "En circulación".</span></div>
+<div class="step"><span class="n">8</span><span><b>¿Ya se depositó?</b> Si el cash/cheque ya entró al banco, tildá depositado + fecha + cuenta. Si no, quedará en circulación hasta que lo deposites (se puede hacer en lote después).</span></div>
+<div class="step"><span class="n">9</span><span><b>Imputá</b> con "✂️ Asignar a cargos" (sección 3) y guardá. El botón dice <b>Create payment</b> (o <b>Create split payments</b> si repartiste).</span></div>
+
+<div class="info avoid"><b>🔎 ¿Este job tiene pagos?</b> En Payments, buscá el número de job: un banner te contesta al toque — ✅ verde con cuántos pagos, total y recibido; 🚫 rojo "Sin pagos cargados"; o ⚠️ ámbar si ningún job coincide con ese número.</div>
+
+<!-- ============ 3 IMPUTAR ============ -->
+<h1 class="sec break"><span class="num">3</span>Imputar: "✂️ Asignar a cargos" — el corazón del sistema</h1>
+<p class="lead">Repartir UN pago entre los cargos del job, línea por línea. 30 segundos que ordenan todo.</p>
+
+<div class="step"><span class="n">1</span><span>En el modal del pago, tildá <b>"✂️ Asignar a cargos (split)"</b>. Se abre el panel violeta: <i>"Repartí el pago entre el balance del job y los extras pendientes. Lo que no asignes queda a cuenta."</i></span></div>
+<div class="step"><span class="n">2</span><span>Aparece <b>una línea por cargo</b>: el <b>balance del job</b> y <b>cada extra activo</b>, cada una con su <b>"Pendiente: $X"</b> (lo que falta cobrar de ese cargo).</span></div>
+<div class="step"><span class="n">3</span><span>El sistema ya te <b>propone el reparto</b>: llena primero el balance del job y después los extras, del más viejo al más nuevo. <b>Podés pisar cualquier monto a mano.</b></span></div>
+<div class="step"><span class="n">4</span><span>Cada línea muestra el <b>"Restante: $Y"</b> después de tu asignación — así ves en vivo qué queda debiendo cada cargo.</span></div>
+<div class="step"><span class="n">5</span><span>Abajo, el pie muestra <b>"Sin asignar (a cuenta): $… / Total: $…"</b> con ✓ o ✗. Lo ideal: $0 sin asignar.</span></div>
+
+<div class="split" style="margin-top:12px">
+  <div class="h">✂️ Asignar a cargos — así se ve (ejemplo: entran $1,500)</div>
+  <div class="row"><span class="c"><b>Balance del job</b><br><span class="muted">Pendiente: $1,200</span></span><span class="amt">1200</span><span class="rest">Restante: $0 ✓</span></div>
+  <div class="row"><span class="c"><b>Extra · Packing</b><br><span class="muted">Pendiente: $200</span></span><span class="amt">200</span><span class="rest">Restante: $0 ✓</span></div>
+  <div class="row"><span class="c"><b>Extra · Long carry</b><br><span class="muted">Pendiente: $150</span></span><span class="amt">100</span><span class="rest">Restante: $50</span></div>
+  <div class="foot2"><span>Sin asignar (a cuenta): <b style="color:#1D7A40">$0</b></span><span>Total: $1,500 ✓</span></div>
+</div>
+
+<h3 style="margin-top:14px">Las reglas del panel (lo que te va a pasar)</h3>
+<ul>
+  <li><b>¿Te pasaste en una línea?</b> Se puede: muestra <b>"Sobrepago $Z — se registra igual"</b> (útil si el cliente pagó de más un cargo puntual).</li>
+  <li><b>¿La suma de líneas supera el total del pago?</b> Eso NO se puede: error <b>"Las asignaciones superan el total en $…"</b> — bajá alguna línea.</li>
+  <li><b>¿Sobró plata sin asignar?</b> Queda automáticamente <b>a cuenta</b> (sección 4). No es error, pero acordate de asignarla después.</li>
+  <li><b>¿Falta un cargo?</b> <b>"+ Nuevo extra / otra línea"</b> crea el cargo en el momento: elegís el concepto (Job / Extra CF / Shuttle / Long carry / Stairs / Packing…), monto y nota — y ese extra <b>ya nace en el sistema de comisiones</b> (sección 5).</li>
+</ul>
+
+<div class="ok avoid"><b>✅ Por qué vale la pena:</b> con el pago imputado, el job muestra la verdad — balance saldado, packing pago, long carry debiendo $50 — y eso es lo que leen las etiquetas de Dispatching (<span class="tag" style="background:#FDE3CF;color:#C2410C">Balance pendiente</span> / <span class="tag" style="background:#FCEBEB;color:#A32D2D">Sin cobrar</span>), el "To collect" de los trips y las <b>comisiones de los drivers</b>. Un pago sin imputar deja todo eso mintiendo.</div>
+
+<!-- ============ 4 A CUENTA ============ -->
+<h1 class="sec"><span class="num">4</span>"A cuenta": la plata que entró pero no se aplicó</h1>
+<p class="lead">Recibida ✓ · aplicada ✗. Se resuelve con el botón Asignar.</p>
+<ul>
+  <li><b>Cómo se genera:</b> cargaste un pago con concepto <b>"A cuenta"</b>, o imputaste y dejaste un sobrante sin asignar.</li>
+  <li><b>Dónde se ve:</b> en el detalle del job, sección Pagos: <b>"A cuenta (sin imputar): $X"</b> con el botón <b>Asignar</b>. También en la tabla de Payments.</li>
+  <li><b>Cómo se aplica:</b> tocá <b>Asignar</b> → se abre <b>"Asignar pago a cuenta"</b> con el monto fijo (no se puede cambiar) y el panel de imputación ya abierto, <b>pre-repartido</b> sobre lo que el job todavía debe. Ajustá si hace falta y guardá con <b>Asignar</b>.</li>
+</ul>
+<div class="warn avoid"><b>⚠️ La regla de oro:</b> "a cuenta" es un estado <b>transitorio</b>. Plata a cuenta = cargos que siguen figurando impagos y comisiones sin destrabar. Antes de cerrar el día, revisá que no quede nada sin asignar.</div>
+
+<!-- ============ 5 EXTRAS ============ -->
+<h1 class="sec"><span class="num">5</span>Extras: crearlos, cobrarlos y comisionar ➕</h1>
+<p class="lead">Un extra es un cargo adicional del job (shuttle, long carry, packing…) que además reparte comisión entre driver y rep.</p>
+
+<h3>Las 3 formas de crear un extra</h3>
+<table class="g">
+  <tr><th>Desde dónde</th><th>Cómo</th><th>Cuándo conviene</th></tr>
+  <tr><td>1. El detalle del job</td><td>Sección <b>Extras</b> → <b>"+ Agregar extra"</b>: tipo, monto, driver, generado por, rep, %.</td><td>Apenas se pacta el extra con el cliente (lo ideal: antes de cobrar).</td></tr>
+  <tr><td>2. La página Extras</td><td>Cada job muestra los <b>7 tipos como filas</b> — tildás la casilla y completás monto y comisiones.</td><td>Carga masiva / repaso de fin de semana por chofer.</td></tr>
+  <tr><td>3. El split de un pago</td><td>En "✂️ Asignar a cargos" → <b>"+ Nuevo extra / otra línea"</b>: elegís concepto y monto.</td><td>El cliente ya está pagando algo que nunca se cargó — lo creás y lo cobrás en el mismo paso.</td></tr>
+</table>
+
+<h3 style="margin-top:12px">Qué lleva cada extra</h3>
+<ul>
+  <li><b>Tipo:</b> Extra CF · Shuttle · Long carry · Stairs · Packing · Flight charge · Other.</li>
+  <li><b>Monto</b>, <b>driver</b> que lo generó (se autocompleta con el del job), <b>"Generado por"</b> (Driver only / Driver + Rep / Rep only), el <b>rep</b> si corresponde y los <b>% de comisión</b> — se autocompletan con estas reglas y los podés pisar:</li>
+</ul>
+<table class="g avoid">
+  <tr><th>Extra</th><th>Driver only</th><th>Driver + Rep</th><th>Rep only</th></tr>
+  <tr><td>Extra CF / Packing / Flight / Other</td><td>Driver 10%</td><td>7% / 3%</td><td>Rep 10%</td></tr>
+  <tr><td>Long carry / Stairs</td><td colspan="3">Siempre driver 50% (la empresa se queda el 50%). El driver viene fijo.</td></tr>
+  <tr><td>Shuttle</td><td>Driver 10%</td><td>7% / 3%</td><td>Rep 5%</td></tr>
+</table>
+
+<h3 style="margin-top:12px">Cómo se COBRA un extra (acá está el quilombo)</h3>
+<div class="step"><span class="n">1</span><span>El extra existe → aparece como <b>línea propia</b> en el panel de imputación de cualquier pago de ese job, con su "Pendiente: $X".</span></div>
+<div class="step"><span class="n">2</span><span>Cuando le asignás plata, el extra pasa a <b>Pagado</b> (chip verde en el detalle del job). Pago parcial = sigue Pendiente por el resto.</span></div>
+<div class="step"><span class="n">3</span><span>Extra cobrado → su <b>comisión queda firme</b> y aparece en la fila COMISIÓN (amarilla) del chofer/rep en la página Extras, lista para liquidar con 📋 Copiar o 🖨️ PDF.</span></div>
+<div class="danger avoid"><b>🚫 El error clásico:</b> cobrarle al cliente "todo junto" y cargar el pago <b>sin imputar</b>. Resultado: el job figura cobrado de más, los extras siguen "Pendientes", el driver reclama su comisión y nadie entiende nada. <b>Un pago que incluye extras SIEMPRE se carga con el split.</b></div>
+<div class="info avoid"><b>💡 Nota:</b> si el pago con split crea un extra nuevo, después se le asigna la comisión con el modal <b>"Asignar comisión"</b> (generado por, driver %, rep %) — el sistema muestra el reparto driver / rep / empresa en vivo. Long carry y stairs vienen con el driver fijo al 50%.</div>
+
+<!-- ============ 6 METODOS ============ -->
+<h1 class="sec break"><span class="num">6</span>Métodos con papeleo: cheque, money order, tarjeta 🧾</h1>
+<p class="lead">Los tres métodos que piden datos extra. Cargalos completos: son tu respaldo si algo se pierde.</p>
+<div class="two">
+  <div class="card avoid">
+    <h3>🏦 Cheque</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Tipo:</b> Cashier's / Personal / Official.</li>
+      <li><b>Número de serie</b> — el sistema avisa en vivo si ese número <b>ya está cargado</b> (cheque duplicado).</li>
+      <li>Banco/emisor, fecha, memo (y routing/últimos 4 si es personal).</li>
+      <li><b>📷 Foto del cheque</b> — sacala siempre; queda en la fila (columna Photo).</li>
+    </ul>
+  </div>
+  <div class="card avoid">
+    <h3>📮 Money order</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Tipo:</b> USPS / Western Union / MoneyGram / Otro.</li>
+      <li><b>Serie</b> (también con chequeo de duplicados), fecha, oficina, de parte de quién.</li>
+      <li><b>📷 Foto</b> del money order.</li>
+    </ul>
+  </div>
+</div>
+<div class="card avoid" style="margin-top:12px">
+  <h3>💳 Tarjeta de crédito (CC fee)</h3>
+  <p style="margin:0">Tildá <b>"Cobrar CC fee al cliente"</b> (3% por defecto): el sistema calcula el fee y el <b>total a cobrar</b>, y al guardar crea <b>solo</b> un segundo pago con concepto <b>CC Fee</b>. No lo cargues a mano — se duplica. Los fees cobrados se ven en la métrica violeta de Payments.</p>
+</div>
+<div class="danger avoid" style="margin-top:10px"><b>👐 Cash, cheques y money orders quedan EN CIRCULACIÓN.</b> El campo "¿Quién tiene la plata?" dice quién los lleva encima. En la pestaña <b>En circulación</b> los ves agrupados por persona, con los días que hace que los tiene: <b>💬 Pedir depósito</b> manda el WhatsApp armado, y el <b>depósito en lote</b> (tildar → cuenta → fecha → ✓ Deposit) los marca depositados de una. La <b>alerta roja</b> lista lo que lleva 7+ días sin depositar: esa lista tiene que estar vacía.</div>
+
+<!-- ============ 7 RECETAS ============ -->
+<h1 class="sec break"><span class="num">7</span>Recetas: qué hacer en cada caso típico 🍳</h1>
+<p class="lead">Buscá tu caso y seguí los pasos. Son los 8 que cubren el 99% de los días.</p>
+
+<div class="recipe"><h3>1 · El cliente paga justo el balance del job (el caso fácil)</h3>
+<div class="steps">Job detail → <b>+ Agregar pago</b> (ya viene con el saldo y el driver) → método → guardar. Si el job no tiene extras, ni hace falta abrir el split: todo el pago va al balance.</div></div>
+
+<div class="recipe"><h3>2 · Paga TODO junto: balance + extras</h3>
+<div class="steps">+ Pago → monto total → <b>✂️ Asignar a cargos</b> → la propuesta ya reparte (balance primero, extras después) → revisá los "Restante" → guardar como <b>Create split payments</b>. Cada extra queda Pagado y las comisiones firmes.</div></div>
+
+<div class="recipe"><h3>3 · Paga un extra que NUNCA se cargó</h3>
+<div class="steps">+ Pago → ✂️ Asignar a cargos → <b>+ Nuevo extra / otra línea</b> → elegí el concepto (shuttle, packing…), monto y nota → guardar. Después completá la comisión con <b>"Asignar comisión"</b> (generado por / driver % / rep %).</div></div>
+
+<div class="recipe"><h3>4 · Entra una seña o un monto "para el job en general"</h3>
+<div class="steps">+ Pago → concepto <b>"A cuenta"</b> (o dejá el sobrante sin asignar en el split) → cuando esté claro a qué va, botón <b>Asignar</b> en el job → el panel se abre pre-repartido sobre lo que se debe → confirmá.</div></div>
+
+<div class="recipe"><h3>5 · Paga de menos (parcial)</h3>
+<div class="steps">+ Pago con lo que entró → ✂️ split → asigná primero a lo que más importe cobrar (regla de la casa: balance del job primero, extras después — la propuesta ya lo hace). Los "Restante" te dicen exactamente qué sigue debiendo; el job queda con la etiqueta 🟧 Balance pendiente.</div></div>
+
+<div class="recipe"><h3>6 · Paga de más</h3>
+<div class="steps">Opción A: asigná el sobrepago a la línea que corresponda — el panel avisa "Sobrepago $Z — se registra igual". Opción B: dejá el sobrante <b>a cuenta</b> para aplicarlo a un cargo futuro (próximo mes de storage, un extra por venir).</div></div>
+
+<div class="recipe"><h3>7 · Cobro del BOL de un broker delivery</h3>
+<div class="steps">Desde el detalle del job (sección Carrier Settlement) o desde la closing sheet en Settlements → <b>Record payment</b> (monto, método, fecha). <b>NO lo cargues también en Payments:</b> se sincroniza solo — un solo registro, nunca dos.</div></div>
+
+<div class="recipe"><h3>8 · Cobro del storage mensual</h3>
+<div class="steps">Página <b>Storage Billing</b> → el cargo del ciclo ya está generado solo → <b>Marcar pagado</b> (o cargá el pago con concepto Storage e imputalo). El recordatorio 💬 por WhatsApp sale armado.</div></div>
+
+<!-- ============ 8 ERRORES ============ -->
+<h1 class="sec break"><span class="num">8</span>Los 7 errores típicos (y cómo no cometerlos) 🚫</h1>
+<table class="g">
+  <tr><th>Error</th><th>Qué rompe</th><th>Lo correcto</th></tr>
+  <tr><td>Cargar el pago sin imputar</td><td>El job "parece" cobrado pero los extras siguen pendientes; comisiones trabadas.</td><td>Siempre <b>✂️ Asignar a cargos</b> cuando el pago cubre más de un cargo.</td></tr>
+  <tr><td>Cargar el BOL dos veces</td><td>Payments y Settlements duplicados; el settlement da mal.</td><td>Registralo <b>una vez</b> (en el job o en la sheet) — se sincroniza solo.</td></tr>
+  <tr><td>Cash fee de tarjeta cargado a mano</td><td>Fee duplicado (el sistema ya lo crea).</td><td>Usar el tilde <b>"Cobrar CC fee al cliente"</b> y listo.</td></tr>
+  <tr><td>"¿Quién tiene la plata?" vacío</td><td>La vista En circulación no sabe a quién reclamarle; la plata "flota".</td><td>Completar siempre el tenedor en pagos físicos (viene pre-cargado con el driver).</td></tr>
+  <tr><td>Dejar plata a cuenta por días</td><td>Cargos figuran impagos, comisiones sin destrabar, el cliente jura que pagó.</td><td>Regla: <b>a fin del día, $0 a cuenta</b> — botón Asignar.</td></tr>
+  <tr><td>Extra cargado sin driver/rep o sin "generado por"</td><td>La comisión se calcula mal o no se calcula.</td><td>Completar generado por + % (se autocompletan; revisalos).</td></tr>
+  <tr><td>Cheque sin foto ni serie</td><td>Sin respaldo si se pierde; duplicados invisibles.</td><td>Serie + 📷 foto SIEMPRE (el sistema avisa duplicados por la serie).</td></tr>
+</table>
+
+<h3 style="margin-top:16px">Chuleta final 📌</h3>
+<div class="card avoid" style="background:#2a0f2a;border-color:#2a0f2a;color:#fff">
+  <ul style="margin-bottom:0;color:#e6d7ee">
+    <li><b style="color:#fff">Un pago = lo que entró. La imputación = a qué fue.</b> Nunca cargues lo primero sin lo segundo.</li>
+    <li>El panel ✂️ ya te <b style="color:#fff">propone el reparto</b> — solo revisá los "Restante".</li>
+    <li>¿Falta el cargo? <b style="color:#fff">+ Nuevo extra / otra línea</b>, ahí mismo.</li>
+    <li>Sobró plata → <b style="color:#fff">a cuenta</b> → botón <b style="color:#fff">Asignar</b> antes de cerrar el día.</li>
+    <li>Extra cobrado = <b style="color:#fff">comisión firme</b>. Extra pendiente = driver reclamando.</li>
+    <li>BOL: <b style="color:#fff">una sola vez</b> — Payments y Settlements se hablan solos.</li>
+    <li>Físico → <b style="color:#fff">quién lo tiene</b> → depósito en lote → alerta roja en $0.</li>
+  </ul>
+</div>
+
+<p style="margin-top:18px;color:#888">¿Dudas con un caso raro? Preguntá en el canal <span class="mono">general</span> de Chats antes de inventar. 💜</p>
+
+</body>
+</html>
