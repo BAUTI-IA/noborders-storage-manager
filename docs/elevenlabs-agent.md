@@ -1,5 +1,8 @@
 # Agente de ElevenLabs (server-to-server)
 
+> Para dejarlo andando paso a paso, ver
+> [`elevenlabs-setup.md`](./elevenlabs-setup.md). Esto es el porqué.
+
 El widget de ElevenLabs es el segundo globito del CRM (`src/elevenlabsAgent.jsx`),
 al lado del agente propio. Este documento es sobre la otra mitad: cómo sus
 **tools** llegan a la base sin abrirle la puerta a cualquiera.
