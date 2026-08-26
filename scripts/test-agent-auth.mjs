@@ -5,6 +5,8 @@
 //
 //   node scripts/test-agent-auth.mjs
 import { serverToServerAuth } from "../api/agent-hub.mjs";
+import { checkSqlAccess, normalizeSql } from "../lib/agentWrite.mjs";
+import { VOICE_TOOL_NAMES } from "../lib/voice.mjs";
 
 let failed = 0;
 const eq = (name, got, want) => {
@@ -99,6 +101,52 @@ await withEnv({ VOICE_AGENT_SECRET: SECRET, VOICE_AGENT_ACTOR_EMAIL: `  ${EMAIL.
   const r = await serverToServerAuth(req(SECRET), dbWith(member));
   eq("el email se normaliza", r.ok, true);
 });
+
+// ── El contrato de la tool ───────────────────────────────────────────────────
+// Lo que ElevenLabs manda de verdad (capturado de una conversación real): el
+// nombre de la herramienta viaja en `name`, no en `tool`, y la query trae punto
+// y coma al final.
+const elevenLabsBody = {
+  action: "voice_tool",
+  name: "crm_lookup",
+  input: { query: "SELECT COUNT(*) FROM storage_jobs WHERE deleted_at IS NULL;" },
+  conversation_id: "conv_8701m0z87nsefceaj58acz82y6pd",
+};
+
+eq("se acepta el nombre de tool que manda ElevenLabs (`name`)",
+  VOICE_TOOL_NAMES.has(String(elevenLabsBody.tool || elevenLabsBody.name || "")), true);
+eq("y el que manda nuestro widget (`tool`)",
+  VOICE_TOOL_NAMES.has(String({ tool: "crm_lookup" }.tool || "")), true);
+eq("una tool inventada sigue sin entrar", VOICE_TOOL_NAMES.has("drop_everything"), false);
+
+// ── normalizeSql ─────────────────────────────────────────────────────────────
+// agent_query rechaza CUALQUIER `;` — es como garantiza una sola sentencia — y
+// los modelos lo ponen por costumbre.
+eq("saca el punto y coma final", normalizeSql("select 1;"), "select 1");
+eq("saca el punto y coma con espacios detrás", normalizeSql("  select 1 ;  "), "select 1");
+eq("no toca una query limpia", normalizeSql("select 1"), "select 1");
+eq("vacío sigue vacío", normalizeSql(undefined), "");
+// Sacar sólo el final no abre la puerta a dos sentencias: lo que queda todavía
+// tiene un `;` y agent_query lo rechaza igual.
+eq("no habilita multi-sentencia", normalizeSql("select 1; drop table trucks;").includes(";"), true);
+
+// ── Tabla inexistente vs sin permiso ─────────────────────────────────────────
+// El agente de ElevenLabs pidió `FROM jobs`. Esa tabla no existe: la de jobs es
+// `storage_jobs`. Decirle "no tenés permiso" lo manda a buscar un admin en vez
+// de a corregir el nombre.
+{
+  const denied = checkSqlAccess("select count(*) from jobs where deleted_at is null", member);
+  eq("una tabla inexistente no se reporta como falta de permiso", /no existe/.test(denied), true);
+  eq("y sugiere la tabla real", /storage_jobs/.test(denied), true);
+}
+{
+  // Una tabla que SÍ existe pero que este perfil no puede ver sigue diciendo
+  // exactamente eso.
+  const denied = checkSqlAccess("select * from bank_transactions", member);
+  eq("sin permiso sigue siendo sin permiso", /no tenés permiso/.test(denied), true);
+}
+eq("una tabla permitida pasa", checkSqlAccess("select * from storage_jobs", member), null);
+eq("una tabla privada sigue bloqueada", /privada/.test(checkSqlAccess("select * from profiles", member)), true);
 
 console.log(failed ? `\n${failed} test(s) fallaron` : "\nTodo OK");
 process.exit(failed ? 1 : 0);

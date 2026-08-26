@@ -82,11 +82,41 @@ header `x-agent-secret: <VOICE_AGENT_SECRET>` y un body:
 ```jsonc
 {
   "action": "voice_tool",
-  "tool": "crm_lookup",              // crm_lookup | crm_ask | crm_plan | crm_confirm | crm_cancel
+  "name": "crm_lookup",              // crm_lookup | crm_ask | crm_plan | crm_confirm | crm_cancel
   "input": { "query": "select ..." },
   "conversation_id": "{{conversation_id}}"
 }
 ```
+
+El nombre de la tool se acepta en `name` (que es como lo manda ElevenLabs) o en
+`tool` (como lo manda nuestro widget). Si mandás cualquier otra cosa, el 400 te
+devuelve `valid_tools` con la lista, así el modelo puede corregir solo.
+
+### La tabla de jobs se llama `storage_jobs`
+
+El error más fácil de cometer, y el agente lo comete solo si no le diste el
+esquema: **no existe una tabla `jobs`**. La de jobs es `storage_jobs` (un job
+lógico son varias filas que comparten `job_number`). Otras que se confunden:
+
+| Lo que el modelo escribe | Lo que existe |
+|---|---|
+| `jobs` | `storage_jobs` |
+| `units`, `warehouses` | `storages` |
+| `stops` | `trip_stops` (paradas que NO son jobs: nafta, balanza, service) |
+
+Pedir una tabla inexistente ya no contesta "no tenés permiso" —contestaba eso, y
+mandaba al agente a buscar un admin en vez de a corregir el nombre—: ahora dice
+que no existe y sugiere las más parecidas.
+
+Igual conviene pegarle el bloque `DATABASE` al system prompt del agente en
+ElevenLabs, con el esquema real. Sale de `getDbSchema()` (`lib/agent.mjs`).
+
+### Punto y coma
+
+`agent_query` rechaza **cualquier** `;` — es como garantiza una sola sentencia.
+Como los modelos lo ponen por costumbre, el server saca uno final si está
+(`normalizeSql`). Eso no habilita dos sentencias: `select 1; drop ...` sigue
+teniendo un `;` en el medio y se rechaza igual.
 
 `conversation_id` importa: es lo que separa una conversación de otra. Un plan
 propuesto en una llamada **no** tiene que poder confirmarse con el "sí" de otra

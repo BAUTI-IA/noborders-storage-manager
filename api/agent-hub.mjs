@@ -179,8 +179,19 @@ async function appChat(req, res) {
   // One function call from the voice model, relayed by the browser. The browser
   // is only a pipe: permissions are checked here against this JWT's profile.
   if (req.body?.action === "voice_tool") {
-    const tool = String(req.body?.tool || "");
-    if (!VOICE_TOOL_NAMES.has(tool)) { res.status(400).json({ error: vt(lang).unknownTool(tool || "?") }); return; }
+    // `tool` is what our own widget sends; ElevenLabs names the field `name`.
+    // Both mean the same thing and neither is worth a failed call over.
+    const tool = String(req.body?.tool || req.body?.name || "");
+    if (!VOICE_TOOL_NAMES.has(tool)) {
+      // Name the valid tools: the caller is a model, and a bare "unknown tool"
+      // gives it nothing to correct towards.
+      res.status(400).json({
+        error: vt(lang).unknownTool(tool || "?"),
+        valid_tools: [...VOICE_TOOL_NAMES],
+        hint: 'the tool name goes in "tool" (or "name"), e.g. {"action":"voice_tool","tool":"crm_lookup","input":{...}}',
+      });
+      return;
+    }
     const input = req.body?.input && typeof req.body.input === "object" && !Array.isArray(req.body.input) ? req.body.input : {};
     const out = await runVoiceTool({ name: tool, input, convoKey: `voice:${identity}`, actor, lang });
     res.status(200).json(out);
