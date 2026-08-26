@@ -14,6 +14,7 @@
 //
 //   --schema-only / --directory-only   un solo bloque
 //   --budget=N                         caracteres de esquema (default: el de la voz)
+import { TABLE_ACL } from "../lib/acl.mjs";
 import { getDbSchema, getReferenceData } from "../lib/agent.mjs";
 import { voiceSchema } from "../lib/voice.mjs";
 
@@ -47,9 +48,19 @@ console.log(`# Generado el ${TODAY} — volvé a correrlo cuando cambie el esque
 
 if (wantSchema) {
   const full = await getDbSchema().catch((e) => fail("el esquema", e));
-  console.log("DATABASE (PostgreSQL, table: columns):");
-  console.log(voiceSchema(full, budget));
+  // Quedarse SOLO con lo que el agente puede tocar. Una tabla fuera de
+  // TABLE_ACL contesta DENIED a cualquier consulta (lib/acl.mjs), así que
+  // listarla en el prompt no le da alcance: le da una llamada fallida y
+  // tokens gastados. El agente propio arrastra ese ruido porque su prompt
+  // sale directo de information_schema; el externo no tiene por qué.
+  const lines = String(full).split("\n").filter(Boolean);
+  const reachable = lines.filter((l) => TABLE_ACL[l.slice(0, l.indexOf(":")).trim()]);
+  const dropped = lines.length - reachable.length;
+
+  console.log("DATABASE (PostgreSQL, table: columns). These are the ONLY tables you can reach; anything else is refused:");
+  console.log(voiceSchema(reachable.join("\n"), budget ?? 999999));
   console.log();
+  if (dropped) console.error(`(${dropped} tabla(s) fuera del alcance del agente omitidas del volcado)`);
 }
 
 if (wantDirectory) {
