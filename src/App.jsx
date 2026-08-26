@@ -4,6 +4,7 @@ import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simpl
 import { BolSection } from "./bol.jsx";
 import { MessagesSection } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
+import { ElevenLabsAgentWidget } from "./elevenlabsAgent.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
@@ -8315,8 +8316,11 @@ export default function App() {
         </div>
       )}
 
-      {/* ───────────────────────── AI AGENT (floating chat, all pages) ───────────────────────── */}
+      {/* ───────────────────────── AI AGENTS (floating, all pages) ───────────────────────── */}
+      {/* Two bubbles bottom right: the in-house CRM agent, and the ElevenLabs
+          one sitting just above it. Neither replaces the other. */}
       {session && <AgentChatWidget session={session} />}
+      {session && <ElevenLabsAgentWidget />}
 
       {/* ───────────────────────── USERS (admin) ───────────────────────── */}
       {page === "users" && isAdmin && <UsersSection session={session} />}
