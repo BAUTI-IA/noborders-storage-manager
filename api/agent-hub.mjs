@@ -97,6 +97,41 @@ export async function serverToServerAuth(req, db = admin) {
   return { ok: true, actor: { profile, userEmail: profile.email || email } };
 }
 
+// ── Un turno de voz no puede colgarse ────────────────────────────────────────
+// Si una tool no vuelve, la persona se queda escuchando silencio hasta que la
+// plataforma corta la llamada por su cuenta — y el modelo nunca se entera de
+// que algo falló, así que no puede ni disculparse ni reintentar distinto.
+// Mejor una respuesta hablable que un socket muerto.
+//
+// El tope se aplica SOLO a las tools de lectura. crm_plan, crm_confirm y
+// crm_cancel llevan estado: cortar un crm_plan por tiempo puede dejar un plan
+// staged que la persona nunca escuchó, y un "sí" posterior lo ejecutaría —
+// exactamente lo que la regla de confirmar-antes-de-escribir existe para
+// impedir. Esos corren hasta terminar.
+const CAPPED_TOOLS = new Set(["crm_lookup", "crm_ask"]);
+const TOOL_TIMEOUT_MS = Number(process.env.VOICE_TOOL_TIMEOUT_MS || 15000);
+
+export async function runToolWithBudget(name, run, lang, ms = TOOL_TIMEOUT_MS) {
+  if (!CAPPED_TOOLS.has(name)) return run();
+  const started = Date.now();
+  let timer;
+  const budget = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({
+      // El texto del output se lo lee el MODELO, no la persona: le dice qué
+      // hacer distinto en vez de dejarlo repetir la misma llamada lenta.
+      output: `ERROR: the call took more than ${Math.round(ms / 1000)}s and was dropped. Do NOT repeat it. Ask for something narrower — a count, one job, one date — or tell the user you couldn't get it.`,
+      ui: { kind: "error", text: vt(lang).slow },
+      ms: Date.now() - started,
+      timed_out: true,
+    }), ms);
+  });
+  try {
+    return await Promise.race([run(), budget]);
+  } finally {
+    clearTimeout(timer); // si ganó la tool, el lambda no queda vivo por el timer
+  }
+}
+
 const ATTACH_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]);
 const MAX_ATTACH_B64 = 4_200_000; // ~3MB binary; Vercel caps request bodies at 4.5MB
 
@@ -193,7 +228,14 @@ async function appChat(req, res) {
       return;
     }
     const input = req.body?.input && typeof req.body.input === "object" && !Array.isArray(req.body.input) ? req.body.input : {};
-    const out = await runVoiceTool({ name: tool, input, convoKey: `voice:${identity}`, actor, lang });
+    const out = await runToolWithBudget(
+      tool,
+      () => runVoiceTool({ name: tool, input, convoKey: `voice:${identity}`, actor, lang }),
+      lang,
+    );
+    // Una línea por llamada en los logs de Vercel: sin esto, un turno que se
+    // cuelga no deja rastro de cuál tool fue ni cuánto tardó.
+    console.log(`voice_tool ${tool} ${out?.ms}ms${out?.timed_out ? " TIMEOUT" : ""}`);
     res.status(200).json(out);
     return;
   }

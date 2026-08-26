@@ -4,7 +4,7 @@
 // no project and no network.
 //
 //   node scripts/test-agent-auth.mjs
-import { serverToServerAuth } from "../api/agent-hub.mjs";
+import { runToolWithBudget, serverToServerAuth } from "../api/agent-hub.mjs";
 import { checkSqlAccess, normalizeSql } from "../lib/agentWrite.mjs";
 import { VOICE_TOOL_NAMES } from "../lib/voice.mjs";
 
@@ -147,6 +147,37 @@ eq("no habilita multi-sentencia", normalizeSql("select 1; drop table trucks;").i
 }
 eq("una tabla permitida pasa", checkSqlAccess("select * from storage_jobs", member), null);
 eq("una tabla privada sigue bloqueada", /privada/.test(checkSqlAccess("select * from profiles", member)), true);
+
+// ── El turno de voz no se cuelga ─────────────────────────────────────────────
+const never = () => new Promise(() => {});           // no resuelve jamás
+const quick = async () => ({ output: "ok", ms: 1 });
+
+{
+  const out = await runToolWithBudget("crm_lookup", never, "es", 30);
+  eq("una lectura colgada devuelve algo hablable", out.timed_out, true);
+  eq("y el modelo recibe una instrucción, no un stack", /Do NOT repeat it/.test(out.output), true);
+  eq("con texto para la persona en su idioma", out.ui.text, "Esa consulta tardó demasiado.");
+}
+{
+  const out = await runToolWithBudget("crm_ask", never, "en", 30);
+  eq("crm_ask también tiene tope", out.timed_out, true);
+  eq("en inglés cuando el turno es en inglés", out.ui.text, "That query took too long.");
+}
+{
+  const out = await runToolWithBudget("crm_lookup", quick, "es", 5000);
+  eq("una tool rápida pasa sin tocar", out.output, "ok");
+  eq("y no se marca como vencida", !!out.timed_out, false);
+}
+// Lo importante: las tools con estado NO se cortan. Un crm_plan cortado por
+// tiempo puede dejar un plan staged que nadie escuchó, y un "sí" posterior lo
+// ejecutaría — justo lo que confirmar-antes-de-escribir existe para impedir.
+for (const stateful of ["crm_plan", "crm_confirm", "crm_cancel"]) {
+  const out = await Promise.race([
+    runToolWithBudget(stateful, never, "es", 30),
+    new Promise((r) => setTimeout(() => r("SIGUE CORRIENDO"), 120)),
+  ]);
+  eq(`${stateful} no se corta por tiempo`, out, "SIGUE CORRIENDO");
+}
 
 console.log(failed ? `\n${failed} test(s) fallaron` : "\nTodo OK");
 process.exit(failed ? 1 : 0);
