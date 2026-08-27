@@ -1601,7 +1601,7 @@ export const I18N_ES = {
   "On the net (post broker)": "Sobre el neto (post broker)",
   "on time (": "a tiempo (",
   "Only jobs without a pickup date are listed. Pick a date above, then click a job to put it on the calendar.": "Solo se listan jobs sin fecha de pickup. Elegí una fecha arriba y hacé clic en un job para ponerlo en el calendario.",
-  "Only the dispatch manager can write, edit or delete notes. Tagged teammates get the note as a direct message. Service entries are posted automatically by whoever adds a service — anyone can, and nobody can edit them.": "Solo el dispatch manager puede escribir, editar o borrar notas. Los compañeros etiquetados reciben la nota como mensaje directo. Las entradas de servicio las postea automáticamente quien agrega el servicio — cualquiera puede, y nadie las puede editar.",
+  "Only the dispatch manager can write, edit or delete notes. Tagged teammates get the note as a direct message. Service entries are posted automatically by whoever adds a service — anyone can add one, and only the dispatch manager can remove the entry.": "Solo el dispatch manager puede escribir, editar o borrar notas. Los compañeros etiquetados reciben la nota como mensaje directo. Las entradas de servicio las postea automáticamente quien agrega el servicio — cualquiera puede cargar una, y solo el dispatch manager puede borrar la entrada.",
   "Only verified transactions": "Solo movimientos verificados",
   "Open group ↗": "Abrir grupo ↗",
   "Open in Google Maps": "Abrir en Google Maps",

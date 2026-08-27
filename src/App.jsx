@@ -12001,7 +12001,7 @@ export default function App() {
                 </>)}
                 <div style={{ fontSize:10.5, color:"#bbb", marginBottom:13, paddingBottom:11, borderBottom:"1px solid #f4f4f4" }}>
                   🔒 {isMgr
-                    ? "Only the dispatch manager can write, edit or delete notes. Tagged teammates get the note as a direct message. Service entries are posted automatically by whoever adds a service — anyone can, and nobody can edit them."
+                    ? "Only the dispatch manager can write, edit or delete notes. Tagged teammates get the note as a direct message. Service entries are posted automatically by whoever adds a service — anyone can add one, and only the dispatch manager can remove the entry."
                     : "Notes are written by the dispatch manager. You can read them here."}
                 </div>
                 {noteRows.length === 0 ? (
@@ -12362,7 +12362,7 @@ export default function App() {
                             {it.notes && <div style={{ fontSize:12, color:"#555", marginTop:2 }}>{it.notes}</div>}
                             <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{(it.date || "").replace("T", " ").slice(0, 16)}{it.by ? ` · ${it.by}` : ""}</div>
                           </div>
-                          {it.source === "manual" && <button onClick={() => deleteJobEvent(it.raw)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
+                          {it.source === "manual" && (!JOB_EVENT_AUTO[it.raw?.event_type] || isMgr) && <button onClick={() => deleteJobEvent(it.raw)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
                         </div>
                       ))}
                     </div>}
