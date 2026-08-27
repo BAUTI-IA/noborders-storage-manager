@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import { BolSection } from "./bol.jsx";
-import { MessagesSection } from "./messages.jsx";
+import { MessagesSection, notifyUser } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
 import { ElevenLabsAgentWidget } from "./elevenlabsAgent.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
@@ -1658,7 +1658,11 @@ const JOB_EVENT_TYPES = [
   { v:"driver_handoff", l:"Handoff de driver", icon:"🔄" },
   { v:"other", l:"Other", icon:"📝" },
 ];
-const jobEventMeta = (v) => JOB_EVENT_TYPES.find(t => t.v === v) || { l: v || "Evento", icon:"•" };
+// Entries the app writes on its own (dispatch notes and service changes). They
+// are NOT in JOB_EVENT_TYPES because they must not be selectable in the manual
+// "add event" form — a note is written from the notes composer, which is gated.
+const JOB_EVENT_AUTO = { note:{ l:"Note", icon:"📝" }, service:{ l:"Additional service", icon:"➕" } };
+const jobEventMeta = (v) => JOB_EVENT_TYPES.find(t => t.v === v) || JOB_EVENT_AUTO[v] || { l: v || "Evento", icon:"•" };
 
 // ── Claims & Incidents: incident types, status workflow and resolutions ──
 const CLAIM_TYPES = [
@@ -1733,6 +1737,51 @@ function nextStatus(g) {
   return null;
 }
 
+// One icon per job status. Every place a status shows up — the header badge, the
+// rail, the status select — uses this table, so a status always looks the same.
+const STATUS_ICON = { scheduled:"📅", picked_up:"🚚", in_storage:"🏬", out_for_delivery:"📦", delivered:"✅", on_hold:"⏸️", redispatched:"🔄", cancelled:"🚫" };
+const statusIcon = (v) => STATUS_ICON[v] || "•";
+// The canonical dispatch flow. It only decides which rail nodes read as done and
+// what `nextStatus` proposes — never what the dispatcher is allowed to pick.
+const STATUS_FLOW = ["scheduled", "picked_up", "in_storage", "out_for_delivery", "delivered"];
+const OFF_FLOW_STATUSES = ["on_hold", "redispatched", "cancelled"];
+
+// Rail nodes for a job: the flow steps it actually cleared (read off the job's
+// own dates, not off the status alone) plus, when the job sits on a status
+// outside the flow, that status dropped in where it happened, flagged manual.
+// The rail shows what the job really did, not the script it was supposed to follow.
+function statusRailNodes(g) {
+  const st = g.status || "scheduled";
+  const anyIn = !!g.date_in || (g.parts || []).some(p => p.date_in);
+  const anyOut = !!g.date_out || (g.parts || []).some(p => p.date_out);
+  const idx = STATUS_FLOW.indexOf(st);
+  const cleared = (v) => {
+    const i = STATUS_FLOW.indexOf(v);
+    if (idx >= 0 && i < idx) return true;
+    if (v === "picked_up") return anyIn || anyOut;
+    if (v === "in_storage") return anyIn;
+    if (v === "delivered") return anyOut;
+    return false;
+  };
+  const dateOf = {
+    scheduled: (g.created_at ? String(g.created_at).slice(0, 10) : "") || g.pickup_date_from || g.pickup_date || "",
+    picked_up: g.pickup_date_from || g.pickup_date || "",
+    in_storage: g.date_in || "",
+    out_for_delivery: "",
+    delivered: g.date_out || "",
+  };
+  const nodes = STATUS_FLOW.map(v => ({
+    v, label: statusMeta(v).l, icon: statusIcon(v), date: dateOf[v] || "",
+    state: v === st ? "cur" : cleared(v) ? "done" : "todo",
+  }));
+  if (OFF_FLOW_STATUSES.includes(st)) {
+    let at = 0;
+    for (let i = 0; i < nodes.length; i++) if (nodes[i].state === "done") at = i + 1;
+    nodes.splice(at, 0, { v: st, label: statusMeta(st).l, icon: statusIcon(st), date: "", state: "cur", manual: true });
+  }
+  return nodes;
+}
+
 // ── List pagination: 15 rows per page, prev/next arrows. Filters run over the
 // full set first; only the page slice is rendered. ──
 const PAGE_SIZE = 15;
@@ -1770,6 +1819,10 @@ function monthGrid(anchorStr) {
 }
 function shiftDate(anchorStr, days) { const x = new Date(anchorStr + "T00:00:00"); x.setDate(x.getDate() + days); return fmtDateLocal(x); }
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+// English day/month abbreviations for new UI. Written in English like every
+// other string and translated through `t()`, so the i18n audit can see them.
+const DOW_EN = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const MONTHS_EN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DOW_ES = ["Dom","Lun","Mar","Wed","Jue","Vie","Sat"];
 // Calendar colour is driven ONLY by this manual field — never inferred from the
 // workflow status, delivery, or trip actions. The five options match the legend.
@@ -1948,6 +2001,65 @@ const fgrid = { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170p
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 
+// Status picker for a job. The flow's next step arrives pre-selected as a
+// suggestion and every status stays pickable: the app proposes an order, the
+// dispatch manager owns it. Read-only users see the suggestion, greyed out.
+function StatusSelect({ current, suggested, canEdit, onApply }) {
+  const [val, setVal] = useState(suggested || current);
+  useEffect(() => { setVal(suggested || current); }, [suggested, current]);
+  const label = (v) => `${statusIcon(v)} ${statusMeta(v).l}${v === current ? tr(" · current", " · actual") : v === suggested ? tr(" · suggested", " · sugerido") : ""}`;
+  return (
+    <div style={{ width:330, flexShrink:0, background:"#fff", border:"1px solid #e6e6e6", borderRadius:10, padding:"9px 11px 8px" }}>
+      <div style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", display:"flex", alignItems:"center", gap:6, marginBottom:7 }}>
+        Status
+        <span style={{ background: canEdit ? "#EDE9FE" : "#f1f1f1", color: canEdit ? "#6D28D9" : "#999", borderRadius:10, padding:"1px 7px", fontSize:9, letterSpacing:0, textTransform:"none" }}>
+          {canEdit ? "Dispatch manager" : "Read only"}
+        </span>
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+        <select value={val} disabled={!canEdit} onChange={e => setVal(e.target.value)}
+          style={{ ...inp, flex:1, fontWeight:600, padding:"6px 8px", cursor: canEdit ? "pointer" : "default", background: canEdit ? "#fff" : "#fafafa" }}>
+          {STATUS_FLOW.map(v => <option key={v} value={v}>{label(v)}</option>)}
+          <option disabled>──────────</option>
+          {OFF_FLOW_STATUSES.map(v => <option key={v} value={v}>{label(v)}</option>)}
+        </select>
+        <Btn primary disabled={!canEdit || val === current} onClick={() => onApply(val)} style={{ padding:"6px 13px", fontSize:12 }}>Apply</Btn>
+      </div>
+      <div style={{ fontSize:10, color:"#c0c0c0", marginTop:6 }}>Pick any status — the suggestion never forces the order.</div>
+    </div>
+  );
+}
+
+// The rail above the status select: what the job actually did, left to right.
+function StatusRail({ group }) {
+  const nodes = statusRailNodes(group);
+  return (
+    <div style={{ flex:1, display:"flex", alignItems:"flex-start", minWidth:0 }}>
+      {nodes.map((n, i) => {
+        const done = n.state === "done", cur = n.state === "cur";
+        const bar = i === 0 ? "transparent" : (done || cur) ? "#639922" : "#eaeaea";
+        const cirBg = n.manual ? "#7C3AED" : done ? "#639922" : cur ? "#fff" : "#e2e2e2";
+        return (
+          <div key={n.v + i} style={{ flex:1, textAlign:"center", position:"relative", minWidth:0 }}>
+            <div style={{ position:"absolute", top:11, left:"-50%", width:"100%", height:2, background:bar }} />
+            <div style={{ position:"relative", width:22, height:22, borderRadius:"50%", margin:"0 auto 5px", background:cirBg,
+              border: cur && !n.manual ? "5px solid #111" : "none", boxShadow: cur ? "0 0 0 4px rgba(17,17,17,0.10)" : "none",
+              display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:"#fff" }}>
+              {done || n.manual ? "✓" : ""}
+            </div>
+            <div style={{ fontSize:11, fontWeight:600, color: n.manual ? "#6D28D9" : done ? "#3B6D11" : cur ? "#111" : "#ccc", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+              <span style={{ fontSize:10, marginRight:2 }}>{n.icon}</span>{n.label}
+            </div>
+            <div style={{ fontSize:9.5, color: n.manual ? "#a78bda" : "#bbb", fontWeight: n.manual ? 600 : 400 }}>
+              {n.manual ? tr("manual", "manual") : (n.date || (n.state === "todo" ? "—" : ""))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Btn({ onClick, primary, danger, disabled, children, style }) {
   return (
     <button onClick={onClick} disabled={disabled} style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border: danger ? "1px solid #fca5a5" : "1px solid #e5e5e5", background: primary ? "#111" : danger ? "#fef2f2" : "#fff", color: primary ? "#fff" : danger ? "#b91c1c" : "#111", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, display:"inline-flex", alignItems:"center", gap:6, ...style }}>
@@ -1956,16 +2068,16 @@ function Btn({ onClick, primary, danger, disabled, children, style }) {
   );
 }
 
-function Modal({ title, onClose, children, footer }) {
+function Modal({ title, header, onClose, children, footer, wide, bodyStyle }) {
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", zIndex:50, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth:600, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,0.15)" }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"18px 20px 14px", borderBottom:"1px solid #f0f0f0" }}>
-          <span style={{ fontWeight:600, fontSize:15 }}>{title}</span>
+      <div style={{ background:"#fff", borderRadius:14, width:"100%", maxWidth: wide ? 1000 : 600, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,0.15)" }}>
+        <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:12, padding:"18px 20px 14px", borderBottom:"1px solid #f0f0f0" }}>
+          <span style={{ fontWeight:600, fontSize:15, flex:1, minWidth:0 }}>{header || title}</span>
           <button onClick={onClose} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#aaa", lineHeight:1 }}>x</button>
         </div>
-        <div style={{ padding:"16px 20px" }}>{children}</div>
+        <div style={{ padding:"16px 20px", ...bodyStyle }}>{children}</div>
         {footer && <div style={{ padding:"12px 20px 16px", borderTop:"1px solid #f0f0f0", display:"flex", justifyContent:"flex-end", gap:8, flexWrap:"wrap" }}>{footer}</div>}
       </div>
     </div>
@@ -3121,6 +3233,15 @@ export default function App() {
   const [listPage, setListPage] = useState(0);   // current page of the Storage Units / Jobs list
   const [detailId, setDetailId] = useState(null);
   const [jobDetailKey, setJobDetailKey] = useState(null);
+  // Job detail: which tab is open, plus the in-place composers (note, service
+  // amount being edited, payment lines). All reset when another job is opened.
+  const [jobTab, setJobTab] = useState("overview");
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteMentions, setNoteMentions] = useState([]);   // profile ids alerted by the next note
+  const [teamPeople, setTeamPeople] = useState([]);       // active teammates, for @mentions
+  const [svcEditId, setSvcEditId] = useState(null);
+  const [jobPayLines, setJobPayLines] = useState(null);   // null = composer closed
+  useEffect(() => { setJobTab("overview"); setNoteDraft(""); setNoteMentions([]); setSvcEditId(null); setJobPayLines(null); }, [jobDetailKey]);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -3431,6 +3552,20 @@ export default function App() {
   const isAdmin = profile?.role === "admin";
   const can = useCallback((id, level = "view") =>
     (profile?.role === "admin") || !!profile?.permissions?.[id]?.[level], [profile]);
+
+  // Active teammates, for @mentions on dispatch notes. Readable by any signed-in
+  // user (the profiles_select_chat policy the Chats section already relies on),
+  // so this works whatever the user's section permissions are.
+  useEffect(() => {
+    if (!session) { setTeamPeople([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("id, full_name, email, active").order("full_name");
+      if (!cancelled) setTeamPeople((data || []).filter(p => p.active !== false));
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+  const personLabel = useCallback((p) => (p?.full_name || "").trim() || (p?.email || "").split("@")[0] || "user", []);
 
   // Save the current user's own display name (any user can edit their own).
   async function saveMyName() {
@@ -4758,13 +4893,17 @@ export default function App() {
     else if (dispatchFilter === "no_trip") arr = arr.filter(g => !g.trip_id);
     else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
     else if (dispatchFilter === "no_delivery") arr = arr.filter(g => !g.delivery_date);
+    // Same "no driver today" rule as the alert banner, so the tab and the banner
+    // can never disagree about which jobs are unmanned.
+    else if (dispatchFilter === "no_driver_today") arr = arr.filter(g => (g.pickup_date === td || g.delivery_date === td) && !jobDriverNames(g));
+    else if (dispatchFilter === "no_sticker") arr = arr.filter(g => !g.sticker_color);
     // Most urgent FADD first; jobs with no FADD sink to the bottom.
     arr.sort((a, b) => {
       const da = daysUntilFadd(a.fadd), db = daysUntilFadd(b.fadd);
       return (da === null ? Infinity : da) - (db === null ? Infinity : db);
     });
     return arr;
-  }, [jobs, storageById, search, driverFilter, dispatchFilter]);
+  }, [jobs, storageById, search, driverFilter, dispatchFilter, jobDriverNames]);
 
   // Calendar: pickups grouped by job and indexed by date. A job with a date range
   // (pickup_date_from..pickup_date_to) is shown spanning every day in that range.
@@ -5097,6 +5236,83 @@ export default function App() {
     for (const j of jobs) { if (j.trip_id && j.date_out === td) deliveredToday++; }
     return { activeCount, cfTransit, collectTransit, deliveredToday };
   }, [trips, jobs, tripCalc]);
+
+  // Everything the Dispatching Overview tab draws, derived from `dispatchGroups`
+  // — which is already deduped by job, already excludes delivered/cancelled, and
+  // already honours the search box and the driver filter. So narrowing to one
+  // driver narrows the whole panel for free, and the panel can never disagree
+  // with the table underneath it.
+  const dispatchOverview = useMemo(() => {
+    const td = today();
+    const pipeline = [...STATUS_FLOW.filter(v => v !== "delivered"), ...OFF_FLOW_STATUSES.filter(v => v !== "cancelled")]
+      .map(v => ({ v, meta: statusMeta(v), count: 0, cf: 0 }));
+    const byStatus = Object.fromEntries(pipeline.map(r => [r.v, r]));
+    // FADD buckets, most urgent first. `null` days = the job has no FADD at all,
+    // which is its own bucket: not urgent, but not fine either.
+    const fadd = [
+      { k:"overdue",  l:"Overdue",     tab:"all", color:"#E24B4A", pill:{ bg:"#FCEBEB", text:"#A32D2D" }, count:0 },
+      { k:"d0_2",     l:"Next 2 days", tab:"all", color:"#EA580C", pill:{ bg:"#FDE3CF", text:"#C2410C" }, count:0 },
+      { k:"d3_7",     l:"3–7 days",    tab:"all", color:"#EAB308", pill:{ bg:"#FEF3C7", text:"#92760B" }, count:0 },
+      { k:"d8_30",    l:"8–30 days",   tab:"all", color:"#639922", pill:{ bg:"#EAF3DE", text:"#3B6D11" }, count:0 },
+      { k:"d30plus",  l:"30+ days",    tab:"all", color:"#378ADD", pill:{ bg:"#E6F1FB", text:"#185FA5" }, count:0 },
+      { k:"none",     l:"No FADD",     tab:"nofadd", color:"#cfcfcf", pill:{ bg:"#f1f1f1", text:"#888" }, count:0 },
+    ];
+    const byBucket = Object.fromEntries(fadd.map(b => [b.k, b]));
+    let overdueCf = 0, oldest = null;
+    const flags = { no_driver_today:0, no_trip:0, nofadd:0, no_delivery:0, no_sticker:0 };
+    const days = Array.from({ length: 7 }, (_, i) => ({ date: addDaysStr(td, i), pickups: [], deliveries: [], unmanned: 0 }));
+    const byDay = Object.fromEntries(days.map(d => [d.date, d]));
+
+    for (const g of dispatchGroups) {
+      const cf = (g.parts || []).reduce((s, p) => s + effCf(p), 0);
+      const row = byStatus[g.status || "scheduled"];
+      if (row) { row.count++; row.cf += cf; }
+
+      const d = daysUntilFadd(g.fadd);
+      const b = d === null ? "none" : d < 0 ? "overdue" : d <= 2 ? "d0_2" : d <= 7 ? "d3_7" : d <= 30 ? "d8_30" : "d30plus";
+      byBucket[b].count++;
+      if (b === "overdue") { overdueCf += cf; if (oldest === null || d < oldest.d) oldest = { d, g }; }
+
+      const drv = jobDriverNames(g);
+      if ((g.pickup_date === td || g.delivery_date === td) && !drv) flags.no_driver_today++;
+      if (!g.trip_id) flags.no_trip++;
+      if (!g.fadd) flags.nofadd++;
+      if (!g.delivery_date) flags.no_delivery++;
+      if (!g.sticker_color) flags.no_sticker++;
+
+      // A pickup with a date range shows on every day of the range, same rule the
+      // pickup calendar uses — a two-day window is two days of work, not one.
+      const from = g.pickup_date_from || g.pickup_date;
+      if (from) {
+        const to = g.pickup_date_to && g.pickup_date_to >= from ? g.pickup_date_to : from;
+        for (const day of days) if (day.date >= from && day.date <= to) day.pickups.push(g);
+      }
+      if (g.delivery_date && byDay[g.delivery_date]) byDay[g.delivery_date].deliveries.push(g);
+    }
+    for (const day of days) {
+      const seen = new Set();
+      for (const g of [...day.pickups, ...day.deliveries]) {
+        if (seen.has(g.key)) continue; seen.add(g.key);
+        if (!jobDriverNames(g) || !g.trip_id) day.unmanned++;
+      }
+    }
+    const maxPipe = Math.max(1, ...pipeline.map(r => r.count));
+    const maxFadd = Math.max(1, ...fadd.map(b => b.count));
+    const totals = {
+      jobs: dispatchGroups.length,
+      cf: pipeline.reduce((s, r) => s + r.cf, 0),
+      pickups: days.reduce((s, d) => s + d.pickups.length, 0),
+      deliveries: days.reduce((s, d) => s + d.deliveries.length, 0),
+      unmanned: days.reduce((s, d) => s + d.unmanned, 0),
+      flags: Object.values(flags).reduce((a, b) => a + b, 0),
+    };
+    // Active trips with what is physically on each truck right now.
+    const activeTrips = trips.filter(t => TRIP_ACTIVE(t.status))
+      .map(t => ({ t, c: tripCalc(t) }))
+      .sort((a, b) => String(a.t.departure_date || "9999").localeCompare(String(b.t.departure_date || "9999")));
+    return { pipeline, maxPipe, fadd, maxFadd, overdueCf, oldest, flags, days, totals, activeTrips,
+      cfOnBoard: activeTrips.reduce((s, x) => s + x.c.loadedCf, 0) };
+  }, [dispatchGroups, jobDriverNames, trips, tripCalc]);
   // Custom (non-job) stops grouped by trip, ordered by stop_order then creation.
   const tripStopsByTrip = useMemo(() => {
     const m = {};
@@ -5538,7 +5754,7 @@ export default function App() {
     // that carries the money — a non-split unit if any, else the original (lowest id)
     // split row. Split portions have their money zeroed, so never let one be `f`.
     const f = parts.find(p => !p.split_group) || parts.reduce((a, b) => (b.id < a.id ? b : a));
-    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, calendar_status:f.calendar_status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
+    return { key:jobDetailKey, job_number:f.job_number, customer:f.customer, driver:f.driver, driver_ids:f.driver_ids, date_in:f.date_in, fadd:f.fadd, volume:f.volume, real_cf:f.real_cf, lot_number:f.lot_number, sticker_color:f.sticker_color, job_type:f.job_type, status:f.status, calendar_status:f.calendar_status, broker_id:f.broker_id, rep:f.rep, client_phone:f.client_phone, client_email:f.client_email, extra_stops:f.extra_stops, price_per_cf:f.price_per_cf, fuel_surcharge_pct:f.fuel_surcharge_pct, estimate:f.estimate, deposit:f.deposit, carrier_notes:f.carrier_notes, closing_sheet_id:f.closing_sheet_id, carrier_rate_per_cf:f.carrier_rate_per_cf, bol_balance:f.bol_balance, bol_collected:f.bol_collected, bol_payment_method:f.bol_payment_method, bol_payment_notes:f.bol_payment_notes, bol_collected_date:f.bol_collected_date, pads_received:f.pads_received, pads_returned:f.pads_returned, broker_job_share_pct:f.broker_job_share_pct, broker_job_share_amount:f.broker_job_share_amount, trip_id:f.trip_id, trip_stop_order:f.trip_stop_order, pickup_balance:f.pickup_balance, delivery_balance:f.delivery_balance, pickup_date:f.pickup_date, pickup_date_from:f.pickup_date_from, pickup_date_to:f.pickup_date_to, pickup_address:f.pickup_address, pickup_city:f.pickup_city, pickup_state:f.pickup_state, pickup_zip:f.pickup_zip, delivery_date:f.delivery_date, delivery_address:f.delivery_address, delivery_city:f.delivery_city, delivery_state:f.delivery_state, delivery_zip:f.delivery_zip, billing_active:f.billing_active, client_monthly_rate:f.client_monthly_rate, first_month_free:f.first_month_free, billing_start_date:f.billing_start_date, notes:f.notes, created_by:f.created_by, created_at:f.created_at, updated_by:f.updated_by, updated_at:f.updated_at, parts };
   }, [jobDetailKey, jobs, storageById]);
 
   // Close the inline pickup-date editor whenever the open job detail changes.
@@ -5962,6 +6178,22 @@ export default function App() {
   // Advance a job to its next status across all its parts. Reaching "delivered"
   // also stamps date_out (so it leaves the active lists). Falls back to the
   // delivered flag when the CRM status columns aren't present yet.
+  // Set a job to ANY status. `advanceStatus` walks the suggested flow; this is
+  // the dispatch manager overriding it — the order of a job is theirs to decide,
+  // so no transition is refused. The change is logged like every other one.
+  async function setJobStatus(g, status) {
+    if (!g?.parts?.length || !status || status === (g.status || "scheduled")) return;
+    const patch = { status, updated_by: userEmail, updated_at: new Date().toISOString() };
+    if (status === "delivered") patch.date_out = today();
+    if (status === "picked_up" && !g.pickup_date) patch.pickup_date = today();
+    // Moving a job back out of "delivered" must clear the delivery date, or the
+    // job keeps counting as closed everywhere date_out is what's checked.
+    if (status !== "delivered" && g.parts.some(p => p.date_out)) patch.date_out = null;
+    await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id));
+    await loadJobs();
+    logServiceNote(Math.min(...g.parts.map(p => p.id)), `${tr("Status", "Estado")} → ${statusMeta(status).l}`);
+    showToast("Status updated");
+  }
   async function advanceStatus(g) {
     if (!g?.parts?.length) return;
     if (jobColsMissing) { await deliverJobs(g.parts.map(p => p.id)); return; }
@@ -7180,6 +7412,112 @@ export default function App() {
     loadJobEvents();
   }
 
+  // ── Job detail: dispatch notes, service amounts, payment lines ──
+  // A dispatch note is a job_event of type "note". Writing one is an edit-level
+  // action on dispatching, so only the dispatch manager (or an admin) gets the
+  // composer — everyone else reads the very same list.
+  async function saveJobNote(repId, job) {
+    const body = noteDraft.trim();
+    if (!body || jobEventsMissing) return;
+    // Tagged teammates are recorded inside the note text as @name, so the thread
+    // still reads correctly for anyone opening it later — no extra column needed.
+    const tagged = teamPeople.filter(p => noteMentions.includes(p.id));
+    const stored = tagged.length ? `${tagged.map(p => "@" + personLabel(p)).join(" ")} ${body}` : body;
+    const { error } = await supabase.from("job_events").insert([{ job_id: repId, event_date: today(), event_type: "note", notes: stored, created_by: userEmail }]);
+    if (error) { window.alert(error.message); return; }
+    setNoteDraft(""); setNoteMentions([]);
+    await loadJobEvents();
+    // The alert itself: a direct message per tagged teammate, so it lands in the
+    // Chats badge they already watch instead of a channel nobody checks.
+    if (tagged.length && session?.user?.id) {
+      const jn = job?.job_number ? `Job ${job.job_number}` : "Job";
+      const who = profile?.full_name || userEmail;
+      const alert = `📝 ${jn}${job?.customer ? ` · ${job.customer}` : ""}\n${body}\n— ${who}`;
+      const sent = await Promise.all(tagged.map(p => notifyUser({ supabase, fromId: session.user.id, fromName: who, toId: p.id, body: alert })));
+      const ok = sent.filter(Boolean).length;
+      showToast(ok ? tr(`Note added · ${ok} teammate(s) alerted`, `Nota agregada · ${ok} compañero(s) alertado(s)`) : "Note added");
+      return;
+    }
+    showToast("Note added");
+  }
+  // Tell the client their delivery is coming. No mail server involved: the app
+  // opens the user's own mail client / WhatsApp with the message pre-written,
+  // then records that the client was contacted so the thread shows it happened.
+  function notifyClient(job, channel) {
+    const repId = Math.min(...job.parts.map(p => p.id));
+    const when = job.delivery_date || job.fadd || "";
+    const subject = tr(`Your delivery — ${job.job_number || ""}`.trim(), `Tu delivery — ${job.job_number || ""}`.trim());
+    const body = tr(
+      `Hi ${job.customer || ""},\n\nWe are getting your delivery ready${when ? ` for ${when}` : ""}.\n\nAddress: ${[job.delivery_address, [job.delivery_city, job.delivery_state].filter(Boolean).join(", "), job.delivery_zip].filter(Boolean).join(" · ") || "—"}\n\nPlease confirm you will be there to receive it.\n\nNo Borders Moving`,
+      `Hola ${job.customer || ""},\n\nEstamos preparando tu delivery${when ? ` para el ${when}` : ""}.\n\nDirección: ${[job.delivery_address, [job.delivery_city, job.delivery_state].filter(Boolean).join(", "), job.delivery_zip].filter(Boolean).join(" · ") || "—"}\n\nConfirmanos que vas a estar para recibirlo.\n\nNo Borders Moving`);
+    if (channel === "email") {
+      if (!job.client_email) { window.alert(tr("This job has no client email.", "Este job no tiene email del cliente.")); return; }
+      window.open(`mailto:${encodeURIComponent(job.client_email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_blank");
+    } else {
+      const phone = (job.client_phone || "").replace(/\D/g, "");
+      if (!phone) { window.alert(tr("This job has no client phone.", "Este job no tiene teléfono del cliente.")); return; }
+      window.open(`https://wa.me/${phone}?text=${encodeURIComponent(body)}`, "_blank");
+    }
+    logServiceNote(repId, tr(`Client contacted by ${channel === "email" ? "email" : "WhatsApp"} about the delivery${when ? ` on ${when}` : ""}`, `Cliente contactado por ${channel === "email" ? "email" : "WhatsApp"} por el delivery${when ? ` del ${when}` : ""}`));
+  }
+  // Every service change posts its own entry, so the money on a job always says
+  // who moved it and when — nobody edits an amount without leaving a trail.
+  async function logServiceNote(repId, text) {
+    if (jobEventsMissing) return;
+    await supabase.from("job_events").insert([{ job_id: repId, event_date: today(), event_type: "service", notes: text, created_by: userEmail }]);
+    loadJobEvents();
+  }
+  // Edit a service amount straight from the rail. Anyone may — the note keeps
+  // the previous value, which is what makes "anyone" safe.
+  async function setExtraAmount(extra, value, repId) {
+    const next = value === "" ? 0 : numv(value);
+    const prev = numv(extra.amount);
+    if (next === prev) return;
+    await patchExtra(extra, { amount: next });
+    await logServiceNote(repId, `${extraTypeLabel(extra.extra_type)}: $${Math.round(prev).toLocaleString()} → $${Math.round(next).toLocaleString()}`);
+  }
+  // Add a service of a given type to a job, with the commission defaults its
+  // type implies. The rail's dashed chips call this.
+  async function addJobService(repId, type, driverId) {
+    const gen = "driver_only";
+    const d = commissionDefaults(type, gen);
+    const { data, error } = await supabase.from("job_extras")
+      .insert([{ job_id: repId, ...extraPayload({ extra_type:type, amount:"", generated_by:gen, driver_id:driverId || null, driver_commission_pct:d.driver, rep_commission_pct:d.rep, active:true }) }])
+      .select("*").single();
+    if (error) { window.alert(error.message); return; }
+    if (data) { undoMgr.record("Extra creado", [undoMgr.createEntry("job_extras", data)]); setSvcEditId(data.id); }
+    await loadExtras();
+    await logServiceNote(repId, `${extraTypeLabel(type)} ${tr("added", "agregado")}`);
+  }
+  // Save the payment lines composed at the bottom of Job total: one payments row
+  // per line, so a collection split across methods — or between the balance and
+  // an extra — stays split in the ledger instead of collapsing into one number.
+  async function saveJobPayLines(repId) {
+    const f = jobPayLines; if (!f) return;
+    const lines = f.lines.filter(l => numv(l.amount) > 0);
+    if (!lines.length) { window.alert(tr("Add at least one line with an amount.", "Agregá al menos una línea con monto.")); return; }
+    const entries = [];
+    for (const l of lines) {
+      const sc = splitConcept(l.concept);
+      const payload = {
+        ...payPayload({
+          job_id: repId, payment_date: f.date, amount: l.amount, method: l.method,
+          received: true, received_date: f.date, received_by: userEmail,
+          banked: isDigitalMethod(l.method), banked_date: f.date, notes: f.notes,
+        }),
+        concept: sc.pay,
+      };
+      if (sc.extra) payload.extra_type = sc.extra;
+      const { data, error } = await supabase.from("payments").insert([payload]).select("*").single();
+      if (error) { window.alert(error.message); return; }
+      if (data) entries.push(undoMgr.createEntry("payments", data));
+    }
+    if (entries.length) undoMgr.record("Pago registrado", entries);
+    setJobPayLines(null);
+    await loadPayments();
+    showToast("Payment saved");
+  }
+
   // ── Extras & commissions handlers ──
   // Build a job_extras payload. For Extra CF the amount = total charged (CF + fuel)
   // and commissions are computed on the chosen base (with/without fuel surcharge).
@@ -8367,7 +8705,7 @@ export default function App() {
           )}
 
           <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"],["no_delivery","No delivery"]].map(([t,l]) => (
+            {[["overview","Overview"],["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"],["no_delivery","No delivery"],["no_driver_today","No driver today"],["no_sticker","No sticker"]].map(([t,l]) => (
               <button key={t} onClick={() => setDispatchFilter(t)}
                 style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
             ))}
@@ -8383,6 +8721,175 @@ export default function App() {
             </select>
           </div>
 
+          {dispatchFilter === "overview" && (() => {
+            const o = dispatchOverview;
+            const card = { background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" };
+            const cap = { fontSize:13, fontWeight:700, letterSpacing:"-0.01em", display:"flex", alignItems:"baseline", gap:8, marginBottom:14 };
+            const right = { marginLeft:"auto", fontSize:11, color:"#bbb", fontWeight:400 };
+            const track = { height:16, background:"#f5f5f5", borderRadius:4 };
+            const go = (tab) => setDispatchFilter(tab);
+            return (
+              <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+
+                {/* ── Pipeline + FADD urgency ── */}
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))", gap:14, alignItems:"start" }}>
+                  <div style={card}>
+                    <div style={cap}>Pipeline<span style={right}>{tr(`${o.totals.jobs} active jobs · ${Math.round(o.totals.cf).toLocaleString()} CF`, `${o.totals.jobs} jobs activos · ${Math.round(o.totals.cf).toLocaleString()} CF`)}</span></div>
+                    {o.totals.jobs > 0 && (
+                      <div style={{ display:"flex", height:9, borderRadius:5, overflow:"hidden", marginBottom:16 }}>
+                        {o.pipeline.filter(r => r.count > 0).map(r => (
+                          <div key={r.v} title={`${r.meta.l} · ${r.count}`} style={{ width:`${r.count / o.totals.jobs * 100}%`, background:r.meta.dot }} />
+                        ))}
+                      </div>
+                    )}
+                    {o.pipeline.map(r => (
+                      <div key={r.v} onClick={() => go(r.v === "in_storage" ? "in_storage" : r.v === "on_hold" ? "on_hold" : "all")}
+                        title={tr("Filter the table by this status", "Filtrar la tabla por este estado")}
+                        style={{ display:"grid", gridTemplateColumns:"142px 1fr 78px", alignItems:"center", gap:10, marginBottom:9, cursor:"pointer" }}>
+                        <span style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:"#444" }}>
+                          <span style={{ width:7, height:7, borderRadius:"50%", background:r.meta.dot, flexShrink:0 }} />
+                          <span style={{ fontSize:11 }}>{statusIcon(r.v)}</span>{r.meta.l}
+                        </span>
+                        <span style={track}><span style={{ display:"block", height:16, borderRadius:4, background:r.meta.bg, border:`1px solid ${r.meta.dot}44`, width:`${Math.max(2, r.count / o.maxPipe * 100)}%` }} /></span>
+                        <span style={{ textAlign:"right", fontSize:12 }}>
+                          <b style={{ color:r.meta.text }}>{r.count}</b>
+                          <span style={{ color:"#bbb", fontSize:10.5, display:"block", marginTop:1 }}>{Math.round(r.cf).toLocaleString()} CF</span>
+                        </span>
+                      </div>
+                    ))}
+                    <div style={{ fontSize:10.5, color:"#ccc", marginTop:12 }}>Click a row to filter the table by that status.</div>
+                  </div>
+
+                  <div style={card}>
+                    <div style={cap}>FADD urgency<span style={right}>{tr(`${o.totals.jobs} jobs`, `${o.totals.jobs} jobs`)}</span></div>
+                    {o.fadd.map(b => (
+                      <div key={b.k} onClick={() => go(b.tab)} style={{ display:"grid", gridTemplateColumns:"100px 1fr 36px", alignItems:"center", gap:9, marginBottom:13, cursor:"pointer" }}>
+                        <span style={{ fontSize:9.5, fontWeight:700, borderRadius:10, padding:"2px 7px", background:b.pill.bg, color:b.pill.text, textAlign:"center" }}>{b.l}</span>
+                        <span style={track}><span style={{ display:"block", height:16, borderRadius:4, background:b.color, width:`${Math.max(2, b.count / o.maxFadd * 100)}%` }} /></span>
+                        <span style={{ textAlign:"right", fontSize:13, fontWeight:700, color:b.pill.text }}>{b.count}</span>
+                      </div>
+                    ))}
+                    <div style={{ display:"flex", gap:8, marginTop:14, paddingTop:12, borderTop:"1px solid #f5f5f5" }}>
+                      <div style={{ flex:1, background:"#FCEBEB", borderRadius:8, padding:"9px 11px" }}>
+                        <div style={{ fontSize:10, color:"#c48787", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em" }}>Oldest overdue</div>
+                        <div style={{ fontSize:12.5, fontWeight:700, color:"#A32D2D", marginTop:3 }}>
+                          {o.oldest ? tr(`${o.oldest.g.job_number || "(no #)"} · ${Math.abs(o.oldest.d)} days`, `${o.oldest.g.job_number || "(sin #)"} · ${Math.abs(o.oldest.d)} días`) : "—"}
+                        </div>
+                      </div>
+                      <div style={{ flex:1, background:"#fafafa", borderRadius:8, padding:"9px 11px" }}>
+                        <div style={{ fontSize:10, color:"#bbb", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em" }}>CF overdue</div>
+                        <div style={{ fontSize:12.5, fontWeight:700, marginTop:3 }}>{Math.round(o.overdueCf).toLocaleString()} CF</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Next 7 days ── */}
+                <div style={card}>
+                  <div style={cap}>Next 7 days<span style={right}>{tr(`${o.totals.pickups} pickups · ${o.totals.deliveries} deliveries · ${o.totals.unmanned} without driver or trip`, `${o.totals.pickups} pickups · ${o.totals.deliveries} deliveries · ${o.totals.unmanned} sin driver ni trip`)}</span></div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
+                    {o.days.map(d => {
+                      const dt = new Date(d.date + "T00:00:00");
+                      const isToday = d.date === today();
+                      const shown = [...d.pickups.map(g => ({ g, kind:"p" })), ...d.deliveries.map(g => ({ g, kind:"d" }))];
+                      return (
+                        <div key={d.date} style={{ border:`1px solid ${isToday ? "#378ADD" : "#efefef"}`, borderRadius:9, minHeight:132, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+                          <div style={{ padding:"6px 8px", borderBottom:"1px solid #f5f5f5", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                            <b style={{ fontSize:11 }}>{t(DOW_EN[dt.getDay()])} {dt.getDate()}</b>
+                            <span style={{ fontSize:10, color:"#bbb" }}>{isToday ? tr("Today", "Hoy") : t(MONTHS_EN[dt.getMonth()])}</span>
+                          </div>
+                          <div style={{ display:"flex", gap:5, padding:"7px 8px 4px" }}>
+                            <div onClick={() => go("pickups_today")} style={{ flex:1, textAlign:"center", borderRadius:6, padding:"4px 0", cursor:"pointer", background: d.pickups.length ? "#E6F1FB" : "#f6f6f6", color: d.pickups.length ? "#185FA5" : "#bbb" }}>
+                              <b style={{ display:"block", fontSize:15, lineHeight:1.1 }}>{d.pickups.length}</b>
+                              <span style={{ fontSize:8.5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em", opacity:0.75 }}>Pickup</span>
+                            </div>
+                            <div onClick={() => go("deliveries_today")} style={{ flex:1, textAlign:"center", borderRadius:6, padding:"4px 0", cursor:"pointer", background: d.deliveries.length ? "#EAF3DE" : "#f6f6f6", color: d.deliveries.length ? "#3B6D11" : "#bbb" }}>
+                              <b style={{ display:"block", fontSize:15, lineHeight:1.1 }}>{d.deliveries.length}</b>
+                              <span style={{ fontSize:8.5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em", opacity:0.75 }}>Deliv.</span>
+                            </div>
+                          </div>
+                          {shown.slice(0, 2).map(({ g, kind }) => {
+                            const bad = !jobDriverNames(g) || !g.trip_id;
+                            // The left border always says pickup-or-delivery, even when the
+                            // chip turns red: a job with both on the same day shows twice, and
+                            // two identical red chips read as a duplicate rather than two events.
+                            const bar = kind === "p" ? "#378ADD" : "#639922";
+                            const c = bad ? { bar, bg:"#FCEBEB", text:"#A32D2D" }
+                              : kind === "p" ? { bar, bg:"#E6F1FB", text:"#185FA5" } : { bar, bg:"#EAF3DE", text:"#3B6D11" };
+                            return (
+                              <div key={g.key + kind} onClick={() => setJobDetailKey(g.key)}
+                                style={{ margin:"0 8px 4px", borderLeft:`3px solid ${c.bar}`, background:c.bg, color:c.text, borderRadius:4, padding:"3px 6px", fontSize:9.5, lineHeight:1.35, cursor:"pointer" }}>
+                                <b style={{ fontFamily:"monospace", fontSize:9.5 }}>{g.job_number || "(job)"}</b>
+                                <div style={{ fontWeight: bad ? 700 : 400 }}>
+                                  {bad ? (!jobDriverNames(g) ? tr("⚠ No driver", "⚠ Sin driver") : tr("⚠ No trip", "⚠ Sin trip"))
+                                       : [g.pickup_state, g.delivery_state].filter(Boolean).join(" → ") || (g.customer || "")}
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {shown.length > 2 && <div style={{ fontSize:9, color:"#bbb", padding:"0 8px 6px" }}>{tr(`+${shown.length - 2} more`, `+${shown.length - 2} más`)}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Active trips + what needs attention ── */}
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))", gap:14, alignItems:"start" }}>
+                  <div style={card}>
+                    <div style={cap}>Active trips<span style={right}>{tr(`${o.activeTrips.length} trips · ${Math.round(o.cfOnBoard).toLocaleString()} CF on board`, `${o.activeTrips.length} trips · ${Math.round(o.cfOnBoard).toLocaleString()} CF a bordo`)}</span></div>
+                    {o.activeTrips.length === 0 ? (
+                      <div style={{ fontSize:12.5, color:"#bbb" }}>No active trips right now.</div>
+                    ) : o.activeTrips.map(({ t, c }, i) => {
+                      // Red past 90%: a truck that full has no room for the next stop.
+                      const occ = c.occPct;
+                      const occColor = occ == null ? "#ccc" : occ >= 90 ? "#E24B4A" : occ >= 70 ? "#639922" : "#EAB308";
+                      return (
+                        <div key={t.id} onClick={() => setPage("trips")} style={{ borderBottom: i < o.activeTrips.length - 1 ? "1px solid #f6f6f6" : "none", padding:"11px 0", cursor:"pointer" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+                            <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:"#6D28D9" }}>{t.trip_number || "#" + t.id}</span>
+                            <TripBadge status={t.status} />
+                            <span style={{ marginLeft:"auto", fontSize:11, color:"#bbb" }}>{t.departure_date || "—"}</span>
+                          </div>
+                          <div style={{ fontSize:11, color:"#999", marginBottom:7 }}>
+                            {[truckById[t.truck_id]?.name, driverById[t.driver_id]?.name && `🧑‍✈️ ${driverById[t.driver_id].name}`,
+                              tr(`${c.count} stops`, `${c.count} stops`),
+                              tr(`${c.delivered} of ${c.deliveryCount} delivered`, `${c.delivered} de ${c.deliveryCount} entregados`)].filter(Boolean).join(" · ")}
+                          </div>
+                          <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                            <span style={{ flex:1, height:8, background:"#f2f2f2", borderRadius:4 }}>
+                              <span style={{ display:"block", height:8, borderRadius:4, background:occColor, width:`${Math.min(100, occ ?? 0)}%` }} />
+                            </span>
+                            <span style={{ fontSize:11.5, fontWeight:700, width:132, textAlign:"right", whiteSpace:"nowrap" }}>
+                              {occ == null ? tr("No capacity set", "Sin capacidad") : `${occ}%`}
+                              <span style={{ color:"#bbb", fontWeight:500, fontSize:10 }}> {Math.round(c.loadedCf).toLocaleString()}{c.cap ? ` / ${Math.round(c.cap).toLocaleString()}` : ""} CF</span>
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div style={{ fontSize:10.5, color:"#ccc", marginTop:12 }}>Click a trip to open it in Trips / Live Load.</div>
+                  </div>
+
+                  <div style={card}>
+                    <div style={cap}>Needs attention<span style={right}>{tr(`${o.totals.flags} flags`, `${o.totals.flags} flags`)}</span></div>
+                    {[["🧑‍✈️","No driver today","no_driver_today","#A32D2D"],["🛣️","No trip assigned","no_trip","#C2410C"],
+                      ["📅","No FADD","nofadd","#C2410C"],["📦","No delivery date","no_delivery","#92760B"],
+                      ["🏷️","Sticker unassigned","no_sticker","#92760B"]].map(([ic, l, k, color]) => (
+                      <div key={k} onClick={() => go(k)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:"1px solid #f6f6f6", fontSize:12.5, cursor:"pointer" }}>
+                        <span style={{ width:20, textAlign:"center", fontSize:13 }}>{ic}</span>{l}
+                        <span style={{ marginLeft:"auto", fontWeight:700, fontSize:14, color: o.flags[k] ? color : "#ddd" }}>{o.flags[k]}</span>
+                        <span style={{ color:"#ddd", fontSize:12 }}>›</span>
+                      </div>
+                    ))}
+                    <div style={{ fontSize:10.5, color:"#ccc", marginTop:12 }}>Each row jumps to the matching tab with the table already filtered.</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {dispatchFilter !== "overview" && (<>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
@@ -8475,6 +8982,7 @@ export default function App() {
             </div>
             <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{dispatchGroups.length} job(s)</div>
           </div>
+          </>)}
         </>
       )}
 
@@ -11013,14 +11521,83 @@ export default function App() {
 
       </div>{/* end page content */}
 
-      {jobDetail && (
-        <Modal title={`Job ${jobDetail.job_number || ""}`.trim()} onClose={() => setJobDetailKey(null)}
+      {jobDetail && (() => {
+        const P = jobDetail.parts;
+        const repId = Math.min(...P.map(p => p.id));
+        const jkey = jobDetail.key;
+        const partIdSet = new Set(P.map(p => p.id));
+        const jobCf = P.reduce((sum, p) => sum + effCf(p), 0);
+        const jobEstCf = P.reduce((sum, p) => sum + parseCf(p.volume), 0);
+        const jobHasRealCf = P.some(hasRealCf);
+        // Who may steer the job. Changing the status and writing a note are
+        // edit-level actions on dispatching, so they are the dispatch manager's.
+        // Loading a service is NOT gated: anyone who can see the job can add one,
+        // because every add and every amount change posts a note naming them.
+        const isMgr = isAdmin || can("dispatching", "edit");
+        const svcs = extrasMissing ? [] : (extrasByJobKey[jkey] || []).filter(e => e.active !== false);
+        const svcTotal = svcs.reduce((s, e) => s + numv(e.amount), 0);
+        const baseTotal = jobToCollect(jobDetail);
+        const collected = paymentsMissing ? numv(jobDetail.bol_collected) : jobCollectedFor(jobDetail, jkey);
+        const svcCollected = paymentsMissing ? 0 : (jobPaidByKey[jkey]?.extra || 0);
+        const grandTotal = baseTotal + svcTotal;
+        const outstanding = Math.max(0, baseTotal - collected) + Math.max(0, svcTotal - svcCollected);
+        const drvNames = jobDriverNames(jobDetail);
+        const gTrip = jobDetail.trip_id ? tripById[jobDetail.trip_id] : null;
+        const storeLabels = [...new Set(P.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U" + p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
+        const daysStored = jobDetail.date_in ? Math.max(0, Math.round((startOfToday() - new Date(jobDetail.date_in + "T00:00:00")) / ONE_DAY)) : null;
+        const faddDays = daysUntilFadd(jobDetail.fadd);
+        const padsMissingCount = jobPadsMissing(jobDetail);
+        const jobClaimsCount = (!claimsMissing && can("claims","view") && jobDetail.job_number)
+          ? claims.filter(cl => normJobNumber(cl.job_number) === normJobNumber(jobDetail.job_number) && cl.status !== "closed").length : 0;
+        // Dispatch notes and service entries share one list: both are job_events
+        // the app writes, and the dispatcher reads them as a single thread.
+        const noteRows = jobEventsMissing ? [] : jobEvents
+          .filter(e => partIdSet.has(e.job_id) && (e.event_type === "note" || e.event_type === "service"))
+          .slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+        const dayLabel = (d) => d === today() ? tr("Today", "Hoy") : d === shiftDate(today(), -1) ? tr("Yesterday", "Ayer") : d;
+        // Matches "@" + any teammate's display name, longest first, so a
+        // two-word name highlights whole instead of just its first token.
+        const mentionRe = teamPeople.length
+          ? new RegExp("@(" + teamPeople.map(pp => personLabel(pp)).sort((a, b) => b.length - a.length)
+              .map(nm => nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "g")
+          : null;
+        const cityLine = (city, st, zip) => [[city, st].filter(Boolean).join(", "), zip].filter(Boolean).join(" ");
+        // Card / label styling shared by every block of the Overview tab.
+        const cardS = { background:"#fff", border:"1px solid #efefef", borderRadius:11, padding:"14px 16px" };
+        const capS = { fontSize:10.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:11, display:"flex", alignItems:"center", gap:7 };
+        const rightS = { marginLeft:"auto", fontWeight:500, letterSpacing:0, textTransform:"none", fontSize:11, color:"#bbb" };
+        const kvS = { display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f6f6f6", fontSize:12.5 };
+        const kS = { color:"#999", width:132, flexShrink:0 };
+        const TABS = [
+          ["overview", "Overview", null],
+          ["money", "Money", svcs.length + (paymentsMissing ? 0 : (paymentsByJobKey[jkey] || []).length)],
+          ["storage", "Storage", P.length],
+          ["timeline", "Timeline", null],
+          ["fields", "All fields", null],
+        ];
+        return (
+        <Modal wide bodyStyle={{ padding:0, background:"#fcfcfc" }} onClose={() => setJobDetailKey(null)}
+          header={<>
+            <div style={{ display:"flex", alignItems:"center", gap:9, flexWrap:"wrap" }}>
+              <span style={{ fontFamily:"monospace", fontSize:21, fontWeight:700, letterSpacing:"-0.02em" }}>{jobDetail.job_number || tr("(no number)", "(sin número)")}</span>
+              <StatusBadge status={jobDetail.status} />
+              <TypeBadge type={jobDetail.job_type} />
+              {jobDetail.sticker_color && <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, color:"#666", border:"1px solid #eee", borderRadius:6, padding:"2px 8px" }}><Sticker color={jobDetail.sticker_color} />{jobDetail.lot_number ? `Lot ${jobDetail.lot_number}` : ""}</span>}
+              {faddDays !== null && faddDays < 0 && <span style={{ fontSize:11, fontWeight:600, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"3px 9px" }}>⚠ {tr(`FADD ${Math.abs(faddDays)} days overdue`, `FADD vencido hace ${Math.abs(faddDays)} días`)}</span>}
+              {outstanding > 0 && <span style={{ fontSize:11, fontWeight:600, color:"#B91C1C", background:"#FEE2E2", borderRadius:20, padding:"3px 9px" }}>{tr(`$${Math.round(outstanding).toLocaleString()} outstanding`, `$${Math.round(outstanding).toLocaleString()} sin cobrar`)}</span>}
+            </div>
+            <div style={{ marginTop:7, fontSize:13, color:"#666", display:"flex", alignItems:"center", gap:7, flexWrap:"wrap", fontWeight:400 }}>
+              <b style={{ color:"#111", fontSize:14.5 }}>{jobDetail.customer || "—"}</b>
+              {brokerName(jobDetail.broker_id) && <><span style={{ color:"#ddd" }}>·</span><span>🏦 {brokerName(jobDetail.broker_id)}</span></>}
+              {jobDetail.rep && <><span style={{ color:"#ddd" }}>·</span><span>Rep {jobDetail.rep}</span></>}
+              {jobDetail.client_phone && <><span style={{ color:"#ddd" }}>·</span><span>📞 {jobDetail.client_phone}</span></>}
+              {jobDetail.client_email && <><span style={{ color:"#ddd" }}>·</span><span>✉ {jobDetail.client_email}</span></>}
+            </div>
+          </>}
           footer={<>
             <Btn onClick={() => openEditJob(jobDetail)}>Edit</Btn>
             {can("bol","view") && <Btn primary onClick={() => { const jn = jobDetail.job_number; setJobDetailKey(null); setBolJobNumber(jn || ""); setPage("bol"); }}>📄 Generate BOL</Btn>}
             <Btn danger onClick={() => deleteJob(jobDetail)}>🗑 Delete job</Btn>
-            <Btn onClick={() => window.open(waLink(jobDetail, (jobDetail.parts||[]).map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean).join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail)), "_blank")}>💬 WhatsApp</Btn>
-            {nextStatus(jobDetail) && <Btn onClick={() => advanceStatus(jobDetail)}>→ {statusMeta(nextStatus(jobDetail)).l}</Btn>}
             {jobDetail.parts.some(p => !p.date_out) && (
               <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Mark all delivered</Btn>
             )}
@@ -11032,7 +11609,123 @@ export default function App() {
             )}
             <Btn primary onClick={() => setJobDetailKey(null)}>Close</Btn>
           </>}>
-          {/* Calendar / pickup-date block (Add to calendar + Edit pickup date) */}
+
+          {/* ── Status: the rail shows what the job really did, the select lets
+               the dispatch manager decide what happens next. ── */}
+          <div style={{ background:"#fafafa", borderBottom:"1px solid #f0f0f0", padding:"13px 20px", display:"flex", alignItems:"center", gap:18, flexWrap:"wrap" }}>
+            <StatusRail group={jobDetail} />
+            <StatusSelect current={jobDetail.status || "scheduled"} suggested={nextStatus(jobDetail)} canEdit={isMgr}
+              onApply={(v) => setJobStatus(jobDetail, v)} />
+          </div>
+
+          {/* ── Additional services: one chip per service, amount editable in
+               place. Adding or changing one posts a note and moves the total. ── */}
+          {!extrasMissing && (
+            <div style={{ background:"#fff", borderBottom:"1px solid #f0f0f0", padding:"12px 20px 13px" }}>
+              <div style={{ ...capS, marginBottom:10, fontSize:9.5 }}>
+                Additional services
+                <span style={{ background:"#EAF3DE", color:"#3B6D11", borderRadius:10, padding:"1px 7px", fontSize:9, letterSpacing:0, textTransform:"none" }}>Anyone can add</span>
+                <span style={{ ...rightS, color:"#999" }}>{tr(`${svcs.length} services · `, `${svcs.length} services · `)}<b style={{ color:"#3B6D11" }}>+${Math.round(svcTotal).toLocaleString()}</b>{tr(" added to the job total", " sumados al total del job")}</span>
+              </div>
+              <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+                {svcs.map(e => {
+                  const isCf = e.extra_type === "extra_cf";
+                  return (
+                    <div key={e.id} style={{ border:"1px solid #dbe8cd", background:"#F5F9F0", borderRadius:9, padding:"6px 11px", minWidth:112 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:"#3B6D11" }}>{extraTypeLabel(e.extra_type)}</span>
+                        <button onClick={() => setSvcEditId(svcEditId === e.id ? null : e.id)} title="Edit service"
+                          style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#9bb182", fontSize:11, padding:0 }}>✎</button>
+                        <button onClick={() => deleteExtra(e)} title="Remove service"
+                          style={{ border:"none", background:"none", cursor:"pointer", color:"#c3d3b3", fontSize:11, padding:0 }}>✕</button>
+                      </div>
+                      {isCf ? (
+                        <>
+                          <div style={{ display:"flex", alignItems:"center", gap:4, marginTop:4, fontSize:11 }}>
+                            <span style={{ border:"1px solid #cfe0bd", background:"#fff", borderRadius:6, padding:"2px 6px", fontWeight:600 }}>
+                              <InlineField value={e.extra_cf_count ?? ""} placeholder="0" onSave={(v) => patchExtra(e, { extra_cf_count: v })} /> CF
+                            </span>
+                            <span style={{ color:"#9bb182" }}>×</span>
+                            <span style={{ border:"1px solid #cfe0bd", background:"#fff", borderRadius:6, padding:"2px 6px", fontWeight:600 }}>
+                              $<InlineField value={e.extra_cf_rate ?? ""} placeholder="0" onSave={(v) => patchExtra(e, { extra_cf_rate: v })} />
+                            </span>
+                          </div>
+                          <div style={{ fontSize:9, color:"#9bb182", marginTop:3 }}>{numv(e.fuel_surcharge_pct) ? `+${numv(e.fuel_surcharge_pct)}% fuel → ` : "→ "}<b style={{ color:"#3B6D11" }}>{money(e.amount) || "$0"}</b></div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ display:"flex", alignItems:"center", gap:3, border:"1px solid #cfe0bd", background:"#fff", borderRadius:6, padding:"3px 7px", marginTop:4 }}>
+                            <span style={{ fontSize:11, color:"#9bb182" }}>$</span>
+                            <span style={{ fontSize:14, fontWeight:700 }}><InlineField value={e.amount ?? ""} placeholder="0" onSave={(v) => setExtraAmount(e, v, repId)} /></span>
+                          </div>
+                          <div style={{ fontSize:9, color:"#9bb182", marginTop:3 }}>{genByLabel(e.generated_by)}</div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+                {EXTRA_TYPES.filter(x => !svcs.some(e => e.extra_type === x.v)).map(x => (
+                  <button key={x.v} onClick={() => addJobService(repId, x.v, (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids[0]) || "")}
+                    style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:9, padding:"6px 12px", fontSize:11.5, color:"#b4b4b4", cursor:"pointer" }}>+ {x.l}</button>
+                ))}
+              </div>
+              {(() => {
+                const e = svcs.find(x => x.id === svcEditId);
+                if (!e) return null;
+                return (
+                  <div style={{ marginTop:11, border:"1px solid #e2e2e2", borderRadius:10, padding:"12px 13px", background:"#fff", maxWidth:520 }}>
+                    <div style={{ fontSize:11.5, fontWeight:700, display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                      {extraTypeLabel(e.extra_type)}
+                      <button onClick={() => { deleteExtra(e); setSvcEditId(null); }} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", fontSize:10.5, color:"#B91C1C", fontWeight:600 }}>🗑 Remove service</button>
+                    </div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
+                      {e.extra_type === "extra_cf" ? (
+                        <>
+                          <Field label="Extra CF"><input style={inp} type="number" value={e.extra_cf_count ?? ""} onChange={ev => patchExtra(e, { extra_cf_count: ev.target.value })} /></Field>
+                          <Field label="Rate / CF ($)"><input style={inp} type="number" value={e.extra_cf_rate ?? ""} onChange={ev => patchExtra(e, { extra_cf_rate: ev.target.value })} /></Field>
+                          <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={e.fuel_surcharge_pct ?? ""} onChange={ev => patchExtra(e, { fuel_surcharge_pct: ev.target.value })} /></Field>
+                          <Field label="Total charged"><div style={{ ...inp, fontWeight:700, color:"#3B6D11" }}>{money(e.amount) || "$0"}</div></Field>
+                        </>
+                      ) : (
+                        <>
+                          <Field label="Amount ($)"><input style={inp} type="number" defaultValue={e.amount ?? ""} onBlur={ev => setExtraAmount(e, ev.target.value, repId)} /></Field>
+                          <Field label="Generated by">
+                            <select style={inp} value={e.generated_by || "driver_only"} disabled={EXTRA_LOCKED_DRIVER(e.extra_type)} onChange={ev => patchExtra(e, { generated_by: ev.target.value })}>
+                              {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
+                            </select>
+                          </Field>
+                        </>
+                      )}
+                      <Field label="Description" full><input style={inp} defaultValue={e.description || ""} onBlur={ev => patchExtra(e, { description: ev.target.value })} placeholder="Why it was charged" /></Field>
+                      <Field label="Driver commission (%)"><input style={inp} type="number" defaultValue={e.driver_commission_pct ?? ""} onBlur={ev => patchExtra(e, { driver_commission_pct: ev.target.value })} /></Field>
+                      <Field label="Rep commission (%)"><input style={inp} type="number" defaultValue={e.rep_commission_pct ?? ""} onBlur={ev => patchExtra(e, { rep_commission_pct: ev.target.value })} /></Field>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10 }}>
+                      <Btn primary onClick={() => setSvcEditId(null)} style={{ padding:"6px 13px", fontSize:12 }}>Done</Btn>
+                      <span style={{ fontSize:9.5, color:"#c0c0c0" }}>D {money(e.driver_commission_amount) || "$0"} · R {money(e.rep_commission_amount) || "$0"}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+              <div style={{ fontSize:10, color:"#c0c0c0", marginTop:9 }}>Amounts stay editable at any time — every add, edit or removal posts a note with who did it and when, and updates the job total.</div>
+            </div>
+          )}
+
+          {/* ── Tabs ── */}
+          <div style={{ display:"flex", padding:"0 20px", borderBottom:"1px solid #f0f0f0", background:"#fff", flexWrap:"wrap" }}>
+            {TABS.map(([id, label, count]) => (
+              <button key={id} onClick={() => setJobTab(id)}
+                style={{ fontSize:13, padding:"11px 15px", cursor:"pointer", border:"none", background:"none",
+                  color: jobTab === id ? "#111" : "#999", fontWeight: jobTab === id ? 600 : 400,
+                  borderBottom: jobTab === id ? "2px solid #111" : "2px solid transparent" }}>
+                {label}{count ? <span style={{ fontSize:10, color:"#bbb", marginLeft:4 }}>{count}</span> : null}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ padding:"16px 20px 20px" }}>
+
+          {jobTab === "overview" && (<>
           {(() => {
             const ids = jobDetail.parts.map(p => p.id);
             const from = jobDetail.pickup_date_from || jobDetail.pickup_date || "";
@@ -11071,73 +11764,292 @@ export default function App() {
               </div>
             );
           })()}
-          <SectionLabel>Job data <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:"#bbb" }}>· click to edit</span></SectionLabel>
-          {(() => { const P = jobDetail.parts; const set = (f) => (v) => updateJobField(P, f, v); return (
-          <>
-          <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
-          <EditRow label="Client"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
-          <EditRow label="Broker">
-            <select value={jobDetail.broker_id || ""} onChange={e => set("broker_id")(e.target.value ? Number(e.target.value) : "")}
-              style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
-              <option value="">— No broker —</option>
-              {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </EditRow>
-          <EditRow label="Type"><TypeBadge type={jobDetail.job_type} /></EditRow>
-          <EditRow label="Status"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
-          <EditRow label="Calendar status (color)">
-            {(() => { const cur = calStatusOf(jobDetail); const cm = calStatusMeta(cur) || CALENDAR_STATUSES[0]; return (
-              <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}>
-                <span title="Calendar color" style={{ width:14, height:14, borderRadius:4, background:cm.bar, border:"1px solid rgba(0,0,0,0.1)", flexShrink:0 }} />
-                <select value={cur} disabled={calStatusMissing} onChange={e => updateJobField(P, "calendar_status", e.target.value)}
-                  style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
-                  {CALENDAR_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
-                </select>
-              </span>
-            ); })()}
-          </EditRow>
-          <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
-          <EditRow label="Volumen (CF) — estimado"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
-          {!realCfMissing && (
-            <EditRow label="Real CF (medido)">
-              <InlineField type="number" value={jobDetail.real_cf ?? ""} onSave={set("real_cf")}
-                display={hasRealCf(jobDetail)
-                  ? <span style={{ fontWeight:600, color:"#3B6D11" }}>{Math.round(Number(jobDetail.real_cf)).toLocaleString()} CF ✓{parseCf(jobDetail.volume) > 0 ? <span style={{ fontWeight:400, color:"#999" }}> · est. {Math.round(parseCf(jobDetail.volume)).toLocaleString()}</span> : null}</span>
-                  : <span style={{ color:"#bbb" }}>— (uses the estimate)</span>} />
-            </EditRow>
-          )}
-          <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
-          <EditRow label="Sticker color"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
-          <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
-          <EditRow label="Pick up from"><InlineField type="date" value={jobDetail.pickup_date_from || jobDetail.pickup_date} onSave={(v) => { updateJobField(P, "pickup_date_from", v); updateJobField(P, "pickup_date", v); }} /></EditRow>
-          <EditRow label="Pick up to (opcional)"><InlineField type="date" value={jobDetail.pickup_date_to} onSave={set("pickup_date_to")} /></EditRow>
-          <EditRow label="Pickup address"><InlineField value={jobDetail.pickup_address} onSave={set("pickup_address")} /></EditRow>
-          <EditRow label="Pickup city"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
-          <EditRow label="Pickup state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
-          <EditRow label="Pickup zip"><InlineField value={jobDetail.pickup_zip} onSave={set("pickup_zip")} /></EditRow>
-          <EditRow label="Balance pickup ($)"><InlineField value={jobDetail.pickup_balance} onSave={set("pickup_balance")} display={money(jobDetail.pickup_balance)} /></EditRow>
-          <EditRow label="Date in (a storage)"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
-          <EditRow label="Delivery date"><InlineField type="date" value={jobDetail.delivery_date} onSave={set("delivery_date")} /></EditRow>
-          <EditRow label="Delivery address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
-          <EditRow label="Delivery city"><InlineField value={jobDetail.delivery_city} onSave={set("delivery_city")} /></EditRow>
-          <EditRow label="Delivery state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
-          <EditRow label="Delivery zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
-          <EditRow label="Balance delivery ($)"><InlineField value={jobDetail.delivery_balance} onSave={set("delivery_balance")} display={money(jobDetail.delivery_balance)} /></EditRow>
-          {routeUrl(jobDetail) && (
-            <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
-              <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Ruta</span>
-              <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ View route storage → delivery en Google Maps</a>
-            </div>
-          )}
-          <EditRow label="Client billing">
-            {jobDetail.billing_active
-              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · since ${jobDetail.billing_start_date}` : ""}</span>
-              : <span style={{ color:"#bbb" }}>No storage charged</span>}
-          </EditRow>
-          <EditRow label="Notes"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
-          </>
-          ); })()}
 
+            {/* ── Route: where it came from, where it sits, where it goes. ── */}
+            <div style={{ ...cardS, marginBottom:12 }}>
+              <div style={capS}>Route<span style={rightS}>{[cityLine(jobDetail.pickup_city, jobDetail.pickup_state, ""), storeLabels[0], cityLine(jobDetail.delivery_city, jobDetail.delivery_state, "")].filter(Boolean).join(" → ")}</span></div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 34px 1fr 34px 1fr", alignItems:"stretch" }}>
+                <div style={{ padding:"2px 4px" }}>
+                  <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#185FA5", marginBottom:6 }}>📍 Pickup</div>
+                  <div style={{ fontSize:17, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{cityLine(jobDetail.pickup_city, jobDetail.pickup_state, jobDetail.pickup_zip) || "—"}</div>
+                  <div style={{ fontSize:11.5, color:"#8a8a8a", marginTop:4, paddingBottom:2 }}>{jobDetail.pickup_address || "—"}</div>
+                  <div style={{ fontSize:11.5, color:"#888", marginTop:15, lineHeight:1.95 }}>
+                    <div>📅 <b style={{ color:"#333" }}>{(() => { const f = jobDetail.pickup_date_from || jobDetail.pickup_date; if (!f) return tr("No pickup date", "Sin fecha de pickup"); const to = jobDetail.pickup_date_to; return to && to !== f ? `${f} → ${to}` : f; })()}</b></div>
+                    <div>{drvNames ? <>🧑‍✈️ <b style={{ color:"#333" }}>{drvNames}</b></> : <span style={{ color:"#bbb" }}>🧑‍✈️ {tr("No driver assigned", "Sin driver asignado")}</span>}</div>
+                    <div>💵 Balance <b style={{ color:"#333" }}>{money(jobDetail.pickup_balance) || "$0"}</b></div>
+                  </div>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"center", color:"#c8c8c8", fontSize:20 }}>→</div>
+                <div style={{ padding:"2px 4px" }}>
+                  <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#3B6D11", marginBottom:6 }}>🏬 Storage</div>
+                  <div style={{ fontSize:17, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{storeLabels[0] || "—"}</div>
+                  <div style={{ fontSize:11.5, color:"#8a8a8a", marginTop:4, paddingBottom:2 }}>{storeLabels.length > 1 ? storeLabels.slice(1).join(" · ") : tr("Single location", "Una sola ubicación")}</div>
+                  <div style={{ fontSize:11.5, color:"#888", marginTop:15, lineHeight:1.95 }}>
+                    <div>📅 {jobDetail.date_in ? <>In since <b style={{ color:"#333" }}>{jobDetail.date_in}</b>{daysStored !== null ? <> · <b style={{ color:"#333" }}>{tr(`${daysStored} days`, `${daysStored} días`)}</b></> : null}</> : <span style={{ color:"#bbb" }}>{tr("Not in storage", "No está en storage")}</span>}</div>
+                    <div>🧾 {jobDetail.billing_active ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Billing active · {money(jobDetail.client_monthly_rate) || "$0"}/mo</span> : <span style={{ color:"#bbb" }}>{tr("No storage charged", "Sin storage facturado")}</span>}</div>
+                    <div>🏷️ {jobDetail.sticker_color ? <>Sticker <b style={{ color:"#333" }}>{jobDetail.sticker_color}{jobDetail.lot_number ? ` · Lot ${jobDetail.lot_number}` : ""}</b></> : <span style={{ color:"#bbb" }}>{tr("Sticker unassigned", "Sticker sin asignar")}</span>}</div>
+                  </div>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"center", color:"#c8c8c8", fontSize:20 }}>→</div>
+                <div style={{ padding:"2px 4px" }}>
+                  <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#6D28D9", marginBottom:6 }}>🎯 Delivery</div>
+                  <div style={{ fontSize:17, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{cityLine(jobDetail.delivery_city, jobDetail.delivery_state, jobDetail.delivery_zip) || "—"}</div>
+                  <div style={{ fontSize:11.5, color:"#8a8a8a", marginTop:4, paddingBottom:2 }}>{jobDetail.delivery_address || "—"}</div>
+                  <div style={{ fontSize:11.5, color:"#888", marginTop:15, lineHeight:1.95 }}>
+                    <div>📅 {jobDetail.delivery_date ? <b style={{ color:"#333" }}>{jobDetail.delivery_date}</b> : <b style={{ color:"#B91C1C" }}>{tr("Not scheduled yet", "Todavía sin agendar")}</b>}</div>
+                    <div>⚠ FADD {jobDetail.fadd ? <><b style={{ color:"#333" }}>{jobDetail.fadd}</b>{faddDays !== null && faddDays < 0 ? <b style={{ color:"#B91C1C" }}> · {tr(`${Math.abs(faddDays)} days overdue`, `vencido hace ${Math.abs(faddDays)} días`)}</b> : null}</> : <span style={{ color:"#bbb" }}>—</span>}</div>
+                    <div>💵 Balance <b style={{ color:"#333" }}>{money(jobDetail.delivery_balance) || "$0"}</b></div>
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop:14, paddingTop:13, borderTop:"1px solid #f5f5f5", display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                {routeUrl(jobDetail) && <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"7px 13px", fontSize:12, fontWeight:600, color:"#fff", background:"#185FA5", textDecoration:"none" }}>🗺️ Open route</a>}
+                <a href={waLink(jobDetail, storeLabels.join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail))} target="_blank" rel="noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"7px 13px", fontSize:12, fontWeight:600, color:"#fff", background:"#1A8A4E", textDecoration:"none" }}>💬 WhatsApp</a>
+                {gTrip && <button onClick={() => { setJobDetailKey(null); setPage("trips"); }} style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"7px 13px", fontSize:12, fontWeight:600, color:"#fff", background:"#6D28D9", border:"none", cursor:"pointer" }}>🛣️ {gTrip.trip_number || "#" + gTrip.id}{jobDetail.trip_stop_order ? ` · stop ${jobDetail.trip_stop_order}` : ""}</button>}
+                <span style={{ marginLeft:"auto", color:"#ccc", fontSize:11 }}>Click any value in All fields to edit it inline</span>
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"1.25fr 1fr", gap:12, alignItems:"start", marginBottom:12 }}>
+              {/* ── Job total: base + services − collected, discriminated. ── */}
+              <div style={cardS}>
+                <div style={capS}>Job total<span style={rightS}>base + services − collected</span></div>
+                <div style={{ display:"flex", alignItems:"baseline", gap:8 }}>
+                  <span style={{ fontSize:26, fontWeight:700, letterSpacing:"-0.02em", color: outstanding > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</span>
+                  <span style={{ fontSize:12, color:"#999" }}>{tr(`outstanding of $${Math.round(grandTotal).toLocaleString()}`, `sin cobrar de $${Math.round(grandTotal).toLocaleString()}`)}</span>
+                </div>
+                {grandTotal > 0 && (() => {
+                  const pc = (v) => Math.max(0, Math.min(100, v / grandTotal * 100));
+                  return (
+                    <>
+                      <div style={{ height:9, borderRadius:5, background:"#f0f0f0", overflow:"hidden", display:"flex", margin:"9px 0 4px" }}>
+                        <div style={{ width:`${pc(collected + svcCollected)}%`, background:"#1A8A4E" }} />
+                        <div style={{ width:`${pc(Math.max(0, baseTotal - collected))}%`, background:"#e6e6e6" }} />
+                        <div style={{ width:`${pc(Math.max(0, svcTotal - svcCollected))}%`, background:"#EA580C" }} />
+                      </div>
+                      <div style={{ display:"flex", gap:12, fontSize:10.5, color:"#999", marginBottom:11, flexWrap:"wrap" }}>
+                        <span><i style={{ width:8, height:8, borderRadius:2, background:"#1A8A4E", display:"inline-block", marginRight:4 }} />Collected ${Math.round(collected + svcCollected).toLocaleString()}</span>
+                        <span><i style={{ width:8, height:8, borderRadius:2, background:"#e2e2e2", display:"inline-block", marginRight:4 }} />Base pending ${Math.round(Math.max(0, baseTotal - collected)).toLocaleString()}</span>
+                        <span><i style={{ width:8, height:8, borderRadius:2, background:"#EA580C", display:"inline-block", marginRight:4 }} />Services ${Math.round(Math.max(0, svcTotal - svcCollected)).toLocaleString()}</span>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                <div style={{ fontSize:9.5, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"12px 0 3px" }}>Base job</div>
+                <div style={kvS}><span style={kS}>Pickup balance</span><span style={{ fontWeight:600 }}>{money(jobDetail.pickup_balance) || "$0"}</span></div>
+                <div style={kvS}><span style={kS}>Delivery balance</span><span style={{ fontWeight:600 }}>{money(jobDetail.delivery_balance) || "$0"}</span></div>
+                {numv(jobDetail.bol_balance) > 0 && <div style={kvS}><span style={kS}>BOL balance</span><span style={{ fontWeight:600 }}>{money(jobDetail.bol_balance)}</span></div>}
+                <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Subtotal base</span><span style={{ fontWeight:700, color:"#555" }}>${Math.round(baseTotal).toLocaleString()}</span></div>
+
+                {svcs.length > 0 && (<>
+                  <div style={{ fontSize:9.5, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"12px 0 3px" }}>Additional services · {svcs.length}</div>
+                  {svcs.map(e => (
+                    <div key={e.id} style={kvS}>
+                      <span style={kS}>{extraTypeLabel(e.extra_type)}</span>
+                      <span style={{ fontWeight:600 }}>{money(e.amount) || "$0"}</span>
+                      <span style={{ marginLeft:"auto", fontSize:10.5, color:"#aaa", textAlign:"right" }}>
+                        {e.extra_type === "extra_cf" && numv(e.extra_cf_count) > 0
+                          ? `${Math.round(numv(e.extra_cf_count)).toLocaleString()} CF × ${money(e.extra_cf_rate) || "$0"}${numv(e.fuel_surcharge_pct) ? ` + fuel ${numv(e.fuel_surcharge_pct)}%` : ""}`
+                          : (e.description || genByLabel(e.generated_by))}
+                      </span>
+                    </div>
+                  ))}
+                  <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Subtotal services</span><span style={{ fontWeight:700, color:"#C2410C" }}>+${Math.round(svcTotal).toLocaleString()}</span></div>
+                </>)}
+
+                <div style={{ ...kvS, borderTop:"2px solid #111", borderBottom:"none", paddingTop:8, marginTop:5 }}><span style={{ ...kS, color:"#111", fontWeight:700 }}>Job total</span><span style={{ fontSize:15, fontWeight:700 }}>${Math.round(grandTotal).toLocaleString()}</span></div>
+                <div style={kvS}><span style={kS}>Collected</span><span style={{ fontWeight:600, color:"#1A8A4E" }}>−${Math.round(collected + svcCollected).toLocaleString()}</span></div>
+                <div style={{ ...kvS, borderTop:"1px solid #f0d0d0", borderBottom:"none", paddingTop:8, marginTop:2 }}><span style={{ ...kS, color:"#111", fontWeight:700 }}>Outstanding</span><span style={{ fontSize:15, fontWeight:700, color: outstanding > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</span></div>
+
+                {/* ── Add payment: as many lines as methods used, so a split
+                     collection stays split in the ledger. ── */}
+                {!paymentsMissing && (
+                  <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
+                    {!jobPayLines ? (
+                      <Btn primary onClick={() => setJobPayLines({ date: today(), notes:"", lines:[{ concept:"job", method:"cash", amount: outstanding > 0 ? String(Math.round(outstanding)) : "" }] })}
+                        style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
+                    ) : (
+                      <div style={{ border:"1px solid #e2e2e2", borderRadius:10, padding:"11px 12px", background:"#fff" }}>
+                        <div style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:9 }}>Record payment</div>
+                        {jobPayLines.lines.map((l, i) => (
+                          <div key={i} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:7 }}>
+                            <select value={l.concept} onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, concept: ev.target.value } : x) }))}
+                              style={{ ...inp, width:132, fontSize:12, padding:"6px 7px" }}>
+                              {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                            </select>
+                            <PaymentMethodSelect style={{ ...inp, width:138, fontSize:12, padding:"6px 7px" }} value={l.method}
+                              onChange={v => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, method: v || "" } : x) }))} />
+                            <input type="number" placeholder="0" value={l.amount}
+                              onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, amount: ev.target.value } : x) }))}
+                              style={{ ...inp, flex:1, minWidth:70, fontSize:12, padding:"6px 7px", fontWeight:600 }} />
+                            <button onClick={() => setJobPayLines(f => ({ ...f, lines: f.lines.filter((_, ix) => ix !== i) }))} title="Remove line"
+                              disabled={jobPayLines.lines.length === 1}
+                              style={{ border:"none", background:"none", cursor: jobPayLines.lines.length === 1 ? "default" : "pointer", color:"#ccc", fontSize:15, padding:0 }}>×</button>
+                          </div>
+                        ))}
+                        <button onClick={() => setJobPayLines(f => ({ ...f, lines: [...f.lines, { concept:"job", method:"cash", amount:"" }] }))}
+                          style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:8, padding:"5px 11px", fontSize:11.5, color:"#888", cursor:"pointer", marginBottom:9 }}>+ Another payment method</button>
+                        <div style={{ display:"flex", gap:6, marginBottom:9 }}>
+                          <input type="date" value={jobPayLines.date} onChange={ev => setJobPayLines(f => ({ ...f, date: ev.target.value }))} style={{ ...inp, width:150, fontSize:12, padding:"6px 7px" }} />
+                          <input value={jobPayLines.notes} onChange={ev => setJobPayLines(f => ({ ...f, notes: ev.target.value }))} placeholder="Payment notes" style={{ ...inp, flex:1, fontSize:12, padding:"6px 7px" }} />
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                          <Btn primary onClick={() => saveJobPayLines(repId)} style={{ padding:"6px 14px", fontSize:12 }}>Save payment</Btn>
+                          <Btn onClick={() => setJobPayLines(null)} style={{ padding:"6px 12px", fontSize:12 }}>Cancel</Btn>
+                          <span style={{ marginLeft:"auto", fontSize:12, color:"#666" }}>Total <b>${Math.round(jobPayLines.lines.reduce((s, l) => s + numv(l.amount), 0)).toLocaleString()}</b></span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Volume & load ── */}
+              <div style={cardS}>
+                <div style={capS}>Volume &amp; load</div>
+                <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"wrap" }}>
+                  <span style={{ fontSize:26, fontWeight:700, letterSpacing:"-0.02em", color: jobHasRealCf ? "#3B6D11" : "#111" }}>{Math.round(jobCf).toLocaleString()}</span>
+                  <span style={{ fontSize:12, color:"#999" }}>{jobHasRealCf ? tr("CF real ✓", "CF real ✓") : tr("CF estimated", "CF estimado")}</span>
+                  {(() => {
+                    const est = jobEstCf;
+                    if (!jobHasRealCf || est <= 0) return null;
+                    const d = (jobCf - est) / est * 100;
+                    return <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, borderRadius:10, padding:"2px 7px", background: d >= 0 ? "#FDE3CF" : "#EAF3DE", color: d >= 0 ? "#C2410C" : "#3B6D11" }}>{d >= 0 ? "+" : ""}{d.toFixed(1)}% vs estimate</span>;
+                  })()}
+                </div>
+                <div style={{ fontSize:11.5, color:"#999", margin:"4px 0 12px" }}>{jobEstCf > 0 ? tr(`Broker estimate ${Math.round(jobEstCf).toLocaleString()} CF`, `Estimado del broker ${Math.round(jobEstCf).toLocaleString()} CF`) : tr("No estimate recorded", "Sin estimado cargado")}</div>
+                <div style={kvS}><span style={kS}>Pads</span><span style={{ fontWeight:600 }}>{numv(jobDetail.pads_received)} received · {numv(jobDetail.pads_returned)} returned</span>{padsMissingCount > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#B91C1C", fontWeight:700 }}>{tr(`${padsMissingCount} missing`, `faltan ${padsMissingCount}`)}</span>}</div>
+                <div style={kvS}><span style={kS}>Trip</span>{gTrip ? <span style={{ fontWeight:600, color:"#6D28D9" }}>{gTrip.trip_number || "#" + gTrip.id}</span> : <span style={{ color:"#bbb" }}>{tr("Unassigned", "Sin asignar")}</span>}</div>
+                <div style={kvS}><span style={kS}>Driver</span><span style={{ fontWeight:600 }}>{drvNames || <span style={{ color:"#bbb" }}>—</span>}</span></div>
+                <div style={kvS}><span style={kS}>Extra stops</span><span style={{ fontWeight:600 }}>{jobDetail.extra_stops || "0"}</span></div>
+                <div style={{ ...kvS, borderBottom:"none" }}><span style={kS}>Price / CF</span><span style={{ fontWeight:600 }}>{money(jobDetail.price_per_cf) || "—"}</span>{numv(jobDetail.fuel_surcharge_pct) > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#999" }}>+ {numv(jobDetail.fuel_surcharge_pct)}% fuel</span>}</div>
+              </div>
+            </div>
+
+            {/* ── Needs attention: what is actually wrong with THIS job. ── */}
+            {(() => {
+              const flags = [];
+              if (faddDays !== null && faddDays < 0) flags.push({ ic:"⚠️", c:"#A32D2D", l: tr(`FADD ${Math.abs(faddDays)} days overdue`, `FADD vencido hace ${Math.abs(faddDays)} días`) });
+              if (!jobDetail.fadd) flags.push({ ic:"📅", c:"#C2410C", l: tr("No FADD set", "Sin FADD") });
+              if (!jobDetail.delivery_date) flags.push({ ic:"📦", c:"#C2410C", l: tr("No delivery date set", "Sin fecha de delivery") });
+              if (!jobDetail.trip_id) flags.push({ ic:"🛣️", c:"#92760B", l: tr("No trip assigned", "Sin trip asignado") });
+              if (!drvNames) flags.push({ ic:"🧑‍✈️", c:"#92760B", l: tr("No driver assigned", "Sin driver asignado") });
+              if (!jobDetail.sticker_color) flags.push({ ic:"🏷️", c:"#92760B", l: tr("Sticker unassigned", "Sticker sin asignar") });
+              if (padsMissingCount > 0) flags.push({ ic:"🧺", c:"#92760B", l: tr(`${padsMissingCount} pads missing`, `faltan ${padsMissingCount} pads`) });
+              if (jobClaimsCount > 0) flags.push({ ic:"🩹", c:"#A32D2D", l: tr(`${jobClaimsCount} open claim(s)`, `${jobClaimsCount} claim(s) abierto(s)`) });
+              if (!flags.length) return null;
+              return (
+                <div style={{ ...cardS, marginBottom:12 }}>
+                  <div style={capS}>Needs attention<span style={rightS}>{flags.length}</span></div>
+                  <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+                    {flags.map((f, i) => (
+                      <span key={i} style={{ display:"inline-flex", alignItems:"center", gap:6, border:"1px solid #f0f0f0", borderRadius:8, padding:"6px 11px", fontSize:12.5, fontWeight:600, color:f.c }}>
+                        <span>{f.ic}</span>{f.l}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── Dispatch notes: manager writes, everyone reads. Service
+                 entries are posted by the app and cannot be edited. ── */}
+            <div style={cardS}>
+              <div style={capS}>Dispatch notes<span style={rightS}>{tr(`${noteRows.length} entries · newest first`, `${noteRows.length} entradas · más nuevas primero`)}</span></div>
+              {jobEventsMissing ? (
+                <div style={{ fontSize:12, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"7px 10px" }}>
+                  Run the updated SQL to save dispatch notes. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:12 }}>View SQL</button>
+                </div>
+              ) : (<>
+                {isMgr && (<>
+                  <div style={{ display:"flex", alignItems:"center", gap:9, marginBottom:8 }}>
+                    <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") saveJobNote(repId, jobDetail); }}
+                      placeholder="Add a note for this job…" style={{ ...inp, flex:1 }} />
+                    <Btn primary disabled={!noteDraft.trim()} onClick={() => saveJobNote(repId, jobDetail)} style={{ padding:"7px 13px", fontSize:12 }}>Add note</Btn>
+                  </div>
+                  {/* Tag a teammate: each one picked gets a direct message with the
+                      note, so "the client is ready to receive" reaches the person
+                      who has to act on it instead of sitting in a card. */}
+                  <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", marginBottom:9 }}>
+                    <span style={{ fontSize:10.5, color:"#999", fontWeight:600 }}>Alert</span>
+                    {teamPeople.length === 0 && <span style={{ fontSize:11, color:"#ccc" }}>No teammates to alert</span>}
+                    {teamPeople.filter(pp => pp.id !== session?.user?.id).map(pp => {
+                      const on = noteMentions.includes(pp.id);
+                      // The job's own people come first: the driver or rep named on
+                      // the job is who a dispatch note usually needs to reach.
+                      const assigned = [drvNames, jobDetail.rep].filter(Boolean).join(" ").toLowerCase().includes(personLabel(pp).toLowerCase());
+                      return (
+                        <button key={pp.id} onClick={() => setNoteMentions(m => on ? m.filter(x => x !== pp.id) : [...m, pp.id])}
+                          title={pp.email || ""}
+                          style={{ display:"inline-flex", alignItems:"center", gap:4, border:`1px solid ${on ? "#6D28D9" : assigned ? "#d8cdf5" : "#eee"}`,
+                            background: on ? "#6D28D9" : "#fff", color: on ? "#fff" : assigned ? "#6D28D9" : "#888",
+                            borderRadius:20, padding:"3px 10px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>
+                          @{personLabel(pp)}{assigned && !on ? " ·" : ""}{assigned && !on ? <span style={{ fontSize:9, fontWeight:700 }}>assigned</span> : null}
+                        </button>
+                      );
+                    })}
+                    <span style={{ marginLeft:"auto", display:"flex", gap:6, alignItems:"center" }}>
+                      <span style={{ fontSize:10.5, color:"#999", fontWeight:600 }}>Notify client</span>
+                      <button onClick={() => notifyClient(jobDetail, "email")} disabled={!jobDetail.client_email} title={jobDetail.client_email || "No client email"}
+                        style={{ border:"1px solid #cfe0f5", background: jobDetail.client_email ? "#fff" : "#fafafa", color: jobDetail.client_email ? "#185FA5" : "#ccc", borderRadius:8, padding:"4px 10px", fontSize:11.5, fontWeight:600, cursor: jobDetail.client_email ? "pointer" : "default" }}>✉ Email</button>
+                      <button onClick={() => notifyClient(jobDetail, "whatsapp")} disabled={!jobDetail.client_phone} title={jobDetail.client_phone || "No client phone"}
+                        style={{ border:"1px solid #cfe6d6", background: jobDetail.client_phone ? "#fff" : "#fafafa", color: jobDetail.client_phone ? "#1A8A4E" : "#ccc", borderRadius:8, padding:"4px 10px", fontSize:11.5, fontWeight:600, cursor: jobDetail.client_phone ? "pointer" : "default" }}>💬 WhatsApp</button>
+                    </span>
+                  </div>
+                </>)}
+                <div style={{ fontSize:10.5, color:"#bbb", marginBottom:13, paddingBottom:11, borderBottom:"1px solid #f4f4f4" }}>
+                  🔒 {isMgr
+                    ? "Only the dispatch manager can write, edit or delete notes. Tagged teammates get the note as a direct message. Service entries are posted automatically by whoever adds a service — anyone can, and nobody can edit them."
+                    : "Notes are written by the dispatch manager. You can read them here."}
+                </div>
+                {noteRows.length === 0 ? (
+                  <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>No notes on this job yet.</div>
+                ) : (() => {
+                  const groups = [];
+                  for (const n of noteRows) {
+                    const day = String(n.created_at || n.event_date || "").slice(0, 10);
+                    if (!groups.length || groups[groups.length - 1].day !== day) groups.push({ day, rows: [] });
+                    groups[groups.length - 1].rows.push(n);
+                  }
+                  return groups.map(g => (
+                    <div key={g.day}>
+                      <div style={{ fontSize:10, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"11px 0 5px" }}>{dayLabel(g.day)}</div>
+                      {g.rows.map(n => {
+                        const auto = n.event_type === "service";
+                        const who = (n.created_by || "").split("@")[0] || "—";
+                        const initials = (who.split(/[.\-_\s]+/).filter(Boolean).map(x => x[0]).join("") || who).slice(0, 2).toUpperCase();
+                        return (
+                          <div key={n.id} style={{ display:"flex", alignItems:"flex-start", gap:9, padding:"7px 0", borderBottom:"1px solid #f7f7f7" }}>
+                            <span style={{ fontSize:10.5, color:"#bbb", width:38, flexShrink:0, paddingTop:3, fontVariantNumeric:"tabular-nums" }}>{String(n.created_at || "").slice(11, 16) || "—"}</span>
+                            <span style={{ width:22, height:22, borderRadius:"50%", background: auto ? "#EAF3DE" : "#EDE9FE", color: auto ? "#3B6D11" : "#6D28D9", fontSize:9, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{initials}</span>
+                            <div style={{ flex:1, fontSize:12.5, lineHeight:1.45, minWidth:0 }}>
+                              <b style={{ fontSize:12 }}>{who}</b>
+                              {auto && <span style={{ fontSize:9, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:9, padding:"1px 6px", marginLeft:4 }}>service</span>}
+                              <div style={{ color:"#444", marginTop:2 }}>
+                                {(() => {
+                                  if (!mentionRe) return n.notes;
+                                  return String(n.notes || "").split(mentionRe).map((part, pi) => pi % 2
+                                    ? <b key={pi} style={{ color:"#6D28D9" }}>@{part}</b>
+                                    : <span key={pi}>{part}</span>);
+                                })()}
+                              </div>
+                            </div>
+                            {isMgr && !auto && (
+                              <button onClick={() => deleteJobEvent(n)} title="Delete note" style={{ border:"none", background:"none", cursor:"pointer", color:"#d8d8d8", fontSize:13, flexShrink:0, paddingTop:2 }}>🗑</button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ));
+                })()}
+              </>)}
+            </div>
+          </>)}
+
+          {jobTab === "money" && (<>
           {!settlementsMissing && (
             <>
               <SectionLabel>Carrier Settlement</SectionLabel>
@@ -11189,7 +12101,6 @@ export default function App() {
               </>); })()}
             </>
           )}
-
           {!extrasMissing && (() => {
             const exs = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false);
             const repId = Math.min(...jobDetail.parts.map(p => p.id));
@@ -11231,7 +12142,6 @@ export default function App() {
               </>
             );
           })()}
-
           {!paymentsMissing && (() => {
             const ps = (paymentsByJobKey[jobDetail.key] || []).slice().sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
             const recv = ps.filter(p => p.received);
@@ -11338,7 +12248,58 @@ export default function App() {
               </>
             );
           })()}
+          </>)}
 
+          {jobTab === "storage" && (<>
+          <SectionLabel>{jobDetail.parts.length === 1 ? "Where it's stored" : `Where it's stored (${jobDetail.parts.length})`}</SectionLabel>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {jobDetail.parts.map(p => {
+              const s = p.storage || {};
+              const delivered = !!p.date_out;
+              const isWh = !!p.warehouse;
+              return (
+                <div key={p.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                    <span style={jobBadgeStyle(delivered)}>
+                      <span style={{ width:6, height:6, borderRadius:"50%", background: delivered ? "#bbb" : "#639922" }} />
+                      {delivered ? "Delivered" : "Active"}
+                    </span>
+                    <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
+                    {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
+                    <span style={{ flex:1 }} />
+                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Split across two trucks" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
+                    {!delivered
+                      ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
+                      : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Undeliver</Btn>}
+                  </div>
+                  <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
+                    {isWh ? (
+                      <div>📍 Own warehouse — {p.warehouse}</div>
+                    ) : (
+                      <>
+                        {s.address && <div>📍 {s.address}</div>}
+                        <div>Unit: <strong style={{ fontFamily:"monospace" }}>{s.unit || "—"}</strong></div>
+                        {s.gate_code && (
+                          <div style={{ display:"inline-flex", alignItems:"center" }}>Gate code: <span style={{ fontFamily:"monospace", marginLeft:4 }}>{s.gate_code}</span><CopyButton value={s.gate_code} /></div>
+                        )}
+                      </>
+                    )}
+                    <div style={{ color:"#888" }}>In: {p.date_in || "—"}{delivered ? ` · Out: ${p.date_out}` : ""}</div>
+                  </div>
+                  {!isWh && (
+                    <div style={{ marginTop:6 }}>
+                      <span onClick={() => { setJobDetailKey(null); setDetailId(p.storage_id); }}
+                        style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>View full unit →</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <AuditInfo rec={jobDetail} />
+          </>)}
+
+          {jobTab === "timeline" && (<>
           {(() => {
             const partIds = jobDetail.parts.map(p => p.id);
             const partSet = new Set(partIds);
@@ -11439,55 +12400,81 @@ export default function App() {
               </>
             );
           })()}
+          </>)}
 
-          <SectionLabel>{jobDetail.parts.length === 1 ? "Where it's stored" : `Where it's stored (${jobDetail.parts.length})`}</SectionLabel>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {jobDetail.parts.map(p => {
-              const s = p.storage || {};
-              const delivered = !!p.date_out;
-              const isWh = !!p.warehouse;
-              return (
-                <div key={p.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff" }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                    <span style={jobBadgeStyle(delivered)}>
-                      <span style={{ width:6, height:6, borderRadius:"50%", background: delivered ? "#bbb" : "#639922" }} />
-                      {delivered ? "Delivered" : "Active"}
-                    </span>
-                    <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
-                    {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
-                    <span style={{ flex:1 }} />
-                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Split across two trucks" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
-                    {!delivered
-                      ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
-                      : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Undeliver</Btn>}
-                  </div>
-                  <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
-                    {isWh ? (
-                      <div>📍 Own warehouse — {p.warehouse}</div>
-                    ) : (
-                      <>
-                        {s.address && <div>📍 {s.address}</div>}
-                        <div>Unit: <strong style={{ fontFamily:"monospace" }}>{s.unit || "—"}</strong></div>
-                        {s.gate_code && (
-                          <div style={{ display:"inline-flex", alignItems:"center" }}>Gate code: <span style={{ fontFamily:"monospace", marginLeft:4 }}>{s.gate_code}</span><CopyButton value={s.gate_code} /></div>
-                        )}
-                      </>
-                    )}
-                    <div style={{ color:"#888" }}>In: {p.date_in || "—"}{delivered ? ` · Out: ${p.date_out}` : ""}</div>
-                  </div>
-                  {!isWh && (
-                    <div style={{ marginTop:6 }}>
-                      <span onClick={() => { setJobDetailKey(null); setDetailId(p.storage_id); }}
-                        style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>View full unit →</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          {jobTab === "fields" && (<>
+          <SectionLabel>Job data <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:"#bbb" }}>· click to edit</span></SectionLabel>
+          {(() => { const P = jobDetail.parts; const set = (f) => (v) => updateJobField(P, f, v); return (
+          <>
+          <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
+          <EditRow label="Client"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
+          <EditRow label="Broker">
+            <select value={jobDetail.broker_id || ""} onChange={e => set("broker_id")(e.target.value ? Number(e.target.value) : "")}
+              style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
+              <option value="">— No broker —</option>
+              {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </EditRow>
+          <EditRow label="Type"><TypeBadge type={jobDetail.job_type} /></EditRow>
+          <EditRow label="Status"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
+          <EditRow label="Calendar status (color)">
+            {(() => { const cur = calStatusOf(jobDetail); const cm = calStatusMeta(cur) || CALENDAR_STATUSES[0]; return (
+              <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}>
+                <span title="Calendar color" style={{ width:14, height:14, borderRadius:4, background:cm.bar, border:"1px solid rgba(0,0,0,0.1)", flexShrink:0 }} />
+                <select value={cur} disabled={calStatusMissing} onChange={e => updateJobField(P, "calendar_status", e.target.value)}
+                  style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
+                  {CALENDAR_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                </select>
+              </span>
+            ); })()}
+          </EditRow>
+          <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
+          <EditRow label="Volumen (CF) — estimado"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
+          {!realCfMissing && (
+            <EditRow label="Real CF (medido)">
+              <InlineField type="number" value={jobDetail.real_cf ?? ""} onSave={set("real_cf")}
+                display={hasRealCf(jobDetail)
+                  ? <span style={{ fontWeight:600, color:"#3B6D11" }}>{Math.round(Number(jobDetail.real_cf)).toLocaleString()} CF ✓{parseCf(jobDetail.volume) > 0 ? <span style={{ fontWeight:400, color:"#999" }}> · est. {Math.round(parseCf(jobDetail.volume)).toLocaleString()}</span> : null}</span>
+                  : <span style={{ color:"#bbb" }}>— (uses the estimate)</span>} />
+            </EditRow>
+          )}
+          <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
+          <EditRow label="Sticker color"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
+          <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
+          <EditRow label="Pick up from"><InlineField type="date" value={jobDetail.pickup_date_from || jobDetail.pickup_date} onSave={(v) => { updateJobField(P, "pickup_date_from", v); updateJobField(P, "pickup_date", v); }} /></EditRow>
+          <EditRow label="Pick up to (opcional)"><InlineField type="date" value={jobDetail.pickup_date_to} onSave={set("pickup_date_to")} /></EditRow>
+          <EditRow label="Pickup address"><InlineField value={jobDetail.pickup_address} onSave={set("pickup_address")} /></EditRow>
+          <EditRow label="Pickup city"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
+          <EditRow label="Pickup state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
+          <EditRow label="Pickup zip"><InlineField value={jobDetail.pickup_zip} onSave={set("pickup_zip")} /></EditRow>
+          <EditRow label="Balance pickup ($)"><InlineField value={jobDetail.pickup_balance} onSave={set("pickup_balance")} display={money(jobDetail.pickup_balance)} /></EditRow>
+          <EditRow label="Date in (a storage)"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
+          <EditRow label="Delivery date"><InlineField type="date" value={jobDetail.delivery_date} onSave={set("delivery_date")} /></EditRow>
+          <EditRow label="Delivery address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
+          <EditRow label="Delivery city"><InlineField value={jobDetail.delivery_city} onSave={set("delivery_city")} /></EditRow>
+          <EditRow label="Delivery state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
+          <EditRow label="Delivery zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
+          <EditRow label="Balance delivery ($)"><InlineField value={jobDetail.delivery_balance} onSave={set("delivery_balance")} display={money(jobDetail.delivery_balance)} /></EditRow>
+          {routeUrl(jobDetail) && (
+            <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
+              <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Ruta</span>
+              <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ View route storage → delivery en Google Maps</a>
+            </div>
+          )}
+          <EditRow label="Client billing">
+            {jobDetail.billing_active
+              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · since ${jobDetail.billing_start_date}` : ""}</span>
+              : <span style={{ color:"#bbb" }}>No storage charged</span>}
+          </EditRow>
+          <EditRow label="Notes"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
+          </>
+          ); })()}
+          </>)}
+
           </div>
-          <AuditInfo rec={jobDetail} />
         </Modal>
-      )}
+        );
+      })()}
 
       {detail && (
         <Modal title={`${detail.brand||"Unit"}${detail.unit ? " — "+detail.unit : ""}${detail.state ? " · "+detail.state : ""}`} onClose={() => setDetailId(null)}

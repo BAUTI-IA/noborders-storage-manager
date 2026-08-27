@@ -120,6 +120,31 @@ const AVATAR_COLORS = ["#185FA5", "#3B6D11", "#B45309", "#A32D2D", "#6D28D9", "#
 const avatarColor = (id) => AVATAR_COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
 const initials = (name) => (name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
 const dmKey = (a, b) => [a, b].sort().join(":");
+
+// Send a one-off direct message to a teammate from OUTSIDE the Chats section —
+// the alert channel for @mentions on dispatch notes. Finds the existing DM
+// channel or opens one, then posts the body; the unread badge does the rest.
+// Returns true when the message landed.
+export async function notifyUser({ supabase, fromId, fromName, toId, body }) {
+  if (!supabase || !fromId || !toId || !body || fromId === toId) return false;
+  const key = dmKey(fromId, toId);
+  let channelId = null;
+  const { data: found } = await supabase.from("chat_channels").select("id").eq("dm_key", key).maybeSingle();
+  if (found) channelId = found.id;
+  else {
+    const { data: made, error } = await supabase.from("chat_channels")
+      .insert([{ is_dm: true, dm_a: fromId, dm_b: toId, dm_key: key, created_by: fromId }]).select("id").single();
+    if (error) {
+      // Unique dm_key race: another tab opened the same DM first — reuse it.
+      const { data: again } = await supabase.from("chat_channels").select("id").eq("dm_key", key).maybeSingle();
+      if (!again) return false;
+      channelId = again.id;
+    } else channelId = made.id;
+  }
+  const { error } = await supabase.from("chat_messages")
+    .insert([{ channel_id: channelId, sender_id: fromId, sender_name: fromName, body }]);
+  return !error;
+}
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const fmtDay = (ts) => {
   const d = new Date(ts), today = new Date();
