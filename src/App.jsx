@@ -2001,6 +2001,139 @@ const fgrid = { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170p
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 
+// The payment composer used by the job detail. A line pays a CHARGE (the job
+// balance, or one specific extra), not a loose "concept": tapping an open charge
+// prefills the exact amount still owed on it, and saving links the row to that
+// charge so the extra actually stops reading as pending. Several lines = one
+// collection split across methods, kept split in the ledger.
+function PayComposer({ charges, outstanding, drivers, people, defaultReceivedBy, form, setForm, onSave, onCancel, saving }) {
+  const chargeLabel = (c) => c.kind === "job" ? "Job balance" : extraTypeLabel(c.extra.extra_type);
+  const open = [
+    ...(charges.jobCharge.remaining > 0.01 ? [{ ...charges.jobCharge, id: "job" }] : []),
+    ...charges.extraCharges.filter(c => c.remaining > 0.01).map(c => ({ ...c, id: "x" + c.extra.id })),
+  ];
+  const lineCharge = (l) => l.extraId
+    ? charges.extraCharges.find(c => Number(c.extra.id) === Number(l.extraId))
+    : charges.jobCharge;
+  const setLine = (i, patch) => setForm(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, ...patch } : x) }));
+  const addLine = (c) => setForm(f => ({ ...f, lines: [...f.lines, {
+    extraId: c && c.kind === "extra" ? c.extra.id : null,
+    method: f.lines[f.lines.length - 1]?.method || "cash",
+    amount: c ? String(Math.round(c.remaining)) : "",
+  }] }));
+  const total = form.lines.reduce((a, l) => a + numv(l.amount), 0);
+  const left = Math.max(0, outstanding - total);
+  const cashHolder = form.received_by || defaultReceivedBy;
+  const cashTotal = form.lines.filter(l => isPhysical(l.method)).reduce((a, l) => a + numv(l.amount), 0);
+  const alreadyOn = (c) => form.lines.some(l => (c.kind === "job" ? !l.extraId : Number(l.extraId) === Number(c.extra.id)));
+
+  return (
+    <div style={{ border:"1px solid #e2e2e2", borderRadius:11, background:"#fff", boxShadow:"0 2px 10px rgba(0,0,0,0.04)" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:8, padding:"11px 13px 0" }}>
+        <span style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em" }}>Record payment</span>
+        <span style={{ marginLeft:"auto", fontSize:11, color:"#bbb" }}>{tr(`$${Math.round(outstanding).toLocaleString()} outstanding`, `$${Math.round(outstanding).toLocaleString()} sin cobrar`)}</span>
+      </div>
+
+      {open.length > 0 && (
+        <div style={{ padding:"9px 13px 0" }}>
+          <div style={{ fontSize:10, color:"#999", marginBottom:6 }}>What are they paying? Tap a charge to add it with the exact amount owed.</div>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+            {open.map(c => {
+              const used = alreadyOn(c);
+              return (
+                <button key={c.id} disabled={used} onClick={() => addLine(c)}
+                  style={{ display:"inline-flex", alignItems:"center", gap:6, border:`1px solid ${used ? "#eee" : "#d8cdf5"}`,
+                    background: used ? "#fafafa" : "#fff", color: used ? "#ccc" : "#5B21B6", borderRadius:20,
+                    padding:"4px 11px", fontSize:11.5, fontWeight:600, cursor: used ? "default" : "pointer" }}>
+                  {chargeLabel(c)}<b style={{ fontWeight:700 }}>${Math.round(c.remaining).toLocaleString()}</b>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div style={{ padding:"11px 13px 0" }}>
+        {form.lines.map((l, i) => {
+          const c = lineCharge(l);
+          const rem = c ? c.remaining : 0;
+          const over = numv(l.amount) > rem + 0.01;
+          const hex = PAY_METHOD_META[l.method] || "#999";
+          return (
+            <div key={i} style={{ border:"1px solid #f0f0f0", borderRadius:9, padding:"8px 9px", marginBottom:7, background:"#fcfcfc" }}>
+              <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+                <select value={l.extraId ? "x" + l.extraId : "job"}
+                  onChange={ev => setLine(i, { extraId: ev.target.value === "job" ? null : Number(ev.target.value.slice(1)) })}
+                  style={{ ...inp, width:150, fontSize:12, padding:"6px 7px", fontWeight:600 }}>
+                  <option value="job">Job balance</option>
+                  {charges.extraCharges.map(x => <option key={x.extra.id} value={"x" + x.extra.id}>{extraTypeLabel(x.extra.extra_type)}</option>)}
+                </select>
+                <span style={{ display:"inline-flex", alignItems:"center", gap:5, border:`1px solid ${hex}44`, borderRadius:8, padding:"0 8px 0 9px", background:"#fff" }}>
+                  <span style={{ width:7, height:7, borderRadius:"50%", background:hex, flexShrink:0 }} />
+                  <select value={l.method} onChange={ev => setLine(i, { method: ev.target.value })}
+                    style={{ border:"none", outline:"none", background:"none", fontSize:12, fontWeight:600, color:hex, padding:"6px 2px", cursor:"pointer" }}>
+                    {PAY_METHODS.map(m => <option key={m.v} value={m.v} style={{ color:"#111" }}>{m.l}</option>)}
+                  </select>
+                </span>
+                <span style={{ display:"inline-flex", alignItems:"center", gap:3, border:`1px solid ${over ? "#E24B4A" : "#e5e5e5"}`, borderRadius:8, padding:"0 8px", background:"#fff", flex:1, minWidth:110 }}>
+                  <span style={{ fontSize:12, color:"#bbb" }}>$</span>
+                  <input type="number" placeholder="0" value={l.amount} onChange={ev => setLine(i, { amount: ev.target.value })}
+                    style={{ border:"none", outline:"none", fontSize:13.5, fontWeight:700, padding:"6px 0", width:"100%", background:"none" }} />
+                </span>
+                <button onClick={() => setForm(f => ({ ...f, lines: f.lines.filter((_, ix) => ix !== i) }))}
+                  title="Remove line" disabled={form.lines.length === 1}
+                  style={{ border:"none", background:"none", cursor: form.lines.length === 1 ? "default" : "pointer", color:"#ccc", fontSize:16, padding:0, lineHeight:1 }}>×</button>
+              </div>
+              <div style={{ fontSize:10, marginTop:4, color: over ? "#B91C1C" : "#bbb", display:"flex", gap:8, flexWrap:"wrap" }}>
+                <span>{rem > 0.01 ? tr(`owes $${Math.round(rem).toLocaleString()}`, `debe $${Math.round(rem).toLocaleString()}`) : tr("nothing owed on this charge", "no debe nada en este cargo")}</span>
+                {over && <b>{tr("more than what is owed — the rest stays as a credit", "más de lo que debe — el resto queda a favor")}</b>}
+                {rem > 0.01 && numv(l.amount) !== Math.round(rem) && (
+                  <button onClick={() => setLine(i, { amount: String(Math.round(rem)) })}
+                    style={{ border:"none", background:"none", padding:0, cursor:"pointer", color:"#6D28D9", fontWeight:700, fontSize:10 }}>pay in full</button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <button onClick={() => addLine(null)}
+          style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:8, padding:"5px 11px", fontSize:11.5, color:"#888", cursor:"pointer" }}>+ Another line</button>
+      </div>
+
+      <div style={{ padding:"11px 13px 0", display:"flex", gap:6, flexWrap:"wrap" }}>
+        <input type="date" value={form.date} onChange={ev => setForm(f => ({ ...f, date: ev.target.value }))} style={{ ...inp, width:148, fontSize:12, padding:"6px 7px" }} />
+        <input list="pay-received-by" value={form.received_by} onChange={ev => setForm(f => ({ ...f, received_by: ev.target.value }))}
+          placeholder="Received by" style={{ ...inp, width:170, fontSize:12, padding:"6px 7px" }} />
+        <datalist id="pay-received-by">
+          {[...new Set([...(drivers || []), ...(people || [])])].filter(Boolean).map(n => <option key={n} value={n} />)}
+        </datalist>
+        <input value={form.notes} onChange={ev => setForm(f => ({ ...f, notes: ev.target.value }))} placeholder="Payment notes" style={{ ...inp, flex:1, minWidth:140, fontSize:12, padding:"6px 7px" }} />
+      </div>
+
+      {cashTotal > 0 && (
+        <div style={{ margin:"9px 13px 0", background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:8, padding:"7px 10px", fontSize:11, color:"#B45309" }}>
+          💵 {tr(`$${Math.round(cashTotal).toLocaleString()} in cash or checks stays in circulation with ${cashHolder || "whoever received it"} until it is deposited.`, `$${Math.round(cashTotal).toLocaleString()} en efectivo o cheques queda en circulación con ${cashHolder || "quien lo recibió"} hasta que se deposite.`)}
+        </div>
+      )}
+
+      <div style={{ display:"flex", alignItems:"center", gap:9, padding:"11px 13px 12px", marginTop:9, borderTop:"1px solid #f4f4f4" }}>
+        <Btn primary disabled={saving || total <= 0} onClick={onSave} style={{ padding:"7px 15px", fontSize:12.5 }}>
+          {(() => {
+            if (saving) return tr("Saving…", "Guardando…");
+            const n = form.lines.filter(l => numv(l.amount) > 0).length;
+            const amt = `$${Math.round(total).toLocaleString()}`;
+            return n <= 1 ? tr(`Save payment · ${amt}`, `Guardar pago · ${amt}`)
+                          : tr(`Save ${n} payments · ${amt}`, `Guardar ${n} pagos · ${amt}`);
+          })()}
+        </Btn>
+        <Btn onClick={onCancel} style={{ padding:"7px 12px", fontSize:12 }}>Cancel</Btn>
+        <span style={{ marginLeft:"auto", fontSize:11.5, color: left > 0 ? "#888" : "#1A8A4E", fontWeight: left > 0 ? 400 : 700 }}>
+          {total > 0 ? (left > 0 ? tr(`leaves $${Math.round(left).toLocaleString()} outstanding`, `quedan $${Math.round(left).toLocaleString()} sin cobrar`) : tr("settles the job in full", "salda el job completo")) : ""}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // Status picker for a job. The flow's next step arrives pre-selected as a
 // suggestion and every status stays pickable: the app proposes an order, the
 // dispatch manager owns it. Read-only users see the suggestion, greyed out.
@@ -7496,26 +7629,38 @@ export default function App() {
     const f = jobPayLines; if (!f) return;
     const lines = f.lines.filter(l => numv(l.amount) > 0);
     if (!lines.length) { window.alert(tr("Add at least one line with an amount.", "Agregá al menos una línea con monto.")); return; }
+    if (lines.some(l => !l.method)) { window.alert(tr("Every line needs a payment method.", "Cada línea necesita un método de pago.")); return; }
+    setPaySaving(true);
     const entries = [];
     for (const l of lines) {
-      const sc = splitConcept(l.concept);
+      // A line pays a CHARGE, not just a concept: `extraId` carries which extra
+      // it settles. Without job_extra_id the money lands as "collected from
+      // extras but not assigned", and that extra stays pending forever.
+      const extra = l.extraId ? (extrasByJobKey[jobDetailKey] || []).find(e => Number(e.id) === Number(l.extraId)) : null;
       const payload = {
         ...payPayload({
           job_id: repId, payment_date: f.date, amount: l.amount, method: l.method,
-          received: true, received_date: f.date, received_by: userEmail,
+          received: true, received_date: f.date,
+          // Who actually took the money: cash and checks are handed to the
+          // driver, digital lands in the company account under whoever logged it.
+          received_by: l.received_by || f.received_by || "",
           banked: isDigitalMethod(l.method), banked_date: f.date, notes: f.notes,
         }),
-        concept: sc.pay,
+        concept: extra ? "extra" : "job",
       };
-      if (sc.extra) payload.extra_type = sc.extra;
+      if (extra) {
+        payload.extra_type = extra.extra_type || null;
+        if (!allocMissing) payload.job_extra_id = extra.id;
+      }
       const { data, error } = await supabase.from("payments").insert([payload]).select("*").single();
-      if (error) { window.alert(error.message); return; }
+      if (error) { setPaySaving(false); window.alert(error.message); return; }
       if (data) entries.push(undoMgr.createEntry("payments", data));
     }
     if (entries.length) undoMgr.record("Pago registrado", entries);
+    setPaySaving(false);
     setJobPayLines(null);
     await loadPayments();
-    showToast("Payment saved");
+    showToast(tr(`Payment saved · ${entries.length} entr${entries.length === 1 ? "y" : "ies"}`, `Pago guardado · ${entries.length} entrada${entries.length === 1 ? "" : "s"}`));
   }
 
   // ── Extras & commissions handlers ──
@@ -11557,6 +11702,27 @@ export default function App() {
         const dayLabel = (d) => d === today() ? tr("Today", "Hoy") : d === shiftDate(today(), -1) ? tr("Yesterday", "Ayer") : d;
         // Matches "@" + any teammate's display name, longest first, so a
         // two-word name highlights whole instead of just its first token.
+        // Open charges for the payment composer: the job balance and each extra,
+        // each with what is still owed on it. Same source the Money tab uses.
+        const payCharges = paymentsMissing
+          ? { jobCharge: { kind:"job", expected:0, collected:0, remaining:0 }, extraCharges: [], onAccount:0, unattributedExtraCollected:0 }
+          : chargeStateByJobKey(jkey);
+        // Cash is handed to the driver; digital lands under whoever logs it. The
+        // driver is the better default because that is who signs for the money.
+        const payDefaultReceiver = drvNames.split(",")[0].trim() || profile?.full_name || (userEmail || "").split("@")[0];
+        const openPayComposer = (owed) => {
+          const c = payCharges.jobCharge.remaining > 0.01
+            ? { kind:"job", remaining: payCharges.jobCharge.remaining }
+            : payCharges.extraCharges.find(x => x.remaining > 0.01);
+          setJobPayLines({
+            date: today(), notes:"", received_by: payDefaultReceiver,
+            lines: [{
+              extraId: c && c.kind === "extra" ? c.extra.id : null,
+              method: "cash",
+              amount: c ? String(Math.round(c.remaining)) : (owed > 0 ? String(Math.round(owed)) : ""),
+            }],
+          });
+        };
         const mentionRe = teamPeople.length
           ? new RegExp("@(" + teamPeople.map(pp => personLabel(pp)).sort((a, b) => b.length - a.length)
               .map(nm => nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "g")
@@ -11867,39 +12033,11 @@ export default function App() {
                 {!paymentsMissing && (
                   <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
                     {!jobPayLines ? (
-                      <Btn primary onClick={() => setJobPayLines({ date: today(), notes:"", lines:[{ concept:"job", method:"cash", amount: outstanding > 0 ? String(Math.round(outstanding)) : "" }] })}
-                        style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
+                      <Btn primary onClick={() => openPayComposer(outstanding)} style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
                     ) : (
-                      <div style={{ border:"1px solid #e2e2e2", borderRadius:10, padding:"11px 12px", background:"#fff" }}>
-                        <div style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:9 }}>Record payment</div>
-                        {jobPayLines.lines.map((l, i) => (
-                          <div key={i} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:7 }}>
-                            <select value={l.concept} onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, concept: ev.target.value } : x) }))}
-                              style={{ ...inp, width:132, fontSize:12, padding:"6px 7px" }}>
-                              {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                            </select>
-                            <PaymentMethodSelect style={{ ...inp, width:138, fontSize:12, padding:"6px 7px" }} value={l.method}
-                              onChange={v => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, method: v || "" } : x) }))} />
-                            <input type="number" placeholder="0" value={l.amount}
-                              onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, amount: ev.target.value } : x) }))}
-                              style={{ ...inp, flex:1, minWidth:70, fontSize:12, padding:"6px 7px", fontWeight:600 }} />
-                            <button onClick={() => setJobPayLines(f => ({ ...f, lines: f.lines.filter((_, ix) => ix !== i) }))} title="Remove line"
-                              disabled={jobPayLines.lines.length === 1}
-                              style={{ border:"none", background:"none", cursor: jobPayLines.lines.length === 1 ? "default" : "pointer", color:"#ccc", fontSize:15, padding:0 }}>×</button>
-                          </div>
-                        ))}
-                        <button onClick={() => setJobPayLines(f => ({ ...f, lines: [...f.lines, { concept:"job", method:"cash", amount:"" }] }))}
-                          style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:8, padding:"5px 11px", fontSize:11.5, color:"#888", cursor:"pointer", marginBottom:9 }}>+ Another payment method</button>
-                        <div style={{ display:"flex", gap:6, marginBottom:9 }}>
-                          <input type="date" value={jobPayLines.date} onChange={ev => setJobPayLines(f => ({ ...f, date: ev.target.value }))} style={{ ...inp, width:150, fontSize:12, padding:"6px 7px" }} />
-                          <input value={jobPayLines.notes} onChange={ev => setJobPayLines(f => ({ ...f, notes: ev.target.value }))} placeholder="Payment notes" style={{ ...inp, flex:1, fontSize:12, padding:"6px 7px" }} />
-                        </div>
-                        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                          <Btn primary onClick={() => saveJobPayLines(repId)} style={{ padding:"6px 14px", fontSize:12 }}>Save payment</Btn>
-                          <Btn onClick={() => setJobPayLines(null)} style={{ padding:"6px 12px", fontSize:12 }}>Cancel</Btn>
-                          <span style={{ marginLeft:"auto", fontSize:12, color:"#666" }}>Total <b>${Math.round(jobPayLines.lines.reduce((s, l) => s + numv(l.amount), 0)).toLocaleString()}</b></span>
-                        </div>
-                      </div>
+                      <PayComposer charges={payCharges} outstanding={outstanding} drivers={drivers} people={teamPeople.map(personLabel)}
+                        defaultReceivedBy={payDefaultReceiver} form={jobPayLines} setForm={setJobPayLines} saving={paySaving}
+                        onSave={() => saveJobPayLines(repId)} onCancel={() => setJobPayLines(null)} />
                     )}
                   </div>
                 )}
@@ -12172,39 +12310,11 @@ export default function App() {
                   ))}
                   <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
                     {!jobPayLines ? (
-                      <Btn primary onClick={() => setJobPayLines({ date: today(), notes:"", lines:[{ concept:"job", method:"cash", amount: totalOutstanding > 0 ? String(Math.round(totalOutstanding)) : "" }] })}
-                        style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
+                      <Btn primary onClick={() => openPayComposer(totalOutstanding)} style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
                     ) : (
-                      <div style={{ border:"1px solid #e2e2e2", borderRadius:10, padding:"11px 12px", background:"#fff" }}>
-                        <div style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:9 }}>Record payment</div>
-                        {jobPayLines.lines.map((l, i) => (
-                          <div key={i} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:7 }}>
-                            <select value={l.concept} onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, concept: ev.target.value } : x) }))}
-                              style={{ ...inp, width:132, fontSize:12, padding:"6px 7px" }}>
-                              {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                            </select>
-                            <PaymentMethodSelect style={{ ...inp, width:138, fontSize:12, padding:"6px 7px" }} value={l.method}
-                              onChange={v => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, method: v || "" } : x) }))} />
-                            <input type="number" placeholder="0" value={l.amount}
-                              onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, amount: ev.target.value } : x) }))}
-                              style={{ ...inp, flex:1, minWidth:70, fontSize:12, padding:"6px 7px", fontWeight:600 }} />
-                            <button onClick={() => setJobPayLines(f => ({ ...f, lines: f.lines.filter((_, ix) => ix !== i) }))} title="Remove line"
-                              disabled={jobPayLines.lines.length === 1}
-                              style={{ border:"none", background:"none", cursor: jobPayLines.lines.length === 1 ? "default" : "pointer", color:"#ccc", fontSize:15, padding:0 }}>×</button>
-                          </div>
-                        ))}
-                        <button onClick={() => setJobPayLines(f => ({ ...f, lines: [...f.lines, { concept:"job", method:"cash", amount:"" }] }))}
-                          style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:8, padding:"5px 11px", fontSize:11.5, color:"#888", cursor:"pointer", marginBottom:9 }}>+ Another payment method</button>
-                        <div style={{ display:"flex", gap:6, marginBottom:9 }}>
-                          <input type="date" value={jobPayLines.date} onChange={ev => setJobPayLines(f => ({ ...f, date: ev.target.value }))} style={{ ...inp, width:150, fontSize:12, padding:"6px 7px" }} />
-                          <input value={jobPayLines.notes} onChange={ev => setJobPayLines(f => ({ ...f, notes: ev.target.value }))} placeholder="Payment notes" style={{ ...inp, flex:1, fontSize:12, padding:"6px 7px" }} />
-                        </div>
-                        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                          <Btn primary onClick={() => saveJobPayLines(repId)} style={{ padding:"6px 14px", fontSize:12 }}>Save payment</Btn>
-                          <Btn onClick={() => setJobPayLines(null)} style={{ padding:"6px 12px", fontSize:12 }}>Cancel</Btn>
-                          <span style={{ marginLeft:"auto", fontSize:12, color:"#666" }}>Total <b>${Math.round(jobPayLines.lines.reduce((s, l) => s + numv(l.amount), 0)).toLocaleString()}</b></span>
-                        </div>
-                      </div>
+                      <PayComposer charges={payCharges} outstanding={totalOutstanding} drivers={drivers} people={teamPeople.map(personLabel)}
+                        defaultReceivedBy={payDefaultReceiver} form={jobPayLines} setForm={setJobPayLines} saving={paySaving}
+                        onSave={() => saveJobPayLines(repId)} onCancel={() => setJobPayLines(null)} />
                     )}
                     <div style={{ fontSize:10.5, color:"#ccc", marginTop:9 }}>Need a check number, a photo or a discount? Open the payment with the pencil for the full form.</div>
                   </div>
