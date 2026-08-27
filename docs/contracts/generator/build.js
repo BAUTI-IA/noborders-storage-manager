@@ -5,7 +5,13 @@ const {
   FONT, PAGE_W, PAGE_H, MARGIN, TABLE_W, COL, P, H, cell, clauseTable, CELL_BORDERS,
 } = G;
 
-const SECTIONS = [...require('./sections.js'), ...require('./sections2.js')];
+const VARIANT = process.argv[3] === 'short' ? 'short' : 'full';
+const SECTIONS = VARIANT === 'short'
+  ? require('./sections-short.js')
+  : [...require('./sections.js'), ...require('./sections2.js')];
+const REF = VARIANT === 'short'
+  ? { lang: '10.6', vol: '6.2', claims: '7' }
+  : { lang: '17.9', vol: '7.2', claims: '8' };
 
 const title = (t, size, after) => new Paragraph({
   children: [new TextRun({ text: t, bold: true, font: FONT, size })],
@@ -109,9 +115,10 @@ const doc = new Document({
     children: [
       title('BROKER–CARRIER AGREEMENT', 30, 60),
       title('CONTRATO ENTRE BROKER Y CARRIER', 26, 140),
-      title('INVICTUS BROKERAGE LLC', 22, 220),
-      P('This Agreement is presented in English and Spanish in parallel columns. Both columns form part of a single agreement; in the event of any discrepancy, the English column governs (Section 17.9).', { align: AlignmentType.CENTER, after: 60, italics: true }),
-      P('Este Contrato se presenta en inglés y español en columnas paralelas. Ambas columnas integran un único contrato; en caso de discrepancia, prevalece la columna en inglés (Cláusula 17.9).', { align: AlignmentType.CENTER, after: 240, italics: true }),
+      title('INVICTUS BROKERAGE LLC', 22, VARIANT === 'short' ? 60 : 220),
+      ...(VARIANT === 'short' ? [title('SHORT FORM / VERSIÓN ABREVIADA', 19, 220)] : []),
+      P(`This Agreement is presented in English and Spanish in parallel columns. Both columns form part of a single agreement; in the event of any discrepancy, the English column governs (Section ${REF.lang}).`, { align: AlignmentType.CENTER, after: 60, italics: true }),
+      P(`Este Contrato se presenta en inglés y español en columnas paralelas. Ambas columnas integran un único contrato; en caso de discrepancia, prevalece la columna en inglés (Cláusula ${REF.lang}).`, { align: AlignmentType.CENTER, after: 240, italics: true }),
       clauseTable(SECTIONS),
       new Paragraph({ children: [new PageBreak()] }),
       title('SIGNATURES / FIRMAS', 24, 160),
@@ -122,7 +129,7 @@ const doc = new Document({
       title('EXHIBIT A — FEE SCHEDULE / ANEXO A — ESQUEMA DE COMISIONES', 22, 160),
       exhibitA,
       P('', { after: 120 }),
-      P('Volume is taken from the signed bill of lading and inventory at loading; actual loaded volume controls where it exceeds the estimate (Section 7.2). / El volumen se toma del bill of lading firmado y del inventario al momento de la carga; prevalece el volumen efectivamente cargado cuando supera el estimado (Cláusula 7.2).', { italics: true, after: 400 }),
+      P(`Volume is taken from the signed bill of lading and inventory at loading; actual loaded volume controls where it exceeds the estimate (Section ${REF.vol}). / El volumen se toma del bill of lading firmado y del inventario al momento de la carga; prevalece el volumen efectivamente cargado cuando supera el estimado (Cláusula ${REF.vol}).`, { italics: true, after: 400 }),
       title('EXHIBIT B — NOTICE AND DISPATCH CONTACTS / ANEXO B — CONTACTOS DE NOTIFICACIÓN Y DISPATCH', 22, 160),
       exhibitB,
     ],

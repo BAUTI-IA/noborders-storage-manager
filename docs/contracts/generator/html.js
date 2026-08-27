@@ -1,5 +1,11 @@
 const fs = require('fs');
-const SECTIONS = [...require('./sections.js'), ...require('./sections2.js')];
+const VARIANT = process.argv[3] === 'short' ? 'short' : 'full';
+const SECTIONS = VARIANT === 'short'
+  ? require('./sections-short.js')
+  : [...require('./sections.js'), ...require('./sections2.js')];
+const REF = VARIANT === 'short'
+  ? { lang: '10.6', vol: '6.2', claims: '7' }
+  : { lang: '17.9', vol: '7.2', claims: '8' };
 const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const md = (s) => esc(s).split('**').map((c,i)=> i%2 ? '<strong>'+c+'</strong>' : c).join('');
 const para = (l) => l.startsWith('- ')
@@ -31,7 +37,7 @@ const contactRows = [
  ['Phone / Teléfono: [PHONE]','Phone / Teléfono: __________________'],
  ['Dispatch contact / Contacto de dispatch: [NAME]','Dispatch contact / Contacto de dispatch: __________________'],
  ['Dispatch email / SMS: [EMAIL / NUMBER]','Dispatch email / SMS: __________________'],
- ['Claims contact / Contacto de claims: n/a — see Section 8','Claims contact / Contacto de claims: __________________'],
+ [`Claims contact / Contacto de claims: n/a — see Section ${REF.claims}`,'Claims contact / Contacto de claims: __________________'],
 ].map(r=>`<tr${r[2]?' class="hd"':''}>${r.slice(0,2).map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('');
 
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -63,8 +69,9 @@ table.grid tr, table.sigs tr { page-break-inside: avoid; }
 <h1>BROKER–CARRIER AGREEMENT</h1>
 <h2>CONTRATO ENTRE BROKER Y CARRIER</h2>
 <h2 class="co">INVICTUS BROKERAGE LLC</h2>
-<p class="note">This Agreement is presented in English and Spanish in parallel columns. Both columns form part of a single agreement; in the event of any discrepancy, the English column governs (Section 17.9).</p>
-<p class="note" style="margin-bottom:11pt">Este Contrato se presenta en inglés y español en columnas paralelas. Ambas columnas integran un único contrato; en caso de discrepancia, prevalece la columna en inglés (Cláusula 17.9).</p>
+${VARIANT === 'short' ? '<h2 class="co" style="font-size:10.5pt">SHORT FORM / VERSIÓN ABREVIADA</h2>' : ''}
+<p class="note">This Agreement is presented in English and Spanish in parallel columns. Both columns form part of a single agreement; in the event of any discrepancy, the English column governs (Section ${REF.lang}).</p>
+<p class="note" style="margin-bottom:11pt">Este Contrato se presenta en inglés y español en columnas paralelas. Ambas columnas integran un único contrato; en caso de discrepancia, prevalece la columna en inglés (Cláusula ${REF.lang}).</p>
 <table class="clauses"><thead><tr><th>ENGLISH</th><th>ESPAÑOL</th></tr></thead><tbody>${rows}</tbody></table>
 <div class="pb"></div>
 <p class="sec-title">SIGNATURES / FIRMAS</p>
@@ -74,7 +81,7 @@ table.grid tr, table.sigs tr { page-break-inside: avoid; }
 <div class="pb"></div>
 <p class="sec-title">EXHIBIT A — FEE SCHEDULE / ANEXO A — ESQUEMA DE COMISIONES</p>
 <table class="grid">${feeRows}</table>
-<p style="margin-top:9pt; font-style:italic">Volume is taken from the signed bill of lading and inventory at loading; actual loaded volume controls where it exceeds the estimate (Section 7.2). / El volumen se toma del bill of lading firmado y del inventario al momento de la carga; prevalece el volumen efectivamente cargado cuando supera el estimado (Cláusula 7.2).</p>
+<p style="margin-top:9pt; font-style:italic">Volume is taken from the signed bill of lading and inventory at loading; actual loaded volume controls where it exceeds the estimate (Section ${REF.vol}). / El volumen se toma del bill of lading firmado y del inventario al momento de la carga; prevalece el volumen efectivamente cargado cuando supera el estimado (Cláusula ${REF.vol}).</p>
 <p class="sec-title" style="margin-top:22pt">EXHIBIT B — NOTICE AND DISPATCH CONTACTS / ANEXO B — CONTACTOS DE NOTIFICACIÓN Y DISPATCH</p>
 <table class="grid">${contactRows}</table>
 </body></html>`;
