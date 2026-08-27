@@ -34,8 +34,8 @@ Section numbers below are given as **short form / full form**.
 Every placeholder is in `[BRACKETS]` or on a blank line:
 
 - `[STATE]` / `[ESTADO]` — state of formation for Invictus Brokerage LLC
+  (Invictus's USDOT 4490702 and MC 1775070 are already filled in)
 - `[ADDRESS]`, `[EMAIL]`, `[PHONE]`, `[NAME]` — Exhibit B broker contacts
-- Broker USDOT/MC authority number (Section 1)
 - `[COUNTY], [STATE]` — governing law and venue (**10.1 / 16**)
 - Bracketed day counts and percentages are defaults — adjust if you want different ones
 

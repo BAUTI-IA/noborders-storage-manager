@@ -3,10 +3,10 @@ module.exports = [
 t: '1. PARTIES',
 te: '1. PARTES',
 en: [
-'This Broker–Carrier Agreement (the "**Agreement**") is made as of ____________________ (the "**Effective Date**") between **Invictus Brokerage LLC**, a [STATE] limited liability company, USDOT/MC Broker Authority No. ____________ ("**Broker**"), and _________________________________________, USDOT No. ____________, MC No. ____________ ("**Carrier**").',
+'This Broker–Carrier Agreement (the "**Agreement**") is made as of ____________________ (the "**Effective Date**") between **Invictus Brokerage LLC**, a [STATE] limited liability company, USDOT No. **4490702**, MC No. **1775070** ("**Broker**"), and _________________________________________, USDOT No. ____________, MC No. ____________ ("**Carrier**").',
 ],
 es: [
-'El presente Contrato entre Broker y Carrier (el "**Contrato**") se celebra el ____________________ (la "**Fecha de Vigencia**") entre **Invictus Brokerage LLC**, sociedad de responsabilidad limitada de [ESTADO], con Autoridad de Broker USDOT/MC N.º ____________ (el "**Broker**"), y _________________________________________, USDOT N.º ____________, MC N.º ____________ (el "**Carrier**").',
+'El presente Contrato entre Broker y Carrier (el "**Contrato**") se celebra el ____________________ (la "**Fecha de Vigencia**") entre **Invictus Brokerage LLC**, sociedad de responsabilidad limitada de [ESTADO], USDOT N.º **4490702**, MC N.º **1775070** (el "**Broker**"), y _________________________________________, USDOT N.º ____________, MC N.º ____________ (el "**Carrier**").',
 ],
 },
 {
