@@ -7,8 +7,10 @@
     "preview": "vite preview",
     "i18n:check": "node scripts/check-i18n.mjs",
     "guide:update": "node scripts/update-guide.mjs",
+    "guide:index": "node scripts/build-guide-index.mjs",
     "guide:pdf": "node scripts/render-guide-pdf.mjs",
     "test:jobcalc": "node scripts/test-jobcalc-data.mjs",
+    "test:retrieval": "node scripts/test-retrieval.mjs",
     "test:voice": "node scripts/test-voice.mjs",
     "test:voice-layout": "node scripts/test-voice-layout.mjs"
   },

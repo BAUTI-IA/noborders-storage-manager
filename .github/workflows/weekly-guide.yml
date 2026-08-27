@@ -62,6 +62,10 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: node scripts/update-guide.mjs ${{ inputs.force && '--force' || '' }}
 
+      - name: Regenerar el índice que lee el agente
+        if: steps.update.outputs.guide_changed == 'true'
+        run: node scripts/build-guide-index.mjs
+
       - name: Instalar Chromium
         if: steps.update.outputs.guide_changed == 'true'
         run: npx playwright install --with-deps chromium
@@ -76,6 +80,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/guia-crm.html docs/crm-guide-en.html \
+                  lib/guideText.mjs \
                   Guia-CRM-NoBorders.pdf CRM-Guide-NoBorders-EN.pdf
           if git diff --cached --quiet; then
             echo "Nada para comitear."
