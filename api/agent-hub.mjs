@@ -11,6 +11,7 @@
 import { admin, handleIncoming, warmCaches } from "../lib/agent.mjs";
 import { writesEnabled } from "../lib/agentWrite.mjs";
 import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from "../lib/brief.mjs";
+import { pruneMemory } from "../lib/retrieval.mjs";
 import { mintVoiceSession, runVoiceTool, vt, VOICE_TOOL_NAMES } from "../lib/voice.mjs";
 
 export const maxDuration = 300;
@@ -43,6 +44,12 @@ async function dailyBrief(req, res) {
     // Telegram caps messages at 4096 chars — split if the brief ran long.
     for (let i = 0; i < brief.length; i += 3900) await sendTelegram(chatId, brief.slice(i, i + 3900));
     await saveSnapshot(data); // after a real send only, so ?dry runs don't overwrite the day
+    // Barrido diario de la memoria del agente: el plan free de Supabase son
+    // 500 MB y la tabla crece con cada mensaje. Nunca puede voltear el brief.
+    try {
+      const pruned = await pruneMemory();
+      if (pruned) console.log(`agent_memory: ${pruned} turnos viejos borrados`);
+    } catch (e) { console.error("agent_memory prune:", e?.message || e); }
     res.status(200).json({ ok: true, sent: true, chars: brief.length, deltas });
   } catch (e) {
     console.error("daily-brief:", e);

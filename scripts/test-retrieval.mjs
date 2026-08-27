@@ -4,7 +4,10 @@
 //
 //   node scripts/test-retrieval.mjs
 import { htmlToText, parseGuide, approxTokens, GUIDE_TOKEN_BUDGET } from "../lib/guideParse.mjs";
-import { findSection, formatHits, getGuide, guideIndex, guideLang, guideSections, renderIndex, selectGuide, visibleToProfile } from "../lib/retrieval.mjs";
+import {
+  findSection, formatHits, getGuide, guideIndex, guideLang, guideSections, normalizeText,
+  queryTerms, rankByTerms, renderIndex, selectGuide, visibleToProfile,
+} from "../lib/retrieval.mjs";
 import { buildSearchSql, TEXT_SOURCES, MIN_QUERY_CHARS } from "../lib/textCorpus.mjs";
 import { AGENT_DENY_TABLES, SOFT_DELETE_TABLES, TABLE_ACL } from "../lib/acl.mjs";
 
@@ -159,6 +162,46 @@ eq("la cabecera trae tabla, id, job, etiqueta y fecha",
 eq("el cuerpo va en una sola línea", formatHits([HIT]).includes("El espejo llegó roto"), true);
 eq("una fila sin job ni etiqueta no deja separadores colgando",
   formatHits([{ source_table: "trips", row_id: 3, body: "x" }]), "[trips #3] x");
+
+// ── Memoria ──────────────────────────────────────────────────────────────────
+eq("normaliza acentos y mayúsculas", normalizeText("Se QUEJÓ del ESPEJO"), "se quejo del espejo");
+eq("los términos de menos de 3 letras se descartan", queryTerms("se me rompió el espejo"), ["rompio", "espejo"]);
+eq("una consulta sin términos útiles no deja términos", queryTerms("el se lo"), []);
+
+// items viene del más nuevo al más viejo, como lo devuelve la query.
+const TURNS = [
+  { role: "user", text: "Nada que ver con esto", created_at: "2026-03-01" },
+  { role: "user", text: "Compré espejos nuevos para el warehouse", created_at: "2026-02-01" },
+  { role: "assistant", text: "El cliente se quejó del espejo roto", created_at: "2026-01-01" },
+];
+eq("gana el que cubre todos los términos",
+  rankByTerms("espejo roto", TURNS)[0].text, "El cliente se quejó del espejo roto");
+eq("los que cubren solo una parte igual aparecen",
+  rankByTerms("espejo roto", TURNS).length, 2);
+eq("descarta lo que no matchea",
+  rankByTerms("espejo roto", TURNS).some((t) => t.text.includes("Nada que ver")), false);
+// Sin stemmer: el match por prefijo de palabra tiene que andar en los dos sentidos.
+eq("plural en la consulta encuentra el singular",
+  rankByTerms("espejos", TURNS).map((t) => t.text.slice(0, 12)),
+  ["Compré espej", "El cliente s"]);
+eq("singular en la consulta encuentra el plural",
+  rankByTerms("espejo", TURNS).length, 2);
+eq("la frase exacta puntúa al máximo",
+  rankByTerms("del espejo roto", TURNS)[0].text, "El cliente se quejó del espejo roto");
+eq("empatados, gana el más reciente",
+  rankByTerms("warehouse", [
+    { text: "warehouse nuevo", created_at: "2026-02-01" },
+    { text: "warehouse viejo", created_at: "2026-01-01" },
+  ])[0].text, "warehouse nuevo");
+eq("una consulta corta no devuelve nada", rankByTerms("ab", TURNS), []);
+eq("sin turnos no rompe", rankByTerms("espejo", []), []);
+eq("respeta el límite", rankByTerms("espejo", TURNS, { limit: 1 }).length, 1);
+
+// La memoria de una persona no puede quedar al alcance de la herramienta sql:
+// sería leer las conversaciones de otro.
+eq("agent_memory está vedada al agente", AGENT_DENY_TABLES.has("agent_memory"), true);
+eq("agent_memory no es una tabla del CRM", !!TABLE_ACL["agent_memory"], false);
+eq("nadie puede verla por el filtro de búsqueda", visibleToProfile(adminP, "agent_memory"), false);
 
 console.log(failed ? `\n${failed} test(s) fallaron` : "\nTodo verde");
 process.exit(failed ? 1 : 0);
