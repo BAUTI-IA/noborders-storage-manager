@@ -4,6 +4,9 @@ Le escribís al agente por WhatsApp en lenguaje natural y él carga, actualiza o
 
 - **Crear**: "Tenemos un job del cliente García, pickup el 25 de julio en Miami FL, entrega en Orlando, FADD 1 de agosto, estimate 4500"
 - **Actualizar**: "El job 1234 se entrega el viernes" / "Poné el job 1234 en depósito"
+- **Explicar el CRM**: "¿cómo cargo un extra?", "¿qué significa el FADD naranja?" — lee la guía de uso (`docs/guia-crm.html`), no adivina.
+- **Buscar en texto libre**: "el job donde el cliente se quejó de un espejo roto", "¿qué gasto menciona la puerta del warehouse?" — busca en notas, descripciones de claims y comentarios, respetando los permisos de quien pregunta.
+- **Acordarse**: "¿qué te dije la semana pasada sobre el camión 3?" — más allá de los últimos turnos, acotado a la persona que pregunta.
 - **Consultar cualquier dato del CRM** (operativo, financiero, flota, usuarios): "¿Qué entregas hay esta semana?", "¿Cuánto facturamos este mes?", "¿Qué camiones están en ruta?", "¿Cuánto le debemos al broker X?". El agente investiga la base con SQL de solo lectura (función `agent_query`, creada por `scripts/setup-agent-query.mjs`: solo SELECT, transacción read-only, máx. 200 filas; los chats internos y el estado del agente quedan excluidos).
 
 Antes de escribir en el CRM siempre te muestra lo que entendió y espera tu **"sí"** (o "no" para cancelar). Si algo está mal, respondé con la corrección ("no, la entrega es el sábado") y re-propone.
@@ -18,7 +21,7 @@ Ejemplos que ya funcionan:
 - **Trip / live load**: "Armá un trip con los jobs 1201 y 1198, camión 3, driver Pedro, sale el jueves" → crea el trip en `loading` y engancha los jobs en orden. "El camión 3 está en Ocala, FL" → `set_truck_location` geocodifica la dirección y lo pone en el mapa.
 - **Pago**: "Imputá $1,800 en Zelle al job 1201" → método digital ⇒ `received` + `banked`, reparte primero el balance del job, después los extras más viejos, el resto a cuenta, y sincroniza `bol_collected`.
 
-Cómo funciona por dentro (`lib/agent.mjs`): un loop con dos herramientas — `sql` (solo lectura, para investigar y resolver nombres → ids) y `stage_plan` (propone un plan de operaciones). **Nada se escribe al proponer**: el plan se valida, se muestra en texto y solo se ejecuta con un "sí" explícito.
+Cómo funciona por dentro (`lib/agent.mjs`): un loop con cuatro herramientas — `sql` (solo lectura, para investigar y resolver nombres → ids), `search` (texto libre: notas, descripciones de claims, comentarios de pagos y gastos, y con scope `memory` también lo que se habló en conversaciones anteriores), `guide` (la guía de uso del CRM, para preguntas de "¿cómo se hace X?") y `stage_plan` (propone un plan de operaciones). **Nada se escribe al proponer**: el plan se valida, se muestra en texto y solo se ejecuta con un "sí" explícito. La capa de recuperación está explicada en [docs/rag.md](rag.md).
 
 Garantías de seguridad:
 - **Permisos por usuario**: cada escritura se chequea contra el rol/permisos del usuario en el CRM (`lib/acl.mjs`, mismo mapa que las políticas RLS). El agente nunca puede hacer más que la persona que se lo pide.
@@ -32,7 +35,7 @@ Garantías de seguridad:
 ### Vincular la cuenta (necesario para escribir desde Telegram/WhatsApp)
 En el CRM, el chat del agente tiene el botón **"Vincular Telegram"** → da un código de 6 dígitos (15 min). El empleado le manda al bot `/link 123456` y queda atado a su usuario del CRM. Sin vincular, por Telegram solo puede consultar.
 
-Migraciones necesarias: `scripts/setup-agent-query.mjs` (lectura) y `scripts/setup-agent-writes.mjs` (columnas de vinculación en `profiles`).
+Migraciones necesarias: `scripts/setup-agent-query.mjs` (lectura), `scripts/setup-agent-writes.mjs` (columnas de vinculación en `profiles`), `scripts/setup-text-search.mjs` (búsqueda de texto libre) y `scripts/setup-agent-memory.mjs` (memoria de conversaciones).
 Tests de permisos: `node scripts/test-agent-acl.mjs`.
 
 ## Cómo funciona
