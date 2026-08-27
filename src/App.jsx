@@ -232,7 +232,7 @@ function PaymentMethodSelect({ value, onChange, style }) {
 function collectionStatus(j) {
   const bal = numv(j.bol_balance), col = numv(j.bol_collected);
   if (bal > 0 && col >= bal) return { key:"complete", l:"Collected", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
-  if (col > 0) return { key:"partial", l:"Parcial", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" };
+  if (col > 0) return { key:"partial", l:"Partial", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" };
   return { key:"pending", l:"Pending", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" };
 }
 // Missing pads for a single job (received minus returned, floored at 0).
@@ -12049,206 +12049,255 @@ export default function App() {
             </div>
           </>)}
 
-          {jobTab === "money" && (<>
-          {!settlementsMissing && (
-            <>
-              <SectionLabel>Carrier Settlement</SectionLabel>
-              {(() => {
-                const linkedId = jobDetail.closing_sheet_id;
-                const linked = linkedId ? closingSheets.find(s => s.id === Number(linkedId)) : null;
-                const openSheets = closingSheets.filter(s => s.status === "open");
-                const selStyle = { fontSize:12, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff" };
-                const onMove = (v) => {
-                  if (!v) return;
-                  if (v === "__unlink") updateJobBol(jobDetail.key, "closing_sheet_id", "");
-                  else if (v === "__new") addJobToNewSheet(jobDetail.key, jobDetail.broker_id);
-                  else updateJobBol(jobDetail.key, "closing_sheet_id", Number(v));
-                };
-                return (
-                  <EditRow label="Closing sheet">
-                    {linked ? (
-                      <span style={{ display:"inline-flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                        <button onClick={() => { setJobDetailKey(null); setPage("settlements"); setCsDetailId(linked.id); }} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>#{linked.closing_sheet_number || linked.id}</button>
-                        <CSBadge status={linked.status} />
-                        <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
-                          <option value="">Move…</option>
-                          {openSheets.filter(s => s.id !== linked.id).map(s => <option key={s.id} value={String(s.id)}>→ #{s.closing_sheet_number || s.id}</option>)}
-                          <option value="__new">→ ➕ New</option>
-                          <option value="__unlink">Remove from closing sheet</option>
-                        </select>
-                      </span>
-                    ) : (
-                      <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
-                        <option value="">+ Add to closing sheet…</option>
-                        {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "no broker"}</option>)}
-                        <option value="__new">➕ Create new</option>
-                      </select>
-                    )}
-                  </EditRow>
-                );
-              })()}
-              {(() => { const P = jobDetail.parts; return (<>
-                <EditRow label="Carrier rate / CF"><InlineField value={jobDetail.carrier_rate_per_cf} onSave={(v) => updateJobField(P, "carrier_rate_per_cf", v === "" ? null : Number(v))} display={money(jobDetail.carrier_rate_per_cf)} /></EditRow>
-                <EditRow label="Carrier fee (auto)"><span style={{ fontWeight:600 }}>{money(parseCf(jobDetail.volume) * numv(jobDetail.carrier_rate_per_cf)) || "$0"}</span></EditRow>
-                <EditRow label="BOL balance to collect"><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(P, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></EditRow>
-                <EditRow label="BOL collected">
-                  <span style={{ display:"inline-flex", alignItems:"center", gap:10 }}>
-                    <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
-                    {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
-                    <Btn onClick={() => setPayModal({ jobKey:jobDetail.key, amount: jobDetail.bol_collected ?? "", method: jobDetail.bol_payment_method || "", date: jobDetail.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"3px 9px", fontSize:11 }}>Record payment</Btn>
-                  </span>
-                </EditRow>
-              </>); })()}
-            </>
-          )}
-          {!extrasMissing && (() => {
-            const exs = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false);
+          {jobTab === "money" && (() => {
             const repId = Math.min(...jobDetail.parts.map(p => p.id));
             const firstDriver = Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? jobDetail.driver_ids[0] : "";
-            const totAmt = exs.reduce((s, e) => s + numv(e.amount), 0);
-            // Per-extra paid/pending chips (payments allocated via job_extra_id + legacy link).
+            const exs = extrasMissing ? [] : (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false);
+            const exsOwed = exs.reduce((s, e) => s + numv(e.amount), 0);
+            // Per-extra paid/pending state (payments allocated via job_extra_id + legacy link).
             const chargeState = paymentsMissing ? null : chargeStateByJobKey(jobDetail.key);
             const chargeOf = (e) => chargeState?.extraCharges.find(c => Number(c.extra.id) === Number(e.id));
-            return (
-              <>
-                <SectionLabel>Extras {exs.length ? `(${exs.length})` : ""}</SectionLabel>
-                {exs.length === 0
-                  ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No extras on this job.</div>
-                  : exs.map(e => (
-                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
-                        <span style={{ fontWeight:600 }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</span>
-                        <span style={{ color:"#111", fontWeight:600 }}>{money(e.amount) || "$0"}</span>
-                        {(() => {
-                          const c = chargeOf(e);
-                          if (!c) return null;
-                          return c.remaining > 0.01
-                            ? <span style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>Pending ${Math.round(c.remaining).toLocaleString()}</span>
-                            : <span style={{ fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 8px" }}>Pagado</span>;
-                        })()}
-                        <span style={{ fontSize:11, color:"#888" }}>{genByLabel(e.generated_by)}</span>
-                        {driverById[e.driver_id]?.name && <span style={{ fontSize:11, color:"#888" }}>🧑‍✈️ {driverById[e.driver_id].name}</span>}
-                        {empById[e.rep_id]?.name && <span style={{ fontSize:11, color:"#888" }}>👤 {empById[e.rep_id].name}</span>}
-                        <span style={{ flex:1 }} />
-                        <span style={{ fontSize:12, color:"#1A8A4E", fontWeight:600 }}>D {money(e.driver_commission_amount) || "$0"}</span>
-                        <span style={{ fontSize:12, color:"#185FA5", fontWeight:600 }}>R {money(e.rep_commission_amount) || "$0"}</span>
-                        <button onClick={() => deleteExtra(e)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
-                      </div>
-                    ))}
-                <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8 }}>
-                  {exs.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total extras: <b>${Math.round(totAmt).toLocaleString()}</b></span>}
-                  <span style={{ flex:1 }} />
-                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_date: today(), extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add extra</Btn>
-                </div>
-              </>
-            );
-          })()}
-          {!paymentsMissing && (() => {
-            const ps = (paymentsByJobKey[jobDetail.key] || []).slice().sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+            const ps = paymentsMissing ? [] : (paymentsByJobKey[jobDetail.key] || []).slice().sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
             const recv = ps.filter(p => p.received);
             // Job balance and extras are tracked independently — never mixed.
             const expected = numv(jobDetail.pickup_balance) + numv(jobDetail.delivery_balance) + numv(jobDetail.bol_balance);
-            const jobCollected = recv.filter(p => p.concept === "job").reduce((s, p) => s + paymentNet(p), 0);
-            const jobOutstanding = Math.max(0, expected - jobCollected);
+            const jobCollected = paymentsMissing ? numv(jobDetail.bol_collected) : jobCollectedFor(jobDetail, jobDetail.key);
+            const jobPending = Math.max(0, expected - jobCollected);
             const extraPays = recv.filter(p => p.concept === "extra");
             const extrasCollected = extraPays.reduce((s, p) => s + paymentNet(p), 0);
+            const extrasPending = Math.max(0, exsOwed - extrasCollected);
             const ccFeeTotal = recv.filter(p => p.concept === "cc_fee").reduce((s, p) => s + paymentNet(p), 0);
-            // Extras owed (from job_extras) vs collected (extra-concept payments).
-            const exsOwed = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false).reduce((s, e) => s + numv(e.amount), 0);
-            const extrasOutstanding = Math.max(0, exsOwed - extrasCollected);
-            const totalOutstanding = jobOutstanding + extrasOutstanding;
-            // Per-extra-type breakdown of what was collected via payments.
+            const totalOutstanding = jobPending + extrasPending;
+            const grand = expected + exsOwed;
             const byType = {};
             for (const p of extraPays) { const t = p.extra_type || "extra"; byType[t] = (byType[t] || 0) + paymentNet(p); }
             const typeEntries = Object.entries(byType);
             // Broker share deductions (job balance + extras) → net revenue to the company.
             const jobBrokerSharePct = numv(jobDetail.broker_job_share_pct);
             const jobBrokerShare = jobCollected * jobBrokerSharePct / 100;
-            const extrasBrokerShare = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false).reduce((s, e) => s + extraBrokerShare(e), 0);
+            const extrasBrokerShare = exs.reduce((s, e) => s + extraBrokerShare(e), 0);
             const totalBrokerShare = jobBrokerShare + extrasBrokerShare;
             const netRevenue = (jobCollected + extrasCollected) - totalBrokerShare;
-            const repId = Math.min(...jobDetail.parts.map(p => p.id));
-            const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
+            const onAcc = recv.filter(p => p.concept === "on_account");
+            const onAccSum = onAcc.reduce((s, p) => s + paymentNet(p), 0);
+            const unattributed = paymentsMissing ? 0 : chargeState.unattributedExtraCollected;
+            const pc = (v) => grand > 0 ? Math.max(0, Math.min(100, v / grand * 100)) : 0;
+            const selStyle = { fontSize:12, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff" };
             return (
-              <>
-                <SectionLabel>Payments {ps.length ? `(${ps.length})` : ""}</SectionLabel>
-                <div style={{ background:"#fafafa", borderRadius:9, padding:"10px 12px", marginBottom:8 }}>
-                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13 }}>
-                    <span>Job balance: <b>${Math.round(expected).toLocaleString()}</b></span>
-                    <span>Collected (job): <b style={{ color:"#1A8A4E" }}>${Math.round(jobCollected).toLocaleString()}</b></span>
-                    <span>Job balance: <b style={{ color: jobOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(jobOutstanding).toLocaleString()}</b></span>
+            <>
+              {/* ── What is still owed, and where it comes from ── */}
+              <div style={{ ...cardS, marginBottom:12 }}>
+                <div style={capS}>Money<span style={rightS}>job balance + extras − collected</span></div>
+                <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"wrap" }}>
+                  <span style={{ fontSize:26, fontWeight:700, letterSpacing:"-0.02em", color: totalOutstanding > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
+                  <span style={{ fontSize:12, color:"#999" }}>{tr(`outstanding of $${Math.round(grand).toLocaleString()}`, `sin cobrar de $${Math.round(grand).toLocaleString()}`)}</span>
+                </div>
+                {grand > 0 && (<>
+                  <div style={{ height:9, borderRadius:5, background:"#f0f0f0", overflow:"hidden", display:"flex", margin:"9px 0 4px" }}>
+                    <div style={{ width:`${pc(jobCollected + extrasCollected)}%`, background:"#1A8A4E" }} />
+                    <div style={{ width:`${pc(jobPending)}%`, background:"#e6e6e6" }} />
+                    <div style={{ width:`${pc(extrasPending)}%`, background:"#EA580C" }} />
                   </div>
-                  {(exsOwed > 0 || extrasCollected > 0) && (
-                    <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12.5, marginTop:6, paddingTop:6, borderTop:"1px solid #eee", color:"#555" }}>
-                      <span>Extras collected: <b style={{ color:"#6D28D9" }}>${Math.round(extrasCollected).toLocaleString()}</b></span>
-                      {exsOwed > 0 && <span>Extras invoiced: <b>${Math.round(exsOwed).toLocaleString()}</b></span>}
-                      {extrasOutstanding > 0 && <span>Extras pending: <b style={{ color:"#EF9F27" }}>${Math.round(extrasOutstanding).toLocaleString()}</b></span>}
-                    </div>
-                  )}
-                  {typeEntries.length > 0 && (
-                    <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
-                      {typeEntries.map(([t, amt]) => <span key={t} style={{ fontSize:10.5, fontWeight:600, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"2px 9px" }}>{extraTypeLabel(t)} ${Math.round(amt).toLocaleString()}</span>)}
-                    </div>
-                  )}
-                  {ccFeeTotal > 0 && <div style={{ fontSize:12, marginTop:6, color:"#854F0B" }}>CC fees collected: <b>${Math.round(ccFeeTotal).toLocaleString()}</b></div>}
-                  {(() => {
-                    // Money received but not yet applied to a charge ("a cuenta").
-                    const onAcc = recv.filter(p => p.concept === "on_account");
-                    const onAccSum = onAcc.reduce((s, p) => s + paymentNet(p), 0);
-                    if (onAccSum <= 0) return null;
-                    const first = onAcc.find(p => p.job_id && !allocMissing);
-                    return (
-                      <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, marginTop:6, color:"#854F0B" }}>
+                  <div style={{ display:"flex", gap:12, fontSize:10.5, color:"#999", marginBottom:11, flexWrap:"wrap" }}>
+                    <span><i style={{ width:8, height:8, borderRadius:2, background:"#1A8A4E", display:"inline-block", marginRight:4 }} />Collected ${Math.round(jobCollected + extrasCollected).toLocaleString()}</span>
+                    <span><i style={{ width:8, height:8, borderRadius:2, background:"#e2e2e2", display:"inline-block", marginRight:4 }} />Job pending ${Math.round(jobPending).toLocaleString()}</span>
+                    <span><i style={{ width:8, height:8, borderRadius:2, background:"#EA580C", display:"inline-block", marginRight:4 }} />Extras pending ${Math.round(extrasPending).toLocaleString()}</span>
+                  </div>
+                </>)}
+
+                <div style={{ fontSize:9.5, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"12px 0 3px" }}>Job balance</div>
+                <div style={kvS}><span style={kS}>Invoiced</span><span style={{ fontWeight:600 }}>${Math.round(expected).toLocaleString()}</span></div>
+                <div style={kvS}><span style={kS}>Collected</span><span style={{ fontWeight:600, color:"#1A8A4E" }}>−${Math.round(jobCollected).toLocaleString()}</span></div>
+                <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Still owed</span><span style={{ fontWeight:700, color: jobPending > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(jobPending).toLocaleString()}</span></div>
+
+                {(exsOwed > 0 || extrasCollected > 0) && (<>
+                  <div style={{ fontSize:9.5, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"12px 0 3px" }}>Extras</div>
+                  <div style={kvS}><span style={kS}>Invoiced</span><span style={{ fontWeight:600 }}>${Math.round(exsOwed).toLocaleString()}</span></div>
+                  <div style={kvS}>
+                    <span style={kS}>Collected</span><span style={{ fontWeight:600, color:"#6D28D9" }}>−${Math.round(extrasCollected).toLocaleString()}</span>
+                    {typeEntries.length > 0 && <span style={{ marginLeft:"auto", display:"flex", gap:5, flexWrap:"wrap", justifyContent:"flex-end" }}>
+                      {typeEntries.map(([t, amt]) => <span key={t} style={{ fontSize:10, fontWeight:600, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 8px" }}>{extraTypeLabel(t)} ${Math.round(amt).toLocaleString()}</span>)}
+                    </span>}
+                  </div>
+                  <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Still owed</span><span style={{ fontWeight:700, color: extrasPending > 0 ? "#C2410C" : "#1A8A4E" }}>${Math.round(extrasPending).toLocaleString()}</span></div>
+                </>)}
+
+                <div style={{ ...kvS, borderTop:"2px solid #111", borderBottom:"none", paddingTop:8, marginTop:5 }}>
+                  <span style={{ ...kS, color:"#111", fontWeight:700 }}>Total outstanding</span>
+                  <span style={{ fontSize:15, fontWeight:700, color: totalOutstanding > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
+                </div>
+
+                {(totalBrokerShare > 0 || ccFeeTotal > 0 || onAccSum > 0 || unattributed > 0.01) && (
+                  <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
+                    {totalBrokerShare > 0 && (<>
+                      <div style={kvS}><span style={{ ...kS, width:"auto" }}>− Broker share{jobBrokerSharePct > 0 ? ` (job ${jobBrokerSharePct}%)` : ""}</span><span style={{ marginLeft:"auto", fontWeight:600, color:"#C2410C" }}>−${Math.round(totalBrokerShare).toLocaleString()}</span></div>
+                      <div style={{ ...kvS, borderBottom:"none" }}><span style={{ ...kS, width:"auto", fontWeight:700 }}>Net revenue (post broker)</span><span style={{ marginLeft:"auto", fontWeight:700, color:"#1A8A4E" }}>${Math.round(netRevenue).toLocaleString()}</span></div>
+                    </>)}
+                    {ccFeeTotal > 0 && <div style={{ ...kvS, borderBottom:"none" }}><span style={{ ...kS, width:"auto" }}>CC fees collected</span><span style={{ marginLeft:"auto", fontWeight:600, color:"#854F0B" }}>${Math.round(ccFeeTotal).toLocaleString()}</span></div>}
+                    {onAccSum > 0 && (
+                      <div style={{ display:"flex", alignItems:"center", gap:8, background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:9, padding:"8px 11px", marginTop:8, fontSize:12.5, color:"#854F0B" }}>
                         <span>On account (unallocated): <b>${Math.round(onAccSum).toLocaleString()}</b></span>
-                        {first && can("payments","edit") && <button onClick={() => openReallocatePayment(first)} style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"1px 8px", cursor:"pointer" }}>Asignar</button>}
+                        {(() => { const first = onAcc.find(p => p.job_id && !allocMissing); return first && can("payments","edit")
+                          ? <button onClick={() => openReallocatePayment(first)} style={{ marginLeft:"auto", border:"1px solid #F4DDB0", background:"#fff", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"3px 10px", cursor:"pointer" }}>Assign</button>
+                          : null; })()}
+                      </div>
+                    )}
+                    {unattributed > 0.01 && <div style={{ fontSize:11, marginTop:6, color:"#999" }}>${Math.round(unattributed).toLocaleString()} collected from extras not assigned to a specific extra (historical).</div>}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Payments: the same composer the Overview uses. ── */}
+              {!paymentsMissing && (
+                <div style={{ ...cardS, marginBottom:12 }}>
+                  <div style={capS}>Payments<span style={rightS}>{tr(`${ps.length} recorded`, `${ps.length} registrados`)}</span></div>
+                  {ps.length === 0 ? (
+                    <div style={{ fontSize:12.5, color:"#bbb", padding:"2px 0 10px" }}>No payments recorded.</div>
+                  ) : ps.map((p, i) => (
+                    <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 0", borderBottom: i < ps.length - 1 ? "1px solid #f6f6f6" : "none", fontSize:12.5, flexWrap:"wrap" }}>
+                      <ConceptBadge concept={p.concept} />
+                      {p.concept === "extra" && p.extra_type && <span style={{ fontSize:10.5, color:"#6D28D9", fontWeight:600 }}>{extraTypeLabel(p.extra_type)}</span>}
+                      {p.split_group && <span title="Part of a split payment" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px" }}>split</span>}
+                      <PaymentMethodBadge method={p.method} />
+                      <b style={{ fontSize:14 }}>{money(paymentNet(p)) || "$0"}</b>
+                      <span style={{ fontSize:11, color:"#aaa" }}>{p.payment_date || "—"}</span>
+                      {p.received
+                        ? (p.banked
+                            ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px" }}>Deposited</span>
+                            : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:20, padding:"1px 7px" }}>In circulation{p.cash_with_whom ? ` · ${p.cash_with_whom}` : ""}</span>)
+                        : <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 7px" }}>Pending</span>}
+                      <span style={{ flex:1 }} />
+                      <button onClick={() => openEditPayment(p)} title="Edit payment" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>
+                    </div>
+                  ))}
+                  <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
+                    {!jobPayLines ? (
+                      <Btn primary onClick={() => setJobPayLines({ date: today(), notes:"", lines:[{ concept:"job", method:"cash", amount: totalOutstanding > 0 ? String(Math.round(totalOutstanding)) : "" }] })}
+                        style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
+                    ) : (
+                      <div style={{ border:"1px solid #e2e2e2", borderRadius:10, padding:"11px 12px", background:"#fff" }}>
+                        <div style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:9 }}>Record payment</div>
+                        {jobPayLines.lines.map((l, i) => (
+                          <div key={i} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:7 }}>
+                            <select value={l.concept} onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, concept: ev.target.value } : x) }))}
+                              style={{ ...inp, width:132, fontSize:12, padding:"6px 7px" }}>
+                              {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                            </select>
+                            <PaymentMethodSelect style={{ ...inp, width:138, fontSize:12, padding:"6px 7px" }} value={l.method}
+                              onChange={v => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, method: v || "" } : x) }))} />
+                            <input type="number" placeholder="0" value={l.amount}
+                              onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, amount: ev.target.value } : x) }))}
+                              style={{ ...inp, flex:1, minWidth:70, fontSize:12, padding:"6px 7px", fontWeight:600 }} />
+                            <button onClick={() => setJobPayLines(f => ({ ...f, lines: f.lines.filter((_, ix) => ix !== i) }))} title="Remove line"
+                              disabled={jobPayLines.lines.length === 1}
+                              style={{ border:"none", background:"none", cursor: jobPayLines.lines.length === 1 ? "default" : "pointer", color:"#ccc", fontSize:15, padding:0 }}>×</button>
+                          </div>
+                        ))}
+                        <button onClick={() => setJobPayLines(f => ({ ...f, lines: [...f.lines, { concept:"job", method:"cash", amount:"" }] }))}
+                          style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:8, padding:"5px 11px", fontSize:11.5, color:"#888", cursor:"pointer", marginBottom:9 }}>+ Another payment method</button>
+                        <div style={{ display:"flex", gap:6, marginBottom:9 }}>
+                          <input type="date" value={jobPayLines.date} onChange={ev => setJobPayLines(f => ({ ...f, date: ev.target.value }))} style={{ ...inp, width:150, fontSize:12, padding:"6px 7px" }} />
+                          <input value={jobPayLines.notes} onChange={ev => setJobPayLines(f => ({ ...f, notes: ev.target.value }))} placeholder="Payment notes" style={{ ...inp, flex:1, fontSize:12, padding:"6px 7px" }} />
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                          <Btn primary onClick={() => saveJobPayLines(repId)} style={{ padding:"6px 14px", fontSize:12 }}>Save payment</Btn>
+                          <Btn onClick={() => setJobPayLines(null)} style={{ padding:"6px 12px", fontSize:12 }}>Cancel</Btn>
+                          <span style={{ marginLeft:"auto", fontSize:12, color:"#666" }}>Total <b>${Math.round(jobPayLines.lines.reduce((s, l) => s + numv(l.amount), 0)).toLocaleString()}</b></span>
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ fontSize:10.5, color:"#ccc", marginTop:9 }}>Need a check number, a photo or a discount? Open the payment with the pencil for the full form.</div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Extras with their commissions: what the rail on top does not show ── */}
+              {!extrasMissing && (
+                <div style={{ ...cardS, marginBottom:12 }}>
+                  <div style={capS}>Extras &amp; commissions<span style={rightS}>{tr(`${exs.length} · $${Math.round(exsOwed).toLocaleString()} invoiced`, `${exs.length} · $${Math.round(exsOwed).toLocaleString()} facturados`)}</span></div>
+                  {exs.length === 0 ? (
+                    <div style={{ fontSize:12.5, color:"#bbb", padding:"2px 0 10px" }}>No extras on this job. Add one from the services line above.</div>
+                  ) : exs.map((e, i) => {
+                    const c = chargeOf(e);
+                    return (
+                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 0", borderBottom: i < exs.length - 1 ? "1px solid #f6f6f6" : "none", fontSize:12.5, flexWrap:"wrap" }}>
+                        <span style={{ fontWeight:600, minWidth:96 }}>{extraTypeLabel(e.extra_type)}</span>
+                        <b style={{ fontSize:14 }}>{money(e.amount) || "$0"}</b>
+                        {c && (c.remaining > 0.01
+                          ? <span style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>Pending ${Math.round(c.remaining).toLocaleString()}</span>
+                          : <span style={{ fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 8px" }}>Paid</span>)}
+                        <span style={{ fontSize:11, color:"#999" }}>{genByLabel(e.generated_by)}</span>
+                        {driverById[e.driver_id]?.name && <span style={{ fontSize:11, color:"#999" }}>🧑‍✈️ {driverById[e.driver_id].name}</span>}
+                        {empById[e.rep_id]?.name && <span style={{ fontSize:11, color:"#999" }}>👤 {empById[e.rep_id].name}</span>}
+                        <span style={{ flex:1 }} />
+                        <span title="Driver commission" style={{ fontSize:11.5, color:"#1A8A4E", fontWeight:600 }}>D {money(e.driver_commission_amount) || "$0"}</span>
+                        <span title="Rep commission" style={{ fontSize:11.5, color:"#185FA5", fontWeight:600 }}>R {money(e.rep_commission_amount) || "$0"}</span>
+                        <button onClick={() => deleteExtra(e)} title="Remove extra" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, lineHeight:1 }}>×</button>
                       </div>
                     );
-                  })()}
-                  {(() => {
-                    const un = paymentsMissing ? 0 : chargeStateByJobKey(jobDetail.key).unattributedExtraCollected;
-                    return un > 0.01 ? <div style={{ fontSize:11, marginTop:4, color:"#999" }}>${Math.round(un).toLocaleString()} collected from extras not assigned to a specific extra (historical).</div> : null;
-                  })()}
-                  {totalBrokerShare > 0 && (
-                    <div style={{ marginTop:6, paddingTop:6, borderTop:"1px solid #eee", fontSize:12.5 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", color:"#C2410C" }}>
-                        <span>− Broker share{jobBrokerSharePct > 0 ? ` (job ${jobBrokerSharePct}%)` : ""}</span>
-                        <span><b>−${Math.round(totalBrokerShare).toLocaleString()}</b></span>
-                      </div>
-                      <div style={{ display:"flex", justifyContent:"space-between", marginTop:3, fontWeight:700 }}>
-                        <span>Net revenue (post broker)</span>
-                        <span style={{ color:"#1A8A4E" }}>${Math.round(netRevenue).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, paddingTop:8, borderTop:"1px solid #eee", fontSize:13.5, fontWeight:800 }}>
-                    <span>Total outstanding balance</span>
-                    <span style={{ color: totalOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
+                  })}
+                  <div style={{ display:"flex", alignItems:"center", marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
+                    <span style={{ fontSize:11, color:"#bbb" }}>Amounts are editable from the services line at the top.</span>
+                    <Btn style={{ marginLeft:"auto", padding:"6px 12px", fontSize:12 }}
+                      onClick={() => setQuickExtra({ jobId: repId, extra_date: today(), extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })}>+ Add extra</Btn>
                   </div>
                 </div>
-                {ps.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments recorded.</div>
-                  : ps.map(p => (
-                      <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
-                        <ConceptBadge concept={p.concept} />
-                        {p.concept === "extra" && p.extra_type && <span style={{ fontSize:10.5, color:"#6D28D9", fontWeight:600 }}>{extraTypeLabel(p.extra_type)}</span>}
-                        {p.split_group && <span title="Part of a split payment" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px" }}>split</span>}
-                        <PaymentMethodBadge method={p.method} />
-                        <b>{money(paymentNet(p)) || "$0"}</b>
-                        <span style={{ fontSize:11, color:"#888" }}>{p.payment_date || "—"}</span>
-                        {p.received
-                          ? (p.banked
-                              ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px" }}>Deposited</span>
-                              : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:20, padding:"1px 7px" }}>In circulation{p.cash_with_whom ? ` · ${p.cash_with_whom}` : ""}</span>)
-                          : <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 7px" }}>Pending</span>}
-                        <span style={{ flex:1 }} />
-                        <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>
-                      </div>
-                    ))}
-                <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: jobOutstanding > 0 ? String(Math.round(jobOutstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add payment</Btn>
-                </div>
-              </>
+              )}
+
+              {/* ── Carrier settlement (broker deliveries) ── */}
+              {!settlementsMissing && (() => {
+                const linkedId = jobDetail.closing_sheet_id;
+                const linked = linkedId ? closingSheets.find(s => s.id === Number(linkedId)) : null;
+                const openSheets = closingSheets.filter(s => s.status === "open");
+                const onMove = (v) => {
+                  if (!v) return;
+                  if (v === "__unlink") updateJobBol(jobDetail.key, "closing_sheet_id", "");
+                  else if (v === "__new") addJobToNewSheet(jobDetail.key, jobDetail.broker_id);
+                  else updateJobBol(jobDetail.key, "closing_sheet_id", Number(v));
+                };
+                const PP = jobDetail.parts;
+                const cs = collectionStatus(jobDetail);
+                const kW = { ...kS, width:164 };   // this card's labels are longer
+                return (
+                  <div style={cardS}>
+                    <div style={capS}>Carrier settlement<span style={rightS}>{brokerName(jobDetail.broker_id) || tr("no broker", "sin broker")}</span></div>
+                    <div style={kvS}>
+                      <span style={kW}>Closing sheet</span>
+                      {linked ? (
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                          <button onClick={() => { setJobDetailKey(null); setPage("settlements"); setCsDetailId(linked.id); }} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>#{linked.closing_sheet_number || linked.id}</button>
+                          <CSBadge status={linked.status} />
+                          <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
+                            <option value="">Move…</option>
+                            {openSheets.filter(s => s.id !== linked.id).map(s => <option key={s.id} value={String(s.id)}>→ #{s.closing_sheet_number || s.id}</option>)}
+                            <option value="__new">→ ➕ New</option>
+                            <option value="__unlink">Remove from closing sheet</option>
+                          </select>
+                        </span>
+                      ) : (
+                        <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
+                          <option value="">+ Add to closing sheet…</option>
+                          {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "no broker"}</option>)}
+                          <option value="__new">➕ Create new</option>
+                        </select>
+                      )}
+                    </div>
+                    <div style={kvS}><span style={kW}>Carrier rate / CF</span><span style={{ fontWeight:600 }}><InlineField value={jobDetail.carrier_rate_per_cf} onSave={(v) => updateJobField(PP, "carrier_rate_per_cf", v === "" ? null : Number(v))} display={money(jobDetail.carrier_rate_per_cf)} /></span></div>
+                    <div style={kvS}><span style={kW}>Carrier fee (auto)</span><span style={{ fontWeight:600 }}>{money(parseCf(jobDetail.volume) * numv(jobDetail.carrier_rate_per_cf)) || "$0"}</span></div>
+                    <div style={kvS}><span style={kW}>BOL balance to collect</span><span style={{ fontWeight:600 }}><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(PP, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></span></div>
+                    <div style={{ ...kvS, borderBottom:"none" }}>
+                      <span style={kW}>BOL collected</span>
+                      <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
+                      <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>
+                      <Btn style={{ marginLeft:"auto", padding:"4px 10px", fontSize:11.5 }}
+                        onClick={() => setPayModal({ jobKey:jobDetail.key, amount: jobDetail.bol_collected ?? "", method: jobDetail.bol_payment_method || "", date: jobDetail.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })}>Record BOL collection</Btn>
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
             );
           })()}
-          </>)}
 
           {jobTab === "storage" && (<>
           <SectionLabel>{jobDetail.parts.length === 1 ? "Where it's stored" : `Where it's stored (${jobDetail.parts.length})`}</SectionLabel>
