@@ -9,6 +9,7 @@
     "guide:update": "node scripts/update-guide.mjs",
     "guide:pdf": "node scripts/render-guide-pdf.mjs",
     "test:jobcalc": "node scripts/test-jobcalc-data.mjs",
+    "test:apar": "node scripts/test-apar-data.mjs",
     "agent:prompt": "node scripts/dump-agent-prompt.mjs",
     "test:agent-auth": "node scripts/test-agent-auth.mjs",
     "test:voice": "node scripts/test-voice.mjs",

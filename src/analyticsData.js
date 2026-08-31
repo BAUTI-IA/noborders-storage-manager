@@ -289,32 +289,64 @@ export function monthlyRevenueSeries(ctx, paymentsMissing) {
   return ctx.months.map(month => ({ month, label: monthLabel(month), ...((by[month]) || { collected: 0, pending: 0 }) }));
 }
 
-// ── AR aging (snapshot) ───────────────────────────────────────────────────────
-// Outstanding BOL balance on delivered jobs, bucketed by days since delivery.
-export function arAging(groups, todayISO) {
-  const buckets = [
-    { label: "0–30 días", min: 0, max: 30, amount: 0, count: 0, jobs: [] },
-    { label: "31–60 días", min: 31, max: 60, amount: 0, count: 0, jobs: [] },
-    { label: "61–90 días", min: 61, max: 90, amount: 0, count: 0, jobs: [] },
-    { label: "90+ días", min: 91, max: Infinity, amount: 0, count: 0, jobs: [] },
-  ];
+// ── Aging (snapshot) ─────────────────────────────────────────────────────────
+// Aging of any dated money list — the same 0–30 / 31–60 / 61–90 / 90+ ladder,
+// whichever side of the balance sheet it is. `rows` are
+// { amount, dueDate, ...anything }; each bucket keeps the rows that fell into
+// it so the UI can drill into a bar. A row with no dueDate is treated as due
+// today (bucket 0), which is the conservative reading: unknown is not overdue.
+//
+// Callers own the labels, because this file must stay language-agnostic —
+// arAging below keeps its own Spanish ones for the Analytics chart, and
+// aparData.js passes English ones through the i18n dictionary.
+export const AGING_BANDS = [[0, 30], [31, 60], [61, 90], [91, Infinity]];
+
+export function agingBuckets(rows, todayISO, labels) {
+  const buckets = AGING_BANDS.map(([min, max], i) => ({
+    label: labels[i], min, max, amount: 0, count: 0, rows: [],
+  }));
   let total = 0, weighted = 0;
   const today = new Date(todayISO + "T00:00:00");
-  for (const g of groups) {
-    const j = g.rep;
-    const delivered = g.anyOut || j.status === "delivered";
-    if (!delivered) continue;
-    const owed = Math.max(0, numv(j.bol_balance) - numv(j.bol_collected));
-    if (owed <= 0) continue;
-    const ref = j.delivery_date || g.dateOut || todayISO;
+  for (const r of rows) {
+    const amount = numv(r.amount);
+    if (amount <= 0) continue;
+    const ref = r.dueDate || todayISO;
     const days = Math.max(0, Math.round((today - new Date(ref + "T00:00:00")) / 86400000));
     const b = buckets.find(b => days >= b.min && days <= b.max);
-    b.amount += owed; b.count += 1;
-    b.jobs.push({ key: g.key, job_number: j.job_number || "", customer: j.customer || "", owed, days, broker_id: j.broker_id });
-    total += owed; weighted += owed * days;
+    b.amount += amount; b.count += 1;
+    b.rows.push({ ...r, amount, days });
+    total += amount; weighted += amount * days;
   }
-  for (const b of buckets) b.jobs.sort((a, c) => c.owed - a.owed);
-  return { buckets, total, dso: total > 0 ? Math.round(weighted / total) : 0 };
+  for (const b of buckets) b.rows.sort((a, c) => c.amount - a.amount);
+  // Weighted average age of the outstanding money: DSO on the receivable side,
+  // DPO on the payable one.
+  return { buckets, total, avgDays: total > 0 ? Math.round(weighted / total) : 0 };
+}
+
+// AR aging of the BOL balance on delivered jobs — the Analytics chart's number.
+// Narrower than the AP/AR section's receivables (which also count pickup and
+// delivery balances, extras, storage billing and settlements); kept as-is so
+// the Analytics chart it feeds does not change.
+export function arAging(groups, todayISO) {
+  const rows = [];
+  for (const g of groups) {
+    const j = g.rep;
+    if (!(g.anyOut || j.status === "delivered")) continue;
+    const owed = Math.max(0, numv(j.bol_balance) - numv(j.bol_collected));
+    if (owed <= 0) continue;
+    rows.push({
+      key: g.key, job_number: j.job_number || "", customer: j.customer || "",
+      owed, amount: owed, broker_id: j.broker_id,
+      dueDate: j.delivery_date || g.dateOut || todayISO,
+    });
+  }
+  const { buckets, total, avgDays } = agingBuckets(
+    rows, todayISO, ["0–30 días", "31–60 días", "61–90 días", "90+ días"]);
+  // Legacy shape: the chart reads bucket.jobs, and `owed` rather than `amount`.
+  return {
+    buckets: buckets.map(b => ({ ...b, jobs: b.rows.map(r => ({ ...r, owed: r.amount })) })),
+    total, dso: avgDays,
+  };
 }
 
 // ── Occupancy over time ───────────────────────────────────────────────────────

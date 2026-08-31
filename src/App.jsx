@@ -12,6 +12,7 @@ import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, i
 import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { BancosSection } from "./bank.jsx";
+import { ApArSection } from "./apar.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
@@ -2704,6 +2705,7 @@ const NAV = [
     { id:"settlements", label:"Settlements", icon:"📑" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
+    { id:"apar", label:"AP / AR", icon:"📒" },
     { id:"expenses", label:"Expenses", icon:"💸" },
     { id:"bancos", label:"Banks", icon:"🏛️" },
     { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
@@ -2776,6 +2778,7 @@ const PAGE_META = {
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
+  apar:        { title:"AP / AR", sub:"Accounts receivable and payable · aging and net position" },
   expenses:    { title:"Expenses", sub:"Expenses per driver, truck and trip · days worked · materials" },
   bancos:      { title:"Banks", sub:"Real bank movements · double-check categorization · reconciliation · P&L" },
   clientes:    { title:"Clients", sub:"Clients and their jobs" },
@@ -11162,6 +11165,17 @@ export default function App() {
           setPayPhotoView={setPayPhotoView}
           Btn={Btn} Modal={Modal}
         />
+      )}
+
+      {/* ───────────────────────── AP / AR ───────────────────────── */}
+      {page === "apar" && can("apar", "view") && (
+        <ApArSection supabase={supabase} session={session} profile={profile}
+          jobs={jobs} payments={payments} jobExtras={jobExtras} billing={billing}
+          closingSheets={closingSheets} sheetCalcById={sheetCalcById} brokers={brokers}
+          expenses={expenses} storages={records} driversList={driversList}
+          workDays={workDays} adjustments={adjustments}
+          jobOutstanding={jobOutstanding} onOpenJob={setJobDetailKey} setPage={setPage}
+          can={can} Btn={Btn} Modal={Modal} />
       )}
 
       {/* ───────────────────────── BANCOS ───────────────────────── */}

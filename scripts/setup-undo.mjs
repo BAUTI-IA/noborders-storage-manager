@@ -26,6 +26,7 @@ const TABLES = [
   "compliance_documents", "closing_sheets", "equipment_items", "employees",
   "material_items", "material_movements", "driver_work_days",
   "driver_adjustments", "trips", "trip_stops", "job_events", "payment_accounts",
+  "ap_bills",
 ];
 
 const SQL = `
