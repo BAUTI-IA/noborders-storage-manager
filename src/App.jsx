@@ -8416,6 +8416,24 @@ export default function App() {
     return m;
   }, [jobs, jobExtras, jobKeyByRowId, extraJobGroups]);
 
+  // Brokers page rollup: totals across every broker row shown in the table.
+  const brokerTotals = useMemo(() => {
+    let jobsCount = 0, balance = 0, share = 0, openCs = 0, owesUs = 0, weOwe = 0, withJobs = 0;
+    for (const b of brokers) {
+      const st = brokerStats[b.id];
+      const ss = brokerSettleStats[b.id];
+      const n = st ? st.jobs.size : 0;
+      jobsCount += n;
+      if (n > 0) withJobs++;
+      balance += st ? st.balance : 0;
+      share += brokerShareByBroker[b.id] || 0;
+      openCs += ss ? ss.open : 0;
+      owesUs += ss ? ss.owesUs : 0;
+      weOwe += ss ? ss.weOwe : 0;
+    }
+    return { brokers: brokers.length, withJobs, jobs: jobsCount, balance, share, openCs, owesUs, weOwe, net: owesUs - weOwe };
+  }, [brokers, brokerStats, brokerSettleStats, brokerShareByBroker]);
+
 
   // Mark every part of a job (all its units) as delivered.
   async function deliverJobs(ids) {
@@ -9311,6 +9329,24 @@ export default function App() {
         <>
           <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
             <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ New broker</Btn>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
+            {[
+              { label:"Brokers", value:brokerTotals.brokers, color:"#111", hint: tr(`${brokerTotals.withJobs} with jobs`, `${brokerTotals.withJobs} con jobs`) },
+              { label:"Total jobs", value:brokerTotals.jobs.toLocaleString(), color:"#185FA5" },
+              { label:"Pending balance", value:"$"+Math.round(brokerTotals.balance).toLocaleString(), color: brokerTotals.balance>0 ? "#1A8A4E" : "#bbb" },
+              { label:"Broker share", value:"$"+Math.round(brokerTotals.share).toLocaleString(), color: brokerTotals.share>0 ? "#C2410C" : "#bbb" },
+              { label:"Open CS", value:brokerTotals.openCs, color:"#185FA5" },
+              { label:"Owes us", value:"$"+Math.round(brokerTotals.owesUs).toLocaleString(), color: brokerTotals.owesUs>0 ? "#1A8A4E" : "#bbb" },
+              { label:"We owe", value:"$"+Math.round(brokerTotals.weOwe).toLocaleString(), color: brokerTotals.weOwe>0 ? "#A32D2D" : "#bbb" },
+              { label:"Net", value: brokerTotals.net>=0 ? `+$${Math.round(brokerTotals.net).toLocaleString()}` : `−$${Math.round(-brokerTotals.net).toLocaleString()}`, color: brokerTotals.net>=0 ? "#1A8A4E" : "#A32D2D" },
+            ].map(m => (
+              <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
+                <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{m.label}</div>
+                <div style={{ fontSize:20, fontWeight:800, color:m.color, marginTop:3 }}>{m.value}</div>
+                {m.hint && <div style={{ fontSize:11, color:"#bbb", marginTop:2 }}>{m.hint}</div>}
+              </div>
+            ))}
           </div>
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
             <div style={{ overflowX:"auto" }}>
