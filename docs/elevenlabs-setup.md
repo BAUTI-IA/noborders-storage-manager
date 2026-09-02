@@ -1,5 +1,15 @@
 # Puesta a punto del agente de ElevenLabs
 
+> **DESENCHUFADO (widget).** El globito de ElevenLabs se sacó del CRM: se
+> borró `src/elevenlabsAgent.jsx` y su montaje en `src/App.jsx`, así que ya no
+> se carga su script de terceros ni aparece la burbuja. Volverlo a poner es
+> revertir ese commit.
+>
+> La **puerta server-to-server sigue en el código** (`x-agent-secret` en
+> `api/agent-hub.mjs`) porque no cuesta nada mientras nadie la llame, y falla
+> cerrada sin configuración. Para cerrarla del todo, borrá `VOICE_AGENT_SECRET`
+> de Vercel: sin eso, cualquier llamada con `x-agent-secret` recibe un 503.
+
 Checklist para dejarlo andando. El detalle de por qué cada cosa es así está en
 [`elevenlabs-agent.md`](./elevenlabs-agent.md); esto es la secuencia.
 
