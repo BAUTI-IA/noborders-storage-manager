@@ -60,46 +60,70 @@
   </div>
 
   <h1>Privacy Policy &amp; Support</h1>
-  <p class="updated">Last updated: August 12, 2026</p>
-  <nav><a href="#privacy">Privacy Policy</a><a href="#support">Support</a></nav>
+  <p class="updated">Last updated: September 3, 2026</p>
+  <nav><a href="#privacy">Privacy Policy</a><a href="#permissions">Permissions</a><a href="#chat">Work chat</a><a href="#support">Support</a></nav>
 
   <h2 id="privacy">Privacy Policy</h2>
 
-  <p>NBM Driver is a work app for the drivers and crews of <strong>No Borders Moving and Storage</strong>. It is used by our employees and contractors to see their assigned jobs and record what happens in the field. This policy explains what the app collects, why, and what we never do with it.</p>
+  <p>NBM Driver is a work app for the drivers, crews and office staff of <strong>No Borders Moving and Storage</strong>. It is used by our employees and contractors to see their assigned jobs, record what happens in the field, clock in and out, and talk with the office. This policy explains what the app collects, why, and what we never do with it.</p>
 
   <div class="box">
-    <p><strong>An account is required.</strong> NBM Driver only works with an account issued by No Borders Moving. It is not a consumer app and does not offer sign-up to the general public.</p>
+    <p><strong>An account is required.</strong> NBM Driver only works with an account issued by No Borders Moving. It is not a consumer app and does not offer sign-up to the general public. Accounts are created, and deleted, by our office.</p>
   </div>
 
   <h3>What the app collects</h3>
   <ul>
-    <li><strong>Your account</strong> — the email address and password you use to sign in. Passwords are handled by our authentication provider and are never visible to us.</li>
+    <li><strong>Your account</strong> — the email address and password you use to sign in, and your name as entered by the office. Passwords are handled by our authentication provider and are never visible to us.</li>
     <li><strong>Job information you enter</strong> — measured cubic feet, lot numbers and sticker colors, job status, balances to collect, addresses, and notes about the move.</li>
+    <li><strong>Payments you record</strong> — amount, payment method, when it was collected, an optional note, and a photo of the receipt. The app never processes card payments and never stores card numbers.</li>
+    <li><strong>Your shifts</strong> — when you clock in and out, which truck you took and who was with you, and the location of the phone <em>at those two moments only</em>. This lets the office confirm where a shift started and ended.</li>
+    <li><strong>Work chat</strong> — the text, photos, videos, voice messages and documents you send, who sent them and when. Messages are visible only to the members of that chat and to the office, which moderates the chat.</li>
+    <li><strong>Job requests</strong> — the details and the photo of the paperwork you submit when asking the office to create a job.</li>
+    <li><strong>A notification token</strong> — an identifier issued by Apple or Google for your device, so we can notify you of new messages. It identifies the device, not you personally, and is removed when you sign out or uninstall.</li>
     <li><strong>An edit history</strong> — for each change, we record which field changed, the new value, the time, and the account that made it. This exists so a mistake in a money field can be traced and corrected.</li>
   </ul>
 
   <h3>What the app does not collect</h3>
   <ul>
-    <li>No background or continuous location tracking. The app never follows where you are.</li>
-    <li>No access to your contacts, photos, microphone, or calendar.</li>
-    <li>No advertising identifiers, no ad networks, and no third-party analytics or tracking software.</li>
-    <li>No payment card data is stored on the device.</li>
+    <li>No background or continuous location tracking. Location is read only when you tap Clock in or Clock out, and only if you allow it. The app never follows where you are.</li>
+    <li>No access to your contacts, calendar or call history.</li>
+    <li>The camera, photo library and microphone are used only when you tap to take a photo, attach a file or record a voice message. Nothing is captured in the background and the app does not scan your library.</li>
+    <li>No advertising identifiers, no ad networks, no third-party analytics and no tracking software.</li>
+    <li>No payment card data is stored on the device or on our servers.</li>
+  </ul>
+
+  <h2 id="permissions">Permissions the app asks for, and why</h2>
+  <p>Every permission is optional and is requested only when you first use the feature that needs it. If you decline, that feature is unavailable and the rest of the app keeps working. You can change any of them later in your phone's Settings.</p>
+  <ul>
+    <li><strong>Notifications</strong> — to tell you when a new message arrives in the work chat.</li>
+    <li><strong>Location (while using the app)</strong> — read once at clock-in and once at clock-out. Never in the background.</li>
+    <li><strong>Camera</strong> — to photograph a payment receipt, the paperwork of a job request, or to take photos, videos and document scans in the chat.</li>
+    <li><strong>Photos</strong> — to attach an existing photo or video to a chat message, and to save a photo you received to your library.</li>
+    <li><strong>Microphone</strong> — to record voice messages in the chat while you hold the record button.</li>
   </ul>
 
   <h3>Address lookup</h3>
-  <p>When you type an address, the app may send that partial text to Google Places to suggest matching addresses and fill in the ZIP, state and city. Only the address text is sent — never your account or your device location. This feature is optional and the app works without it.</p>
+  <p>When you type an address, the app may send that partial text to Google Places to suggest matching addresses and fill in the ZIP, state and city. Only the address text is sent — never your account or your device location. This feature is optional and the app works without it. Tapping an address opens your phone's Maps app for navigation.</p>
+
+  <h2 id="chat">Work chat and moderation</h2>
+  <p>The chat is a private tool for the staff of No Borders Moving. Only the office creates groups and decides who is in them; nothing is public and nobody outside the company can join. We expect everyone to use it respectfully.</p>
+  <ul>
+    <li><strong>Reporting a message.</strong> Long-press any message, tap <em>Report</em> and confirm. The office receives a copy of the message and reviews it; the sender is not told who reported it.</li>
+    <li><strong>What the office can do.</strong> Remove a message, remove a person from a group, or deactivate an account, which blocks that person from the whole app immediately.</li>
+    <li>You can also write to the contact address below.</li>
+  </ul>
 
   <h3>Where the information lives</h3>
-  <p>Job data is stored on your device so the app keeps working without signal, and is synced to our database hosted with Supabase on servers in the United States. Access is restricted so that each account can only reach the jobs it is entitled to see.</p>
+  <p>Data is stored on your device so the app keeps working without signal, and is synced to our database and file storage hosted with Supabase on servers in the United States. Access is restricted so that each account can only reach the jobs, chats and files it is entitled to see.</p>
 
   <h3>Who we share it with</h3>
-  <p>We do not sell your information, and we do not share it for advertising. Information is shared only with the service providers that make the app run: Supabase (database and authentication), Google (address lookup, when used), and Expo (app delivery and updates). Each processes it solely to provide their service to us. We may also disclose information where the law requires it.</p>
+  <p>We do not sell your information, and we do not share it for advertising. Information is shared only with the service providers that make the app run: Supabase (database, authentication and file storage), Expo (app delivery, updates and push notification routing), Apple and Google (delivering notifications to your phone), and Google (address lookup, when used). Each processes it solely to provide their service to us. We may also disclose information where the law requires it.</p>
 
   <h3>How long we keep it</h3>
-  <p>Job records are business records of completed moves and are retained as long as our operations and accounting obligations require. If your employment or contract with No Borders Moving ends, your account is deactivated and you lose access to the app.</p>
+  <p>Job, payment and shift records are business records of completed moves and are retained as long as our operations and accounting obligations require. Chat messages are kept while the group exists. If your employment or contract with No Borders Moving ends, your account is deactivated and you lose access to the app.</p>
 
   <h3>Your choices</h3>
-  <p>You can ask us for a copy of the personal information tied to your account, ask us to correct it, or ask us to delete your account. Write to the contact address below and we will respond. Job records that are part of a completed move may be kept where we are legally required to do so, even after an account is deleted.</p>
+  <p>You can ask us for a copy of the personal information tied to your account, ask us to correct it, or ask us to <strong>delete your account</strong>. Ask the office or write to the contact address below; we delete the account and the personal information tied to it within 30 days. Job records that are part of a completed move may be kept where we are legally required to do so, even after an account is deleted.</p>
 
   <h3>Children</h3>
   <p>NBM Driver is a workplace tool and is not directed to anyone under 16. We do not knowingly collect information from children.</p>
@@ -118,6 +142,8 @@
   <p><strong>I don't see any jobs.</strong> Jobs appear once the office assigns them to you. If your account was just created, the office may still need to link it to your driver record.</p>
   <p><strong>I have no signal on the road.</strong> Keep working normally. Everything you enter is saved on the phone, and the bar at the top of the screen tells you what is still waiting to upload. It syncs by itself when coverage returns.</p>
   <p><strong>A number I entered looks wrong in the office system.</strong> Every change is recorded with the time and the account that made it, so the office can trace and correct it. Tell them the job number and what you expected to see.</p>
+  <p><strong>Someone sent something inappropriate in the chat.</strong> Long-press the message and tap <em>Report</em>. The office gets a copy right away.</p>
+  <p><strong>I want to change my password or delete my account.</strong> Ask the office, or email the address above. We will confirm when it is done.</p>
 
   <hr>
 
