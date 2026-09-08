@@ -1393,6 +1393,10 @@ const liveStatusMeta = (s) => LIVE_STATUS[s] || LIVE_STATUS.unknown;
 // as "In transit" is worse than admitting there is no data, now that the map
 // claims to be live.
 const LIVE_STALE_MS = 24 * 60 * 60 * 1000;
+// How often the open map re-asks Verizon. Their guidance is no more than one
+// location poll per vehicle every 3–5 minutes, so this sits at the safe end.
+const FLEET_SYNC_MS = 5 * 60 * 1000;
+const FLEET_SYNC_MIN = Math.round(FLEET_SYNC_MS / 60000);
 const liveStatusOf = (t) => {
   if (!t || t.last_lat == null || t.last_lng == null) return "unknown";
   const at = t.last_location_at ? new Date(t.last_location_at).getTime() : NaN;
@@ -6809,7 +6813,7 @@ export default function App() {
   useEffect(() => {
     if (!verizonOn || page !== "trips" || tripsView !== "live") return;
     syncFleet(true);
-    const id = setInterval(() => syncFleet(true), 5 * 60 * 1000);
+    const id = setInterval(() => syncFleet(true), FLEET_SYNC_MS);
     return () => clearInterval(id);
   }, [verizonOn, page, tripsView, syncFleet]);
 
@@ -10241,11 +10245,17 @@ export default function App() {
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
                         <span style={{ marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:8 }}>
                           {verizonOn ? (<>
+                            {/* A live map should look alive: the dot breathes while the
+                                map is polling on its own, and goes solid red on error. */}
+                            <span style={{ width:8, height:8, borderRadius:"50%", flexShrink:0,
+                              background: fleetSync.error ? "#E24B4A" : "#1A8A4E",
+                              animation: fleetSync.error ? "none" : "vzpulse 2s ease-in-out infinite" }} />
+                            <style>{`@keyframes vzpulse{0%,100%{opacity:1}50%{opacity:.25}}`}</style>
                             <span style={{ color: fleetSync.error ? "#b91c1c" : "#aaa" }}>
                               {fleetSync.error ? t("Verizon Connect: sync error")
                                 : !fleetSync.at ? t("Live from Verizon Connect")
-                                : tr(`Live from Verizon Connect · updated ${timeAgo(fleetSync.at)}`,
-                                     `En vivo desde Verizon Connect · actualizado ${timeAgo(fleetSync.at)}`)}
+                                : tr(`Live from Verizon Connect · updated ${timeAgo(fleetSync.at)} · refreshes every ${FLEET_SYNC_MIN} min`,
+                                     `En vivo desde Verizon Connect · actualizado ${timeAgo(fleetSync.at)} · se actualiza sola cada ${FLEET_SYNC_MIN} min`)}
                             </span>
                             <button onClick={() => syncFleet(false)} disabled={fleetSync.busy}
                               style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor: fleetSync.busy ? "default" : "pointer", textDecoration:"underline" }}>
