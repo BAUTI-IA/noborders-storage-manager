@@ -264,6 +264,13 @@ export const I18N_ES = {
   "Driver app · calculator": "App del driver · calculadora",
   "These values feed the job calculator in the mobile app. Change them once here and every phone picks them up.": "Estos valores alimentan la calculadora de jobs de la app mobile. Cambialos una vez acá y todos los teléfonos los toman.",
   "Run the setup SQL once in Supabase to enable this.": "Corré el SQL de setup una vez en Supabase para habilitarlo.",
+  // Settings → Accounts receivable · cutoff
+  "Accounts receivable · cutoff": "Cuentas a cobrar · fecha de corte",
+  "Balances dated before this day are treated as history: they disappear from Receivables, its aging and the net position. Leave it empty to count everything.": "Los saldos con fecha anterior a este día se toman como historia: desaparecen de Cobros, de su aging y de la posición neta. Dejalo vacío para contar todo.",
+  "Ignore balances dated before": "Ignorar saldos con fecha anterior a",
+  "Compared against each balance's own date: delivery date or date out for a job, period end for storage billing, load date for a settlement.": "Se compara con la fecha propia de cada saldo: delivery date o date out en un job, fin del período en storage billing, load date en un settlement.",
+  "Saved. Balances dated before this day are hidden from receivables.": "Guardado. Los saldos con fecha anterior a este día no se muestran en cobros.",
+  "Saved. All balances count again.": "Guardado. Vuelven a contar todos los saldos.",
   "Fuel cost per mile ($)": "Costo de combustible por milla ($)",
   "What a loaded truck burns per mile. Used to price the trip.": "Lo que consume un truck cargado por milla. Se usa para cotizar el trip.",
   "Crew rate per day ($)": "Tarifa de crew por día ($)",

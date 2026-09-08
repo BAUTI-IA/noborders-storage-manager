@@ -107,7 +107,7 @@ const NON_RECEIVABLE_STATUS = new Set(["scheduled", "cancelled"]);
  */
 export function buildReceivables({
   groups = [], billing = [], closingSheets = [], sheetCalcById = {},
-  jobs = [], brokerName = () => "", jobOutstanding,
+  jobs = [], brokerName = () => "", jobOutstanding, cutoff = null,
 }) {
   const rows = [];
 
@@ -168,7 +168,21 @@ export function buildReceivables({
     });
   }
 
-  return sortByDue(rows);
+  return sortByDue(applyCutoff(rows, cutoff));
+}
+
+/**
+ * Receivables cutoff (Settings → Accounts receivable). Anything dated before
+ * the cutoff is history the company has decided not to chase — jobs closed long
+ * ago whose balance was never reconciled, storage months from before the CRM,
+ * settlements already handled outside it. Those rows are dropped here, from
+ * every ledger at once, so AR, its aging and the net position agree. The date
+ * compared is the row's own dueDate (the same one the aging ladder uses); a row
+ * with no date has nothing to be older than and stays.
+ */
+export function applyCutoff(rows, cutoff) {
+  if (!cutoff) return rows;
+  return rows.filter(r => !r.dueDate || r.dueDate >= cutoff);
 }
 
 // ── Payable ──────────────────────────────────────────────────────────────────

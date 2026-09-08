@@ -4,3 +4,4 @@ dist/
 *.log
 *.pdf.tmp
 .nb-layout-*/
+backup/

@@ -109,7 +109,7 @@ export function ApArSection({
   jobs = [], payments = [], jobExtras = [], billing = [], closingSheets = [],
   sheetCalcById = {}, brokers = [], expenses = [], storages = [],
   driversList = [], workDays = [], adjustments = [],
-  jobOutstanding, onOpenJob, setPage,
+  jobOutstanding, onOpenJob, setPage, arCutoff = "",
   can = () => true, Btn, Modal,
 }) {
   const myName = profile?.full_name || session?.user?.email || "";
@@ -199,8 +199,8 @@ export function ApArSection({
   }, [driversList, payments]);
 
   const receivables = useMemo(() => buildReceivables({
-    groups, billing, closingSheets, sheetCalcById, jobs, brokerName, jobOutstanding,
-  }), [groups, billing, closingSheets, sheetCalcById, jobs, brokerName, jobOutstanding]);
+    groups, billing, closingSheets, sheetCalcById, jobs, brokerName, jobOutstanding, cutoff: arCutoff || null,
+  }), [groups, billing, closingSheets, sheetCalcById, jobs, brokerName, jobOutstanding, arCutoff]);
 
   const driverPayables = useMemo(() => buildDriverPayables({
     driversList, workDays, adjustments, jobExtras, cashOnHandByDriver,
@@ -413,6 +413,12 @@ export function ApArSection({
         )}
         {tab === "payable" && canCreate && <Btn primary onClick={openAddBill}>+ Bill</Btn>}
       </div>
+
+      {tab === "receivable" && arCutoff && (
+        <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>
+          {tr(`Balances dated before ${arCutoff} are not counted (receivables cutoff in Settings).`, `Los saldos con fecha anterior al ${arCutoff} no se cuentan (fecha de corte de cobros en Settings).`)}
+        </div>
+      )}
 
       {bucketSel != null && (
         <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>
