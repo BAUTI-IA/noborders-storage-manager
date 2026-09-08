@@ -1466,10 +1466,23 @@ const VZ_CHECK_LABELS = {
 
 // Live fleet map on real tiles. The state-outline SVG this replaced could zoom,
 // but there was nothing underneath to zoom into: knowing a truck is "in Indiana"
-// is useless next to knowing which yard it is sitting in. CARTO's Voyager tiles
-// are free, need no key, and carry streets and labels all the way down.
-const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+// is useless next to knowing which yard it is sitting in.
+//
+// Both providers are genuinely key-free. CARTO's basemaps were tried first and
+// stamp "API KEY REQUIRED" across every tile now, so they are not an option.
+const BASEMAPS = {
+  "Streets": {
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attr: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    max: 19,
+  },
+  "Satellite": {
+    // Esri serves {z}/{y}/{x} — y before x, unlike everyone else.
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr: "Tiles &copy; Esri",
+    max: 18,
+  },
+};
 const US_VIEW = { center: [39.5, -98.35], zoom: 4 };
 
 const TRUCK_MAP_CSS = `
@@ -1485,6 +1498,7 @@ const TRUCK_MAP_CSS = `
 @keyframes tlmhalo{0%,100%{transform:scale(1);opacity:.22}50%{transform:scale(1.75);opacity:.04}}
 .tlm-tip{font:600 11.5px/1.45 system-ui,sans-serif}
 .tlm-tip small{display:block;font-weight:400;color:#6b7785}
+.tlm-map .leaflet-control-layers{margin-top:52px;border-radius:8px;border:1px solid #dde5ee;box-shadow:0 1px 5px rgba(16,42,67,.14)}
 .tlm-fit{position:absolute;top:10px;right:10px;z-index:500;width:32px;height:32px;display:grid;place-items:center;
   cursor:pointer;background:rgba(255,255,255,.95);border:1px solid #dde5ee;border-radius:8px;font-size:13px;
   color:#3d4b5a;box-shadow:0 1px 5px rgba(16,42,67,.14);padding:0}
@@ -1503,6 +1517,7 @@ function TruckLiveMap({ trucks, selected, onSelect }) {
 
   const located = trucks.filter(t => t.last_lat != null && t.last_lng != null);
 
+  const fitRef = useRef(null);
   const fitAll = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -1510,17 +1525,29 @@ function TruckLiveMap({ trucks, selected, onSelect }) {
     if (pts.length > 1) map.fitBounds(pts, { padding: [50, 50], maxZoom: 12 });
     else if (pts.length === 1) map.setView(pts[0], 11);
     else map.setView(US_VIEW.center, US_VIEW.zoom);
+    if (located.length) fittedRef.current = true;
   }, [located]);
+  fitRef.current = fitAll;
 
   useEffect(() => {
     if (mapRef.current || !elRef.current) return;
     const map = L.map(elRef.current, { zoomControl: true, worldCopyJump: true })
       .setView(US_VIEW.center, US_VIEW.zoom);
-    L.tileLayer(TILE_URL, { maxZoom: 19, subdomains: "abcd", attribution: TILE_ATTR }).addTo(map);
+    const layers = {};
+    for (const [name, b] of Object.entries(BASEMAPS)) {
+      layers[name] = L.tileLayer(b.url, { maxZoom: b.max, attribution: b.attr });
+    }
+    layers["Streets"].addTo(map);
+    L.control.layers(layers, null, { position: "topright" }).addTo(map);
     mapRef.current = map;
-    // The map lives inside a grid that settles after mount, and Leaflet sizes
-    // itself once — without this it renders into a stale box and tiles tear.
-    const ro = new ResizeObserver(() => map.invalidateSize());
+    // The map lives inside a grid that settles after mount, and Leaflet measures
+    // itself once — without this it renders into a stale box and tiles tear. The
+    // first frame is also the only moment the initial fit can land correctly, so
+    // it waits until the real size is known instead of framing an empty box.
+    const ro = new ResizeObserver(() => {
+      map.invalidateSize();
+      if (!fittedRef.current) fitRef.current?.();
+    });
     ro.observe(elRef.current);
     return () => { ro.disconnect(); map.remove(); mapRef.current = null; markersRef.current.clear(); };
   }, []);
@@ -1568,7 +1595,7 @@ function TruckLiveMap({ trucks, selected, onSelect }) {
     }
     // Frame the fleet the first time positions actually exist, once only —
     // after that the view belongs to whoever is driving the mouse.
-    if (!fittedRef.current && located.length) { fittedRef.current = true; fitAll(); }
+    if (!fittedRef.current && located.length) fitAll();
   }, [located, selected, fitAll]);
 
   useEffect(() => {
@@ -13848,11 +13875,18 @@ export default function App() {
                     {c.count != null && c.ok ? <span style={{ fontWeight:400, color:"#888" }}> · {c.count}</span> : null}
                   </div>
                   {c.detail && <div style={{ fontSize:11.5, color: c.ok ? "#999" : "#b91c1c", marginTop:2 }}>{c.detail}</div>}
-                  {!c.ok && c.tried?.length > 0 && (
+                  {!c.ok && c.tried?.length > 0 && (<>
+                    <div style={{ fontSize:11.5, color:"#b91c1c", marginTop:2 }}>
+                      {c.tried.some(x => / 403$/.test(x))
+                        ? tr("This API exists but the app has no access — request it in the developer portal.",
+                             "Esta API existe pero la app no tiene acceso — pedila en el portal de developers.")
+                        : tr("No route answered. The API is probably not enabled on this account.",
+                             "Ninguna ruta respondió. Lo más probable es que esta API no esté habilitada en la cuenta.")}
+                    </div>
                     <div style={{ fontSize:10.5, color:"#bbb", fontFamily:"monospace", marginTop:3, wordBreak:"break-all" }}>
                       {c.tried.join(" · ")}
                     </div>
-                  )}
+                  </>)}
                 </div>
               </div>
             );
