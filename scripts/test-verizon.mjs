@@ -104,6 +104,21 @@ check("reads camelCase too", v.mapLocation({ latitude: 1.5, longitude: -2.5 })?.
 check("no speed is stopped", v.mapLocation({ Latitude: 1, Longitude: 2 }).last_status === "stopped");
 check("a plain-string address survives", v.mapLocation({ Latitude: 1, Longitude: 2, Address: "Atlanta, GA" }).last_location === "Atlanta, GA");
 check("a garbage timestamp falls back to now", !isNaN(Date.parse(v.mapLocation({ Latitude: 1, Longitude: 2, UpdateUTC: "nope" }).last_location_at)));
+// Reveal repeats the city and state that AddressLine1 already carries.
+const dup = v.mapLocation({
+  Latitude: 41.3, Longitude: -86.3,
+  Address: { AddressLine1: "11350 9A Rd, Plymouth, IN 46563, USA", Locality: "Plymouth", AdministrativeArea: "IN" },
+});
+check("does not repeat a city and state already in the street line",
+  dup.last_location === "11350 9A Rd, Plymouth, IN 46563, USA", dup.last_location);
+// "IN" lives inside "Springfield" — a substring test would wrongly drop the state.
+const spring = v.mapLocation({
+  Latitude: 1, Longitude: 2,
+  Address: { AddressLine1: "742 Evergreen Terrace", Locality: "Springfield", AdministrativeArea: "IN" },
+});
+check("keeps a state whose letters hide inside the city name",
+  spring.last_location === "742 Evergreen Terrace, Springfield, IN", spring.last_location);
+
 check("no coordinates → null, never a truck at 0,0", v.mapLocation({ Speed: 10 }) === null);
 check("null payload → null", v.mapLocation(null) === null);
 

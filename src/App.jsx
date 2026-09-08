@@ -1388,6 +1388,17 @@ const LIVE_STATUS = {
   unknown: { l:"No data", dot:"#9aa3ad", bg:"#f1f1f1", text:"#888" },
 };
 const liveStatusMeta = (s) => LIVE_STATUS[s] || LIVE_STATUS.unknown;
+// A position nobody refreshed in a day says nothing about whether the truck is
+// moving — the tracker went quiet, or somebody typed it in months ago. Reading it
+// as "In transit" is worse than admitting there is no data, now that the map
+// claims to be live.
+const LIVE_STALE_MS = 24 * 60 * 60 * 1000;
+const liveStatusOf = (t) => {
+  if (!t || t.last_lat == null || t.last_lng == null) return "unknown";
+  const at = t.last_location_at ? new Date(t.last_location_at).getTime() : NaN;
+  if (!isNaN(at) && Date.now() - at > LIVE_STALE_MS) return "unknown";
+  return t.last_status || "unknown";
+};
 function timeAgo(iso) {
   if (!iso) return "not updated";
   const t = new Date(iso).getTime();
@@ -1418,7 +1429,7 @@ function TruckLiveMap({ trucks, selected, onSelect }) {
         </Geographies>
         {trucks.map(t => {
           if (t.last_lat == null || t.last_lng == null) return null;
-          const c = liveStatusMeta(t.last_status);
+          const c = liveStatusMeta(liveStatusOf(t));
           const isSel = selected === t.id;
           return (
             <Marker key={t.id} coordinates={[Number(t.last_lng), Number(t.last_lat)]} onClick={() => onSelect(isSel ? null : t.id)}>
@@ -10162,10 +10173,10 @@ export default function App() {
               const driverByTruck = {};
               for (const tp of trips) { if (TRIP_ACTIVE(tp.status) && tp.truck_id) driverByTruck[tp.truck_id] = driverById[tp.driver_id]?.name; }
               const located = trucksList.filter(t => t.last_lat != null && t.last_lng != null);
-              const visible = located.filter(t => liveStatusFilter === "all" ? true : (t.last_status || "unknown") === liveStatusFilter);
+              const visible = located.filter(t => liveStatusFilter === "all" ? true : liveStatusOf(t) === liveStatusFilter);
               const noLoc = trucksList.filter(t => t.last_lat == null || t.last_lng == null);
-              const moving = located.filter(t => t.last_status === "moving").length;
-              const stopped = located.filter(t => t.last_status === "stopped").length;
+              const moving = located.filter(t => liveStatusOf(t) === "moving").length;
+              const stopped = located.filter(t => liveStatusOf(t) === "stopped").length;
               return (
                 <>
                   {truckLocMissing && (
@@ -10188,7 +10199,7 @@ export default function App() {
                         ) : visible.length === 0 ? (
                           <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>No trucks in this condition.</div>
                         ) : visible.map(t => {
-                          const c = liveStatusMeta(t.last_status);
+                          const c = liveStatusMeta(liveStatusOf(t));
                           const isSel = liveSelTruck === t.id;
                           const dn = driverByTruck[t.id];
                           return (
