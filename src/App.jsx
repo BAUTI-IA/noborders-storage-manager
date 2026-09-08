@@ -797,6 +797,24 @@ create policy "csdocs_update" on storage.objects for update to anon, authenticat
 
 do $$ begin alter publication supabase_realtime add table public.closing_sheets; exception when others then null; end $$;`;
 
+// ELD hours. Kept apart from the payroll table on purpose — see the comment on
+// driver_hos_days in the expenses SQL below.
+const HOS_SQL = `alter table public.drivers add column if not exists verizon_driver_id text;
+create table if not exists public.driver_hos_days (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  work_date date,
+  hours numeric,
+  driving_hours numeric,
+  clock_in timestamptz,
+  clock_out timestamptz,
+  synced_at timestamptz default now(),
+  unique (driver_id, work_date)
+);
+alter table public.driver_hos_days enable row level security;
+drop policy if exists "driver_hos_days_all" on public.driver_hos_days;
+create policy "driver_hos_days_all" on public.driver_hos_days for all to anon, authenticated using (true) with check (true);`;
+
 // Trips / Live Load: trucks + trips tables + trip link columns on storage_jobs.
 const TRIPS_SQL = `create table if not exists public.trucks (
   id bigint generated always as identity primary key,
@@ -1439,6 +1457,15 @@ function timeAgo(iso) {
 // Pan with a drag, zoom with the wheel or the buttons; picking a truck flies to it.
 const US_CENTER = [-97, 38];
 const MAP_MIN_ZOOM = 1, MAP_MAX_ZOOM = 16;
+
+// Plain-language names for what the diagnostic probes.
+const VZ_CHECK_LABELS = {
+  config: "Credentials configured",
+  auth: "Authentication",
+  vehicles: "Vehicle list",
+  location: "Live GPS",
+  logbook: "Driver hours (ELD)",
+};
 
 const mapBtnS = {
   width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer",
@@ -3541,6 +3568,8 @@ export default function App() {
   const [fleetSync, setFleetSync] = useState({ busy:false, at:null, error:null });
   const [vzVehicles, setVzVehicles] = useState(null);      // Reveal roster | null
   const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
+  const [hosMissing, setHosMissing] = useState(false);
+  const [vzDiag, setVzDiag] = useState(null);       // null | "loading" | checks[]
   const [locModal, setLocModal] = useState(null); // truck row | null
   const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
   const [locBusy, setLocBusy] = useState(false);
@@ -4306,6 +4335,23 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, tripStopsMissing, loadTripStops]);
+
+  // Probe / auto-migrate driver_hos_days (real ELD hours).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("driver_hos_days").select("id").limit(1);
+      if (cancelled || !error) { if (!cancelled) setHosMissing(false); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: HOS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled) setHosMissing(!created);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
 
   // Probe / auto-migrate the equipment_items table (Equipment tab — internal cargo).
   useEffect(() => {
@@ -6878,6 +6924,20 @@ export default function App() {
       .catch(() => { if (alive) setVerizonOn(false); });
     return () => { alive = false; };
   }, []);
+
+  // Asks Verizon, from the server, which of its API products this account can
+  // actually reach — so nobody has to go read that off the developer portal.
+  const runVzDiag = useCallback(async () => {
+    if (!session?.access_token) return;
+    setVzDiag("loading");
+    try {
+      const r = await fetch("/api/geocode?fleet=diagnose", { headers: { Authorization: "Bearer " + session.access_token } });
+      const d = await r.json();
+      setVzDiag(r.ok ? (d.checks || []) : [{ key:"config", ok:false, detail: d?.error || "failed" }]);
+    } catch (e) {
+      setVzDiag([{ key:"config", ok:false, detail: e?.message || "failed" }]);
+    }
+  }, [session]);
 
   // Reveal's vehicle roster, pulled the first time a truck form is opened so the
   // Verizon field can offer the real list instead of asking somebody to copy
@@ -10345,6 +10405,10 @@ export default function App() {
                               style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor: fleetSync.busy ? "default" : "pointer", textDecoration:"underline" }}>
                               {fleetSync.busy ? t("Syncing...") : t("Sync now")}
                             </button>
+                            <button onClick={runVzDiag} disabled={vzDiag === "loading"}
+                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>
+                              {vzDiag === "loading" ? t("Checking...") : t("Check connection")}
+                            </button>
                           </>) : (
                             <span style={{ color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
                           )}
@@ -13737,6 +13801,35 @@ export default function App() {
               : tr(`${vzVehicles.length} vehicle(s) in Verizon Connect — click the field to pick one.`,
                    `${vzVehicles.length} vehículo(s) en Verizon Connect — hacé click en el campo para elegir.`)}
           </div>
+        </Modal>
+      )}
+
+      {Array.isArray(vzDiag) && (
+        <Modal title="Verizon Connect" onClose={() => setVzDiag(null)}
+          footer={<><Btn onClick={() => setVzDiag(null)}>Close</Btn><Btn primary onClick={runVzDiag}>Check again</Btn></>}>
+          <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
+            What this account can actually reach right now. The server asks Verizon directly.
+          </div>
+          {vzDiag.map(c => {
+            const label = VZ_CHECK_LABELS[c.key] || c.key;
+            return (
+              <div key={c.key} style={{ display:"flex", gap:10, padding:"9px 0", borderBottom:"1px solid #f4f4f4" }}>
+                <span style={{ fontSize:14, lineHeight:1.3 }}>{c.ok ? "✅" : "❌"}</span>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#111" }}>
+                    {t(label)}
+                    {c.count != null && c.ok ? <span style={{ fontWeight:400, color:"#888" }}> · {c.count}</span> : null}
+                  </div>
+                  {c.detail && <div style={{ fontSize:11.5, color: c.ok ? "#999" : "#b91c1c", marginTop:2 }}>{c.detail}</div>}
+                  {!c.ok && c.tried?.length > 0 && (
+                    <div style={{ fontSize:10.5, color:"#bbb", fontFamily:"monospace", marginTop:3, wordBreak:"break-all" }}>
+                      {c.tried.join(" · ")}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </Modal>
       )}
 

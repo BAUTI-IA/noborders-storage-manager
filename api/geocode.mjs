@@ -27,7 +27,7 @@ import { admin } from "../lib/clients.mjs";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
   mapLocation, normalizeVehicles, resolvedPaths, applyGpsEvents, syncDriverHours,
-  SYNC_MIN_INTERVAL_MS,
+  diagnose, SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -100,6 +100,10 @@ async function fleet(req, res, action) {
       }
       lastSyncAt = Date.now();
       res.status(200).json(await syncTruckLocations());
+      return;
+    }
+    if (action === "diagnose") {
+      res.status(200).json({ checks: await diagnose() });
       return;
     }
     if (action === "hours") {
