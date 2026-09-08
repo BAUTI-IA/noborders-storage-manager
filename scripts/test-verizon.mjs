@@ -107,5 +107,21 @@ check("a garbage timestamp falls back to now", !isNaN(Date.parse(v.mapLocation({
 check("no coordinates → null, never a truck at 0,0", v.mapLocation({ Speed: 10 }) === null);
 check("null payload → null", v.mapLocation(null) === null);
 
+// ── Vehicle roster ───────────────────────────────────────────────────────────
+console.log("\nVehicle roster");
+const roster = v.normalizeVehicles([
+  { Number: "T-14", Name: "Box 26", RegistrationNumber: "ABC-1234" },
+  { Number: "T-2", Name: "Box 26" },
+  { Number: "T-14", Name: "duplicate" },
+  { Name: "no number at all" },
+  null,
+]);
+check("skips rows with no vehicle number and drops duplicates", roster.length === 2, JSON.stringify(roster));
+check("labels with name and plate", roster.find((r) => r.number === "T-14").label === "T-14 · Box 26 · ABC-1234");
+check("sorts naturally (T-2 before T-14)", roster[0].number === "T-2");
+check("reads a wrapped roster", v.normalizeVehicles({ Vehicles: [{ number: "9" }] })[0]?.number === "9");
+check("a label never repeats the number", v.normalizeVehicles([{ Number: "T-1", Name: "T-1" }])[0].label === "T-1");
+check("garbage in → empty list, not a crash", v.normalizeVehicles(null).length === 0 && v.normalizeVehicles("nope").length === 0);
+
 console.log(failures ? `\n${failures} failure(s)\n` : "\nall passing\n");
 process.exit(failures ? 1 : 0);

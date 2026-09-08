@@ -3367,6 +3367,8 @@ export default function App() {
   const [liveSelTruck, setLiveSelTruck] = useState(null);
   const [verizonOn, setVerizonOn] = useState(null);   // null until the server answers
   const [fleetSync, setFleetSync] = useState({ busy:false, at:null, error:null });
+  const [vzVehicles, setVzVehicles] = useState(null);      // Reveal roster | null
+  const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
   const [locModal, setLocModal] = useState(null); // truck row | null
   const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
   const [locBusy, setLocBusy] = useState(false);
@@ -6704,6 +6706,19 @@ export default function App() {
       .catch(() => { if (alive) setVerizonOn(false); });
     return () => { alive = false; };
   }, []);
+
+  // Reveal's vehicle roster, pulled the first time a truck form is opened so the
+  // Verizon field can offer the real list instead of asking somebody to copy
+  // vehicle numbers out of Reveal by hand.
+  useEffect(() => {
+    if (!showTruckModal || !verizonOn || vzVehicles || !session?.access_token) return;
+    let alive = true;
+    fetch("/api/geocode?fleet=vehicles", { headers: { Authorization: "Bearer " + session.access_token } })
+      .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
+      .then((d) => { if (alive) { setVzVehicles(d.vehicles || []); setVzVehiclesErr(null); } })
+      .catch((e) => { if (alive) setVzVehiclesErr(e?.message || "failed"); });
+    return () => { alive = false; };
+  }, [showTruckModal, verizonOn, vzVehicles, session]);
 
   // Poll only while somebody is actually looking at the map. Verizon asks for no
   // more than one location poll every 3–5 minutes, so 5 stays well inside it.
@@ -13528,10 +13543,20 @@ export default function App() {
 
           <SectionLabel>Live tracking</SectionLabel>
           <Field label="Verizon vehicle number" full>
-            <input style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))} placeholder="As it appears in Reveal" />
+            <input style={inp} list="verizon-vehicles-list" value={truckForm.verizon_vehicle_id}
+              onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))} placeholder="As it appears in Reveal" />
+            <datalist id="verizon-vehicles-list">
+              {(vzVehicles || []).map(v => <option key={v.number} value={v.number}>{v.label}</option>)}
+            </datalist>
           </Field>
-          <div style={{ fontSize:11.5, color:"#999", marginTop:6 }}>
-            Links this truck to Verizon Connect so its position updates on the live map by itself. Leave it empty to keep setting the location by hand.
+          <div style={{ fontSize:11.5, color: vzVehiclesErr ? "#b91c1c" : "#999", marginTop:6 }}>
+            {!verizonOn
+              ? "Links this truck to Verizon Connect so its position updates on the live map by itself. Leave it empty to keep setting the location by hand."
+              : vzVehiclesErr ? t("Could not read the vehicle list from Verizon Connect.")
+              : !vzVehicles ? t("Reading the vehicle list from Verizon Connect...")
+              : vzVehicles.length === 0 ? t("Verizon Connect returned no vehicles.")
+              : tr(`${vzVehicles.length} vehicle(s) in Verizon Connect — click the field to pick one.`,
+                   `${vzVehicles.length} vehículo(s) en Verizon Connect — hacé click en el campo para elegir.`)}
           </div>
         </Modal>
       )}

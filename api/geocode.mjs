@@ -19,7 +19,7 @@
 import { admin } from "../lib/clients.mjs";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
-  mapLocation, resolvedPaths, SYNC_MIN_INTERVAL_MS,
+  mapLocation, normalizeVehicles, resolvedPaths, SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -63,7 +63,9 @@ async function fleet(req, res, action) {
       return;
     }
     if (action === "vehicles") {
-      res.status(200).json({ vehicles: await fetchVehicles() });
+      const raw = await fetchVehicles();
+      // Normalised here so the browser never has to guess at Reveal's shapes.
+      res.status(200).json({ vehicles: normalizeVehicles(raw) });
       return;
     }
     if (action === "probe") {
