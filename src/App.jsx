@@ -2016,6 +2016,79 @@ const fgrid = { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170p
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 
+// Combobox for trucks.verizon_vehicle_id. Stays a free-text input — a truck can
+// be linked before the roster loads, or with Verizon off entirely — but offers
+// the real Reveal fleet as a filterable list instead of the browser's datalist,
+// which renders differently in every browser and can't show two lines per row.
+function VehiclePicker({ value, onChange, options, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const wrapRef = useRef();
+  const list = options || [];
+
+  const q = (value || "").toLowerCase().trim();
+  // Typing filters, but an exact pick shows the whole list again rather than
+  // collapsing to the one row that matches itself.
+  const matches = useMemo(() => {
+    if (!q || list.some(o => o.number.toLowerCase() === q)) return list;
+    return list.filter(o => o.label.toLowerCase().includes(q));
+  }, [list, q]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const choose = (o) => { onChange(o.number); setOpen(false); };
+
+  function onKeyDown(e) {
+    if (!open) { if (e.key === "ArrowDown") { setOpen(true); setHi(0); } return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi(i => Math.min(i + 1, matches.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi(i => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter" && matches[hi]) { e.preventDefault(); choose(matches[hi]); }
+    else if (e.key === "Escape") setOpen(false);
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position:"relative" }}>
+      <input style={inp} value={value} placeholder={placeholder} onKeyDown={onKeyDown}
+        onChange={e => { onChange(e.target.value); setOpen(true); setHi(0); }}
+        onFocus={() => list.length > 0 && setOpen(true)} />
+      {open && list.length > 0 && (
+        <div style={{ position:"absolute", top:"calc(100% + 4px)", left:0, right:0, zIndex:60,
+          background:"#fff", border:"1px solid #e5e5e5", borderRadius:10, overflow:"hidden",
+          boxShadow:"0 8px 24px rgba(0,0,0,0.12)", maxHeight:232, overflowY:"auto" }}>
+          {matches.length === 0 ? (
+            <div style={{ padding:"12px 13px", fontSize:12, color:"#bbb" }}>{t("No vehicle matches that")}</div>
+          ) : matches.map((o, i) => {
+            const sel = o.number === value;
+            return (
+              // onMouseDown, not onClick: the input's blur would close the list first.
+              <div key={o.number} onMouseDown={e => { e.preventDefault(); choose(o); }} onMouseEnter={() => setHi(i)}
+                style={{ padding:"8px 13px", cursor:"pointer", background: i === hi ? "#f0f6fc" : "#fff",
+                  borderLeft:`3px solid ${sel ? "#185FA5" : "transparent"}`,
+                  borderBottom: i === matches.length - 1 ? "none" : "1px solid #f4f4f4" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                  <span style={{ fontSize:12.5, fontWeight:700, color:"#111" }}>🚛 {o.number}</span>
+                  {sel && <span style={{ fontSize:10, color:"#185FA5", fontWeight:600 }}>✓</span>}
+                </div>
+                {(o.name || o.plate) && (
+                  <div style={{ fontSize:11, color:"#999", marginTop:2 }}>
+                    {o.name}{o.name && o.plate ? " · " : ""}
+                    {o.plate && <span style={{ fontFamily:"monospace" }}>{o.plate}</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Status picker for a job. The flow's next step arrives pre-selected as a
 // suggestion and every status stays pickable: the app proposes an order, the
 // dispatch manager owns it. Read-only users see the suggestion, greyed out.
@@ -13543,11 +13616,9 @@ export default function App() {
 
           <SectionLabel>Live tracking</SectionLabel>
           <Field label="Verizon vehicle number" full>
-            <input style={inp} list="verizon-vehicles-list" value={truckForm.verizon_vehicle_id}
-              onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))} placeholder="As it appears in Reveal" />
-            <datalist id="verizon-vehicles-list">
-              {(vzVehicles || []).map(v => <option key={v.number} value={v.number}>{v.label}</option>)}
-            </datalist>
+            <VehiclePicker value={truckForm.verizon_vehicle_id} options={vzVehicles}
+              onChange={val => setTruckForm(f => ({...f, verizon_vehicle_id:val}))}
+              placeholder="As it appears in Reveal" />
           </Field>
           <div style={{ fontSize:11.5, color: vzVehiclesErr ? "#b91c1c" : "#999", marginTop:6 }}>
             {!verizonOn

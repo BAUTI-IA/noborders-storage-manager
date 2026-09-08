@@ -140,6 +140,7 @@ export const I18N_ES = {
   "Mute the agent": "Silenciar al agente",
   "Net position": "Posición neta",
   "New bill": "Nueva factura",
+  "No vehicle matches that": "Ningún vehículo coincide",
   "Nothing left to collect": "No queda nada por cobrar",
   "Nothing left to pay": "No queda nada por pagar",
   "Nothing outstanding": "Nada pendiente",
