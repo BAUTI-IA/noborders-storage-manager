@@ -77,6 +77,28 @@ t("receivables: scheduled and cancelled jobs are not debts", () => {
   assert.equal(rows.some(r => r.label === "J-300"), false);
 });
 
+t("receivables: the cutoff drops every ledger's rows dated before it, keeps undated ones", () => {
+  const billing = [
+    { id: 20, job_id: 1, amount: 250, status: "overdue", billing_period_end: "2026-05-31" },
+    { id: 21, job_id: 1, amount: 250, status: "pending", billing_period_end: "2026-08-31" },
+    { id: 22, job_id: 1, amount: 250, status: "pending" }, // no period → no date → stays
+  ];
+  const closingSheets = [
+    { id: 30, closing_sheet_number: "CS-1", broker_id: 1, status: "open", load_date: "2026-03-15" },
+    { id: 31, closing_sheet_number: "CS-2", broker_id: 1, status: "open", load_date: "2026-07-15" },
+  ];
+  const sheetCalcById = { 30: { net: 800 }, 31: { net: 900 } };
+  const args = { groups: allGroups, billing, closingSheets, sheetCalcById, jobs: allJobRows, jobOutstanding: outstanding };
+  const before = buildReceivables(args);
+  const after = buildReceivables({ ...args, cutoff: "2026-06-01" });
+  assert.deepEqual(before.map(r => r.id).sort(), ["job:n:j-100", "job:n:j-400", "settlement:30", "settlement:31", "storage_billing:20", "storage_billing:21", "storage_billing:22"].sort());
+  assert.deepEqual(after.map(r => r.id).sort(), ["job:n:j-100", "settlement:31", "storage_billing:21", "storage_billing:22"].sort());
+  assert.equal(sumRows(after), 1200 + 900 + 250 + 250);
+  // Empty / null cutoff = no filtering at all.
+  assert.equal(buildReceivables({ ...args, cutoff: "" }).length, before.length);
+  assert.equal(buildReceivables({ ...args, cutoff: null }).length, before.length);
+});
+
 t("receivables: storage billing counts only pending and overdue rows", () => {
   const billing = [
     { id: 10, job_id: 1, amount: 250, status: "pending", billing_period_start: "2026-08-01", billing_period_end: "2026-08-31" },

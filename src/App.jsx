@@ -925,6 +925,21 @@ create policy "driver_app_settings_select" on public.driver_app_settings for sel
 drop policy if exists "driver_app_settings_update" on public.driver_app_settings;
 create policy "driver_app_settings_update" on public.driver_app_settings for update to authenticated using (public.is_admin()) with check (public.is_admin());`;
 
+// Parámetros generales del CRM (una sola fila). Por ahora: la fecha de corte de
+// cuentas a cobrar — los saldos con fecha anterior no se reclaman ni se cuentan.
+const CRM_SETTINGS_SQL = `create table if not exists public.crm_settings (
+  id boolean primary key default true check (id),
+  ar_cutoff_date date,
+  updated_at timestamptz not null default now(),
+  updated_by text
+);
+insert into public.crm_settings (id) values (true) on conflict (id) do nothing;
+alter table public.crm_settings enable row level security;
+drop policy if exists "crm_settings_select" on public.crm_settings;
+create policy "crm_settings_select" on public.crm_settings for select to authenticated using (true);
+drop policy if exists "crm_settings_update" on public.crm_settings;
+create policy "crm_settings_update" on public.crm_settings for update to authenticated using (public.is_admin()) with check (public.is_admin());`;
+
 // Per-driver expense tracking: every cost (fuel, hotels, materials, tolls…) linked
 // to driver/truck/trip/job, with bank-vs-driver-cash source so cash taken from
 // customer collections reconciles against the "in circulation" money. Also the
@@ -3211,6 +3226,11 @@ export default function App() {
   const [driverAppSaving, setDriverAppSaving] = useState(false);
   const [driverAppNotice, setDriverAppNotice] = useState(null); // { ok, text }
   const [driverAppMissing, setDriverAppMissing] = useState(false); // driver_app_settings no está en la DB
+  const [crmSettings, setCrmSettings] = useState(null); // fila única de crm_settings (null = todavía no cargó)
+  const [crmSettingsMissing, setCrmSettingsMissing] = useState(false); // crm_settings no está en la DB
+  const [arCutoffForm, setArCutoffForm] = useState("");
+  const [arCutoffSaving, setArCutoffSaving] = useState(false);
+  const [arCutoffNotice, setArCutoffNotice] = useState(null); // { ok, text }
   const [pwRecovery, setPwRecovery] = useState(false); // invite / reset-password landing
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3646,6 +3666,41 @@ export default function App() {
     setDriverAppSaving(false);
     if (error) setDriverAppNotice({ ok:false, text: error.code === "42P01" ? "Run the setup SQL in Supabase first." : error.message });
     else setDriverAppNotice({ ok:true, text:"Saved. The app will pick it up." });
+  }
+
+  // ── Parámetros generales del CRM (crm_settings) ─────────────────────────
+  // Se cargan al iniciar sesión, no sólo en Settings: la fecha de corte de
+  // cobros la usa la sección AP / AR para dejar afuera los saldos viejos.
+  const loadCrmSettings = useCallback(async () => {
+    let { data, error } = await supabase.from("crm_settings").select("*").limit(1).maybeSingle();
+    if (error?.code === "42P01") {
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: CRM_SETTINGS_SQL });
+        if (!rpcErr) break;
+      }
+      ({ data, error } = await supabase.from("crm_settings").select("*").limit(1).maybeSingle());
+    }
+    if (error) { setCrmSettingsMissing(error.code === "42P01"); return; }
+    setCrmSettingsMissing(false);
+    setCrmSettings(data || {});
+    setArCutoffForm(data?.ar_cutoff_date || "");
+  }, [supabase]);
+
+  useEffect(() => { if (session) loadCrmSettings(); }, [session, loadCrmSettings]);
+
+  async function saveArCutoff() {
+    setArCutoffSaving(true); setArCutoffNotice(null);
+    const value = arCutoffForm || null;
+    const { error } = await supabase.from("crm_settings").upsert({
+      id: true,
+      ar_cutoff_date: value,
+      updated_at: new Date().toISOString(),
+      updated_by: session?.user?.email || null,
+    });
+    setArCutoffSaving(false);
+    if (error) { setArCutoffNotice({ ok:false, text: error.code === "42P01" ? "Run the setup SQL in Supabase first." : error.message }); return; }
+    setCrmSettings(c => ({ ...(c || {}), ar_cutoff_date: value }));
+    setArCutoffNotice({ ok:true, text: value ? "Saved. Balances dated before this day are hidden from receivables." : "Saved. All balances count again." });
   }
 
   // Keep `page` pointed at a section the user is actually allowed to see.
@@ -11093,6 +11148,44 @@ export default function App() {
               </div>
             );
           })()}
+
+          {/* Fecha de corte de cuentas a cobrar: los saldos anteriores son
+              historia (jobs cerrados sin conciliar) y no se reclaman. */}
+          {(() => {
+            const canEditAr = can("settings", "edit");
+            return (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px", marginTop:16 }}>
+                <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>Accounts receivable · cutoff</div>
+                <div style={{ fontSize:12.5, color:"#888", marginBottom:16 }}>Balances dated before this day are treated as history: they disappear from Receivables, its aging and the net position. Leave it empty to count everything.</div>
+
+                {crmSettingsMissing ? (
+                  <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                    <span>Run the setup SQL once in Supabase to enable this.</span>
+                    <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+                  </div>
+                ) : !crmSettings ? (
+                  <div style={{ fontSize:13, color:"#888" }}>Loading…</div>
+                ) : (
+                  <>
+                    <div style={{ marginBottom:16 }}>
+                      <label style={{ fontSize:12, fontWeight:600, color:"#888", display:"block", marginBottom:6 }}>Ignore balances dated before</label>
+                      <input type="date" disabled={!canEditAr} value={arCutoffForm}
+                        onChange={e => { setArCutoffForm(e.target.value); setArCutoffNotice(null); }}
+                        style={{ fontSize:14, padding:"9px 12px", borderRadius:8, border:"1px solid #e5e5e5", width:"100%", maxWidth:340, outline:"none", boxSizing:"border-box", background: canEditAr ? "#fff" : "#fafafa" }} />
+                      <div style={{ fontSize:11.5, color:"#aaa", marginTop:4 }}>Compared against each balance's own date: delivery date or date out for a job, period end for storage billing, load date for a settlement.</div>
+                    </div>
+                    {canEditAr && (
+                      <div style={{ marginTop:20, display:"flex", alignItems:"center", gap:12 }}>
+                        <Btn primary disabled={arCutoffSaving || (arCutoffForm || "") === (crmSettings.ar_cutoff_date || "")} onClick={saveArCutoff}>{arCutoffSaving ? "Saving…" : "Save changes"}</Btn>
+                        {arCutoffForm && <Btn disabled={arCutoffSaving} onClick={() => { setArCutoffForm(""); setArCutoffNotice(null); }}>Clear</Btn>}
+                        {arCutoffNotice && <span style={{ fontSize:13, color: arCutoffNotice.ok ? "#3B6D11" : "#b91c1c" }}>{arCutoffNotice.text}</span>}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -11210,6 +11303,7 @@ export default function App() {
           expenses={expenses} storages={records} driversList={driversList}
           workDays={workDays} adjustments={adjustments}
           jobOutstanding={jobOutstanding} onOpenJob={setJobDetailKey} setPage={setPage}
+          arCutoff={crmSettings?.ar_cutoff_date || ""}
           can={can} Btn={Btn} Modal={Modal} />
       )}
 
@@ -13226,7 +13320,7 @@ export default function App() {
       })()}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL, DRIVER_APP_SETTINGS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL, DRIVER_APP_SETTINGS_SQL, CRM_SETTINGS_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
