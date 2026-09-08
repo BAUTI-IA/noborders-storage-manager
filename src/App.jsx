@@ -63,7 +63,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true };
+const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true, verizon_driver_id:"" };
 const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
@@ -994,6 +994,26 @@ alter table public.driver_work_days add column if not exists hours numeric;
 alter table public.driver_work_days enable row level security;
 drop policy if exists "driver_work_days_all" on public.driver_work_days;
 create policy "driver_work_days_all" on public.driver_work_days for all to anon, authenticated using (true) with check (true);
+
+-- Horas reales del ELD de Verizon. Tabla aparte a propósito: driver_work_days es
+-- la nómina que carga la oficina y workDayPay() paga como día completo cualquier
+-- fila sin day_type, así que escribir acá adentro inflaría el costo laboral. Con
+-- las dos separadas se pueden comparar horas pagadas contra horas reales.
+alter table public.drivers add column if not exists verizon_driver_id text;
+create table if not exists public.driver_hos_days (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  work_date date,
+  hours numeric,
+  driving_hours numeric,
+  clock_in timestamptz,
+  clock_out timestamptz,
+  synced_at timestamptz default now(),
+  unique (driver_id, work_date)
+);
+alter table public.driver_hos_days enable row level security;
+drop policy if exists "driver_hos_days_all" on public.driver_hos_days;
+create policy "driver_hos_days_all" on public.driver_hos_days for all to anon, authenticated using (true) with check (true);
 
 create table if not exists public.driver_adjustments (
   id bigint generated always as identity primary key,
@@ -6451,13 +6471,13 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false });
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false, verizon_driver_id: d.verizon_driver_id || "" });
     setShowDriverModal(true);
   }
   async function saveDriver() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
-    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active };
+    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active, verizon_driver_id: driverForm.verizon_driver_id.trim() || null };
     if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
     else await supabase.from("drivers").insert([payload]);
     setDriverSaving(false); setShowDriverModal(false);
@@ -13602,6 +13622,9 @@ export default function App() {
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="e.g. T-12" /></Field>
             <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="e.g. 250" /></Field>
+            <Field label="Verizon driver number" full>
+              <input style={inp} value={driverForm.verizon_driver_id} onChange={e => setDriverForm(f => ({...f, verizon_driver_id:e.target.value}))} placeholder="As it appears in the Reveal logbook" />
+            </Field>
             <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="e.g. 25 (optional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>

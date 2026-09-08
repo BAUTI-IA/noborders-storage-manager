@@ -13,6 +13,7 @@
 //                                           trucks.verizon_vehicle_id.
 //   GET /api/geocode?fleet=probe&vehicle= → raw Reveal payload for one vehicle,
 //                                           to confirm field names.
+//   GET /api/geocode?fleet=hours&from=&to= → pull ELD hours into driver_hos_days.
 //   POST /api/verizon-gps                 → Reveal's GPS webhook, pushing positions
 //                                           instead of us polling. Rewritten to
 //                                           ?fleet=webhook in vercel.json so it gets
@@ -25,7 +26,8 @@ import { timingSafeEqual } from "node:crypto";
 import { admin } from "../lib/clients.mjs";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
-  mapLocation, normalizeVehicles, resolvedPaths, applyGpsEvents, SYNC_MIN_INTERVAL_MS,
+  mapLocation, normalizeVehicles, resolvedPaths, applyGpsEvents, syncDriverHours,
+  SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -98,6 +100,14 @@ async function fleet(req, res, action) {
       }
       lastSyncAt = Date.now();
       res.status(200).json(await syncTruckLocations());
+      return;
+    }
+    if (action === "hours") {
+      const iso = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(String(x || "")) ? String(x) : null);
+      // Default window: the last week, which is what the payroll comparison reads.
+      const to = iso(req.query?.to) || new Date().toISOString().slice(0, 10);
+      const from = iso(req.query?.from) || new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+      res.status(200).json(await syncDriverHours({ from, to }));
       return;
     }
     if (action === "vehicles") {

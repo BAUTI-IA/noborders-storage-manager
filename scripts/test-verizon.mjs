@@ -154,5 +154,93 @@ check("garbage in → empty, not a crash",
   v.normalizeGpsEvents(null).length === 0 && v.normalizeGpsEvents("nope").length === 0 && v.normalizeGpsEvents([null, 3]).length === 0);
 check("a numeric vehicle number becomes a string", v.normalizeGpsEvents({ Number: 77, Latitude: 1, Longitude: 2 })[0].number === "77");
 
+// ── Hours of Service ─────────────────────────────────────────────────────────
+// Timestamps are UTC; September 2026 puts America/New_York on EDT (UTC-4).
+console.log("\nHours of Service");
+const T = (iso) => Date.parse(iso);
+
+check("recognises the many spellings of a duty status",
+  ["D", "Driving", "DRIVING"].every(x => v.dutyCode(x) === "D") &&
+  ["ON", "OnDuty", "ON_DUTY_NOT_DRIVING", "On Duty Not Driving"].every(x => v.dutyCode(x) === "ON") &&
+  ["OFF", "OffDuty", "Off Duty"].every(x => v.dutyCode(x) === "OFF") &&
+  ["SB", "Sleeper", "SleeperBerth"].every(x => v.dutyCode(x) === "SB") &&
+  v.dutyCode("") === null && v.dutyCode(undefined) === null);
+
+// 08:00 on duty, 09:00 driving, 17:00 off — a plain day.
+const plain = v.summarizeDutyDays([
+  { driver: "D1", status: "ON", at: T("2026-09-08T12:00:00Z") },
+  { driver: "D1", status: "Driving", at: T("2026-09-08T13:00:00Z") },
+  { driver: "D1", status: "OffDuty", at: T("2026-09-08T21:00:00Z") },
+]);
+check("one row for the day", plain.length === 1 && plain[0].date === "2026-09-08", JSON.stringify(plain));
+check("on-duty counts driving plus non-driving work", plain[0].hours === 9);
+check("driving is counted apart", plain[0].drivingHours === 8);
+check("clock in is the first minute on duty", plain[0].clockIn === "2026-09-08T12:00:00.000Z");
+check("clock out is when they went off", plain[0].clockOut === "2026-09-08T21:00:00.000Z");
+
+// 22:00 to 06:00: the hours belong to the days they were actually driven.
+const night = v.summarizeDutyDays([
+  { driver: "D1", status: "D", at: T("2026-09-09T02:00:00Z") },
+  { driver: "D1", status: "OFF", at: T("2026-09-09T10:00:00Z") },
+]);
+check("an overnight run splits across midnight", night.length === 2, JSON.stringify(night));
+check("2 h land on the day it started", night[0].date === "2026-09-08" && night[0].drivingHours === 2);
+check("6 h land on the day it finished", night[1].date === "2026-09-09" && night[1].drivingHours === 6);
+check("the split does not invent or lose hours", night[0].hours + night[1].hours === 8);
+
+// Sleeper berth is rest, not work.
+const rest = v.summarizeDutyDays([
+  { driver: "D1", status: "SB", at: T("2026-09-08T12:00:00Z") },
+  { driver: "D1", status: "ON", at: T("2026-09-08T20:00:00Z") },
+  { driver: "D1", status: "OFF", at: T("2026-09-08T22:00:00Z") },
+]);
+check("sleeper berth banks no hours", rest[0].hours === 2);
+
+// A shift with no closing event stops at now, not at some imagined end.
+const open = v.summarizeDutyDays(
+  [{ driver: "D1", status: "D", at: T("2026-09-08T12:00:00Z") }],
+  { now: T("2026-09-08T15:00:00Z") });
+check("an open shift is billed only up to now", open[0].hours === 3);
+
+const two = v.summarizeDutyDays([
+  { driver: "D1", status: "ON", at: T("2026-09-08T12:00:00Z") },
+  { driver: "D2", status: "ON", at: T("2026-09-08T12:00:00Z") },
+  { driver: "D1", status: "OFF", at: T("2026-09-08T14:00:00Z") },
+  { driver: "D2", status: "OFF", at: T("2026-09-08T18:00:00Z") },
+]);
+check("drivers are never mixed together",
+  two.length === 2 && two.find(r => r.driver === "D1").hours === 2 && two.find(r => r.driver === "D2").hours === 6);
+
+check("no events → no rows, not a crash", v.summarizeDutyDays([]).length === 0 && v.summarizeDutyDays(null).length === 0);
+check("events with no driver or no timestamp are ignored",
+  v.summarizeDutyDays([{ status: "D", at: T("2026-09-08T12:00:00Z") }, { driver: "D1", status: "D" }]).length === 0);
+
+// ── Logbook payloads ─────────────────────────────────────────────────────────
+console.log("\nLogbook payloads");
+check("reads a flat log row", v.normalizeDutyEvents([
+  { DriverNumber: "DRV1", DutyStatus: "Driving", StartUTC: "2026-09-08T12:00:00Z" },
+]).length === 1);
+check("reads a driver nested under Driver", v.normalizeDutyEvents({
+  Logs: [{ Driver: { Number: "DRV2" }, Status: "ON", EventUTC: "2026-09-08T12:00:00Z" }],
+})[0]?.driver === "DRV2");
+check("drops rows missing driver, status or time", v.normalizeDutyEvents([
+  { DutyStatus: "D", StartUTC: "2026-09-08T12:00:00Z" },
+  { DriverNumber: "DRV1", StartUTC: "2026-09-08T12:00:00Z" },
+  { DriverNumber: "DRV1", DutyStatus: "D" },
+]).length === 0);
+check("drops an unparseable timestamp", v.normalizeDutyEvents([
+  { DriverNumber: "DRV1", DutyStatus: "D", StartUTC: "not a date" },
+]).length === 0);
+check("garbage in → empty, not a crash",
+  v.normalizeDutyEvents(null).length === 0 && v.normalizeDutyEvents("nope").length === 0);
+// End to end: a raw payload straight through to daily totals.
+const endToEnd = v.summarizeDutyDays(v.normalizeDutyEvents({ Logs: [
+  { DriverNumber: "DRV1", DutyStatus: "OnDuty", StartUTC: "2026-09-08T12:00:00Z" },
+  { DriverNumber: "DRV1", DutyStatus: "Driving", StartUTC: "2026-09-08T13:00:00Z" },
+  { DriverNumber: "DRV1", DutyStatus: "OffDuty", StartUTC: "2026-09-08T21:00:00Z" },
+]}));
+check("raw logbook through to a day's totals",
+  endToEnd.length === 1 && endToEnd[0].hours === 9 && endToEnd[0].drivingHours === 8, JSON.stringify(endToEnd));
+
 console.log(failures ? `\n${failures} failure(s)\n` : "\nall passing\n");
 process.exit(failures ? 1 : 0);
