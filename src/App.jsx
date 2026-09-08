@@ -1,6 +1,8 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { ComposableMap, Geographies, Geography, Marker, Line, ZoomableGroup } from "react-simple-maps";
+import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { BolSection } from "./bol.jsx";
 import { MessagesSection, notifyUser } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
@@ -1453,11 +1455,6 @@ function timeAgo(iso) {
   return `hace ${Math.round(hrs / 24)} d`;
 }
 
-// Verizon-style live map: every truck with a known position plotted on the US map.
-// Pan with a drag, zoom with the wheel or the buttons; picking a truck flies to it.
-const US_CENTER = [-97, 38];
-const MAP_MIN_ZOOM = 1, MAP_MAX_ZOOM = 16;
-
 // Plain-language names for what the diagnostic probes.
 const VZ_CHECK_LABELS = {
   config: "Credentials configured",
@@ -1467,96 +1464,126 @@ const VZ_CHECK_LABELS = {
   logbook: "Driver hours (ELD)",
 };
 
-const mapBtnS = {
-  width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer",
-  background: "rgba(255,255,255,0.94)", border: "1px solid #dde5ee", borderRadius: 8,
-  fontSize: 15, lineHeight: 1, color: "#3d4b5a", fontWeight: 600,
-  boxShadow: "0 1px 4px rgba(16,42,67,0.10)", padding: 0,
-};
+// Live fleet map on real tiles. The state-outline SVG this replaced could zoom,
+// but there was nothing underneath to zoom into: knowing a truck is "in Indiana"
+// is useless next to knowing which yard it is sitting in. CARTO's Voyager tiles
+// are free, need no key, and carry streets and labels all the way down.
+const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const US_VIEW = { center: [39.5, -98.35], zoom: 4 };
+
+const TRUCK_MAP_CSS = `
+.tlm-wrap{position:relative;border:1px solid #e3e9ef;border-radius:12px;overflow:hidden;background:#e9eef2}
+.tlm-map{height:min(560px,66vh);width:100%}
+.tlm-map .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.75)}
+.tlm-pin{position:relative;width:0;height:0}
+.tlm-halo{position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;opacity:.22}
+.tlm-pin.moving .tlm-halo{animation:tlmhalo 2.4s ease-in-out infinite}
+.tlm-dot{position:absolute;left:-8px;top:-8px;width:16px;height:16px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 1px 5px rgba(16,49,79,.45);transition:transform .15s}
+.tlm-pin.sel .tlm-dot{transform:scale(1.3)}
+.tlm-pin:hover .tlm-dot{transform:scale(1.18)}
+@keyframes tlmhalo{0%,100%{transform:scale(1);opacity:.22}50%{transform:scale(1.75);opacity:.04}}
+.tlm-tip{font:600 11.5px/1.45 system-ui,sans-serif}
+.tlm-tip small{display:block;font-weight:400;color:#6b7785}
+.tlm-fit{position:absolute;top:10px;right:10px;z-index:500;width:32px;height:32px;display:grid;place-items:center;
+  cursor:pointer;background:rgba(255,255,255,.95);border:1px solid #dde5ee;border-radius:8px;font-size:13px;
+  color:#3d4b5a;box-shadow:0 1px 5px rgba(16,42,67,.14);padding:0}
+`;
+
+const esc = (x) => String(x ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
 
 function TruckLiveMap({ trucks, selected, onSelect }) {
-  const [view, setView] = useState({ center: US_CENTER, zoom: 1 });
-  const [hover, setHover] = useState(null);
+  const elRef = useRef(null);
+  const mapRef = useRef(null);
+  const markersRef = useRef(new Map());   // truck id → L.Marker
+  const fittedRef = useRef(false);
+  // Held in a ref so the marker click handlers never need rebinding.
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
-  // Picking a truck flies to it; the map returns to the whole country on reset.
-  // `trucks` is deliberately out of the deps: a position refresh every 5 minutes
-  // must not yank the view out from under somebody reading the map.
+  const located = trucks.filter(t => t.last_lat != null && t.last_lng != null);
+
+  const fitAll = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const pts = located.map(t => [Number(t.last_lat), Number(t.last_lng)]);
+    if (pts.length > 1) map.fitBounds(pts, { padding: [50, 50], maxZoom: 12 });
+    else if (pts.length === 1) map.setView(pts[0], 11);
+    else map.setView(US_VIEW.center, US_VIEW.zoom);
+  }, [located]);
+
   useEffect(() => {
-    const t = trucks.find(x => x.id === selected);
-    if (!t || t.last_lat == null || t.last_lng == null) return;
-    setView(v => ({ center: [Number(t.last_lng), Number(t.last_lat)], zoom: Math.max(v.zoom, 5) }));
+    if (mapRef.current || !elRef.current) return;
+    const map = L.map(elRef.current, { zoomControl: true, worldCopyJump: true })
+      .setView(US_VIEW.center, US_VIEW.zoom);
+    L.tileLayer(TILE_URL, { maxZoom: 19, subdomains: "abcd", attribution: TILE_ATTR }).addTo(map);
+    mapRef.current = map;
+    // The map lives inside a grid that settles after mount, and Leaflet sizes
+    // itself once — without this it renders into a stale box and tiles tear.
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(elRef.current);
+    return () => { ro.disconnect(); map.remove(); mapRef.current = null; markersRef.current.clear(); };
+  }, []);
+
+  // Markers are reused across refreshes: rebuilding them every five minutes
+  // would tear down whatever popup or hover the person was looking at.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const seen = new Set();
+    for (const t of located) {
+      seen.add(t.id);
+      const st = liveStatusOf(t);
+      const c = liveStatusMeta(st);
+      const isSel = selected === t.id;
+      const pos = [Number(t.last_lat), Number(t.last_lng)];
+      const icon = L.divIcon({
+        className: "",
+        iconSize: [0, 0],
+        html: `<div class="tlm-pin ${st} ${isSel ? "sel" : ""}">
+                 <span class="tlm-halo" style="background:${c.dot}"></span>
+                 <span class="tlm-dot" style="background:${c.dot}"></span>
+               </div>`,
+      });
+      const tip = `<div class="tlm-tip">🚛 ${esc(t.name)}<small>${esc(c.l)} · ${esc(timeAgo(t.last_location_at))}</small>${
+        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}</div>`;
+
+      let m = markersRef.current.get(t.id);
+      if (!m) {
+        m = L.marker(pos, { icon }).addTo(map);
+        m.on("click", () => onSelectRef.current(selected === t.id ? null : t.id));
+        markersRef.current.set(t.id, m);
+      } else {
+        m.setLatLng(pos);
+        m.setIcon(icon);
+        // The closure above captured a stale `selected`, so rebind the toggle.
+        m.off("click");
+        m.on("click", () => onSelectRef.current(isSel ? null : t.id));
+      }
+      m.unbindTooltip();
+      m.bindTooltip(tip, { direction: "top", offset: [0, -12], opacity: 1 });
+    }
+    for (const [id, m] of markersRef.current) {
+      if (!seen.has(id)) { m.remove(); markersRef.current.delete(id); }
+    }
+    // Frame the fleet the first time positions actually exist, once only —
+    // after that the view belongs to whoever is driving the mouse.
+    if (!fittedRef.current && located.length) { fittedRef.current = true; fitAll(); }
+  }, [located, selected, fitAll]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const t = located.find(x => x.id === selected);
+    if (!map || !t) return;
+    map.flyTo([Number(t.last_lat), Number(t.last_lng)], Math.max(map.getZoom(), 12), { duration: 0.8 });
+    markersRef.current.get(t.id)?.openTooltip();
   }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const zoomBy = (f) => setView(v => ({ ...v, zoom: Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, v.zoom * f)) }));
-  const resetView = () => { onSelect(null); setView({ center: US_CENTER, zoom: 1 }); };
-
-  // Markers are drawn inside the zoom transform, so everything about them is
-  // divided by the zoom to keep a constant size on screen at any scale.
-  const z = view.zoom;
-
   return (
-    <div style={{ position:"relative", background:"linear-gradient(180deg,#eef5fb 0%,#e3eef8 100%)",
-      border:"1px solid #e3e9ef", borderRadius:12, overflow:"hidden" }}>
-
-      <div style={{ position:"absolute", top:10, right:10, zIndex:5, display:"flex", flexDirection:"column", gap:6 }}>
-        <button style={mapBtnS} onClick={() => zoomBy(1.6)} title="Zoom in">+</button>
-        <button style={mapBtnS} onClick={() => zoomBy(1 / 1.6)} title="Zoom out">−</button>
-        <button style={{ ...mapBtnS, fontSize:12 }} onClick={resetView} title="Fit all trucks">⤢</button>
-      </div>
-
-      <ComposableMap projection="geoAlbersUsa" projectionConfig={{ scale: 1000 }} width={800} height={500}
-        style={{ width:"100%", height:"auto", display:"block" }}>
-        <defs>
-          <filter id="truckPinShadow" x="-60%" y="-60%" width="220%" height="220%">
-            <feDropShadow dx="0" dy="1" stdDeviation="1.4" floodColor="#12314f" floodOpacity="0.35" />
-          </filter>
-        </defs>
-        <ZoomableGroup center={view.center} zoom={z} minZoom={MAP_MIN_ZOOM} maxZoom={MAP_MAX_ZOOM}
-          onMoveEnd={({ coordinates, zoom }) => setView({ center: coordinates, zoom })}>
-          <Geographies geography={US_GEO_URL}>
-            {({ geographies }) => geographies.map(geo => (
-              <Geography key={geo.rsmKey} geography={geo}
-                style={{
-                  default: { fill:"#fbfaf6", stroke:"#c8d5e2", strokeWidth: 0.5 / z, outline:"none" },
-                  hover:   { fill:"#f4f7ef", stroke:"#a9bccf", strokeWidth: 0.7 / z, outline:"none" },
-                  pressed: { fill:"#f4f7ef", stroke:"#a9bccf", strokeWidth: 0.7 / z, outline:"none" },
-                }} />
-            ))}
-          </Geographies>
-
-          {trucks.map(t => {
-            if (t.last_lat == null || t.last_lng == null) return null;
-            const st = liveStatusOf(t);
-            const c = liveStatusMeta(st);
-            const isSel = selected === t.id;
-            const isHot = isSel || hover === t.id;
-            return (
-              <Marker key={t.id} coordinates={[Number(t.last_lng), Number(t.last_lat)]}
-                onClick={() => onSelect(isSel ? null : t.id)}
-                onMouseEnter={() => setHover(t.id)} onMouseLeave={() => setHover(h => (h === t.id ? null : h))}>
-                <g style={{ cursor:"pointer" }} transform={`scale(${1 / z})`}>
-                  {/* A truck actually on the move gets a halo that breathes. */}
-                  {st === "moving" && (
-                    <circle r={13} fill={c.dot} opacity={0.22} style={{ animation:"truckhalo 2.4s ease-in-out infinite" }} />
-                  )}
-                  {isHot && <circle r={11} fill={c.dot} opacity={0.3} />}
-                  <circle r={6.5} fill={c.dot} stroke="#fff" strokeWidth={2} filter="url(#truckPinShadow)" />
-                  <circle r={2.2} fill="#fff" opacity={0.9} />
-                  {isHot && (
-                    <text textAnchor="middle" y={-17}
-                      style={{ fontSize:10, fontWeight:800, fill:"#16324c", paintOrder:"stroke", stroke:"#fff", strokeWidth:3.2 }}>
-                      {t.name}
-                    </text>
-                  )}
-                </g>
-              </Marker>
-            );
-          })}
-        </ZoomableGroup>
-      </ComposableMap>
-      {/* scale(), not an animated r: the circle sits on the origin so it grows from
-          its own centre, and CSS-animated SVG geometry is uneven across browsers. */}
-      <style>{`@keyframes truckhalo{0%,100%{opacity:.22;transform:scale(1)}50%{opacity:.04;transform:scale(1.55)}}`}</style>
+    <div className="tlm-wrap">
+      <style>{TRUCK_MAP_CSS}</style>
+      <button className="tlm-fit" onClick={fitAll} title="Fit all trucks">⤢</button>
+      <div ref={elRef} className="tlm-map" />
     </div>
   );
 }
