@@ -14,6 +14,7 @@
     "agent:prompt": "node scripts/dump-agent-prompt.mjs",
     "test:agent-auth": "node scripts/test-agent-auth.mjs",
     "test:voice": "node scripts/test-voice.mjs",
+    "test:verizon": "node scripts/test-verizon.mjs",
     "test:voice-layout": "node scripts/test-voice-layout.mjs"
   },
   "dependencies": {

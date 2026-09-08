@@ -67,19 +67,35 @@ minutos. El intervalo del cliente y un throttle en el servidor
 Columnas que escribe (ya existen en el setup SQL): `last_lat`, `last_lng`,
 `last_location`, `last_location_at`, `last_status`, `verizon_vehicle_id`.
 
+## Qué endpoint usa
+
+Reveal reparte los datos de vehículos entre varios productos de API y no todas las
+cuentas tienen activados los mismos, así que el código **no asume ninguno**: prueba
+las rutas conocidas en orden y se queda con la que responda, recordándola mientras
+el lambda esté tibio. Un 403/404 significa "ese producto no", cualquier otro error
+corta la búsqueda porque es un problema real.
+
+No hace falta averiguar en el portal cuál está activada. Si ninguna responde, el
+error lo dice y ahí sí hay que pedir acceso a alguna API de ubicación en
+**APIs → Request access** para la app.
+
 ## Si algo no anda
 
 Los nombres de los campos que devuelve Reveal cambian entre versiones y cuentas,
 así que `mapLocation()` lee la primera clave que encuentra en vez de asumir una.
-Para ver el payload crudo de un vehículo y confirmar los nombres reales:
+Para ver el payload crudo de un vehículo, el mapeo y qué endpoint quedó elegido:
 
 ```
 GET /api/geocode?fleet=probe&vehicle=<vehicle number>
 ```
 
-Devuelve `{ raw, mapped }`: `raw` es lo que mandó Verizon, `mapped` es lo que se
-guardaría. Si `mapped` viene en `null`, las claves de lat/lng no coinciden con
-ninguna de las que busca `mapLocation()` y hay que agregarlas ahí.
+Devuelve `{ raw, mapped, endpoints }`: `raw` es lo que mandó Verizon, `mapped` es
+lo que se guardaría y `endpoints` cuál ruta ganó. Si `mapped` viene en `null`, las
+claves de lat/lng no coinciden con ninguna de las que busca `mapLocation()` y hay
+que agregarlas ahí.
+
+Tests del handshake, el descubrimiento de endpoints y el mapeo (sin red, con
+`fetch` stubbeado): `npm run test:verizon`.
 
 Errores típicos:
 

@@ -19,7 +19,7 @@
 import { admin } from "../lib/clients.mjs";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
-  mapLocation, SYNC_MIN_INTERVAL_MS,
+  mapLocation, resolvedPaths, SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -70,7 +70,7 @@ async function fleet(req, res, action) {
       const vehicle = (req.query?.vehicle || "").toString().trim();
       if (!vehicle) { res.status(400).json({ error: "Falta el vehicle number." }); return; }
       const raw = await fetchVehicleLocation(vehicle);
-      res.status(200).json({ raw, mapped: mapLocation(raw) });
+      res.status(200).json({ raw, mapped: mapLocation(raw), endpoints: resolvedPaths() });
       return;
     }
     res.status(400).json({ error: `Unknown fleet action: ${action}` });
