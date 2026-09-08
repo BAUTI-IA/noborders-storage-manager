@@ -64,7 +64,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true };
-const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
+const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
 const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[], purposes:{} };
@@ -3365,6 +3365,8 @@ export default function App() {
   // Live-load map: status filter, selected truck, and the "set location" modal.
   const [liveStatusFilter, setLiveStatusFilter] = useState("all"); // all | moving | stopped
   const [liveSelTruck, setLiveSelTruck] = useState(null);
+  const [verizonOn, setVerizonOn] = useState(null);   // null until the server answers
+  const [fleetSync, setFleetSync] = useState({ busy:false, at:null, error:null });
   const [locModal, setLocModal] = useState(null); // truck row | null
   const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
   const [locBusy, setLocBusy] = useState(false);
@@ -6606,7 +6608,8 @@ export default function App() {
   function openEditTruck(t) {
     setEditingTruckId(t.id);
     setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false,
-      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "" });
+      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "",
+      verizon_vehicle_id: t.verizon_vehicle_id || "" });
     setShowTruckModal(true);
   }
   async function saveTruck() {
@@ -6621,6 +6624,7 @@ export default function App() {
       payload.license_plate = truckForm.license_plate || null;
       payload.license_state = truckForm.license_state || null;
     }
+    if (!truckLocMissing) payload.verizon_vehicle_id = truckForm.verizon_vehicle_id.trim() || null;
     let error = null;
     if (editingTruckId) ({ error } = await supabase.from("trucks").update(payload).eq("id", editingTruckId));
     else ({ error } = await supabase.from("trucks").insert([payload]));
@@ -6665,6 +6669,50 @@ export default function App() {
     showToast(`Location updated · ${locModal.name}`);
     loadTrucks();
   }
+
+  // ── Live-load: real GPS from Verizon Connect Reveal ──
+  // The credentials never reach the browser: the serverless side authenticates,
+  // reads each mapped vehicle's position and writes it onto the trucks row the
+  // map already draws. All the client does is ask for a sync and reload.
+  const syncFleet = useCallback(async (silent = false) => {
+    if (!session?.access_token) return;
+    setFleetSync(s => ({ ...s, busy:true, error:null }));
+    try {
+      const r = await fetch("/api/geocode?fleet=sync", { headers: { Authorization: "Bearer " + session.access_token } });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "Sync failed");
+      // A throttled call is not a failure — Verizon just asked us to wait.
+      if (data.throttled) { setFleetSync(s => ({ ...s, busy:false })); return; }
+      setFleetSync({ busy:false, at:new Date().toISOString(), error:null });
+      await loadTrucks();
+      if (!silent) showToast(tr(`Fleet synced · ${data.updated} truck(s) updated`,
+                                `Flota sincronizada · ${data.updated} camión(es) actualizado(s)`));
+    } catch (e) {
+      const msg = e?.message || "Sync failed";
+      setFleetSync(s => ({ ...s, busy:false, error:msg }));
+      if (!silent) showToast(tr("Could not sync with Verizon Connect.", "No se pudo sincronizar con Verizon Connect."));
+    }
+  }, [session, loadTrucks]);
+
+  // Whether the server holds Verizon credentials at all. Until it does, the live
+  // map stays exactly as it was: manual positions only, no sync button.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/geocode?fleet=status")
+      .then(r => r.json())
+      .then(d => { if (alive) setVerizonOn(!!d?.configured); })
+      .catch(() => { if (alive) setVerizonOn(false); });
+    return () => { alive = false; };
+  }, []);
+
+  // Poll only while somebody is actually looking at the map. Verizon asks for no
+  // more than one location poll every 3–5 minutes, so 5 stays well inside it.
+  useEffect(() => {
+    if (!verizonOn || page !== "trips" || tripsView !== "live") return;
+    syncFleet(true);
+    const id = setInterval(() => syncFleet(true), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [verizonOn, page, tripsView, syncFleet]);
 
   // ── Legal & Compliance handlers ──
   function openAddCompany() { setEditingCompanyId(null); setCompanyForm(EMPTY_COMPANY); setShowCompanyModal(true); }
@@ -10092,7 +10140,22 @@ export default function App() {
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
-                        <span style={{ marginLeft:"auto", color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
+                        <span style={{ marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:8 }}>
+                          {verizonOn ? (<>
+                            <span style={{ color: fleetSync.error ? "#b91c1c" : "#aaa" }}>
+                              {fleetSync.error ? t("Verizon Connect: sync error")
+                                : !fleetSync.at ? t("Live from Verizon Connect")
+                                : tr(`Live from Verizon Connect · updated ${timeAgo(fleetSync.at)}`,
+                                     `En vivo desde Verizon Connect · actualizado ${timeAgo(fleetSync.at)}`)}
+                            </span>
+                            <button onClick={() => syncFleet(false)} disabled={fleetSync.busy}
+                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor: fleetSync.busy ? "default" : "pointer", textDecoration:"underline" }}>
+                              {fleetSync.busy ? t("Syncing...") : t("Sync now")}
+                            </button>
+                          </>) : (
+                            <span style={{ color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
+                          )}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -13461,6 +13524,14 @@ export default function App() {
             <Field label="License state">
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
             </Field>
+          </div>
+
+          <SectionLabel>Live tracking</SectionLabel>
+          <Field label="Verizon vehicle number" full>
+            <input style={inp} value={truckForm.verizon_vehicle_id} onChange={e => setTruckForm(f => ({...f, verizon_vehicle_id:e.target.value}))} placeholder="As it appears in Reveal" />
+          </Field>
+          <div style={{ fontSize:11.5, color:"#999", marginTop:6 }}>
+            Links this truck to Verizon Connect so its position updates on the live map by itself. Leave it empty to keep setting the location by hand.
           </div>
         </Modal>
       )}

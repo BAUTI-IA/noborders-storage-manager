@@ -1,12 +1,94 @@
-// Vercel serverless function: geocode a free-text address to lat/lng using the
-// OpenStreetMap Nominatim service (no API key). Kept server-side to set a proper
-// User-Agent (Nominatim policy) and avoid browser CORS. Used by the live-load map
-// to place a truck's manual / last-known position.
+// Vercel serverless function: map data for the live-load view.
+//
+// Two features share one function because the Hobby plan caps the project at 12
+// serverless functions and api/ is already at the limit (same reason
+// api/agent-hub.mjs folds several agent features together).
+//
+//   GET /api/geocode?q=<address>          → address → lat/lng via OpenStreetMap
+//                                           Nominatim (no key, no auth).
+//   GET /api/geocode?fleet=status         → whether Verizon Connect is wired up.
+//   GET /api/geocode?fleet=sync           → pull live GPS from Verizon Connect
+//                                           Reveal into public.trucks.
+//   GET /api/geocode?fleet=vehicles       → Reveal's vehicle roster, to fill in
+//                                           trucks.verizon_vehicle_id.
+//   GET /api/geocode?fleet=probe&vehicle= → raw Reveal payload for one vehicle,
+//                                           to confirm field names.
+//
+// Every fleet=* action except `status` needs the caller's Supabase JWT, because
+// the sync writes to trucks through the service role.
+import { admin } from "../lib/clients.mjs";
+import {
+  verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
+  mapLocation, SYNC_MIN_INTERVAL_MS,
+} from "../lib/verizon.mjs";
+
+// Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
+// map throttles on its side too. Belt and braces against Verizon's 3–5 min floor.
+let lastSyncAt = 0;
+
+async function requireUser(req, res) {
+  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  if (!token || !admin) {
+    res.status(401).json({ error: "unauthorized" });
+    return null;
+  }
+  const { data: { user } = {}, error } = await admin.auth.getUser(token);
+  if (error || !user) {
+    res.status(401).json({ error: "unauthorized" });
+    return null;
+  }
+  return user;
+}
+
+async function fleet(req, res, action) {
+  if (action === "status") {
+    res.status(200).json({ configured: verizonConfigured() });
+    return;
+  }
+  if (!(await requireUser(req, res))) return;
+  if (!verizonConfigured()) {
+    res.status(503).json({ error: "Verizon Connect is not configured on the server." });
+    return;
+  }
+
+  try {
+    if (action === "sync") {
+      const since = Date.now() - lastSyncAt;
+      if (since < SYNC_MIN_INTERVAL_MS) {
+        res.status(200).json({ throttled: true, retryInMs: SYNC_MIN_INTERVAL_MS - since });
+        return;
+      }
+      lastSyncAt = Date.now();
+      res.status(200).json(await syncTruckLocations());
+      return;
+    }
+    if (action === "vehicles") {
+      res.status(200).json({ vehicles: await fetchVehicles() });
+      return;
+    }
+    if (action === "probe") {
+      const vehicle = (req.query?.vehicle || "").toString().trim();
+      if (!vehicle) { res.status(400).json({ error: "Falta el vehicle number." }); return; }
+      const raw = await fetchVehicleLocation(vehicle);
+      res.status(200).json({ raw, mapped: mapLocation(raw) });
+      return;
+    }
+    res.status(400).json({ error: `Unknown fleet action: ${action}` });
+  } catch (e) {
+    console.error("geocode fleet:", e);
+    res.status(502).json({ error: e?.message || "Verizon Connect request failed." });
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
+
+  const action = (req.query?.fleet || "").toString().trim();
+  if (action) return fleet(req, res, action);
+
   const q = (req.query?.q || "").toString().trim();
   if (!q) {
     res.status(400).json({ error: "Falta la dirección (q)." });
