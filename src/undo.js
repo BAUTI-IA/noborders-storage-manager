@@ -1,6 +1,11 @@
 // Session-scoped undo/redo manager over Supabase, backed by soft deletes
 // (deleted_at) and an action_log audit table (see scripts/setup-undo.mjs).
 //
+// Tables that never got the migration (no deleted_at column) are NOT blocked:
+// the manager falls back to a physical delete and remembers the full row, so
+// undo re-inserts it. Such rows can't show up in Trash — only session undo
+// brings them back — so the fallback reports itself through onFallback().
+//
 // Every user-visible mutation gets recorded as a "step" — a labelled batch of
 // entries {table, id, action, before, after}. Undo replays the batch backwards
 // (restore before-values, un-delete soft-deleted rows); redo replays it forward.
@@ -22,6 +27,16 @@ export function createUndoManager(supabase) {
   const listeners = new Set();
   let userEmail = null;
   let auditAvailable = true; // flips off after the first failed action_log insert
+  const hardTables = new Set();  // tables without deleted_at → physical delete
+  const warnedTables = new Set();
+  let fallbackNotice = null;     // set by the UI to warn once per table
+
+  // Tell the UI (once per table) that a delete had to be physical.
+  function reportFallback(table) {
+    if (!fallbackNotice || warnedTables.has(table)) return;
+    warnedTables.add(table);
+    try { fallbackNotice(table); } catch { /* ignore */ }
+  }
 
   const notify = () => listeners.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
 
@@ -60,22 +75,49 @@ export function createUndoManager(supabase) {
 
   // ── Helpers that mutate AND build entries ──────────────────────────────────
 
+  // Physically delete rows whose table has no deleted_at column, keeping the
+  // whole row in the entry so undo can re-insert it.
+  async function hardDelete(table, rows) {
+    hardTables.add(table);
+    const rowIds = rows.map((r) => r.id);
+    const { error } = await supabase.from(table).delete().in("id", rowIds);
+    if (error) return { error, entries: [] };
+    reportFallback(table);
+    return {
+      error: null,
+      hard: true,
+      entries: rows.map((r) => ({ table, id: r.id, action: "delete", hard: true, before: r, after: null })),
+    };
+  }
+
   // Soft-delete rows (by id, or by another FK column). Returns { error, entries }.
-  // Refuses to fall back to a physical delete: if deleted_at is missing the
-  // caller must run the migration first.
+  // If the table has no deleted_at column (migration not applied), it falls back
+  // to a physical delete instead of refusing — deleting always works.
   async function softDelete(table, ids, col = "id") {
     const list = (Array.isArray(ids) ? ids : [ids]).filter((v) => v != null);
     if (!list.length) return { error: null, entries: [] };
+    if (hardTables.has(table)) {
+      const { data, error } = await supabase.from(table).select("*").in(col, list);
+      if (error) return { error, entries: [] };
+      if (!data || !data.length) return { error: null, entries: [] };
+      return hardDelete(table, data);
+    }
     // Only rows not already in the trash — re-deleting an old soft-deleted row
     // would wrongly pull it into this undo step.
     const { data: before, error: selErr } = await supabase.from(table).select("*").in(col, list).is("deleted_at", null);
-    if (selErr) return { error: isMissingDeletedAt(selErr) ? { ...selErr, message: `Soft delete unavailable on "${table}". ${UNDO_SETUP_HINT}` } : selErr, entries: [] };
+    if (selErr) {
+      if (!isMissingDeletedAt(selErr)) return { error: selErr, entries: [] };
+      const retry = await supabase.from(table).select("*").in(col, list);
+      if (retry.error) return { error: retry.error, entries: [] };
+      if (!retry.data || !retry.data.length) return { error: null, entries: [] };
+      return hardDelete(table, retry.data);
+    }
     if (!before || !before.length) return { error: null, entries: [] };
     const now = new Date().toISOString();
     const rowIds = before.map((r) => r.id);
     const { error } = await supabase.from(table).update({ deleted_at: now }).in("id", rowIds);
     if (error) {
-      if (isMissingDeletedAt(error)) return { error: { ...error, message: `Soft delete unavailable on "${table}". ${UNDO_SETUP_HINT}` }, entries: [] };
+      if (isMissingDeletedAt(error)) return hardDelete(table, before);
       return { error, entries: [] };
     }
     return {
@@ -113,8 +155,35 @@ export function createUndoManager(supabase) {
 
   // ── Undo / redo ────────────────────────────────────────────────────────────
 
+  // Re-insert a physically deleted row. Identity columns are usually
+  // "generated always", which rejects an explicit id — retry without it and
+  // remember the new id so a later redo deletes the right row.
+  async function reinsert(e, row) {
+    const full = { ...row };
+    delete full.deleted_at;
+    const first = await supabase.from(e.table).insert([full]).select("*").single();
+    if (!first.error) return null;
+    const withoutId = { ...full };
+    delete withoutId.id;
+    const second = await supabase.from(e.table).insert([withoutId]).select("*").single();
+    if (second.error) return first.error;
+    if (second.data?.id != null) {
+      e.id = second.data.id;
+      if (e.before) e.before = { ...e.before, id: second.data.id };
+      if (e.after) e.after = { ...e.after, id: second.data.id };
+    }
+    return null;
+  }
+
   async function applyEntry(e, direction) {
     const t = supabase.from(e.table);
+    if (e.hard) {
+      // Physically deleted row: undo re-inserts it, redo deletes it again.
+      const wasDeleted = e.action !== "create";
+      const shouldExist = direction === "undo" ? wasDeleted : !wasDeleted;
+      if (shouldExist) return reinsert(e, e.before || e.after || {});
+      return (await t.delete().eq("id", e.id)).error;
+    }
     if (e.action === "update" || e.action === "restore" || e.action === "delete") {
       if (e.action === "update") {
         const patch = direction === "undo" ? e.before : e.after;
@@ -129,7 +198,15 @@ export function createUndoManager(supabase) {
       if (direction === "undo") {
         // Reverting a create = soft-delete the new row.
         const { error } = await t.update({ deleted_at: new Date().toISOString() }).eq("id", e.id);
-        if (error && isMissingDeletedAt(error)) return (await supabase.from(e.table).delete().eq("id", e.id)).error;
+        if (error && isMissingDeletedAt(error)) {
+          e.hard = true;
+          hardTables.add(e.table);
+          const { data } = await supabase.from(e.table).select("*").eq("id", e.id).maybeSingle();
+          if (data) e.after = data;
+          const del = await supabase.from(e.table).delete().eq("id", e.id);
+          if (!del.error) reportFallback(e.table);
+          return del.error;
+        }
         return error;
       }
       return (await t.update({ deleted_at: null }).eq("id", e.id)).error;
@@ -154,6 +231,9 @@ export function createUndoManager(supabase) {
 
   return {
     setUser(email) { userEmail = email || null; },
+    // fn(table) runs once per table whose delete had to be physical.
+    onFallback(fn) { fallbackNotice = fn || null; },
+    isHardDeleted: (table) => hardTables.has(table),
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     canUndo: () => undoStack.length > 0,
     canRedo: () => redoStack.length > 0,
