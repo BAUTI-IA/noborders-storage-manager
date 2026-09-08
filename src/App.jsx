@@ -1506,7 +1506,7 @@ const TRUCK_MAP_CSS = `
 
 const esc = (x) => String(x ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
 
-function TruckLiveMap({ trucks, selected, onSelect }) {
+function LeafletTruckMap({ trucks, selected, onSelect }) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef(new Map());   // truck id → L.Marker
@@ -1613,6 +1613,135 @@ function TruckLiveMap({ trucks, selected, onSelect }) {
       <div ref={elRef} className="tlm-map" />
     </div>
   );
+}
+
+// ── Google basemap ───────────────────────────────────────────────────────────
+// The look people already know from Reveal, plus satellite and hybrid for free.
+// The key is fetched at runtime from the server rather than built in, so it never
+// sits in a public asset.
+
+let gmapsPromise = null;
+function loadGoogleMaps(key) {
+  if (window.google?.maps) return Promise.resolve(window.google.maps);
+  // One script tag per page no matter how many times the map mounts.
+  if (!gmapsPromise) {
+    gmapsPromise = new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly`;
+      el.async = true;
+      el.onload = () => (window.google?.maps ? resolve(window.google.maps) : reject(new Error("Google Maps loaded but exposed nothing")));
+      el.onerror = () => { gmapsPromise = null; reject(new Error("Google Maps failed to load")); };
+      document.head.appendChild(el);
+    });
+  }
+  return gmapsPromise;
+}
+
+function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
+  const elRef = useRef(null);
+  const mapRef = useRef(null);
+  const gRef = useRef(null);
+  const marksRef = useRef(new Map());
+  const infoRef = useRef(null);
+  const fittedRef = useRef(false);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const [ready, setReady] = useState(false);
+
+  const located = trucks.filter(t => t.last_lat != null && t.last_lng != null);
+
+  const fitAll = useCallback(() => {
+    const maps = gRef.current, map = mapRef.current;
+    if (!maps || !map) return;
+    if (!located.length) { map.setCenter({ lat: 39.5, lng: -98.35 }); map.setZoom(4); return; }
+    const b = new maps.LatLngBounds();
+    for (const t of located) b.extend({ lat: Number(t.last_lat), lng: Number(t.last_lng) });
+    if (located.length === 1) { map.setCenter(b.getCenter()); map.setZoom(12); }
+    else map.fitBounds(b, 60);
+    fittedRef.current = true;
+  }, [located]);
+
+  useEffect(() => {
+    let alive = true;
+    loadGoogleMaps(apiKey).then(maps => {
+      if (!alive || !elRef.current || mapRef.current) return;
+      gRef.current = maps;
+      mapRef.current = new maps.Map(elRef.current, {
+        center: { lat: 39.5, lng: -98.35 }, zoom: 4,
+        mapTypeId: "roadmap",
+        mapTypeControl: true,
+        mapTypeControlOptions: { mapTypeIds: ["roadmap", "hybrid", "terrain"] },
+        streetViewControl: false, fullscreenControl: false,
+        // Points of interest are noise on a fleet map; roads and places are not.
+        styles: [{ featureType: "poi.business", stylers: [{ visibility: "off" }] }],
+      });
+      infoRef.current = new maps.InfoWindow();
+      setReady(true);
+    }).catch(e => { if (alive) onFail(e?.message || "Google Maps failed to load"); });
+    return () => { alive = false; };
+  }, [apiKey, onFail]);
+
+  useEffect(() => {
+    const maps = gRef.current, map = mapRef.current;
+    if (!ready || !maps || !map) return;
+    const seen = new Set();
+    for (const t of located) {
+      seen.add(t.id);
+      const st = liveStatusOf(t);
+      const c = liveStatusMeta(st);
+      const isSel = selected === t.id;
+      const pos = { lat: Number(t.last_lat), lng: Number(t.last_lng) };
+      const icon = {
+        path: maps.SymbolPath.CIRCLE,
+        scale: isSel ? 9.5 : 7.5,
+        fillColor: c.dot, fillOpacity: 1,
+        strokeColor: "#fff", strokeWeight: 2.5,
+      };
+      let m = marksRef.current.get(t.id);
+      if (!m) {
+        m = new maps.Marker({ map, position: pos, icon, title: t.name, zIndex: 1 });
+        marksRef.current.set(t.id, m);
+      } else {
+        m.setPosition(pos); m.setIcon(icon);
+      }
+      m.setZIndex(isSel ? 10 : 1);
+      maps.event.clearInstanceListeners(m);
+      m.addListener("click", () => onSelectRef.current(isSel ? null : t.id));
+      const html = `<div class="tlm-tip">🚛 ${esc(t.name)}<small>${esc(c.l)} · ${esc(timeAgo(t.last_location_at))}</small>${
+        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}</div>`;
+      m.addListener("mouseover", () => { infoRef.current.setContent(html); infoRef.current.open(map, m); });
+      m.addListener("mouseout", () => infoRef.current.close());
+    }
+    for (const [id, m] of marksRef.current) {
+      if (!seen.has(id)) { m.setMap(null); marksRef.current.delete(id); }
+    }
+    if (!fittedRef.current && located.length) fitAll();
+  }, [ready, located, selected, fitAll]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const t = located.find(x => x.id === selected);
+    if (!ready || !map || !t) return;
+    map.panTo({ lat: Number(t.last_lat), lng: Number(t.last_lng) });
+    if (map.getZoom() < 12) map.setZoom(12);
+  }, [ready, selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="tlm-wrap">
+      <style>{TRUCK_MAP_CSS}</style>
+      <button className="tlm-fit" onClick={fitAll} title="Fit all trucks">⤢</button>
+      <div ref={elRef} className="tlm-map" />
+    </div>
+  );
+}
+
+// Google when a key is configured, Leaflet otherwise — and Leaflet again if
+// Google fails to load, so a billing problem never leaves the page mapless.
+function TruckLiveMap({ googleKey, ...props }) {
+  const [googleFailed, setGoogleFailed] = useState(false);
+  const onFail = useCallback((msg) => { console.warn("Google Maps:", msg); setGoogleFailed(true); }, []);
+  if (googleKey && !googleFailed) return <GoogleTruckMap {...props} apiKey={googleKey} onFail={onFail} />;
+  return <LeafletTruckMap {...props} />;
 }
 
 const BILLING_STATUS = {
@@ -3624,6 +3753,7 @@ export default function App() {
   const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
   const [hosMissing, setHosMissing] = useState(false);
   const [vzDiag, setVzDiag] = useState(null);       // null | "loading" | checks[]
+  const [googleKey, setGoogleKey] = useState(null);
   const [locModal, setLocModal] = useState(null); // truck row | null
   const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
   const [locBusy, setLocBusy] = useState(false);
@@ -6967,6 +7097,18 @@ export default function App() {
       if (!silent) showToast(tr("Could not sync with Verizon Connect.", "No se pudo sincronizar con Verizon Connect."));
     }
   }, [session, loadTrucks]);
+
+  // The Google basemap key, if one is configured. Signed-in fetch on purpose:
+  // it keeps the key out of the public bundle.
+  useEffect(() => {
+    if (!session?.access_token) return;
+    let alive = true;
+    fetch("/api/geocode?fleet=mapkey", { headers: { Authorization: "Bearer " + session.access_token } })
+      .then(r => r.json())
+      .then(d => { if (alive) setGoogleKey(d?.key || null); })
+      .catch(() => { if (alive) setGoogleKey(null); });
+    return () => { alive = false; };
+  }, [session]);
 
   // Whether the server holds Verizon credentials at all. Until it does, the live
   // map stays exactly as it was: manual positions only, no sync button.
@@ -10436,7 +10578,7 @@ export default function App() {
                     </div>
                     {/* Map */}
                     <div>
-                      <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} />
+                      <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} googleKey={googleKey} />
                       <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>

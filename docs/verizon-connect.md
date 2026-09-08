@@ -96,6 +96,31 @@ que llega un evento de verdad.
 Un evento cuyo vehículo no está vinculado a ningún camión cuenta como `unmatched`
 y se descarta, no rompe la entrega.
 
+## El mapa
+
+Por defecto corre sobre Leaflet con tiles de OpenStreetMap (calles) y Esri World
+Imagery (satélite), las dos sin API key.
+
+Si se configura una key de Google, el mapa pasa a usar Google Maps — el mismo
+look de Reveal, con satélite e híbrido:
+
+```
+GOOGLE_MAPS_BROWSER_KEY
+```
+
+**Es una key distinta de `GOOGLE_MAPS_API_KEY`**, la que usa `api/distance.mjs`.
+Esa vive solo en el servidor y nunca sale; la del mapa la ejecuta el navegador y
+queda a la vista de cualquiera que abra el CRM. Por eso:
+
+- La key del mapa se pide en runtime a `?fleet=mapkey`, **con sesión iniciada**, en
+  vez de compilarse con un `VITE_`: así no queda dentro de un asset público.
+- Igual hay que **restringirla por HTTP referrer** en Google Cloud, al dominio del
+  CRM. Lo anterior es una capa, no la única.
+- Nunca reusar la key del servidor acá.
+
+Si la key no está, o si Google no carga (facturación, restricción mal puesta), el
+mapa cae solo a Leaflet. Nunca queda una pantalla sin mapa.
+
 ## Dónde vive el código
 
 - `lib/verizon.mjs` — token cacheado, llamadas a Reveal, mapeo del payload y el

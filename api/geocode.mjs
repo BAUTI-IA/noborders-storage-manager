@@ -14,6 +14,7 @@
 //   GET /api/geocode?fleet=probe&vehicle= → raw Reveal payload for one vehicle,
 //                                           to confirm field names.
 //   GET /api/geocode?fleet=hours&from=&to= → pull ELD hours into driver_hos_days.
+//   GET /api/geocode?fleet=mapkey         → browser key for the Google basemap.
 //   POST /api/verizon-gps                 → Reveal's GPS webhook, pushing positions
 //                                           instead of us polling. Rewritten to
 //                                           ?fleet=webhook in vercel.json so it gets
@@ -100,6 +101,13 @@ async function fleet(req, res, action) {
       }
       lastSyncAt = Date.now();
       res.status(200).json(await syncTruckLocations());
+      return;
+    }
+    if (action === "mapkey") {
+      // Served to signed-in users only, never baked into the bundle: a VITE_ var
+      // would ship the key in a public asset for anyone to lift. Restrict it by
+      // HTTP referrer in Google Cloud as well — this is one layer, not the only one.
+      res.status(200).json({ key: process.env.GOOGLE_MAPS_BROWSER_KEY || null });
       return;
     }
     if (action === "diagnose") {
