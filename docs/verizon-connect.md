@@ -55,6 +55,47 @@ Verizon pide no consultar la posición de un vehículo más de una vez cada 3–
 minutos. El intervalo del cliente y un throttle en el servidor
 (`SYNC_MIN_INTERVAL_MS`) respetan ese piso.
 
+## Webhooks de GPS (tiempo real)
+
+En vez de que el CRM pregunte cada 5 minutos, Reveal puede empujar la posición
+apenas cambia. El endpoint es:
+
+```
+POST https://<dominio>/api/verizon-gps
+```
+
+Sale por un rewrite en `vercel.json` hacia `?fleet=webhook`, así tiene una URL
+limpia sin gastar una de las 12 funciones del plan Hobby.
+
+Reveal no firma nada: se autentica con Basic Auth usando las credenciales que se
+le dan al registrar el endpoint. Hay que inventar un usuario y password y
+cargarlos en Vercel:
+
+```
+VERIZON_WEBHOOK_USER
+VERIZON_WEBHOOK_PASSWORD
+```
+
+**Mientras falte cualquiera de las dos, el endpoint rechaza todo** — nunca acepta
+posiciones anónimas.
+
+Después se registra la URL desde Reveal: **Admin → Integrations**, en la
+integración, el botón **SUBMIT ENDPOINTS**. Ahí van la URL y esas credenciales.
+
+El polling cada 5 min y el webhook conviven sin pisarse: los dos escriben las
+mismas columnas de `trucks`, y el más reciente gana.
+
+### El schema no está documentado públicamente
+
+`normalizeGpsEvents()` acepta un evento suelto, un array o un batch envuelto en
+`Events`/`Items`, y busca el vehículo tanto en la raíz como anidado en `Vehicle`.
+Si una entrega no matchea nada, el endpoint **loguea el body completo** en los
+Runtime Logs de Vercel. Ese log es cómo se confirma el schema real la primera vez
+que llega un evento de verdad.
+
+Un evento cuyo vehículo no está vinculado a ningún camión cuenta como `unmatched`
+y se descarta, no rompe la entrega.
+
 ## Dónde vive el código
 
 - `lib/verizon.mjs` — token cacheado, llamadas a Reveal, mapeo del payload y el

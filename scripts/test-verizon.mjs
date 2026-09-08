@@ -138,5 +138,21 @@ check("reads a wrapped roster", v.normalizeVehicles({ Vehicles: [{ number: "9" }
 check("a label never repeats the number", v.normalizeVehicles([{ Number: "T-1", Name: "T-1" }])[0].label === "T-1");
 check("garbage in → empty list, not a crash", v.normalizeVehicles(null).length === 0 && v.normalizeVehicles("nope").length === 0);
 
+// ── GPS webhook payloads ─────────────────────────────────────────────────────
+console.log("\nGPS webhook payloads");
+const one = v.normalizeGpsEvents({ VehicleNumber: "BT002", Latitude: 41.3, Longitude: -86.3, Speed: 62 });
+check("a single event object", one.length === 1 && one[0].number === "BT002" && one[0].loc.last_status === "moving");
+check("an array of events", v.normalizeGpsEvents([
+  { Number: "BT001", Latitude: 1, Longitude: 2 },
+  { Number: "BT002", Latitude: 3, Longitude: 4 },
+]).length === 2);
+check("a vehicle nested under Vehicle", v.normalizeGpsEvents({ Vehicle: { Number: "BT009" }, Latitude: 5, Longitude: 6 })[0]?.number === "BT009");
+check("a wrapped batch", v.normalizeGpsEvents({ Events: [{ Number: "BT003", Latitude: 7, Longitude: 8 }] }).length === 1);
+check("drops events with no coordinates", v.normalizeGpsEvents({ Number: "BT004", Speed: 10 }).length === 0);
+check("drops events naming no vehicle", v.normalizeGpsEvents({ Latitude: 1, Longitude: 2 }).length === 0);
+check("garbage in → empty, not a crash",
+  v.normalizeGpsEvents(null).length === 0 && v.normalizeGpsEvents("nope").length === 0 && v.normalizeGpsEvents([null, 3]).length === 0);
+check("a numeric vehicle number becomes a string", v.normalizeGpsEvents({ Number: 77, Latitude: 1, Longitude: 2 })[0].number === "77");
+
 console.log(failures ? `\n${failures} failure(s)\n` : "\nall passing\n");
 process.exit(failures ? 1 : 0);

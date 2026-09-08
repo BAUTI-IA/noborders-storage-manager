@@ -13,13 +13,19 @@
 //                                           trucks.verizon_vehicle_id.
 //   GET /api/geocode?fleet=probe&vehicle= → raw Reveal payload for one vehicle,
 //                                           to confirm field names.
+//   POST /api/verizon-gps                 → Reveal's GPS webhook, pushing positions
+//                                           instead of us polling. Rewritten to
+//                                           ?fleet=webhook in vercel.json so it gets
+//                                           a clean public URL without costing one
+//                                           of the 12 functions.
 //
 // Every fleet=* action except `status` needs the caller's Supabase JWT, because
 // the sync writes to trucks through the service role.
+import { timingSafeEqual } from "node:crypto";
 import { admin } from "../lib/clients.mjs";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
-  mapLocation, normalizeVehicles, resolvedPaths, SYNC_MIN_INTERVAL_MS,
+  mapLocation, normalizeVehicles, resolvedPaths, applyGpsEvents, SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -38,6 +44,38 @@ async function requireUser(req, res) {
     return null;
   }
   return user;
+}
+
+// Reveal signs nothing: it authenticates with the Basic credentials given to it
+// when the endpoint is submitted in Reveal. Without a configured pair the
+// endpoint refuses everything rather than accepting anonymous truck positions.
+function webhookAuthOk(req) {
+  const user = process.env.VERIZON_WEBHOOK_USER;
+  const pass = process.env.VERIZON_WEBHOOK_PASSWORD;
+  if (!user || !pass) return false;
+  const got = Buffer.from(String(req.headers.authorization || ""));
+  const want = Buffer.from("Basic " + Buffer.from(`${user}:${pass}`).toString("base64"));
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
+async function gpsWebhook(req, res) {
+  if (!webhookAuthOk(req)) { res.status(401).json({ error: "unauthorized" }); return; }
+  let body = req.body;
+  if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = null; } }
+  if (!body) { res.status(400).json({ error: "empty or unparseable body" }); return; }
+  try {
+    const result = await applyGpsEvents(body);
+    // The payload shape is not documented publicly, so a delivery that matched
+    // nothing gets logged in full — that log is how we learn the real schema.
+    if (result.applied === 0) {
+      console.log("verizon gps webhook: nothing applied", JSON.stringify(body).slice(0, 4000));
+    }
+    res.status(200).json(result);
+  } catch (e) {
+    console.error("verizon gps webhook:", e);
+    // 500, not 200: a transient failure should make Reveal retry the delivery.
+    res.status(500).json({ error: "failed" });
+  }
 }
 
 async function fleet(req, res, action) {
@@ -83,12 +121,15 @@ async function fleet(req, res, action) {
 }
 
 export default async function handler(req, res) {
+  const action = (req.query?.fleet || "").toString().trim();
+  if (action === "webhook") {
+    if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+    return gpsWebhook(req, res);
+  }
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-
-  const action = (req.query?.fleet || "").toString().trim();
   if (action) return fleet(req, res, action);
 
   const q = (req.query?.q || "").toString().trim();
