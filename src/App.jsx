@@ -17,6 +17,7 @@ import { ApArSection } from "./apar.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
+import { selectAll } from "./db.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -4137,107 +4138,107 @@ export default function App() {
   }, [profile, page, isAdmin, can]);
 
   const loadData = useCallback(async () => {
-    const { data, error } = await supabase.from("storages").select("*").order("date_opened", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("storages").select("*").order("date_opened", { ascending: false }));
     if (error) { setError(error.message); setLoading(false); return; }
     setRecords((data || []).filter(notDel));
     setLoading(false);
   }, []);
 
   const loadJobs = useCallback(async () => {
-    const { data, error } = await supabase.from("storage_jobs").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("storage_jobs").select("*").order("created_at", { ascending: false }));
     if (!error) setJobs((data || []).filter(notDel));
   }, []);
 
   const loadBrokers = useCallback(async () => {
-    const { data, error } = await supabase.from("brokers").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("brokers").select("*").order("name", { ascending: true }));
     if (!error) setBrokers((data || []).filter(notDel));
   }, []);
 
   const loadBilling = useCallback(async () => {
-    const { data, error } = await supabase.from("storage_billing").select("*").order("billing_period_end", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("storage_billing").select("*").order("billing_period_end", { ascending: true }));
     if (!error) { setBilling(data || []); setBillingLoaded(true); }
   }, []);
 
   const loadDrivers = useCallback(async () => {
-    const { data, error } = await supabase.from("drivers").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("drivers").select("*").order("name", { ascending: true }));
     if (!error) setDriversList((data || []).filter(notDel));
   }, []);
 
   const loadClosingSheets = useCallback(async () => {
-    const { data, error } = await supabase.from("closing_sheets").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("closing_sheets").select("*").order("created_at", { ascending: false }));
     if (!error) setClosingSheets((data || []).filter(notDel));
   }, []);
 
   const loadTrips = useCallback(async () => {
-    const { data, error } = await supabase.from("trips").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("trips").select("*").order("created_at", { ascending: false }));
     if (!error) setTrips((data || []).filter(notDel));
   }, []);
   const loadTrucks = useCallback(async () => {
-    const { data, error } = await supabase.from("trucks").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("trucks").select("*").order("name", { ascending: true }));
     if (!error) setTrucksList((data || []).filter(notDel));
   }, []);
   const loadTripEvents = useCallback(async () => {
-    const { data, error } = await supabase.from("trip_events").select("*").order("created_at", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("trip_events").select("*").order("created_at", { ascending: true }));
     if (!error) setTripEvents(data || []);
   }, []);
   const loadTripStops = useCallback(async () => {
-    const { data, error } = await supabase.from("trip_stops").select("*").order("stop_order", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("trip_stops").select("*").order("stop_order", { ascending: true }));
     if (!error) setTripStops((data || []).filter(notDel));
   }, []);
   const loadEquipment = useCallback(async () => {
-    const { data, error } = await supabase.from("equipment_items").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("equipment_items").select("*").order("created_at", { ascending: false }));
     if (!error) setEquipmentItems((data || []).filter(notDel));
   }, []);
   const loadExpenses = useCallback(async () => {
-    const { data, error } = await supabase.from("expenses").select("*").order("expense_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("expenses").select("*").order("expense_date", { ascending: false }));
     if (!error) setExpenses((data || []).filter(notDel));
   }, []);
   const loadWorkDays = useCallback(async () => {
-    const { data, error } = await supabase.from("driver_work_days").select("*").order("work_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("driver_work_days").select("*").order("work_date", { ascending: false }));
     if (!error) setWorkDays((data || []).filter(notDel));
   }, []);
   const loadAdjustments = useCallback(async () => {
-    const { data, error } = await supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false }));
     if (!error) setAdjustments((data || []).filter(notDel));
   }, []);
   const loadMaterialItems = useCallback(async () => {
-    const { data, error } = await supabase.from("material_items").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("material_items").select("*").order("name", { ascending: true }));
     if (!error) setMaterialItems((data || []).filter(notDel));
   }, []);
   const loadMaterialMovements = useCallback(async () => {
-    const { data, error } = await supabase.from("material_movements").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("material_movements").select("*").order("created_at", { ascending: false }));
     if (!error) setMaterialMovements((data || []).filter(notDel));
   }, []);
   const loadJobEvents = useCallback(async () => {
-    const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("job_events").select("*").order("created_at", { ascending: true }));
     if (!error) setJobEvents((data || []).filter(notDel));
   }, []);
   const loadExtras = useCallback(async () => {
-    const { data, error } = await supabase.from("job_extras").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("job_extras").select("*").order("created_at", { ascending: false }));
     if (!error) setJobExtras((data || []).filter(notDel));
   }, []);
   const loadEmployees = useCallback(async () => {
-    const { data, error } = await supabase.from("employees").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("employees").select("*").order("name", { ascending: true }));
     if (!error) setEmployees((data || []).filter(notDel));
   }, []);
   const loadPayments = useCallback(async () => {
-    const { data, error } = await supabase.from("payments").select("*").order("payment_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("payments").select("*").order("payment_date", { ascending: false }));
     if (!error) setPayments((data || []).filter(notDel));
   }, []);
   const loadPayAccounts = useCallback(async () => {
-    const { data, error } = await supabase.from("payment_accounts").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("payment_accounts").select("*").order("name", { ascending: true }));
     if (!error) setPayAccounts((data || []).filter(notDel));
   }, []);
   const loadCompanies = useCallback(async () => {
-    const { data, error } = await supabase.from("companies").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("companies").select("*").order("name", { ascending: true }));
     if (!error) setCompanies((data || []).filter(notDel));
   }, []);
   const loadComplianceDocs = useCallback(async () => {
-    const { data, error } = await supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true }));
     if (!error) setComplianceDocs((data || []).filter(notDel));
   }, []);
   const loadClaims = useCallback(async () => {
-    const { data, error } = await supabase.from("claims").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("claims").select("*").order("created_at", { ascending: false }));
     if (!error) setClaims((data || []).filter(notDel));
   }, []);
   const loadClaimNotes = useCallback(async (claimId) => {

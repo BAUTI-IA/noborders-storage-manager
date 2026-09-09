@@ -8,6 +8,7 @@
 // supabase + session and manages its own data + realtime. Pure math lives in
 // src/bankData.js so it's unit-testable with node.
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { selectAll } from "./db.js";
 import {
   SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
@@ -87,17 +88,10 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
   // Full fetch in pages — the reconciliation needs every row, and a fixed
   // limit silently truncated the oldest months once the table grew past it.
   const loadTxns = useCallback(async () => {
-    const PAGE = 1000;
-    const all = [];
-    for (let fromIdx = 0; ; fromIdx += PAGE) {
-      const { data, error } = await supabase.from("bank_transactions").select("*")
-        .order("txn_date", { ascending: false }).order("id", { ascending: false })
-        .range(fromIdx, fromIdx + PAGE - 1);
-      if (error) return;
-      all.push(...(data || []));
-      if (!data || data.length < PAGE) break;
-    }
-    setTxns(all);
+    const { data, error } = await selectAll(() => supabase.from("bank_transactions").select("*")
+      .order("txn_date", { ascending: false }).order("id", { ascending: false }), { tiebreak: null });
+    if (error) return;
+    setTxns(data);
   }, [supabase]);
 
   useEffect(() => { loadAccounts(); loadCats(); loadTxns(); }, [loadAccounts, loadCats, loadTxns]);
