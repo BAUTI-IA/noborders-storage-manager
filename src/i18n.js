@@ -76,6 +76,7 @@ export const I18N_ES = {
   "Back to standard": "Volver al estándar",
   "Base ZIP": "ZIP de la base",
   "Baseline crew size": "Tamaño de la crew base",
+  "Basemap": "Mapa base",
   "Bigger crew speed-up": "Rendimiento de crew más grande",
   "Bill": "Factura",
   "Bill date": "Fecha de la factura",

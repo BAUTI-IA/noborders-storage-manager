@@ -1709,11 +1709,11 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
         m.setPosition(pos); m.setIcon(icon);
       }
       m.setZIndex(isSel ? 10 : 1);
-      maps.event.clearInstanceListeners(m);
+      for (const ev of ["click", "mouseover", "mouseout"]) maps.event.clearListeners(m, ev);
       m.addListener("click", () => onSelectRef.current(isSel ? null : t.id));
       const html = `<div class="tlm-tip">🚛 ${esc(t.name)}<small>${esc(c.l)} · ${esc(timeAgo(t.last_location_at))}</small>${
         t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}</div>`;
-      m.addListener("mouseover", () => { infoRef.current.setContent(html); infoRef.current.open(map, m); });
+      m.addListener("mouseover", () => { infoRef.current.setContent(html); infoRef.current.open({ anchor: m, map }); });
       m.addListener("mouseout", () => infoRef.current.close());
     }
     for (const [id, m] of marksRef.current) {
@@ -14073,6 +14073,18 @@ export default function App() {
           footer={<><Btn onClick={() => setVzDiag(null)}>Close</Btn><Btn primary onClick={runVzDiag}>Check again</Btn></>}>
           <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
             What this account can actually reach right now. The server asks Verizon directly.
+          </div>
+          <div style={{ display:"flex", gap:10, padding:"9px 0", borderBottom:"1px solid #f4f4f4" }}>
+            <span style={{ fontSize:14, lineHeight:1.3 }}>{googleKey ? "✅" : "•"}</span>
+            <div style={{ minWidth:0, flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:"#111" }}>{t("Basemap")}</div>
+              <div style={{ fontSize:11.5, color:"#999", marginTop:2 }}>
+                {googleKey
+                  ? tr("Google Maps", "Google Maps")
+                  : tr("OpenStreetMap — set GOOGLE_MAPS_BROWSER_KEY for Google Maps",
+                       "OpenStreetMap — cargá GOOGLE_MAPS_BROWSER_KEY para usar Google Maps")}
+              </div>
+            </div>
           </div>
           {vzDiag.map(c => {
             const label = VZ_CHECK_LABELS[c.key] || c.key;
