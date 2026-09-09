@@ -1,0 +1,33 @@
+name: CI
+
+# Corre en cada PR y en cada push a main: instala, audita el i18n, corre los
+# tests de matemática pura (scripts/test-*.mjs) y hace el build de producción.
+# Ningún paso necesita secrets ni toca la base.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: i18n coverage (npm run i18n:check)
+        run: npm run i18n:check
+
+      - name: Tests (npm test)
+        run: npm test
+
+      - name: Build (npm run build)
+        run: npm run build

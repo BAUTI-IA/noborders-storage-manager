@@ -1,11 +1,13 @@
 {
   "name": "noborders-storage-manager",
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "test": "node scripts/test-all.mjs",
     "jobs:cleanup": "node scripts/cleanup-old-jobs.mjs",
     "guide:update": "node scripts/update-guide.mjs",
     "guide:pdf": "node scripts/render-guide-pdf.mjs",
@@ -22,6 +24,7 @@
     "@supabase/supabase-js": "^2.39.0",
     "@vercel/functions": "^2.0.0",
     "d3-geo": "^3.1.1",
+    "jszip": "^3.10.1",
     "leaflet": "^1.9.4",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.1.200",
@@ -31,6 +34,7 @@
     "recharts": "^2.15.4"
   },
   "devDependencies": {
+    "@babel/parser": "^7.29.8",
     "@vitejs/plugin-react": "^4.2.0",
     "playwright": "^1.49.0",
     "vite": "^5.0.0"
