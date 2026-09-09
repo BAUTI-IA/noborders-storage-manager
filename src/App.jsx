@@ -7147,6 +7147,10 @@ export default function App() {
   const vzUnlinked = useMemo(
     () => (vzVehicles || []).filter(v => !vzTakenBy[v.number]),
     [vzVehicles, vzTakenBy]);
+  // The other half of the same question: trucks here that nobody linked yet.
+  const vzUnlinkedTrucks = useMemo(
+    () => trucksList.filter(t => !t.verizon_vehicle_id),
+    [trucksList]);
 
   // Asks Verizon, from the server, which of its API products this account can
   // actually reach — so nobody has to go read that off the developer portal.
@@ -10594,11 +10598,39 @@ export default function App() {
                             </div>
                           );
                         })}
-                        {vzUnlinked.length > 0 && (
-                          <div style={{ padding:"10px 14px", fontSize:11.5, color:"#854F0B", background:"#FAEEDA", borderTop:"1px solid #f0e0c0" }}>
-                            {tr(`${vzUnlinked.length} vehicle(s) in Verizon are not linked to any truck here:`,
-                                `${vzUnlinked.length} vehículo(s) de Verizon no están vinculados a ningún truck de acá:`)}{" "}
-                            <span style={{ fontWeight:700 }}>{vzUnlinked.map(v => v.label).join(" · ")}</span>
+                        {verizonOn && vzVehicles && (vzUnlinkedTrucks.length > 0 || vzUnlinked.length > 0) && (
+                          <div style={{ padding:"11px 14px", background:"#FAEEDA", borderTop:"1px solid #f0e0c0" }}>
+                            <div style={{ fontSize:10, fontWeight:700, color:"#854F0B", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6 }}>
+                              Verizon linking
+                            </div>
+                            {vzUnlinkedTrucks.length > 0 && (
+                              <div style={{ marginBottom: vzUnlinked.length ? 8 : 0 }}>
+                                <div style={{ fontSize:11.5, color:"#854F0B", marginBottom:3 }}>
+                                  {tr(`${vzUnlinkedTrucks.length} truck(s) here with no Verizon vehicle — click to link:`,
+                                      `${vzUnlinkedTrucks.length} truck(s) de acá sin vehículo de Verizon — click para vincular:`)}
+                                </div>
+                                <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                                  {vzUnlinkedTrucks.map(t => (
+                                    <button key={t.id} onClick={() => openEditTruck(t)}
+                                      style={{ fontSize:11, fontWeight:600, color:"#854F0B", background:"#fff", border:"1px solid #e8d3a8",
+                                        borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>{t.name}</button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {vzUnlinked.length > 0 && (
+                              <div>
+                                <div style={{ fontSize:11.5, color:"#854F0B", marginBottom:3 }}>
+                                  {tr(`${vzUnlinked.length} vehicle(s) in Verizon with no truck here — add them in Trucks:`,
+                                      `${vzUnlinked.length} vehículo(s) en Verizon sin truck acá — agregalos en Trucks:`)}
+                                </div>
+                                {vzUnlinked.map(v => (
+                                  <div key={v.number} style={{ fontSize:11, color:"#7a5a1e", lineHeight:1.5 }}>
+                                    <strong>{v.number}</strong>{v.name ? ` · ${v.name}` : ""}{v.plate ? ` · ${v.plate}` : ""}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         )}
                         {noLoc.length > 0 && (
