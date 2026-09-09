@@ -242,5 +242,15 @@ const endToEnd = v.summarizeDutyDays(v.normalizeDutyEvents({ Logs: [
 check("raw logbook through to a day's totals",
   endToEnd.length === 1 && endToEnd[0].hours === 9 && endToEnd[0].drivingHours === 8, JSON.stringify(endToEnd));
 
+// ── Position history ─────────────────────────────────────────────────────────
+console.log("\nPosition history");
+check("the same instant in different shapes is one fix",
+  v.sameInstant("2026-09-08T12:00:00Z", "2026-09-08T12:00:00.000+00:00") &&
+  v.sameInstant("2026-09-08T12:00:00.000Z", Date.parse("2026-09-08T12:00:00Z")));
+check("a different instant is a new fix", !v.sameInstant("2026-09-08T12:00:00Z", "2026-09-08T12:05:00Z"));
+check("a missing side is never the same fix",
+  !v.sameInstant(null, "2026-09-08T12:00:00Z") && !v.sameInstant("2026-09-08T12:00:00Z", null) && !v.sameInstant(null, null));
+check("garbage is never the same fix", !v.sameInstant("nope", "2026-09-08T12:00:00Z"));
+
 console.log(failures ? `\n${failures} failure(s)\n` : "\nall passing\n");
 process.exit(failures ? 1 : 0);
