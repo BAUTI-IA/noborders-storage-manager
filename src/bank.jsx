@@ -1186,6 +1186,7 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
   const [to, setTo] = useState(now);
   const [account, setAccount] = useState("");
   const [onlyVerified, setOnlyVerified] = useState(true);
+  const [lens, setLens] = useState("management"); // "management" (Excel) | "gaap"
   const [rpcRows, setRpcRows] = useState(null); // null = RPC unavailable → client fallback
   const [rpcMissing, setRpcMissing] = useState(false);
 
@@ -1206,10 +1207,12 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
   }, [supabase, from, to, account, onlyVerified, txns]);
 
   const st = useMemo(() => rpcRows
-    ? pnlStatementFromRows(rpcRows, { from, to })
-    : bankPnlStatement({ bankTxns: txns, categories: cats, from, to, onlyVerified }),
-  [rpcRows, txns, cats, from, to, onlyVerified]);
+    ? pnlStatementFromRows(rpcRows, { from, to, categories: cats, lens })
+    : bankPnlStatement({ bankTxns: txns, categories: cats, from, to, onlyVerified, lens }),
+  [rpcRows, txns, cats, from, to, onlyVerified, lens]);
   const revenue = st.sections.find(s => s.group === "Revenue");
+  const isGaap = lens === "gaap";
+  const excludedTotal = (st.excluded || []).reduce((sum, e) => sum + e.total, 0);
 
   const tdN = { ...td, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
   const rowCells = (line, style = {}) => (
@@ -1227,6 +1230,19 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
 
   return (
     <div>
+      <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:12 }}>
+        {[["management", "🏢 Management view"], ["gaap", "📘 GAAP view"]].map(([v, l]) => (
+          <button key={v} onClick={() => setLens(v)}
+            style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: lens===v?"#fff":"none", color: lens===v?"#111":"#888", fontWeight: lens===v?600:400, boxShadow: lens===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
+        ))}
+      </div>
+      <div style={{ fontSize:11.5, color:"#999", marginBottom:12, maxWidth:760 }}>
+        {isGaap
+          ? tr("Same transactions, grouped the way an accountant reads them. Truck purchases, owner draws and loan principal leave the statement here: they are balance sheet, not expenses — they are listed at the bottom so you can see where the cash went.",
+               "Los mismos movimientos, agrupados como los lee un contador. Las compras de camiones, los retiros de los dueños y el capital de los préstamos salen del estado: son balance, no gastos — quedan listados abajo para que veas a dónde fue la plata.")
+          : tr("The bookkeeper's Excel grouping: every categorized dollar lands in a line, including what you paid for trucks. This is the view for running the business.",
+               "El agrupamiento del Excel del bookkeeper: cada dólar categorizado cae en una línea, incluido lo que pagaste por camiones. Esta es la vista para manejar el negocio.")}
+      </div>
       <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:14, flexWrap:"wrap" }}>
         <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...inp, width:"auto" }} />
         <span style={{ color:"#bbb" }}>→</span>
@@ -1248,7 +1264,8 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10, marginBottom:16 }}>
         <Tile label="Revenue" value={fmt$(revenue?.total || 0)} color="#3B6D11" />
         {st.gross && <Tile label="Gross Profit" value={fmt$(st.gross.total)} color={st.gross.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={revenue?.total ? `${Math.round(st.gross.total / revenue.total * 100)}${tr("% margin", "% margen")}` : undefined} />}
-        <Tile label="Net Profit" value={fmt$(st.net.total)} color={st.net.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={`${st.count} ${tr("transactions · transfers excluded", "movimientos · transferencias excluidas")}${revenue?.total ? ` · ${Math.round(st.net.total / revenue.total * 100)}${tr("% net margin", "% margen neto")}` : ""}`} />
+        {isGaap && st.operating && <Tile label="Operating Income" value={fmt$(st.operating.total)} color={st.operating.total >= 0 ? "#3B6D11" : "#A32D2D"} />}
+        <Tile label={isGaap ? "Net Income" : "Net Profit"} value={fmt$(st.net.total)} color={st.net.total >= 0 ? "#3B6D11" : "#A32D2D"} sub={`${st.count} ${tr("transactions · transfers excluded", "movimientos · transferencias excluidas")}${revenue?.total ? ` · ${Math.round(st.net.total / revenue.total * 100)}${tr("% net margin", "% margen neto")}` : ""}`} />
       </div>
 
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
@@ -1263,21 +1280,43 @@ function PnlTab({ txns, cats, accounts = [], supabase }) {
           <tbody>
             {st.count === 0 && <tr><td colSpan={st.months.length + 2} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>No transactions in the period{onlyVerified ? " (or nothing verified yet — untick the filter to see what's categorized)" : ""}.</td></tr>}
             {st.sections.map(sec => (
-              <FragmentSection key={sec.group} sec={sec} months={st.months} rowCells={rowCells}
-                gross={sec.group === "Cost of Revenues" ? st.gross : null} subtotalRow={subtotalRow} />
+              <FragmentSection key={sec.group} sec={sec} months={st.months} rowCells={rowCells} subtotalRow={subtotalRow} />
             ))}
-            {st.count > 0 && subtotalRow("NET PROFIT", st.net, { bg: st.net.total >= 0 ? "#EAF3DE" : "#FCEBEB", big: true })}
+            {st.count > 0 && subtotalRow(isGaap ? "NET INCOME" : "NET PROFIT", st.net, { bg: st.net.total >= 0 ? "#EAF3DE" : "#FCEBEB", big: true })}
+            {isGaap && (st.excluded || []).length > 0 && (
+              <>
+                <tr>
+                  <td colSpan={st.months.length + 2} style={{ ...td, fontWeight:700, fontSize:11, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em", paddingTop:18, position:"sticky", left:0, background:"#fff" }}>Not in the income statement · balance sheet</td>
+                </tr>
+                {st.excluded.map(e => (
+                  <tr key={e.name} style={{ borderBottom:"1px solid #f7f7f7", color:"#888" }}>
+                    <td style={{ ...td, whiteSpace:"nowrap", paddingLeft:22, position:"sticky", left:0, background:"#fff", color:"#888" }}>
+                      {e.name} <span style={{ fontSize:10.5, color:"#bbb" }}>· {e.bucket}</span>
+                    </td>
+                    {rowCells(e, { color:"#999" })}
+                  </tr>
+                ))}
+              </>
+            )}
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize:11, color:"#999", marginTop:8 }}>Expenses are shown in parentheses, accounting style. Revenue → (Cost of Revenues) → <b>Gross Profit</b> → rest of the expenses → <b>Net Profit</b>.</div>
+      <div style={{ fontSize:11, color:"#999", marginTop:8 }}>
+        {isGaap
+          ? tr("Expenses are shown in parentheses, accounting style. Revenue → (COGS) → Gross Profit → (operating expenses) → Operating Income → below the line → Net Income.",
+               "Los gastos van entre paréntesis, estilo contable. Revenue → (COGS) → Gross Profit → (gastos operativos) → Operating Income → debajo de la línea → Net Income.")
+          : tr("Expenses are shown in parentheses, accounting style. Revenue → (Cost of Revenues) → Gross Profit → rest of the expenses → Net Profit.",
+               "Los gastos van entre paréntesis, estilo contable. Revenue → (Cost of Revenues) → Gross Profit → resto de los gastos → Net Profit.")}
+        {isGaap && excludedTotal !== 0 && tr(" Balance-sheet movements below are excluded from Net Income: ", " Los movimientos de balance de abajo quedan fuera del Net Income: ") + acct$(excludedTotal) + "."}
+      </div>
     </div>
   );
 }
 
-// One P&L section: header row, one row per category, subtotal; after Cost of
-// Revenues also emits the Gross Profit line.
-function FragmentSection({ sec, months, rowCells, gross, subtotalRow }) {
+// One P&L section: header row, one row per category, its own subtotal, and then
+// whatever running subtotal the statement attached to it (Gross Profit,
+// Operating Income). Which ones exist depends on the lens, so this stays dumb.
+function FragmentSection({ sec, months, rowCells, subtotalRow }) {
   const isRevenue = sec.group === "Revenue";
   return (
     <>
@@ -1291,7 +1330,7 @@ function FragmentSection({ sec, months, rowCells, gross, subtotalRow }) {
         </tr>
       ))}
       {subtotalRow(isRevenue ? "Total Revenue" : `Total ${sec.group}`, sec)}
-      {gross && subtotalRow("GROSS PROFIT", gross, { bg: "#F8FAFC" })}
+      {sec.subtotal && subtotalRow(sec.subtotal.label, sec.subtotal.line, { bg: sec.subtotal.bg })}
     </>
   );
 }
