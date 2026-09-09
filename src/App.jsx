@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -9103,7 +9103,7 @@ export default function App() {
     if (!file) return;
     setZipName(file.name); setZipStatus("Leyendo ZIP...");
     try {
-      const { default: JSZip } = await import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm");
+      const { default: JSZip } = await import("jszip");
       const zip = await JSZip.loadAsync(file);
       let chatFile = Object.keys(zip.files).find(n => /chat.*\.txt$/i.test(n) && !zip.files[n].dir);
       if (!chatFile) chatFile = Object.keys(zip.files).find(n => /\.txt$/i.test(n) && !zip.files[n].dir);
