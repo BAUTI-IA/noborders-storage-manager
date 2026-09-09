@@ -673,6 +673,15 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
   // index makes re-uploads idempotent. The category from the bookkeeper's file
   // is kept as a pre-fill, but the categorize→verify double-check is still done
   // by hand by two different people — no row is ever verified automatically.
+  //
+  // Legacy note: this import used to insert rows straight as 'verified',
+  // stamping categorized_by/verified_by with the same user and timestamp. Those
+  // rows were deliberately LEFT as verified (the rule starts from this change
+  // on), so a bank_transactions row that was never actually double-checked by a
+  // person is still recognizable by that auto-stamp signature:
+  //   source = 'csv_reload'
+  //   and verified_by is not distinct from categorized_by
+  //   and verified_at = categorized_at
   const confirmMasterImport = async () => {
     if (!master?.rows?.length) return;
     setBusy(true); setError("");
