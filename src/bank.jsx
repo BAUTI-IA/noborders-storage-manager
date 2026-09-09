@@ -9,7 +9,7 @@
 // src/bankData.js so it's unit-testable with node.
 import { useState, useMemo, useEffect, useCallback } from "react";
 import {
-  SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
+  SEED_BANK_CATEGORIES, PNL_GROUPS, GAAP_CATEGORIES, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
   parseCsv, mapBankCsv, reconcileBank, bankPnlStatement, pnlStatementFromRows,
 } from "./bankData.js";
@@ -981,13 +981,16 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
   const [editing, setEditing] = useState(null); // row being edited, or null = new
   const [form, setForm] = useState(EMPTY_BANK_CATEGORY);
   const [saving, setSaving] = useState(false);
+  // True once a write comes back complaining about gaap_category → the
+  // setup-bank.mjs migration hasn't been run on this database yet.
+  const [gaapMissing, setGaapMissing] = useState(false);
 
   const usesOf = (name) => txns.filter(t => t.category === name).length;
 
   const openAdd = () => { setEditing(null); setForm(EMPTY_BANK_CATEGORY); setShowModal(true); };
   const openEdit = (c) => {
     setEditing(c);
-    setForm({ name: c.name || "", direction: c.direction || (c.is_transfer ? "" : "out"), pnl_group: c.pnl_group || "", is_transfer: !!c.is_transfer, icon: c.icon || "", active: c.active !== false });
+    setForm({ name: c.name || "", direction: c.direction || (c.is_transfer ? "" : "out"), pnl_group: c.pnl_group || "", gaap_category: c.gaap_category || "", is_transfer: !!c.is_transfer, icon: c.icon || "", active: c.active !== false });
     setShowModal(true);
   };
   const save = async () => {
@@ -999,18 +1002,33 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
       name, icon: form.icon || null, is_transfer: !!form.is_transfer, active: form.active !== false,
       direction: form.is_transfer ? null : (form.direction || "out"),
       pnl_group: (form.is_transfer || form.direction === "in") ? null : (form.pnl_group || null),
+      gaap_category: form.gaap_category || null,
     };
-    let error;
-    if (editing) {
-      ({ error } = await supabase.from("bank_categories").update(payload).eq("id", editing.id));
-      // Rename cascades: transactions store the category NAME.
-      if (!error && editing.name !== name) {
-        await supabase.from("bank_transactions").update({ category: name }).eq("category", editing.name);
-        await supabase.from("bank_transactions").update({ ai_suggested_category: name }).eq("ai_suggested_category", editing.name);
-        onReloadTxns();
+    // The gaap_category column arrives with the setup-bank.mjs migration. If the
+    // front is deployed before that runs, PostgREST rejects the whole write for
+    // the unknown column — so retry once without it instead of blocking every
+    // edit on the migration.
+    const write = async (body) => {
+      const q = editing
+        ? supabase.from("bank_categories").update(body).eq("id", editing.id)
+        : supabase.from("bank_categories").insert({ ...body, sort: 100 + list.length });
+      const { error } = await q;
+      // Retry only while the field is actually still in the body, so a stubborn
+      // error mentioning it can never loop.
+      if (error && "gaap_category" in body && /gaap_category/.test(error.message || "")) {
+        setGaapMissing(true);
+        const { gaap_category, ...rest } = body;
+        return write(rest);
       }
-    } else {
-      ({ error } = await supabase.from("bank_categories").insert({ ...payload, sort: 100 + list.length }));
+      return error;
+    };
+
+    const error = await write(payload);
+    // Rename cascades: transactions store the category NAME.
+    if (editing && !error && editing.name !== name) {
+      await supabase.from("bank_transactions").update({ category: name }).eq("category", editing.name);
+      await supabase.from("bank_transactions").update({ ai_suggested_category: name }).eq("ai_suggested_category", editing.name);
+      onReloadTxns();
     }
     setSaving(false);
     if (error) { window.alert(error.message); return; }
@@ -1028,16 +1046,27 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
       <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>
         These are the same categories and groups from the Bank Flows Excel. You can add new ones or rename — already-categorized transactions update by themselves. Deactivating a category removes it from the selector without touching the history.
       </div>
+      {gaapMissing && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#854F0B" }}>
+          ⚠️ <b>GAAP category</b>
+          <span> is not in the database yet, so it was not saved. Run scripts/setup-bank.mjs once — it adds the column and fills in the classification of the categories that already exist — and save again.</span>
+        </div>
+      )}
+      <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>
+        📘 <b>GAAP category</b>
+        <span> is a second, independent reading of the same category: where an accountant would post it on a standard income statement. It changes nothing in the P&L — the Excel grouping keeps running the business — it is only so the books can be handed to an accountant. Both readings can legitimately disagree: a broker fee is "Broker" for you and "Cost of Goods Sold" for them.</span>
+      </div>
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Category", "Direction", "P&L group", "Transactions", "Active", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Category", "Direction", "P&L group", "GAAP category", "Transactions", "Active", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
           <tbody>
-            {list.length === 0 && <tr><td colSpan={6} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Run the setup-bank.mjs migration to seed the Excel categories.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={7} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Run the setup-bank.mjs migration to seed the Excel categories.</td></tr>}
             {list.map(c => (
               <tr key={c.id} style={{ borderBottom:"1px solid #f7f7f7", opacity: c.active === false ? 0.5 : 1 }}>
                 <td style={{ ...td, fontWeight:600 }}>{c.icon} {c.name}</td>
                 <td style={td}>{c.is_transfer ? "🔁 Transfer" : c.direction === "in" ? "🟢 Income" : "🔴 Expense"}</td>
                 <td style={td}>{groupLabel(c)}</td>
+                <td style={{ ...td, color: c.gaap_category ? "#444" : "#c9c9c9" }}>{c.gaap_category || tr("Not set", "Sin asignar")}</td>
                 <td style={td}>{usesOf(c.name)}</td>
                 <td style={td}>{c.active === false ? "No" : "Yes"}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>
@@ -1074,6 +1103,12 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
               </select>
             </Field>
           )}
+          <Field label="GAAP category (for the accountant)">
+            <select style={inp} value={form.gaap_category} onChange={e => setForm(f => ({ ...f, gaap_category: e.target.value }))}>
+              <option value="">— not set —</option>
+              {GAAP_CATEGORIES.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </Field>
           <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:12 }}>
             <Btn onClick={() => setShowModal(false)}>Cancelar</Btn>
             <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>

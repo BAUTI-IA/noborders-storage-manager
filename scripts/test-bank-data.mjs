@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   parseCsv, mapBankCsv, dedupHash, signedAmount,
   matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl, bankPnlStatement, pnlStatementFromRows,
-  SEED_BANK_CATEGORIES, PNL_GROUPS, catByName, isTransferCat,
+  SEED_BANK_CATEGORIES, PNL_GROUPS, GAAP_CATEGORIES, catByName, isTransferCat, gaapOf,
 } from "../src/bankData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -204,6 +204,27 @@ t("catalog: seed mirrors the Excel taxonomy; transfer detected; PNL groups valid
   assert.ok(isTransferCat([], "Transfer Between Accounts"));
   assert.ok(!isTransferCat([], "Fuel"));
   assert.equal(catByName([], "nope"), null);
+});
+
+t("catalog: every seed category carries a GAAP classification from the closed list", () => {
+  for (const c of SEED_BANK_CATEGORIES) {
+    assert.ok(c.gaap_category, c.name + " has no gaap_category");
+    assert.ok(GAAP_CATEGORIES.includes(c.gaap_category), c.name + " → unknown GAAP category " + c.gaap_category);
+  }
+  assert.equal(new Set(GAAP_CATEGORIES).size, GAAP_CATEGORIES.length, "GAAP_CATEGORIES has duplicates");
+});
+
+t("catalog: the GAAP lens is independent of the Excel pnl_group", () => {
+  // Same category, two readings on purpose: the owner's Type column vs. where
+  // an accountant posts it. If these ever collapse into one field, this fails.
+  assert.equal(catByName([], "Broker").pnl_group, "Broker");
+  assert.equal(gaapOf([], "Broker"), "Cost of Goods Sold");
+  // Owner draws are an expense for the owner but equity for the accountant.
+  assert.equal(catByName([], "Loren Expenses").pnl_group, "Structure Expenses");
+  assert.equal(gaapOf([], "Loren Expenses"), "Owner's Draw / Distribution");
+  // Unclassified / unknown categories resolve to "" rather than throwing.
+  assert.equal(gaapOf([{ name: "Truck Wash", direction: "out" }], "Truck Wash"), "");
+  assert.equal(gaapOf([], "nope"), "");
 });
 
 t("catalog: a live DB catalog (owner-added category) overrides the seed", () => {

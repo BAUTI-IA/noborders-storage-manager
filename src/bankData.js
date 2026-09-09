@@ -23,45 +23,71 @@ import { effectiveBanked, bankedDateOf } from "./bankShared.js";
 //   direction: 'in' | 'out' | null (null = transfer, usable both ways)
 //   pnl_group: the Excel "Type" column — drives the P&L sections
 //   is_transfer: kept for reconciliation but excluded from the P&L
+//   gaap_category: SECOND, INDEPENDENT lens on the same category — where the
+//     accountant would post it on a standard income statement / chart of
+//     accounts. It is purely descriptive today: NOTHING in the P&L math reads
+//     it, so the managerial view (pnl_group, the bookkeeper's Excel) is
+//     untouched. It exists so the books can be handed to a CPA, and because the
+//     two lenses legitimately disagree (a broker fee is "Broker" for the owner
+//     and Cost of Goods Sold for the accountant).
 export const PNL_GROUPS = ["Cost of Revenues", "Production Expenses", "Structure Expenses", "Sales & Marketing Expenses", "Broker", "CapEx"];
+
+// Standard income-statement / chart-of-accounts classifications, in the order
+// they appear on a statement (revenue at the top, balance-sheet and non-P&L
+// buckets last). Kept as a closed list so the CPA export stays consistent.
+export const GAAP_CATEGORIES = [
+  "Revenue",
+  "Other Income",
+  "Cost of Goods Sold",
+  "Selling & Marketing Expense",
+  "General & Administrative Expense",
+  "Depreciation & Amortization",
+  "Interest Expense",
+  "Income Tax Expense",
+  "Other Expense",
+  "Fixed Asset (CapEx)",
+  "Owner's Draw / Distribution",
+  "Loan Principal",
+  "Transfer / Not in P&L",
+];
 export const SEED_BANK_CATEGORIES = [
   // Inflows
-  { name:"Job",    direction:"in", pnl_group:null, is_transfer:false, icon:"💰", sort:1 },
-  { name:"Refund", direction:"in", pnl_group:null, is_transfer:false, icon:"↩️", sort:2 },
+  { name:"Job",    direction:"in", pnl_group:null, is_transfer:false, icon:"💰", gaap_category:"Revenue", sort:1 },
+  { name:"Refund", direction:"in", pnl_group:null, is_transfer:false, icon:"↩️", gaap_category:"Other Income", sort:2 },
   // Outflows · Cost of Revenues
-  { name:"Hotels",              direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🏨", sort:10 },
-  { name:"Fuel",                direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"⛽", sort:11 },
-  { name:"Salaries - Employees", direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🧑‍✈️", sort:12 },
-  { name:"Salaries - Helpers",  direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"💪", sort:13 },
-  { name:"Toll",                direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🛣️", sort:14 },
-  { name:"Truck Repair",        direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🔧", sort:15 },
-  { name:"Packaging",           direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"📦", sort:16 },
-  { name:"Commissions",         direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"📈", sort:17 },
-  { name:"Claims",              direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"⚠️", sort:18 },
+  { name:"Hotels",              direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🏨", gaap_category:"Cost of Goods Sold", sort:10 },
+  { name:"Fuel",                direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"⛽", gaap_category:"Cost of Goods Sold", sort:11 },
+  { name:"Salaries - Employees", direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🧑‍✈️", gaap_category:"Cost of Goods Sold", sort:12 },
+  { name:"Salaries - Helpers",  direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"💪", gaap_category:"Cost of Goods Sold", sort:13 },
+  { name:"Toll",                direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🛣️", gaap_category:"Cost of Goods Sold", sort:14 },
+  { name:"Truck Repair",        direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"🔧", gaap_category:"Cost of Goods Sold", sort:15 },
+  { name:"Packaging",           direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"📦", gaap_category:"Cost of Goods Sold", sort:16 },
+  { name:"Commissions",         direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"📈", gaap_category:"Selling & Marketing Expense", sort:17 },
+  { name:"Claims",              direction:"out", pnl_group:"Cost of Revenues", is_transfer:false, icon:"⚠️", gaap_category:"Cost of Goods Sold", sort:18 },
   // Outflows · Production Expenses
-  { name:"Storage",             direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🏬", sort:20 },
-  { name:"Truck Licensing Fees", direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"📋", sort:21 },
-  { name:"Truck Rental",        direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🚛", sort:22 },
-  { name:"Truck Maintenance",   direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🛠️", sort:23 },
-  { name:"Truck Insurance",     direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🛡️", sort:24 },
-  { name:"Truck Utilities",     direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"💡", sort:25 },
+  { name:"Storage",             direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🏬", gaap_category:"Cost of Goods Sold", sort:20 },
+  { name:"Truck Licensing Fees", direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"📋", gaap_category:"Cost of Goods Sold", sort:21 },
+  { name:"Truck Rental",        direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🚛", gaap_category:"Cost of Goods Sold", sort:22 },
+  { name:"Truck Maintenance",   direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🛠️", gaap_category:"Cost of Goods Sold", sort:23 },
+  { name:"Truck Insurance",     direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"🛡️", gaap_category:"Cost of Goods Sold", sort:24 },
+  { name:"Truck Utilities",     direction:"out", pnl_group:"Production Expenses", is_transfer:false, icon:"💡", gaap_category:"Cost of Goods Sold", sort:25 },
   // Outflows · Structure Expenses
-  { name:"Fees",                direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🏦", sort:30 },
-  { name:"Software Licenses",   direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"💻", sort:31 },
-  { name:"Ground Transportation", direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚕", sort:32 },
-  { name:"Airfare",             direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"✈️", sort:33 },
-  { name:"Car Rental",          direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚗", sort:34 },
-  { name:"Office Supplies",     direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🖇️", sort:35 },
-  { name:"Loren Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", sort:36 },
-  { name:"Bauti Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", sort:37 },
-  { name:"Taxes",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🧾", sort:38 },
-  { name:"Fines",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚨", sort:39 },
-  { name:"Other",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"💵", sort:40 },
+  { name:"Fees",                direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🏦", gaap_category:"General & Administrative Expense", sort:30 },
+  { name:"Software Licenses",   direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"💻", gaap_category:"General & Administrative Expense", sort:31 },
+  { name:"Ground Transportation", direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚕", gaap_category:"General & Administrative Expense", sort:32 },
+  { name:"Airfare",             direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"✈️", gaap_category:"General & Administrative Expense", sort:33 },
+  { name:"Car Rental",          direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚗", gaap_category:"General & Administrative Expense", sort:34 },
+  { name:"Office Supplies",     direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🖇️", gaap_category:"General & Administrative Expense", sort:35 },
+  { name:"Loren Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", gaap_category:"Owner's Draw / Distribution", sort:36 },
+  { name:"Bauti Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", gaap_category:"Owner's Draw / Distribution", sort:37 },
+  { name:"Taxes",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🧾", gaap_category:"Income Tax Expense", sort:38 },
+  { name:"Fines",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚨", gaap_category:"Other Expense", sort:39 },
+  { name:"Other",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"💵", gaap_category:"General & Administrative Expense", sort:40 },
   // Outflows · Broker / Sales & Marketing
-  { name:"Broker",              direction:"out", pnl_group:"Broker", is_transfer:false, icon:"🤝", sort:50 },
-  { name:"Marketing",           direction:"out", pnl_group:"Sales & Marketing Expenses", is_transfer:false, icon:"📣", sort:51 },
+  { name:"Broker",              direction:"out", pnl_group:"Broker", is_transfer:false, icon:"🤝", gaap_category:"Cost of Goods Sold", sort:50 },
+  { name:"Marketing",           direction:"out", pnl_group:"Sales & Marketing Expenses", is_transfer:false, icon:"📣", gaap_category:"Selling & Marketing Expense", sort:51 },
   // Transfers (both directions; excluded from P&L and reconciliation)
-  { name:"Transfer Between Accounts", direction:null, pnl_group:null, is_transfer:true, icon:"🔁", sort:90 },
+  { name:"Transfer Between Accounts", direction:null, pnl_group:null, is_transfer:true, icon:"🔁", gaap_category:"Transfer / Not in P&L", sort:90 },
 ];
 
 // Category helpers take the live catalog (rows of bank_categories) so they see
@@ -70,6 +96,9 @@ export const SEED_BANK_CATEGORIES = [
 export const catByName = (categories, name) =>
   (categories?.length ? categories : SEED_BANK_CATEGORIES).find(c => c.name === name) || null;
 export const isTransferCat = (categories, name) => !!catByName(categories, name)?.is_transfer;
+// The category's standard-accounting classification, "" when nobody set it yet
+// (owner-added categories start empty until someone picks one).
+export const gaapOf = (categories, name) => catByName(categories, name)?.gaap_category || "";
 
 export const BANK_STATUS = {
   unreviewed: { l:"Unreviewed", bg:"#FEF3C7", text:"#92760B" },
@@ -81,7 +110,7 @@ export const BANK_STATUS = {
 export const PAYMENT_METHODS_BANK = ["Zelle", "Venmo", "Cash Deposit", "Money Order", "Cashier's Check", "Personal Check", "Official Check", "Online Transfer", "Card", "Debit", "Credit", "Check", "Transfer", "Other"];
 
 export const EMPTY_BANK_ACCOUNT = { name:"", bank_name:"", account_last4:"", type:"checking", currency:"USD", opening_balance:"", opening_date:"", notes:"" };
-export const EMPTY_BANK_CATEGORY = { name:"", direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"", active:true };
+export const EMPTY_BANK_CATEGORY = { name:"", direction:"out", pnl_group:"Structure Expenses", gaap_category:"", is_transfer:false, icon:"", active:true };
 
 // ── Normalization / dedup ────────────────────────────────────────────────────
 export const normDesc = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
