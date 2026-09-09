@@ -4,6 +4,7 @@
 // with an optional written response. Tables: suggestions, suggestion_votes.
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { tr } from "./i18n.js";
+import { selectAll } from "./db.js";
 
 // Shown in the setup banner when the tables don't exist yet.
 // Keep in sync with scripts/setup-suggestions.mjs (the one-time migration).
@@ -88,7 +89,7 @@ export function SuggestionsSection({ supabase, session, profile, isAdmin = false
   const isMissingErr = (error) => error && (error.code === "42P01" || /suggestion/.test(error.message || ""));
 
   const load = useCallback(async () => {
-    const { data, error } = await supabase.from("suggestions").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("suggestions").select("*").order("created_at", { ascending: false }));
     if (isMissingErr(error)) { setMissing(true); setLoading(false); return; }
     setMissing(false);
     setRows(data || []);

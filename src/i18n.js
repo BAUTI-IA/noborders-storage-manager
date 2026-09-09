@@ -635,6 +635,7 @@ export const I18N_ES = {
   "Pads returned (post-delivery)": "Pads devueltos (post-delivery)",
   "Password must be at least 8 characters.": "La contraseña debe tener al menos 8 caracteres.",
   "Password updated.": "Contraseña actualizada.",
+  "Partial": "Parcial",
   "Passwords do not match.": "Las contraseñas no coinciden.",
   "Payment date": "Fecha de pago",
   "Payment due date": "Vencimiento de pago",

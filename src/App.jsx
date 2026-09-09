@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -17,6 +17,8 @@ import { ApArSection } from "./apar.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
+import { selectAll } from "./db.js";
+import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry } from "./appData.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -48,7 +50,6 @@ create policy "storage_jobs_auth_all" on public.storage_jobs
   for all to authenticated using (true) with check (true);
 do $$ begin alter publication supabase_realtime add table public.storage_jobs; exception when others then null; end $$;`;
 
-const today = () => new Date().toISOString().slice(0, 10);
 
 // A storage = a physical unit (fixed: company, location, unit, gate code, account).
 // Jobs (customer, job number, driver, dates, notes) live in storage_jobs as history.
@@ -81,8 +82,9 @@ function TripBadge({ status }) {
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
 }
 const TRIP_ACTIVE = (s) => s === "loading" || s === "in_transit";
-// Expense form constants (EMPTY_EXPENSE, categories, statuses, material forms)
-// live in expenses.jsx — one copy shared by the page UI and App.jsx state.
+// Field Expenses form constants (EMPTY_EXPENSE, categories, statuses, driver
+// adjustments) live in expenses.jsx — one copy shared by the page UI and
+// App.jsx state.
 
 // ── Extras & Commissions ──
 const EXTRA_TYPES = [
@@ -103,31 +105,6 @@ const GEN_BY = [
 const genByLabel = (v) => GEN_BY.find(g => g.v === v)?.l || v;
 // Long carry / stairs are always driver-only (driver 50% / company 50%).
 const EXTRA_LOCKED_DRIVER = (t) => t === "long_carry" || t === "stairs";
-// Commission % auto-fill rules. Returns { driver, rep } percentages; always editable after.
-function commissionDefaults(extraType, generatedBy) {
-  if (extraType === "long_carry" || extraType === "stairs") return { driver:50, rep:0 };
-  if (extraType === "shuttle") {
-    if (generatedBy === "driver_only") return { driver:10, rep:0 };
-    if (generatedBy === "driver_and_rep") return { driver:7, rep:3 };
-    if (generatedBy === "rep_only") return { driver:0, rep:5 };
-  }
-  // extra_cf, packing, flight_charge, other
-  if (generatedBy === "driver_only") return { driver:10, rep:0 };
-  if (generatedBy === "driver_and_rep") return { driver:7, rep:3 };
-  if (generatedBy === "rep_only") return { driver:0, rep:10 };
-  return { driver:0, rep:0 };
-}
-// Extra CF math: CF×rate subtotal, fuel surcharge, total, and the commission base.
-function extraCfCalc(o) {
-  const cfCount = numv(o.extra_cf_count), cfRate = numv(o.extra_cf_rate);
-  const cfSub = cfCount * cfRate;
-  const fuelPct = numv(o.fuel_surcharge_pct);
-  const fuelAmt = cfSub * fuelPct / 100;
-  const total = cfSub + fuelAmt;
-  const commissionBase = o.commission_base === "without_fuel" ? "without_fuel" : "with_fuel";
-  const base = commissionBase === "without_fuel" ? cfSub : total;
-  return { cfCount, cfRate, cfSub, fuelPct, fuelAmt, total, commissionBase, base };
-}
 const EMPTY_EMPLOYEE = { name:"", role:"", phone:"", email:"", active:true };
 
 // One row of the per-job extras matrix. A row is "active" when an extra exists for
@@ -230,36 +207,6 @@ function PaymentMethodSelect({ value, onChange, style }) {
     </select>
   );
 }
-// Collection status for a BOL job: complete / partial / pending.
-function collectionStatus(j) {
-  const bal = numv(j.bol_balance), col = numv(j.bol_collected);
-  if (bal > 0 && col >= bal) return { key:"complete", l:"Collected", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" };
-  if (col > 0) return { key:"partial", l:"Parcial", bg:"#FEF3C7", text:"#92760B", dot:"#EAB308" };
-  return { key:"pending", l:"Pending", bg:"#FCEBEB", text:"#A32D2D", dot:"#E24B4A" };
-}
-// Missing pads for a single job (received minus returned, floored at 0).
-const jobPadsMissing = (j) => Math.max(0, numv(j.pads_received) - numv(j.pads_returned));
-// All settlement math for a closing sheet given its (deduped-by-job) job rows.
-// Pads are now tallied per job (received/returned), not from the sheet header.
-function sheetCalc(sheet, jobsIn) {
-  let carrierFee = 0, bolBalance = 0, bolCollected = 0, totalCf = 0, padsSent = 0, padsReturned = 0, padsMissing = 0;
-  for (const j of jobsIn) {
-    const cf = parseCf(j.volume);
-    totalCf += cf;
-    carrierFee += cf * numv(j.carrier_rate_per_cf);
-    bolBalance += numv(j.bol_balance);
-    bolCollected += numv(j.bol_collected);
-    padsSent += numv(j.pads_received);
-    padsReturned += numv(j.pads_returned);
-    padsMissing += jobPadsMissing(j);
-  }
-  const padsCharge = padsMissing * (sheet?.charge_per_pad != null ? numv(sheet.charge_per_pad) : 7);
-  const deductions = numv(sheet?.trip_cost) + numv(sheet?.labor_charges) + numv(sheet?.other_fees) + padsCharge;
-  const netCarrier = carrierFee - deductions;       // what the broker owes us
-  const pending = Math.max(0, bolBalance - bolCollected);
-  const net = netCarrier - bolCollected;            // >0 broker owes us, <0 we owe broker
-  return { carrierFee, bolBalance, bolCollected, totalCf, padsSent, padsReturned, padsMissing, padsCharge, deductions, netCarrier, pending, net, jobCount: jobsIn.length };
-}
 // ── Payments module: money in, who holds it, what's banked ──
 const EMPTY_PAY_ACCOUNT = { name:"", bank_name:"", account_type:"", account_last4:"", notes:"", active:true };
 const PAY_CONCEPTS = [
@@ -338,18 +285,6 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
     </div>
   );
 }
-// Cash, check and money order are physically held; everything else is digital.
-// (PHYSICAL_METHODS/isPhysical/isDigitalMethod live in analyticsData.js — one copy.)
-const paymentNet = (p) => numv(p.amount) - numv(p.discount);
-// Whether a payment counts as banked/deposited. Digital methods are auto-banked
-// (legacy rows may still have banked = null), so they always count as banked;
-// physical cash/checks count only when explicitly marked banked = true. A null
-// banked on a physical payment is therefore treated as "in circulation".
-const effectiveBanked = (p) => isDigitalMethod(p.method) ? true : p.banked === true;
-// Deposit date used for the "Deposited this month" window. Falls back to the
-// received/payment date for digital rows that were auto-banked without a date.
-const bankedDateOf = (p) => p.banked_date || (isDigitalMethod(p.method) ? (p.received_date || p.payment_date || "") : "");
-const daysSince = (dateStr) => { if (!dateStr) return 0; const d = new Date(dateStr + "T00:00:00"); return Math.floor((Date.now() - d.getTime()) / 86400000); };
 const EMPTY_PAYMENT = {
   job_id:"", payment_date:"", amount:"", concept:"job", method:"cash", method_id:"", check_type:"",
   discount:"", discount_reason:"", received:false, received_date:"", received_by:"", cash_with_whom:"",
@@ -384,15 +319,6 @@ const DOC_GRID = {
   driver:  ["cdl", "medical_card", "mvr", "drug_test", "background_check", "other"],
 };
 const ENTITY_LABELS = { company: "Company", truck: "Truck", driver: "Driver" };
-// Auto status from expiry date: expired / expiring_soon (≤30d) / active / none.
-function docStatus(doc) {
-  if (!doc || !doc.expiry_date) return "none";
-  const td = today();
-  if (doc.expiry_date < td) return "expired";
-  if (doc.expiry_date <= addDaysStr(td, 30)) return "expiring_soon";
-  return "active";
-}
-const docDaysToExpiry = (doc) => doc?.expiry_date ? Math.round((new Date(doc.expiry_date + "T00:00:00") - new Date(today() + "T00:00:00")) / 86400000) : null;
 const DOC_STATUS_META = {
   active:        { l:"Up to date", bg:"#EAF3DE", text:"#3B6D11", dot:"#639922" },
   expiring_soon: { l:"Expiring soon", bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" },
@@ -497,9 +423,7 @@ function AuditInfo({ rec }) {
 // Payment due dates. If payment_due_date isn't set, derive it from date_opened
 // + 30 days, rolled forward in 30-day steps until it lands on/after today.
 const ONE_DAY = 86400000;
-const fmtDateLocal = (d) => d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}` : null;
 const startOfToday = () => { const d = new Date(); d.setHours(0,0,0,0); return d; };
-const addDaysStr = (dateStr, n) => { const d = new Date(dateStr + "T00:00:00"); d.setDate(d.getDate() + n); return fmtDateLocal(d); };
 function paymentDueDate(r) {
   if (!r) return null;
   if (r.payment_due_date) return new Date(r.payment_due_date + "T00:00:00");
@@ -981,8 +905,10 @@ create policy "crm_settings_update" on public.crm_settings for update to authent
 
 // Per-driver expense tracking: every cost (fuel, hotels, materials, tolls…) linked
 // to driver/truck/trip/job, with bank-vs-driver-cash source so cash taken from
-// customer collections reconciles against the "in circulation" money. Also the
-// per-day driver pay log and the materials issue/return ledger (theft control).
+// customer collections reconciles against the "in circulation" money.
+// driver_work_days and the material_items/material_movements ledger are still
+// created here and still read (worked days feed the driver P&L and AP/AR), but
+// their UI was removed — nobody was loading them. See the Field Expenses page.
 // job_number (not just job_id) so aggregation dedupes by jobKey like everything else.
 const EXPENSES_SQL = `create table if not exists public.expenses (
   id bigint generated always as identity primary key,
@@ -4129,99 +4055,99 @@ export default function App() {
   }, [profile, page, isAdmin, can]);
 
   const loadData = useCallback(async () => {
-    const { data, error } = await supabase.from("storages").select("*").order("date_opened", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("storages").select("*").order("date_opened", { ascending: false }));
     if (error) { setError(error.message); setLoading(false); return; }
     setRecords((data || []).filter(notDel));
     setLoading(false);
   }, []);
 
   const loadJobs = useCallback(async () => {
-    const { data, error } = await supabase.from("storage_jobs").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("storage_jobs").select("*").order("created_at", { ascending: false }));
     if (!error) setJobs((data || []).filter(notDel));
   }, []);
 
   const loadBrokers = useCallback(async () => {
-    const { data, error } = await supabase.from("brokers").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("brokers").select("*").order("name", { ascending: true }));
     if (!error) setBrokers((data || []).filter(notDel));
   }, []);
 
   const loadBilling = useCallback(async () => {
-    const { data, error } = await supabase.from("storage_billing").select("*").order("billing_period_end", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("storage_billing").select("*").order("billing_period_end", { ascending: true }));
     if (!error) { setBilling(data || []); setBillingLoaded(true); }
   }, []);
 
   const loadDrivers = useCallback(async () => {
-    const { data, error } = await supabase.from("drivers").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("drivers").select("*").order("name", { ascending: true }));
     if (!error) setDriversList((data || []).filter(notDel));
   }, []);
 
   const loadClosingSheets = useCallback(async () => {
-    const { data, error } = await supabase.from("closing_sheets").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("closing_sheets").select("*").order("created_at", { ascending: false }));
     if (!error) setClosingSheets((data || []).filter(notDel));
   }, []);
 
   const loadTrips = useCallback(async () => {
-    const { data, error } = await supabase.from("trips").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("trips").select("*").order("created_at", { ascending: false }));
     if (!error) setTrips((data || []).filter(notDel));
   }, []);
   const loadTrucks = useCallback(async () => {
-    const { data, error } = await supabase.from("trucks").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("trucks").select("*").order("name", { ascending: true }));
     if (!error) setTrucksList((data || []).filter(notDel));
   }, []);
   const loadTripEvents = useCallback(async () => {
-    const { data, error } = await supabase.from("trip_events").select("*").order("created_at", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("trip_events").select("*").order("created_at", { ascending: true }));
     if (!error) setTripEvents(data || []);
   }, []);
   const loadTripStops = useCallback(async () => {
-    const { data, error } = await supabase.from("trip_stops").select("*").order("stop_order", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("trip_stops").select("*").order("stop_order", { ascending: true }));
     if (!error) setTripStops((data || []).filter(notDel));
   }, []);
   const loadEquipment = useCallback(async () => {
-    const { data, error } = await supabase.from("equipment_items").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("equipment_items").select("*").order("created_at", { ascending: false }));
     if (!error) setEquipmentItems((data || []).filter(notDel));
   }, []);
   const loadExpenses = useCallback(async () => {
-    const { data, error } = await supabase.from("expenses").select("*").order("expense_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("expenses").select("*").order("expense_date", { ascending: false }));
     if (!error) setExpenses((data || []).filter(notDel));
   }, []);
   const loadWorkDays = useCallback(async () => {
-    const { data, error } = await supabase.from("driver_work_days").select("*").order("work_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("driver_work_days").select("*").order("work_date", { ascending: false }));
     if (!error) setWorkDays((data || []).filter(notDel));
   }, []);
   const loadAdjustments = useCallback(async () => {
-    const { data, error } = await supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false }));
     if (!error) setAdjustments((data || []).filter(notDel));
   }, []);
   const loadJobEvents = useCallback(async () => {
-    const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("job_events").select("*").order("created_at", { ascending: true }));
     if (!error) setJobEvents((data || []).filter(notDel));
   }, []);
   const loadExtras = useCallback(async () => {
-    const { data, error } = await supabase.from("job_extras").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("job_extras").select("*").order("created_at", { ascending: false }));
     if (!error) setJobExtras((data || []).filter(notDel));
   }, []);
   const loadEmployees = useCallback(async () => {
-    const { data, error } = await supabase.from("employees").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("employees").select("*").order("name", { ascending: true }));
     if (!error) setEmployees((data || []).filter(notDel));
   }, []);
   const loadPayments = useCallback(async () => {
-    const { data, error } = await supabase.from("payments").select("*").order("payment_date", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("payments").select("*").order("payment_date", { ascending: false }));
     if (!error) setPayments((data || []).filter(notDel));
   }, []);
   const loadPayAccounts = useCallback(async () => {
-    const { data, error } = await supabase.from("payment_accounts").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("payment_accounts").select("*").order("name", { ascending: true }));
     if (!error) setPayAccounts((data || []).filter(notDel));
   }, []);
   const loadCompanies = useCallback(async () => {
-    const { data, error } = await supabase.from("companies").select("*").order("name", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("companies").select("*").order("name", { ascending: true }));
     if (!error) setCompanies((data || []).filter(notDel));
   }, []);
   const loadComplianceDocs = useCallback(async () => {
-    const { data, error } = await supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("compliance_documents").select("*").order("expiry_date", { ascending: true }));
     if (!error) setComplianceDocs((data || []).filter(notDel));
   }, []);
   const loadClaims = useCallback(async () => {
-    const { data, error } = await supabase.from("claims").select("*").order("created_at", { ascending: false });
+    const { data, error } = await selectAll(() => supabase.from("claims").select("*").order("created_at", { ascending: false }));
     if (!error) setClaims((data || []).filter(notDel));
   }, []);
   const loadClaimNotes = useCallback(async (claimId) => {
@@ -8993,7 +8919,7 @@ export default function App() {
     if (!file) return;
     setZipName(file.name); setZipStatus("Leyendo ZIP...");
     try {
-      const { default: JSZip } = await import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm");
+      const { default: JSZip } = await import("jszip");
       const zip = await JSZip.loadAsync(file);
       let chatFile = Object.keys(zip.files).find(n => /chat.*\.txt$/i.test(n) && !zip.files[n].dir);
       if (!chatFile) chatFile = Object.keys(zip.files).find(n => /\.txt$/i.test(n) && !zip.files[n].dir);
@@ -11819,7 +11745,7 @@ export default function App() {
           urgentPayments={urgentPayments} faddStats={faddStats}
           brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
           expenses={expenses} workDays={workDays} adjustments={adjustments} expensesMissing={expensesMissing}
-          lang={lang}
+          lang={lang} session={session}
         />
       )}
 
