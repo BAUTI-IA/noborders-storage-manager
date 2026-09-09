@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "i18n:check": "node scripts/check-i18n.mjs",
     "test": "node scripts/test-all.mjs",
+    "test:app": "node scripts/test-app-data.mjs",
     "jobs:cleanup": "node scripts/cleanup-old-jobs.mjs",
     "guide:update": "node scripts/update-guide.mjs",
     "guide:pdf": "node scripts/render-guide-pdf.mjs",
