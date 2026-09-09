@@ -7,6 +7,7 @@ import { BolSection } from "./bol.jsx";
 import { MessagesSection, notifyUser } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
+import { ReportsSection } from "./reports.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, computeDriverPnl } from "./analyticsData.js";
@@ -3076,6 +3077,7 @@ const NAV = [
   { section:"Business", items:[
     { id:"compliance", label:"Legal & Compliance", icon:"📋" },
     { id:"analytics", label:"Analytics", icon:"📊" },
+    { id:"reports", label:"Reports", icon:"📈" },
     { id:"suggestions", label:"Suggestions", icon:"💡" },
     { id:"bol", label:"BOL", icon:"📄" },
     { id:"trash", label:"Trash / History", icon:"🗑️" },
@@ -3145,6 +3147,7 @@ const PAGE_META = {
   compliance:  { title:"Legal & Compliance", sub:"Companies, documents and expirations" },
   claims:      { title:"Claims & Incidents", sub:"Damage, theft and customer claims per job" },
   analytics:   { title:"Analytics", sub:"AI metrics and recommendations" },
+  reports: { title:"Reports", sub:"What the trucks did against what payroll paid" },
   suggestions: { title:"Suggestions", sub:"Employee feedback and improvement ideas" },
   users:       { title:"Users", sub:"Team members, roles and permissions" },
   bol:         { title:"BOL", sub:"Bill of Lading templates and generation" },
@@ -9147,6 +9150,7 @@ export default function App() {
       {page === "messages" && can("messages","view") && <MessagesSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} onlineIds={onlineIds} onUnreadTotal={setChatUnread} />}
 
       {/* ───────────────────────── SUGGESTIONS (employee feedback) ───────────────────────── */}
+      {page === "reports" && <ReportsSection supabase={supabase} session={session} />}
       {page === "suggestions" && <SuggestionsSection supabase={supabase} session={session} profile={profile} isAdmin={isAdmin} />}
 
       {/* ───────────────────────── JOB CALCULATOR (take it or leave it) ───────────────────────── */}
