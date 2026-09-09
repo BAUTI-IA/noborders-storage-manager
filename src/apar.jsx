@@ -26,6 +26,7 @@ import { numv, dedupeJobs, isPhysical } from "./analyticsData.js";
 import { effectiveBanked } from "./bankShared.js";
 import { paymentNet } from "./paymentAlloc.js";
 import { tr, t } from "./i18n.js";
+import { selectAll } from "./db.js";
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
@@ -134,8 +135,8 @@ export function ApArSection({
 
   // ── Data + realtime ────────────────────────────────────────────────────────
   const loadBills = useCallback(async () => {
-    const { data, error } = await supabase.from("ap_bills").select("*")
-      .order("due_date", { ascending: true }).order("id", { ascending: true });
+    const { data, error } = await selectAll(() => supabase.from("ap_bills").select("*")
+      .order("due_date", { ascending: true }).order("id", { ascending: true }), { tiebreak: null });
     if (error) { if (/does not exist|relation/i.test(error.message)) setMissing(true); return; }
     setMissing(false);
     setBills((data || []).filter(r => !r.deleted_at));
