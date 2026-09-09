@@ -2337,7 +2337,7 @@ const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid
 // be linked before the roster loads, or with Verizon off entirely — but offers
 // the real Reveal fleet as a filterable list instead of the browser's datalist,
 // which renders differently in every browser and can't show two lines per row.
-function VehiclePicker({ value, onChange, options, placeholder }) {
+function VehiclePicker({ value, onChange, options, placeholder, takenBy = {}, selfName }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
   const wrapRef = useRef();
@@ -2395,6 +2395,13 @@ function VehiclePicker({ value, onChange, options, placeholder }) {
                   <div style={{ fontSize:11, color:"#999", marginTop:2 }}>
                     {o.name}{o.name && o.plate ? " · " : ""}
                     {o.plate && <span style={{ fontFamily:"monospace" }}>{o.plate}</span>}
+                  </div>
+                )}
+                {/* Two trucks pointing at one vehicle would have them both track
+                    the same GPS, which is silent and very confusing. */}
+                {takenBy[o.number] && takenBy[o.number] !== selfName && (
+                  <div style={{ fontSize:10.5, color:"#B45309", marginTop:2 }}>
+                    {tr(`Already linked to ${takenBy[o.number]}`, `Ya está vinculado a ${takenBy[o.number]}`)}
                   </div>
                 )}
               </div>
@@ -7129,6 +7136,18 @@ export default function App() {
     return () => { alive = false; };
   }, []);
 
+  const vzTakenBy = useMemo(() => {
+    const m = {};
+    for (const t of trucksList) if (t.verizon_vehicle_id) m[String(t.verizon_vehicle_id)] = t.name;
+    return m;
+  }, [trucksList]);
+
+  // Vehicles Verizon reports that no truck in the CRM is linked to. These are
+  // trucks the operation is paying to track and cannot see on this map.
+  const vzUnlinked = useMemo(
+    () => (vzVehicles || []).filter(v => !vzTakenBy[v.number]),
+    [vzVehicles, vzTakenBy]);
+
   // Asks Verizon, from the server, which of its API products this account can
   // actually reach — so nobody has to go read that off the developer portal.
   const runVzDiag = useCallback(async () => {
@@ -7147,14 +7166,15 @@ export default function App() {
   // Verizon field can offer the real list instead of asking somebody to copy
   // vehicle numbers out of Reveal by hand.
   useEffect(() => {
-    if (!showTruckModal || !verizonOn || vzVehicles || !session?.access_token) return;
+    const wantsRoster = showTruckModal || (page === "trips" && tripsView === "live");
+    if (!wantsRoster || !verizonOn || vzVehicles || !session?.access_token) return;
     let alive = true;
     fetch("/api/geocode?fleet=vehicles", { headers: { Authorization: "Bearer " + session.access_token } })
       .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
       .then((d) => { if (alive) { setVzVehicles(d.vehicles || []); setVzVehiclesErr(null); } })
       .catch((e) => { if (alive) setVzVehiclesErr(e?.message || "failed"); });
     return () => { alive = false; };
-  }, [showTruckModal, verizonOn, vzVehicles, session]);
+  }, [showTruckModal, page, tripsView, verizonOn, vzVehicles, session]);
 
   // Poll only while somebody is actually looking at the map. Verizon asks for no
   // more than one location poll every 3–5 minutes, so 5 stays well inside it.
@@ -10574,6 +10594,13 @@ export default function App() {
                             </div>
                           );
                         })}
+                        {vzUnlinked.length > 0 && (
+                          <div style={{ padding:"10px 14px", fontSize:11.5, color:"#854F0B", background:"#FAEEDA", borderTop:"1px solid #f0e0c0" }}>
+                            {tr(`${vzUnlinked.length} vehicle(s) in Verizon are not linked to any truck here:`,
+                                `${vzUnlinked.length} vehículo(s) de Verizon no están vinculados a ningún truck de acá:`)}{" "}
+                            <span style={{ fontWeight:700 }}>{vzUnlinked.map(v => v.label).join(" · ")}</span>
+                          </div>
+                        )}
                         {noLoc.length > 0 && (
                           <div style={{ padding:"10px 14px", fontSize:11.5, color:"#bbb", borderTop:"1px solid #f4f4f4" }}>
                             {noLoc.length} truck(s) with no location set{noLoc.length ? ": " : ""}
@@ -13993,6 +14020,7 @@ export default function App() {
           <SectionLabel>Live tracking</SectionLabel>
           <Field label="Verizon vehicle number" full>
             <VehiclePicker value={truckForm.verizon_vehicle_id} options={vzVehicles}
+              takenBy={vzTakenBy} selfName={truckForm.name}
               onChange={val => setTruckForm(f => ({...f, verizon_vehicle_id:val}))}
               placeholder="As it appears in Reveal" />
           </Field>
