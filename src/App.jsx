@@ -1510,13 +1510,13 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef(new Map());   // truck id → L.Marker
-  const fittedRef = useRef(false);
   // Held in a ref so the marker click handlers never need rebinding.
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
   const located = trucks.filter(t => t.last_lat != null && t.last_lng != null);
 
+  const touchedRef = useRef(false);
   const fitRef = useRef(null);
   const fitAll = useCallback(() => {
     const map = mapRef.current;
@@ -1525,7 +1525,6 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
     if (pts.length > 1) map.fitBounds(pts, { padding: [50, 50], maxZoom: 12 });
     else if (pts.length === 1) map.setView(pts[0], 11);
     else map.setView(US_VIEW.center, US_VIEW.zoom);
-    if (located.length) fittedRef.current = true;
   }, [located]);
   fitRef.current = fitAll;
 
@@ -1533,6 +1532,7 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
     if (mapRef.current || !elRef.current) return;
     const map = L.map(elRef.current, { zoomControl: true, worldCopyJump: true })
       .setView(US_VIEW.center, US_VIEW.zoom);
+    map.on("dragstart zoomstart", () => { touchedRef.current = true; });
     const layers = {};
     for (const [name, b] of Object.entries(BASEMAPS)) {
       layers[name] = L.tileLayer(b.url, { maxZoom: b.max, attribution: b.attr });
@@ -1546,7 +1546,7 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
     // it waits until the real size is known instead of framing an empty box.
     const ro = new ResizeObserver(() => {
       map.invalidateSize();
-      if (!fittedRef.current) fitRef.current?.();
+      if (!touchedRef.current) fitRef.current?.();
     });
     ro.observe(elRef.current);
     return () => { ro.disconnect(); map.remove(); mapRef.current = null; markersRef.current.clear(); };
@@ -1593,10 +1593,14 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
     for (const [id, m] of markersRef.current) {
       if (!seen.has(id)) { m.remove(); markersRef.current.delete(id); }
     }
-    // Frame the fleet the first time positions actually exist, once only —
-    // after that the view belongs to whoever is driving the mouse.
-    if (!fittedRef.current && located.length) fitAll();
-  }, [located, selected, fitAll]);
+  }, [located, selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keyed on which trucks have a position, not on the positions themselves, so
+  // the five-minute refresh never re-frames the map under somebody's nose.
+  const locatedKey = located.map(t => t.id).sort().join(",");
+  useEffect(() => {
+    if (!touchedRef.current && located.length) fitAll();
+  }, [locatedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1643,7 +1647,7 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
   const gRef = useRef(null);
   const marksRef = useRef(new Map());
   const infoRef = useRef(null);
-  const fittedRef = useRef(false);
+  const touchedRef = useRef(false);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const [ready, setReady] = useState(false);
@@ -1658,7 +1662,6 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
     for (const t of located) b.extend({ lat: Number(t.last_lat), lng: Number(t.last_lng) });
     if (located.length === 1) { map.setCenter(b.getCenter()); map.setZoom(12); }
     else map.fitBounds(b, 60);
-    fittedRef.current = true;
   }, [located]);
 
   useEffect(() => {
@@ -1676,6 +1679,7 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
         styles: [{ featureType: "poi.business", stylers: [{ visibility: "off" }] }],
       });
       infoRef.current = new maps.InfoWindow();
+      mapRef.current.addListener("dragstart", () => { touchedRef.current = true; });
       setReady(true);
     }).catch(e => { if (alive) onFail(e?.message || "Google Maps failed to load"); });
     return () => { alive = false; };
@@ -1715,8 +1719,12 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
     for (const [id, m] of marksRef.current) {
       if (!seen.has(id)) { m.setMap(null); marksRef.current.delete(id); }
     }
-    if (!fittedRef.current && located.length) fitAll();
-  }, [ready, located, selected, fitAll]);
+  }, [ready, located, selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const locatedKey = located.map(t => t.id).sort().join(",");
+  useEffect(() => {
+    if (ready && !touchedRef.current && located.length) fitAll();
+  }, [ready, locatedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const map = mapRef.current;
@@ -10579,7 +10587,7 @@ export default function App() {
                     {/* Map */}
                     <div>
                       <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} googleKey={googleKey} />
-                      <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0" }}>
+                      <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0", paddingRight:78 }}>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
