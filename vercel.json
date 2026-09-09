@@ -1,5 +1,14 @@
 {
   "crons": [
-    { "path": "/api/agent-hub", "schedule": "0 12 * * *" }
+    {
+      "path": "/api/agent-hub",
+      "schedule": "0 12 * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/verizon-gps",
+      "destination": "/api/geocode?fleet=webhook"
+    }
   ]
 }

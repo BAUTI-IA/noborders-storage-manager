@@ -1,6 +1,8 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ComposableMap, Geographies, Geography, Marker, Line } from "react-simple-maps";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { BolSection } from "./bol.jsx";
 import { MessagesSection, notifyUser } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
@@ -63,8 +65,8 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true };
-const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"" };
+const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true, verizon_driver_id:"" };
+const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"" };
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
 const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[], purposes:{} };
@@ -797,6 +799,24 @@ create policy "csdocs_update" on storage.objects for update to anon, authenticat
 
 do $$ begin alter publication supabase_realtime add table public.closing_sheets; exception when others then null; end $$;`;
 
+// ELD hours. Kept apart from the payroll table on purpose — see the comment on
+// driver_hos_days in the expenses SQL below.
+const HOS_SQL = `alter table public.drivers add column if not exists verizon_driver_id text;
+create table if not exists public.driver_hos_days (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  work_date date,
+  hours numeric,
+  driving_hours numeric,
+  clock_in timestamptz,
+  clock_out timestamptz,
+  synced_at timestamptz default now(),
+  unique (driver_id, work_date)
+);
+alter table public.driver_hos_days enable row level security;
+drop policy if exists "driver_hos_days_all" on public.driver_hos_days;
+create policy "driver_hos_days_all" on public.driver_hos_days for all to anon, authenticated using (true) with check (true);`;
+
 // Trips / Live Load: trucks + trips tables + trip link columns on storage_jobs.
 const TRIPS_SQL = `create table if not exists public.trucks (
   id bigint generated always as identity primary key,
@@ -994,6 +1014,26 @@ alter table public.driver_work_days add column if not exists hours numeric;
 alter table public.driver_work_days enable row level security;
 drop policy if exists "driver_work_days_all" on public.driver_work_days;
 create policy "driver_work_days_all" on public.driver_work_days for all to anon, authenticated using (true) with check (true);
+
+-- Horas reales del ELD de Verizon. Tabla aparte a propósito: driver_work_days es
+-- la nómina que carga la oficina y workDayPay() paga como día completo cualquier
+-- fila sin day_type, así que escribir acá adentro inflaría el costo laboral. Con
+-- las dos separadas se pueden comparar horas pagadas contra horas reales.
+alter table public.drivers add column if not exists verizon_driver_id text;
+create table if not exists public.driver_hos_days (
+  id bigint generated always as identity primary key,
+  driver_id bigint references public.drivers(id) on delete cascade,
+  work_date date,
+  hours numeric,
+  driving_hours numeric,
+  clock_in timestamptz,
+  clock_out timestamptz,
+  synced_at timestamptz default now(),
+  unique (driver_id, work_date)
+);
+alter table public.driver_hos_days enable row level security;
+drop policy if exists "driver_hos_days_all" on public.driver_hos_days;
+create policy "driver_hos_days_all" on public.driver_hos_days for all to anon, authenticated using (true) with check (true);
 
 create table if not exists public.driver_adjustments (
   id bigint generated always as identity primary key,
@@ -1388,6 +1428,21 @@ const LIVE_STATUS = {
   unknown: { l:"No data", dot:"#9aa3ad", bg:"#f1f1f1", text:"#888" },
 };
 const liveStatusMeta = (s) => LIVE_STATUS[s] || LIVE_STATUS.unknown;
+// A position nobody refreshed in a day says nothing about whether the truck is
+// moving — the tracker went quiet, or somebody typed it in months ago. Reading it
+// as "In transit" is worse than admitting there is no data, now that the map
+// claims to be live.
+const LIVE_STALE_MS = 24 * 60 * 60 * 1000;
+// How often the open map re-asks Verizon. Their guidance is no more than one
+// location poll per vehicle every 3–5 minutes, so this sits at the safe end.
+const FLEET_SYNC_MS = 5 * 60 * 1000;
+const FLEET_SYNC_MIN = Math.round(FLEET_SYNC_MS / 60000);
+const liveStatusOf = (t) => {
+  if (!t || t.last_lat == null || t.last_lng == null) return "unknown";
+  const at = t.last_location_at ? new Date(t.last_location_at).getTime() : NaN;
+  if (!isNaN(at) && Date.now() - at > LIVE_STALE_MS) return "unknown";
+  return t.last_status || "unknown";
+};
 function timeAgo(iso) {
   if (!iso) return "not updated";
   const t = new Date(iso).getTime();
@@ -1400,39 +1455,293 @@ function timeAgo(iso) {
   return `hace ${Math.round(hrs / 24)} d`;
 }
 
-// Verizon-style live map: every truck with a known position plotted on the US map.
-function TruckLiveMap({ trucks, selected, onSelect }) {
-  const wrapRef = useRef();
+// Plain-language names for what the diagnostic probes.
+const VZ_CHECK_LABELS = {
+  config: "Credentials configured",
+  auth: "Authentication",
+  vehicles: "Vehicle list",
+  location: "Live GPS",
+  logbook: "Driver hours (ELD)",
+};
+
+// Live fleet map on real tiles. The state-outline SVG this replaced could zoom,
+// but there was nothing underneath to zoom into: knowing a truck is "in Indiana"
+// is useless next to knowing which yard it is sitting in.
+//
+// Both providers are genuinely key-free. CARTO's basemaps were tried first and
+// stamp "API KEY REQUIRED" across every tile now, so they are not an option.
+const BASEMAPS = {
+  "Streets": {
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attr: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    max: 19,
+  },
+  "Satellite": {
+    // Esri serves {z}/{y}/{x} — y before x, unlike everyone else.
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr: "Tiles &copy; Esri",
+    max: 18,
+  },
+};
+const US_VIEW = { center: [39.5, -98.35], zoom: 4 };
+
+const TRUCK_MAP_CSS = `
+.tlm-wrap{position:relative;border:1px solid #e3e9ef;border-radius:12px;overflow:hidden;background:#e9eef2}
+.tlm-map{height:min(560px,66vh);width:100%}
+.tlm-map .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.75)}
+.tlm-pin{position:relative;width:0;height:0}
+.tlm-halo{position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;opacity:.22}
+.tlm-pin.moving .tlm-halo{animation:tlmhalo 2.4s ease-in-out infinite}
+.tlm-dot{position:absolute;left:-8px;top:-8px;width:16px;height:16px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 1px 5px rgba(16,49,79,.45);transition:transform .15s}
+.tlm-pin.sel .tlm-dot{transform:scale(1.3)}
+.tlm-pin:hover .tlm-dot{transform:scale(1.18)}
+@keyframes tlmhalo{0%,100%{transform:scale(1);opacity:.22}50%{transform:scale(1.75);opacity:.04}}
+.tlm-tip{font:600 11.5px/1.45 system-ui,sans-serif}
+.tlm-tip small{display:block;font-weight:400;color:#6b7785}
+.tlm-map .leaflet-control-layers{margin-top:52px;border-radius:8px;border:1px solid #dde5ee;box-shadow:0 1px 5px rgba(16,42,67,.14)}
+.tlm-fit{position:absolute;top:10px;right:10px;z-index:500;width:32px;height:32px;display:grid;place-items:center;
+  cursor:pointer;background:rgba(255,255,255,.95);border:1px solid #dde5ee;border-radius:8px;font-size:13px;
+  color:#3d4b5a;box-shadow:0 1px 5px rgba(16,42,67,.14);padding:0}
+`;
+
+const esc = (x) => String(x ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+function LeafletTruckMap({ trucks, selected, onSelect }) {
+  const elRef = useRef(null);
+  const mapRef = useRef(null);
+  const markersRef = useRef(new Map());   // truck id → L.Marker
+  const fittedRef = useRef(false);
+  // Held in a ref so the marker click handlers never need rebinding.
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+
+  const located = trucks.filter(t => t.last_lat != null && t.last_lng != null);
+
+  const fitRef = useRef(null);
+  const fitAll = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const pts = located.map(t => [Number(t.last_lat), Number(t.last_lng)]);
+    if (pts.length > 1) map.fitBounds(pts, { padding: [50, 50], maxZoom: 12 });
+    else if (pts.length === 1) map.setView(pts[0], 11);
+    else map.setView(US_VIEW.center, US_VIEW.zoom);
+    if (located.length) fittedRef.current = true;
+  }, [located]);
+  fitRef.current = fitAll;
+
+  useEffect(() => {
+    if (mapRef.current || !elRef.current) return;
+    const map = L.map(elRef.current, { zoomControl: true, worldCopyJump: true })
+      .setView(US_VIEW.center, US_VIEW.zoom);
+    const layers = {};
+    for (const [name, b] of Object.entries(BASEMAPS)) {
+      layers[name] = L.tileLayer(b.url, { maxZoom: b.max, attribution: b.attr });
+    }
+    layers["Streets"].addTo(map);
+    L.control.layers(layers, null, { position: "topright" }).addTo(map);
+    mapRef.current = map;
+    // The map lives inside a grid that settles after mount, and Leaflet measures
+    // itself once — without this it renders into a stale box and tiles tear. The
+    // first frame is also the only moment the initial fit can land correctly, so
+    // it waits until the real size is known instead of framing an empty box.
+    const ro = new ResizeObserver(() => {
+      map.invalidateSize();
+      if (!fittedRef.current) fitRef.current?.();
+    });
+    ro.observe(elRef.current);
+    return () => { ro.disconnect(); map.remove(); mapRef.current = null; markersRef.current.clear(); };
+  }, []);
+
+  // Markers are reused across refreshes: rebuilding them every five minutes
+  // would tear down whatever popup or hover the person was looking at.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const seen = new Set();
+    for (const t of located) {
+      seen.add(t.id);
+      const st = liveStatusOf(t);
+      const c = liveStatusMeta(st);
+      const isSel = selected === t.id;
+      const pos = [Number(t.last_lat), Number(t.last_lng)];
+      const icon = L.divIcon({
+        className: "",
+        iconSize: [0, 0],
+        html: `<div class="tlm-pin ${st} ${isSel ? "sel" : ""}">
+                 <span class="tlm-halo" style="background:${c.dot}"></span>
+                 <span class="tlm-dot" style="background:${c.dot}"></span>
+               </div>`,
+      });
+      const tip = `<div class="tlm-tip">🚛 ${esc(t.name)}<small>${esc(c.l)} · ${esc(timeAgo(t.last_location_at))}</small>${
+        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}</div>`;
+
+      let m = markersRef.current.get(t.id);
+      if (!m) {
+        m = L.marker(pos, { icon }).addTo(map);
+        m.on("click", () => onSelectRef.current(selected === t.id ? null : t.id));
+        markersRef.current.set(t.id, m);
+      } else {
+        m.setLatLng(pos);
+        m.setIcon(icon);
+        // The closure above captured a stale `selected`, so rebind the toggle.
+        m.off("click");
+        m.on("click", () => onSelectRef.current(isSel ? null : t.id));
+      }
+      m.unbindTooltip();
+      m.bindTooltip(tip, { direction: "top", offset: [0, -12], opacity: 1 });
+    }
+    for (const [id, m] of markersRef.current) {
+      if (!seen.has(id)) { m.remove(); markersRef.current.delete(id); }
+    }
+    // Frame the fleet the first time positions actually exist, once only —
+    // after that the view belongs to whoever is driving the mouse.
+    if (!fittedRef.current && located.length) fitAll();
+  }, [located, selected, fitAll]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const t = located.find(x => x.id === selected);
+    if (!map || !t) return;
+    map.flyTo([Number(t.last_lat), Number(t.last_lng)], Math.max(map.getZoom(), 12), { duration: 0.8 });
+    markersRef.current.get(t.id)?.openTooltip();
+  }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
-    <div ref={wrapRef} style={{ position:"relative", background:"#eaf3fb", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
-      <ComposableMap projection="geoAlbersUsa" projectionConfig={{ scale: 1000 }} width={800} height={500} style={{ width:"100%", height:"auto" }}>
-        <Geographies geography={US_GEO_URL}>
-          {({ geographies }) => geographies.map(geo => (
-            <Geography key={geo.rsmKey} geography={geo}
-              style={{
-                default: { fill:"#f3f6e9", stroke:"#cdd8e3", strokeWidth:0.6, outline:"none" },
-                hover:   { fill:"#f3f6e9", stroke:"#cdd8e3", strokeWidth:0.6, outline:"none" },
-                pressed: { fill:"#f3f6e9", stroke:"#cdd8e3", strokeWidth:0.6, outline:"none" },
-              }} />
-          ))}
-        </Geographies>
-        {trucks.map(t => {
-          if (t.last_lat == null || t.last_lng == null) return null;
-          const c = liveStatusMeta(t.last_status);
-          const isSel = selected === t.id;
-          return (
-            <Marker key={t.id} coordinates={[Number(t.last_lng), Number(t.last_lat)]} onClick={() => onSelect(isSel ? null : t.id)}>
-              <g style={{ cursor:"pointer" }}>
-                {isSel && <circle r={11} fill={c.dot} opacity={0.25} />}
-                <circle r={6} fill={c.dot} stroke="#fff" strokeWidth={1.6} />
-                {isSel && <text textAnchor="middle" y={-12} style={{ fontSize:9, fontWeight:700, fill:"#111", paintOrder:"stroke", stroke:"#fff", strokeWidth:2.5 }}>{t.name}</text>}
-              </g>
-            </Marker>
-          );
-        })}
-      </ComposableMap>
+    <div className="tlm-wrap">
+      <style>{TRUCK_MAP_CSS}</style>
+      <button className="tlm-fit" onClick={fitAll} title="Fit all trucks">⤢</button>
+      <div ref={elRef} className="tlm-map" />
     </div>
   );
+}
+
+// ── Google basemap ───────────────────────────────────────────────────────────
+// The look people already know from Reveal, plus satellite and hybrid for free.
+// The key is fetched at runtime from the server rather than built in, so it never
+// sits in a public asset.
+
+let gmapsPromise = null;
+function loadGoogleMaps(key) {
+  if (window.google?.maps) return Promise.resolve(window.google.maps);
+  // One script tag per page no matter how many times the map mounts.
+  if (!gmapsPromise) {
+    gmapsPromise = new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly`;
+      el.async = true;
+      el.onload = () => (window.google?.maps ? resolve(window.google.maps) : reject(new Error("Google Maps loaded but exposed nothing")));
+      el.onerror = () => { gmapsPromise = null; reject(new Error("Google Maps failed to load")); };
+      document.head.appendChild(el);
+    });
+  }
+  return gmapsPromise;
+}
+
+function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
+  const elRef = useRef(null);
+  const mapRef = useRef(null);
+  const gRef = useRef(null);
+  const marksRef = useRef(new Map());
+  const infoRef = useRef(null);
+  const fittedRef = useRef(false);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const [ready, setReady] = useState(false);
+
+  const located = trucks.filter(t => t.last_lat != null && t.last_lng != null);
+
+  const fitAll = useCallback(() => {
+    const maps = gRef.current, map = mapRef.current;
+    if (!maps || !map) return;
+    if (!located.length) { map.setCenter({ lat: 39.5, lng: -98.35 }); map.setZoom(4); return; }
+    const b = new maps.LatLngBounds();
+    for (const t of located) b.extend({ lat: Number(t.last_lat), lng: Number(t.last_lng) });
+    if (located.length === 1) { map.setCenter(b.getCenter()); map.setZoom(12); }
+    else map.fitBounds(b, 60);
+    fittedRef.current = true;
+  }, [located]);
+
+  useEffect(() => {
+    let alive = true;
+    loadGoogleMaps(apiKey).then(maps => {
+      if (!alive || !elRef.current || mapRef.current) return;
+      gRef.current = maps;
+      mapRef.current = new maps.Map(elRef.current, {
+        center: { lat: 39.5, lng: -98.35 }, zoom: 4,
+        mapTypeId: "roadmap",
+        mapTypeControl: true,
+        mapTypeControlOptions: { mapTypeIds: ["roadmap", "hybrid", "terrain"] },
+        streetViewControl: false, fullscreenControl: false,
+        // Points of interest are noise on a fleet map; roads and places are not.
+        styles: [{ featureType: "poi.business", stylers: [{ visibility: "off" }] }],
+      });
+      infoRef.current = new maps.InfoWindow();
+      setReady(true);
+    }).catch(e => { if (alive) onFail(e?.message || "Google Maps failed to load"); });
+    return () => { alive = false; };
+  }, [apiKey, onFail]);
+
+  useEffect(() => {
+    const maps = gRef.current, map = mapRef.current;
+    if (!ready || !maps || !map) return;
+    const seen = new Set();
+    for (const t of located) {
+      seen.add(t.id);
+      const st = liveStatusOf(t);
+      const c = liveStatusMeta(st);
+      const isSel = selected === t.id;
+      const pos = { lat: Number(t.last_lat), lng: Number(t.last_lng) };
+      const icon = {
+        path: maps.SymbolPath.CIRCLE,
+        scale: isSel ? 9.5 : 7.5,
+        fillColor: c.dot, fillOpacity: 1,
+        strokeColor: "#fff", strokeWeight: 2.5,
+      };
+      let m = marksRef.current.get(t.id);
+      if (!m) {
+        m = new maps.Marker({ map, position: pos, icon, title: t.name, zIndex: 1 });
+        marksRef.current.set(t.id, m);
+      } else {
+        m.setPosition(pos); m.setIcon(icon);
+      }
+      m.setZIndex(isSel ? 10 : 1);
+      maps.event.clearInstanceListeners(m);
+      m.addListener("click", () => onSelectRef.current(isSel ? null : t.id));
+      const html = `<div class="tlm-tip">🚛 ${esc(t.name)}<small>${esc(c.l)} · ${esc(timeAgo(t.last_location_at))}</small>${
+        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}</div>`;
+      m.addListener("mouseover", () => { infoRef.current.setContent(html); infoRef.current.open(map, m); });
+      m.addListener("mouseout", () => infoRef.current.close());
+    }
+    for (const [id, m] of marksRef.current) {
+      if (!seen.has(id)) { m.setMap(null); marksRef.current.delete(id); }
+    }
+    if (!fittedRef.current && located.length) fitAll();
+  }, [ready, located, selected, fitAll]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const t = located.find(x => x.id === selected);
+    if (!ready || !map || !t) return;
+    map.panTo({ lat: Number(t.last_lat), lng: Number(t.last_lng) });
+    if (map.getZoom() < 12) map.setZoom(12);
+  }, [ready, selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="tlm-wrap">
+      <style>{TRUCK_MAP_CSS}</style>
+      <button className="tlm-fit" onClick={fitAll} title="Fit all trucks">⤢</button>
+      <div ref={elRef} className="tlm-map" />
+    </div>
+  );
+}
+
+// Google when a key is configured, Leaflet otherwise — and Leaflet again if
+// Google fails to load, so a billing problem never leaves the page mapless.
+function TruckLiveMap({ googleKey, ...props }) {
+  const [googleFailed, setGoogleFailed] = useState(false);
+  const onFail = useCallback((msg) => { console.warn("Google Maps:", msg); setGoogleFailed(true); }, []);
+  if (googleKey && !googleFailed) return <GoogleTruckMap {...props} apiKey={googleKey} onFail={onFail} />;
+  return <LeafletTruckMap {...props} />;
 }
 
 const BILLING_STATUS = {
@@ -2015,6 +2324,79 @@ function FormSection({ title, defaultOpen = true, children }) {
 const fgrid = { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:10 };
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
+
+// Combobox for trucks.verizon_vehicle_id. Stays a free-text input — a truck can
+// be linked before the roster loads, or with Verizon off entirely — but offers
+// the real Reveal fleet as a filterable list instead of the browser's datalist,
+// which renders differently in every browser and can't show two lines per row.
+function VehiclePicker({ value, onChange, options, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const wrapRef = useRef();
+  const list = options || [];
+
+  const q = (value || "").toLowerCase().trim();
+  // Typing filters, but an exact pick shows the whole list again rather than
+  // collapsing to the one row that matches itself.
+  const matches = useMemo(() => {
+    if (!q || list.some(o => o.number.toLowerCase() === q)) return list;
+    return list.filter(o => o.label.toLowerCase().includes(q));
+  }, [list, q]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const choose = (o) => { onChange(o.number); setOpen(false); };
+
+  function onKeyDown(e) {
+    if (!open) { if (e.key === "ArrowDown") { setOpen(true); setHi(0); } return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi(i => Math.min(i + 1, matches.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi(i => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter" && matches[hi]) { e.preventDefault(); choose(matches[hi]); }
+    else if (e.key === "Escape") setOpen(false);
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position:"relative" }}>
+      <input style={inp} value={value} placeholder={placeholder} onKeyDown={onKeyDown}
+        onChange={e => { onChange(e.target.value); setOpen(true); setHi(0); }}
+        onFocus={() => list.length > 0 && setOpen(true)} />
+      {open && list.length > 0 && (
+        <div style={{ position:"absolute", top:"calc(100% + 4px)", left:0, right:0, zIndex:60,
+          background:"#fff", border:"1px solid #e5e5e5", borderRadius:10, overflow:"hidden",
+          boxShadow:"0 8px 24px rgba(0,0,0,0.12)", maxHeight:232, overflowY:"auto" }}>
+          {matches.length === 0 ? (
+            <div style={{ padding:"12px 13px", fontSize:12, color:"#bbb" }}>{t("No vehicle matches that")}</div>
+          ) : matches.map((o, i) => {
+            const sel = o.number === value;
+            return (
+              // onMouseDown, not onClick: the input's blur would close the list first.
+              <div key={o.number} onMouseDown={e => { e.preventDefault(); choose(o); }} onMouseEnter={() => setHi(i)}
+                style={{ padding:"8px 13px", cursor:"pointer", background: i === hi ? "#f0f6fc" : "#fff",
+                  borderLeft:`3px solid ${sel ? "#185FA5" : "transparent"}`,
+                  borderBottom: i === matches.length - 1 ? "none" : "1px solid #f4f4f4" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                  <span style={{ fontSize:12.5, fontWeight:700, color:"#111" }}>🚛 {o.number}</span>
+                  {sel && <span style={{ fontSize:10, color:"#185FA5", fontWeight:600 }}>✓</span>}
+                </div>
+                {(o.name || o.plate) && (
+                  <div style={{ fontSize:11, color:"#999", marginTop:2 }}>
+                    {o.name}{o.name && o.plate ? " · " : ""}
+                    {o.plate && <span style={{ fontFamily:"monospace" }}>{o.plate}</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Status picker for a job. The flow's next step arrives pre-selected as a
 // suggestion and every status stays pickable: the app proposes an order, the
@@ -3365,6 +3747,13 @@ export default function App() {
   // Live-load map: status filter, selected truck, and the "set location" modal.
   const [liveStatusFilter, setLiveStatusFilter] = useState("all"); // all | moving | stopped
   const [liveSelTruck, setLiveSelTruck] = useState(null);
+  const [verizonOn, setVerizonOn] = useState(null);   // null until the server answers
+  const [fleetSync, setFleetSync] = useState({ busy:false, at:null, error:null });
+  const [vzVehicles, setVzVehicles] = useState(null);      // Reveal roster | null
+  const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
+  const [hosMissing, setHosMissing] = useState(false);
+  const [vzDiag, setVzDiag] = useState(null);       // null | "loading" | checks[]
+  const [googleKey, setGoogleKey] = useState(null);
   const [locModal, setLocModal] = useState(null); // truck row | null
   const [locForm, setLocForm] = useState({ query:"", lat:"", lng:"", label:"", status:"stopped" });
   const [locBusy, setLocBusy] = useState(false);
@@ -4130,6 +4519,23 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, tripStopsMissing, loadTripStops]);
+
+  // Probe / auto-migrate driver_hos_days (real ELD hours).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("driver_hos_days").select("id").limit(1);
+      if (cancelled || !error) { if (!cancelled) setHosMissing(false); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: HOS_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled) setHosMissing(!created);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
 
   // Probe / auto-migrate the equipment_items table (Equipment tab — internal cargo).
   useEffect(() => {
@@ -6295,13 +6701,13 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false });
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false, verizon_driver_id: d.verizon_driver_id || "" });
     setShowDriverModal(true);
   }
   async function saveDriver() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
-    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active };
+    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active, verizon_driver_id: driverForm.verizon_driver_id.trim() || null };
     if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
     else await supabase.from("drivers").insert([payload]);
     setDriverSaving(false); setShowDriverModal(false);
@@ -6606,7 +7012,8 @@ export default function App() {
   function openEditTruck(t) {
     setEditingTruckId(t.id);
     setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false,
-      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "" });
+      year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "",
+      verizon_vehicle_id: t.verizon_vehicle_id || "" });
     setShowTruckModal(true);
   }
   async function saveTruck() {
@@ -6621,6 +7028,7 @@ export default function App() {
       payload.license_plate = truckForm.license_plate || null;
       payload.license_state = truckForm.license_state || null;
     }
+    if (!truckLocMissing) payload.verizon_vehicle_id = truckForm.verizon_vehicle_id.trim() || null;
     let error = null;
     if (editingTruckId) ({ error } = await supabase.from("trucks").update(payload).eq("id", editingTruckId));
     else ({ error } = await supabase.from("trucks").insert([payload]));
@@ -6665,6 +7073,89 @@ export default function App() {
     showToast(`Location updated · ${locModal.name}`);
     loadTrucks();
   }
+
+  // ── Live-load: real GPS from Verizon Connect Reveal ──
+  // The credentials never reach the browser: the serverless side authenticates,
+  // reads each mapped vehicle's position and writes it onto the trucks row the
+  // map already draws. All the client does is ask for a sync and reload.
+  const syncFleet = useCallback(async (silent = false) => {
+    if (!session?.access_token) return;
+    setFleetSync(s => ({ ...s, busy:true, error:null }));
+    try {
+      const r = await fetch("/api/geocode?fleet=sync", { headers: { Authorization: "Bearer " + session.access_token } });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "Sync failed");
+      // A throttled call is not a failure — Verizon just asked us to wait.
+      if (data.throttled) { setFleetSync(s => ({ ...s, busy:false })); return; }
+      setFleetSync({ busy:false, at:new Date().toISOString(), error:null });
+      await loadTrucks();
+      if (!silent) showToast(tr(`Fleet synced · ${data.updated} truck(s) updated`,
+                                `Flota sincronizada · ${data.updated} camión(es) actualizado(s)`));
+    } catch (e) {
+      const msg = e?.message || "Sync failed";
+      setFleetSync(s => ({ ...s, busy:false, error:msg }));
+      if (!silent) showToast(tr("Could not sync with Verizon Connect.", "No se pudo sincronizar con Verizon Connect."));
+    }
+  }, [session, loadTrucks]);
+
+  // The Google basemap key, if one is configured. Signed-in fetch on purpose:
+  // it keeps the key out of the public bundle.
+  useEffect(() => {
+    if (!session?.access_token) return;
+    let alive = true;
+    fetch("/api/geocode?fleet=mapkey", { headers: { Authorization: "Bearer " + session.access_token } })
+      .then(r => r.json())
+      .then(d => { if (alive) setGoogleKey(d?.key || null); })
+      .catch(() => { if (alive) setGoogleKey(null); });
+    return () => { alive = false; };
+  }, [session]);
+
+  // Whether the server holds Verizon credentials at all. Until it does, the live
+  // map stays exactly as it was: manual positions only, no sync button.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/geocode?fleet=status")
+      .then(r => r.json())
+      .then(d => { if (alive) setVerizonOn(!!d?.configured); })
+      .catch(() => { if (alive) setVerizonOn(false); });
+    return () => { alive = false; };
+  }, []);
+
+  // Asks Verizon, from the server, which of its API products this account can
+  // actually reach — so nobody has to go read that off the developer portal.
+  const runVzDiag = useCallback(async () => {
+    if (!session?.access_token) return;
+    setVzDiag("loading");
+    try {
+      const r = await fetch("/api/geocode?fleet=diagnose", { headers: { Authorization: "Bearer " + session.access_token } });
+      const d = await r.json();
+      setVzDiag(r.ok ? (d.checks || []) : [{ key:"config", ok:false, detail: d?.error || "failed" }]);
+    } catch (e) {
+      setVzDiag([{ key:"config", ok:false, detail: e?.message || "failed" }]);
+    }
+  }, [session]);
+
+  // Reveal's vehicle roster, pulled the first time a truck form is opened so the
+  // Verizon field can offer the real list instead of asking somebody to copy
+  // vehicle numbers out of Reveal by hand.
+  useEffect(() => {
+    if (!showTruckModal || !verizonOn || vzVehicles || !session?.access_token) return;
+    let alive = true;
+    fetch("/api/geocode?fleet=vehicles", { headers: { Authorization: "Bearer " + session.access_token } })
+      .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
+      .then((d) => { if (alive) { setVzVehicles(d.vehicles || []); setVzVehiclesErr(null); } })
+      .catch((e) => { if (alive) setVzVehiclesErr(e?.message || "failed"); });
+    return () => { alive = false; };
+  }, [showTruckModal, verizonOn, vzVehicles, session]);
+
+  // Poll only while somebody is actually looking at the map. Verizon asks for no
+  // more than one location poll every 3–5 minutes, so 5 stays well inside it.
+  useEffect(() => {
+    if (!verizonOn || page !== "trips" || tripsView !== "live") return;
+    syncFleet(true);
+    const id = setInterval(() => syncFleet(true), FLEET_SYNC_MS);
+    return () => clearInterval(id);
+  }, [verizonOn, page, tripsView, syncFleet]);
 
   // ── Legal & Compliance handlers ──
   function openAddCompany() { setEditingCompanyId(null); setCompanyForm(EMPTY_COMPANY); setShowCompanyModal(true); }
@@ -10026,10 +10517,10 @@ export default function App() {
               const driverByTruck = {};
               for (const tp of trips) { if (TRIP_ACTIVE(tp.status) && tp.truck_id) driverByTruck[tp.truck_id] = driverById[tp.driver_id]?.name; }
               const located = trucksList.filter(t => t.last_lat != null && t.last_lng != null);
-              const visible = located.filter(t => liveStatusFilter === "all" ? true : (t.last_status || "unknown") === liveStatusFilter);
+              const visible = located.filter(t => liveStatusFilter === "all" ? true : liveStatusOf(t) === liveStatusFilter);
               const noLoc = trucksList.filter(t => t.last_lat == null || t.last_lng == null);
-              const moving = located.filter(t => t.last_status === "moving").length;
-              const stopped = located.filter(t => t.last_status === "stopped").length;
+              const moving = located.filter(t => liveStatusOf(t) === "moving").length;
+              const stopped = located.filter(t => liveStatusOf(t) === "stopped").length;
               return (
                 <>
                   {truckLocMissing && (
@@ -10052,7 +10543,7 @@ export default function App() {
                         ) : visible.length === 0 ? (
                           <div style={{ padding:"28px 16px", textAlign:"center", color:"#bbb", fontSize:13 }}>No trucks in this condition.</div>
                         ) : visible.map(t => {
-                          const c = liveStatusMeta(t.last_status);
+                          const c = liveStatusMeta(liveStatusOf(t));
                           const isSel = liveSelTruck === t.id;
                           const dn = driverByTruck[t.id];
                           return (
@@ -10087,12 +10578,37 @@ export default function App() {
                     </div>
                     {/* Map */}
                     <div>
-                      <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} />
+                      <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} googleKey={googleKey} />
                       <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
-                        <span style={{ marginLeft:"auto", color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
+                        <span style={{ marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:8 }}>
+                          {verizonOn ? (<>
+                            {/* A live map should look alive: the dot breathes while the
+                                map is polling on its own, and goes solid red on error. */}
+                            <span style={{ width:8, height:8, borderRadius:"50%", flexShrink:0,
+                              background: fleetSync.error ? "#E24B4A" : "#1A8A4E",
+                              animation: fleetSync.error ? "none" : "vzpulse 2s ease-in-out infinite" }} />
+                            <style>{`@keyframes vzpulse{0%,100%{opacity:1}50%{opacity:.25}}`}</style>
+                            <span style={{ color: fleetSync.error ? "#b91c1c" : "#aaa" }}>
+                              {fleetSync.error ? t("Verizon Connect: sync error")
+                                : !fleetSync.at ? t("Live from Verizon Connect")
+                                : tr(`Live from Verizon Connect · updated ${timeAgo(fleetSync.at)} · refreshes every ${FLEET_SYNC_MIN} min`,
+                                     `En vivo desde Verizon Connect · actualizado ${timeAgo(fleetSync.at)} · se actualiza sola cada ${FLEET_SYNC_MIN} min`)}
+                            </span>
+                            <button onClick={() => syncFleet(false)} disabled={fleetSync.busy}
+                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor: fleetSync.busy ? "default" : "pointer", textDecoration:"underline" }}>
+                              {fleetSync.busy ? t("Syncing...") : t("Sync now")}
+                            </button>
+                            <button onClick={runVzDiag} disabled={vzDiag === "loading"}
+                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>
+                              {vzDiag === "loading" ? t("Checking...") : t("Check connection")}
+                            </button>
+                          </>) : (
+                            <span style={{ color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
+                          )}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -13366,6 +13882,9 @@ export default function App() {
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="e.g. T-12" /></Field>
             <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="e.g. 250" /></Field>
+            <Field label="Verizon driver number" full>
+              <input style={inp} value={driverForm.verizon_driver_id} onChange={e => setDriverForm(f => ({...f, verizon_driver_id:e.target.value}))} placeholder="As it appears in the Reveal logbook" />
+            </Field>
             <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="e.g. 25 (optional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
@@ -13462,6 +13981,58 @@ export default function App() {
               <input style={inp} list="states-list" maxLength={2} value={truckForm.license_state} onChange={e => setTruckForm(f => ({...f, license_state: e.target.value.toUpperCase().slice(0, 2)}))} placeholder="NJ" />
             </Field>
           </div>
+
+          <SectionLabel>Live tracking</SectionLabel>
+          <Field label="Verizon vehicle number" full>
+            <VehiclePicker value={truckForm.verizon_vehicle_id} options={vzVehicles}
+              onChange={val => setTruckForm(f => ({...f, verizon_vehicle_id:val}))}
+              placeholder="As it appears in Reveal" />
+          </Field>
+          <div style={{ fontSize:11.5, color: vzVehiclesErr ? "#b91c1c" : "#999", marginTop:6 }}>
+            {!verizonOn
+              ? "Links this truck to Verizon Connect so its position updates on the live map by itself. Leave it empty to keep setting the location by hand."
+              : vzVehiclesErr ? t("Could not read the vehicle list from Verizon Connect.")
+              : !vzVehicles ? t("Reading the vehicle list from Verizon Connect...")
+              : vzVehicles.length === 0 ? t("Verizon Connect returned no vehicles.")
+              : tr(`${vzVehicles.length} vehicle(s) in Verizon Connect — click the field to pick one.`,
+                   `${vzVehicles.length} vehículo(s) en Verizon Connect — hacé click en el campo para elegir.`)}
+          </div>
+        </Modal>
+      )}
+
+      {Array.isArray(vzDiag) && (
+        <Modal title="Verizon Connect" onClose={() => setVzDiag(null)}
+          footer={<><Btn onClick={() => setVzDiag(null)}>Close</Btn><Btn primary onClick={runVzDiag}>Check again</Btn></>}>
+          <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
+            What this account can actually reach right now. The server asks Verizon directly.
+          </div>
+          {vzDiag.map(c => {
+            const label = VZ_CHECK_LABELS[c.key] || c.key;
+            return (
+              <div key={c.key} style={{ display:"flex", gap:10, padding:"9px 0", borderBottom:"1px solid #f4f4f4" }}>
+                <span style={{ fontSize:14, lineHeight:1.3 }}>{c.ok ? "✅" : "❌"}</span>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#111" }}>
+                    {t(label)}
+                    {c.count != null && c.ok ? <span style={{ fontWeight:400, color:"#888" }}> · {c.count}</span> : null}
+                  </div>
+                  {c.detail && <div style={{ fontSize:11.5, color: c.ok ? "#999" : "#b91c1c", marginTop:2 }}>{c.detail}</div>}
+                  {!c.ok && c.tried?.length > 0 && (<>
+                    <div style={{ fontSize:11.5, color:"#b91c1c", marginTop:2 }}>
+                      {c.tried.some(x => / 403$/.test(x))
+                        ? tr("This API exists but the app has no access — request it in the developer portal.",
+                             "Esta API existe pero la app no tiene acceso — pedila en el portal de developers.")
+                        : tr("No route answered. The API is probably not enabled on this account.",
+                             "Ninguna ruta respondió. Lo más probable es que esta API no esté habilitada en la cuenta.")}
+                    </div>
+                    <div style={{ fontSize:10.5, color:"#bbb", fontFamily:"monospace", marginTop:3, wordBreak:"break-all" }}>
+                      {c.tried.join(" · ")}
+                    </div>
+                  </>)}
+                </div>
+              </div>
+            );
+          })}
         </Modal>
       )}
 
