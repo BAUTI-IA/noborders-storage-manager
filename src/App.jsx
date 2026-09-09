@@ -11939,7 +11939,7 @@ export default function App() {
           brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
           expenses={expenses} workDays={workDays} adjustments={adjustments} materialItems={materialItems}
           materialMovements={materialMovements} expensesMissing={expensesMissing}
-          lang={lang}
+          lang={lang} session={session}
         />
       )}
 
