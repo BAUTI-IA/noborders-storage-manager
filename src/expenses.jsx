@@ -3,9 +3,17 @@
 // cruza contra el extracto en Bancos → Conciliación.
 // UI only: state, Supabase calls and handlers live in App.jsx (same split as analytics.jsx).
 // Shared Btn/Modal components arrive as props to avoid a circular import with App.jsx.
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { tr } from "./i18n.js";
 import { numv, monthOf, driverCashReconciliation, payWeekStart, addDaysISO } from "./analyticsData.js";
+import { selectAll } from "./db.js";
+import {
+  EXPENSE_CATEGORIES, FIELD_CAT_BY_BANK, expenseCatMeta,
+  mergeFieldExpenses, fieldExpenseTotals,
+} from "./expensesData.js";
+
+// Re-exported so App.jsx keeps importing the catalog from one place.
+export { EXPENSE_CATEGORIES, FIELD_CAT_BY_BANK, expenseCatMeta };
 
 // Form/constant definitions live here (exported) so App.jsx state and this UI share one copy.
 export const EMPTY_EXPENSE = {
@@ -13,15 +21,6 @@ export const EMPTY_EXPENSE = {
   job_number:"", paid_from:"bank", bank_account:"", status:"pending",
   gallons:"", odometer:"", fuel_state:"", receipt_url:"", notes:"",
 };
-export const EXPENSE_CATEGORIES = [
-  { v:"fuel", l:"Fuel", icon:"⛽" },
-  { v:"hotel", l:"Hotel / Lodging", icon:"🏨" },
-  { v:"materials", l:"Materials", icon:"📦" },
-  { v:"tolls", l:"Tolls", icon:"🛣️" },
-  { v:"maintenance", l:"Maintenance", icon:"🔧" },
-  { v:"meals", l:"Meals", icon:"🍔" },
-  { v:"other", l:"Other", icon:"💵" },
-];
 export const PAID_FROM_OPTIONS = [
   { v:"bank", l:"Bank account", icon:"🏦" },
   { v:"driver_cash", l:"Cash del driver (de cobros)", icon:"💵" },
@@ -38,7 +37,6 @@ export const ADJUSTMENT_KINDS = [
   { v:"deduction", l:"Descuento (fuck-up, daño, faltante…)", icon:"🔻" },
   { v:"bonus", l:"Compensación / bono", icon:"💚" },
 ];
-export const expenseCatMeta = (v) => EXPENSE_CATEGORIES.find(c => c.v === v) || EXPENSE_CATEGORIES[EXPENSE_CATEGORIES.length - 1];
 export const paidFromMeta = (v) => PAID_FROM_OPTIONS.find(p => p.v === v) || PAID_FROM_OPTIONS[0];
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
@@ -100,7 +98,7 @@ export function ExpensesPage(props) {
     onEdit, onSave, onDelete, onSetStatus, onSettle, onUploadReceipt,
     adjForm, setAdjForm, showAdjModal, setShowAdjModal, adjSaving,
     onAddAdjustment, onSaveAdjustment, onDeleteAdjustment,
-    setPayPhotoView, Btn, Modal,
+    setPayPhotoView, Btn, Modal, supabase,
   } = props;
 
   const [tab, setTab] = useState("gastos");
@@ -111,7 +109,30 @@ export function ExpensesPage(props) {
   const [fFrom, setFFrom] = useState("");
   const [fTo, setFTo] = useState("");
   const [fSearch, setFSearch] = useState("");
+  const [fSource, setFSource] = useState("");
   const [weekStart, setWeekStart] = useState(() => payWeekStart(today())); // Wednesday that opens the pay week
+
+  // Field costs that came off the statement. Fetched here rather than in
+  // App.jsx so the whole app doesn't pay for it — this page is the only reader,
+  // and it only mounts when somebody opens it. Outflows only; the merge drops
+  // the ones that are not field categories.
+  const [bankTxns, setBankTxns] = useState([]);
+  const [bankCats, setBankCats] = useState([]);
+  const [bankLoading, setBankLoading] = useState(true);
+  const loadBank = useCallback(async () => {
+    if (!supabase) { setBankLoading(false); return; }
+    setBankLoading(true);
+    const [{ data: txns }, { data: cats }] = await Promise.all([
+      selectAll(() => supabase.from("bank_transactions").select("*").eq("direction", "out")
+        .in("category", Object.keys(FIELD_CAT_BY_BANK))
+        .order("txn_date", { ascending: false }).order("id", { ascending: false }), { tiebreak: null }),
+      supabase.from("bank_categories").select("*"),
+    ]);
+    setBankTxns(txns || []);
+    setBankCats(cats || []);
+    setBankLoading(false);
+  }, [supabase]);
+  useEffect(() => { loadBank(); }, [loadBank]);
 
   const canEdit = can("expenses", "edit");
   const canCreate = can("expenses", "create");
@@ -122,21 +143,30 @@ export function ExpensesPage(props) {
   const jobNumbers = useMemo(() => [...new Set(jobs.map(j => (j.job_number || "").trim()).filter(Boolean))].sort(), [jobs]);
   const activeDrivers = useMemo(() => driversList.filter(d => d.active !== false), [driversList]);
 
-  const filtered = useMemo(() => expenses.filter(e => {
-    if (fDriver && String(e.driver_id) !== String(fDriver)) return false;
-    if (fCategory && e.category !== fCategory) return false;
-    if (fPaidFrom && e.paid_from !== fPaidFrom) return false;
-    if (fStatus && (e.status || "pending") !== fStatus) return false;
-    const d = e.expense_date || (e.created_at || "").slice(0, 10);
-    if (fFrom && d < fFrom) return false;
-    if (fTo && d > fTo) return false;
+  // Every field cost in one list: what was typed here plus the statement lines
+  // nobody typed. A bank-paid expense and its statement line are one cost and
+  // collapse into a single row — see mergeFieldExpenses.
+  const merged = useMemo(
+    () => mergeFieldExpenses({ expenses, bankTxns, categories: bankCats }),
+    [expenses, bankTxns, bankCats]);
+
+  const filtered = useMemo(() => merged.filter(r => {
+    if (fSource && r.source !== fSource) return false;
+    if (fDriver && String(r.driverId) !== String(fDriver)) return false;
+    if (fCategory && r.category !== fCategory) return false;
+    if (fPaidFrom && r.paidFrom !== fPaidFrom) return false;
+    if (fStatus && r.status !== fStatus) return false;
+    if (fFrom && r.date < fFrom) return false;
+    if (fTo && r.date > fTo) return false;
     if (fSearch) {
       const q = fSearch.toLowerCase();
-      const hay = [e.vendor, e.notes, e.job_number, driverById[e.driver_id]?.name].filter(Boolean).join(" ").toLowerCase();
+      const hay = [r.vendor, r.notes, r.jobNumber, driverById[r.driverId]?.name].filter(Boolean).join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
-  }), [expenses, fDriver, fCategory, fPaidFrom, fStatus, fFrom, fTo, fSearch, driverById]);
+  }), [merged, fSource, fDriver, fCategory, fPaidFrom, fStatus, fFrom, fTo, fSearch, driverById]);
+
+  const totals = useMemo(() => fieldExpenseTotals(filtered), [filtered]);
 
   // Tiles: current-month spend (approved), pending approvals, unsettled driver cash.
   const tiles = useMemo(() => {
@@ -201,7 +231,8 @@ export function ExpensesPage(props) {
             <Tile label="Gastado este mes (aprobado)" value={fmt$(tiles.monthTotal)} sub={tiles.topCat ? `Top: ${expenseCatMeta(tiles.topCat[0]).icon} ${expenseCatMeta(tiles.topCat[0]).l} ${fmt$(tiles.topCat[1])}` : null} />
             <Tile label="Pendientes de aprobar" value={tiles.pendingCount} color={tiles.pendingCount > 0 ? "#C2410C" : "#1A8A4E"} sub={tiles.pendingCount > 0 ? fmt$(tiles.pendingTotal) : null} />
             <Tile label="Cash de drivers sin rendir" value={fmt$(tiles.unsettledCash)} color={tiles.unsettledCash > 0 ? "#E24B4A" : "#1A8A4E"} sub="gastos aprobados pagados con cash de cobros, sin settle" />
-            <Tile label="Gastos en el filtro" value={filtered.length} sub={fmt$(filtered.reduce((s, e) => s + ((e.status || "pending") !== "rejected" ? numv(e.amount) : 0), 0))} />
+            <Tile label="In this filter" value={fmt$(totals.total)} sub={`${totals.count} · ${fmt$(totals.manual)} ${tr("loaded here", "cargados acá")} · ${fmt$(totals.fromBank)} ${tr("from the bank", "del banco")}`} />
+            <Tile label="Unattributed" value={fmt$(totals.unattributed)} color={totals.unattributed > 0 ? "#C2410C" : "#1A8A4E"} sub={`${totals.unattributedCount} ${tr("with no driver, truck, trip or job", "sin driver, truck, trip ni job")}`} />
           </div>
 
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
@@ -213,6 +244,11 @@ export function ExpensesPage(props) {
             <select value={fCategory} onChange={e => setFCategory(e.target.value)} style={{ ...inp, width:"auto", minWidth:130 }}>
               <option value="">All categories</option>
               {EXPENSE_CATEGORIES.map(c => <option key={c.v} value={c.v}>{c.icon} {c.l}</option>)}
+            </select>
+            <select value={fSource} onChange={e => setFSource(e.target.value)} style={{ ...inp, width:"auto", minWidth:130 }}>
+              <option value="">Loaded anywhere</option>
+              <option value="manual">✍️ Loaded here</option>
+              <option value="bank">🏦 From the bank</option>
             </select>
             <select value={fPaidFrom} onChange={e => setFPaidFrom(e.target.value)} style={{ ...inp, width:"auto", minWidth:130 }}>
               <option value="">All payment sources</option>
@@ -235,46 +271,70 @@ export function ExpensesPage(props) {
                 </tr></thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={10} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No expenses in this filter. Add one with “+ Expense”.</td></tr>
-                  ) : filtered.map(e => {
-                    const pf = paidFromMeta(e.paid_from);
-                    const trip = e.trip_id ? tripById[e.trip_id] : null;
+                    <tr><td colSpan={10} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>
+                      {bankLoading ? "Loading…" : "No field expenses in this filter. Add one with “+ Expense”."}
+                    </td></tr>
+                  ) : filtered.map(r => {
+                    const e = r.raw;
+                    const fromBank = r.source === "bank";
+                    const pf = paidFromMeta(r.paidFrom);
+                    const trip = r.tripId ? tripById[r.tripId] : null;
                     return (
-                      <tr key={e.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                        <td style={{ ...td, whiteSpace:"nowrap" }}>{e.expense_date || (e.created_at || "").slice(0, 10) || "—"}</td>
-                        <td style={td}><ExpenseCatChip category={e.category} />{e.category === "fuel" && numv(e.gallons) > 0 && <span style={{ fontSize:10.5, color:"#888" }}> · {numv(e.gallons)} gal{numv(e.amount) > 0 ? ` · $${(numv(e.amount) / numv(e.gallons)).toFixed(2)}/gal` : ""}</span>}</td>
-                        <td style={td}>{e.vendor || "—"}</td>
-                        <td style={{ ...td, fontWeight:700, whiteSpace:"nowrap" }}>{fmt$(numv(e.amount))}</td>
-                        <td style={td}>{e.driver_id ? (driverById[e.driver_id]?.name || `#${e.driver_id}`) : "—"}</td>
+                      <tr key={r.key} style={{ borderBottom:"1px solid #fafafa", background: fromBank ? "#fcfdff" : undefined }}>
+                        <td style={{ ...td, whiteSpace:"nowrap" }}>{r.date || "—"}</td>
+                        <td style={td}>
+                          <ExpenseCatChip category={r.category} />
+                          {!fromBank && r.category === "fuel" && numv(e.gallons) > 0 && <span style={{ fontSize:10.5, color:"#888" }}> · {numv(e.gallons)} gal{r.amount > 0 ? ` · $${(r.amount / numv(e.gallons)).toFixed(2)}/gal` : ""}</span>}
+                          {fromBank && <div style={{ fontSize:10, color:"#aaa" }}>{r.bankCategory}</div>}
+                        </td>
+                        <td style={td}>{r.vendor || "—"}</td>
+                        <td style={{ ...td, fontWeight:700, whiteSpace:"nowrap" }}>{fmt$(r.amount)}</td>
+                        <td style={td}>{r.driverId ? (driverById[r.driverId]?.name || `#${r.driverId}`) : <span style={{ color:"#ddd" }}>—</span>}</td>
                         <td style={{ ...td, whiteSpace:"nowrap" }}>
-                          {pf.icon} <span style={{ fontSize:11.5 }}>{e.paid_from === "bank" ? (e.bank_account || pf.l) : pf.l}</span>
-                          {e.paid_from === "driver_cash" && (e.settled
-                            ? <span style={{ fontSize:10, fontWeight:700, color:"#185FA5", marginLeft:5 }}>rendido {e.settled_date || ""}</span>
-                            : <span style={{ fontSize:10, fontWeight:700, color:"#C2410C", marginLeft:5 }}>unsettled</span>)}
+                          {fromBank ? (
+                            <span style={{ fontSize:11.5, color:"#185FA5", fontWeight:600 }}>🏦 From the bank</span>
+                          ) : (
+                            <>
+                              {pf.icon} <span style={{ fontSize:11.5 }}>{r.paidFrom === "bank" ? (e.bank_account || pf.l) : pf.l}</span>
+                              {r.reconciled && <span title="Matched to a statement line" style={{ fontSize:10, fontWeight:700, color:"#3B6D11", marginLeft:5 }}>✓ in bank</span>}
+                              {r.paidFrom === "driver_cash" && (e.settled
+                                ? <span style={{ fontSize:10, fontWeight:700, color:"#185FA5", marginLeft:5 }}>rendido {e.settled_date || ""}</span>
+                                : <span style={{ fontSize:10, fontWeight:700, color:"#C2410C", marginLeft:5 }}>unsettled</span>)}
+                            </>
+                          )}
                         </td>
                         <td style={{ ...td, fontSize:11.5, color:"#666", whiteSpace:"nowrap" }}>
-                          {[trip && (trip.trip_number || `trip #${trip.id}`), e.job_number, e.truck_id && (truckById[e.truck_id]?.name || `truck #${e.truck_id}`)].filter(Boolean).join(" · ") || "—"}
+                          {[trip && (trip.trip_number || `trip #${trip.id}`), r.jobNumber, r.truckId && (truckById[r.truckId]?.name || `truck #${r.truckId}`)].filter(Boolean).join(" · ")
+                            || (fromBank ? <span style={{ color:"#C2410C", fontSize:11 }}>unattributed</span> : "—")}
                         </td>
                         <td style={td}>
-                          {e.receipt_url ? (
+                          {!fromBank && e.receipt_url ? (
                             (e.receipt_url || "").toLowerCase().includes(".pdf")
                               ? <a href={e.receipt_url} target="_blank" rel="noreferrer" style={{ fontSize:16, textDecoration:"none" }}>📄</a>
                               : <img src={e.receipt_url} alt="recibo" onClick={() => setPayPhotoView(e.receipt_url)} style={{ height:28, width:40, objectFit:"cover", borderRadius:4, cursor:"pointer", border:"1px solid #eee" }} />
                           ) : <span style={{ color:"#ddd" }}>—</span>}
                         </td>
-                        <td style={td}><ExpenseStatusBadge status={e.status || "pending"} /></td>
+                        <td style={td}>{fromBank
+                          ? <span style={{ fontSize:10.5, color:"#888" }}>{r.status}</span>
+                          : <ExpenseStatusBadge status={r.status} />}</td>
                         <td style={{ ...td, whiteSpace:"nowrap" }}>
-                          {canEdit && (e.status || "pending") === "pending" && (
+                          {fromBank ? (
+                            <span style={{ fontSize:10.5, color:"#bbb" }}>edit in Banks</span>
+                          ) : (
                             <>
-                              <button onClick={() => onSetStatus(e, "approved")} title="Aprobar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:15 }}>✅</button>
-                              <button onClick={() => onSetStatus(e, "rejected")} title="Rechazar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:15 }}>❌</button>
+                              {canEdit && r.status === "pending" && (
+                                <>
+                                  <button onClick={() => onSetStatus(e, "approved")} title="Aprobar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:15 }}>✅</button>
+                                  <button onClick={() => onSetStatus(e, "rejected")} title="Rechazar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:15 }}>❌</button>
+                                </>
+                              )}
+                              {canEdit && r.paidFrom === "driver_cash" && r.status === "approved" && !e.settled && (
+                                <button onClick={() => onSettle(e)} title="Mark settled (the driver handed over the rest of the cash)" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>🤝</button>
+                              )}
+                              {canEdit && <button onClick={() => onEdit(e)} title="Editar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>✏️</button>}
+                              {canEdit && <button onClick={() => onDelete(e)} title="Borrar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>🗑️</button>}
                             </>
                           )}
-                          {canEdit && e.paid_from === "driver_cash" && e.status === "approved" && !e.settled && (
-                            <button onClick={() => onSettle(e)} title="Mark settled (the driver handed over the rest of the cash)" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>🤝</button>
-                          )}
-                          {canEdit && <button onClick={() => onEdit(e)} title="Editar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>✏️</button>}
-                          {canEdit && <button onClick={() => onDelete(e)} title="Borrar" style={{ background:"none", border:"none", cursor:"pointer", fontSize:14 }}>🗑️</button>}
                         </td>
                       </tr>
                     );

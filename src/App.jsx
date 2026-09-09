@@ -11703,6 +11703,7 @@ export default function App() {
       {/* ───────────────────────── EXPENSES ───────────────────────── */}
       {page === "expenses" && (
         <ExpensesPage
+          supabase={supabase}
           missing={expensesMissing} onShowSetup={() => setShowSetup(true)}
           expenses={expenses} driversList={driversList} trucksList={trucksList} trips={trips} jobs={jobs}
           payAccounts={payAccounts} payments={payments} paymentsMissing={paymentsMissing}
