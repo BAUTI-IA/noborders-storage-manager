@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Payments, Extras &amp; Job Entry Guide — No Borders CRM</title>
+<style>
+  @page { size: A4; margin: 14mm 13mm 15mm 13mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html,body { margin:0; padding:0; }
+  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color:#1a1a1a; font-size:11.2px; line-height:1.55; }
+  h1,h2,h3 { margin:0; letter-spacing:-0.02em; }
+  p { margin:0 0 8px; }
+  .muted { color:#888; }
+  .break { page-break-before: always; }
+  h1.sec, h3 { break-after: avoid; }
+  table.g { break-inside: auto; }
+  tr { break-inside: avoid; }
+  .avoid { break-inside: avoid; }
+  ul, ol { margin:4px 0 10px; padding-left:18px; }
+  li { margin-bottom:4px; }
+  .mono { font-family: ui-monospace, monospace; }
+
+  .cover { page-break-after: always; height: 261mm; border-radius:20px; overflow:hidden;
+           background: linear-gradient(160deg,#2a0f2a 0%, #3a1240 55%, #260c33 100%); color:#fff; position:relative; padding:34mm 24mm; }
+  .cover .kicker { font-size:12px; font-weight:700; letter-spacing:0.22em; text-transform:uppercase; color:#d0a5e0; }
+  .cover h1 { font-size:44px; font-weight:800; margin:14px 0 6px; line-height:1.08; }
+  .cover .sub { font-size:19px; color:#e0cde8; font-weight:500; }
+  .cover .pill { display:inline-block; margin-top:30px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18);
+                 border-radius:30px; padding:9px 18px; font-size:13px; color:#f2e7f7; }
+  .cover .foot { position:absolute; left:24mm; right:24mm; bottom:26mm; display:flex; justify-content:space-between; align-items:flex-end;
+                 border-top:1px solid rgba(255,255,255,0.14); padding-top:16px; font-size:12px; color:#c8a5d4; }
+  .cover .mock { position:absolute; right:18mm; top:118mm; display:flex; gap:10px; opacity:0.96; }
+  .cover .chip { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:14px 16px; min-width:118px; }
+  .cover .chip .n { font-size:22px; font-weight:800; }
+  .cover .chip .l { font-size:11px; color:#c8a5d4; margin-top:2px; }
+
+  .sec { font-size:21px; font-weight:800; margin:24px 0 4px; }
+  .sec .num { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:9px;
+              background:#5b21b6; color:#fff; font-size:15px; margin-right:10px; vertical-align:middle; }
+  .lead { color:#666; margin:0 0 14px; font-size:12px; }
+
+  .note { background:#F6F0FC; border:1px solid #E2D3F2; border-left:4px solid #8B5CF6; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .note b { color:#5B21B6; }
+  .info { background:#F1F7FD; border:1px solid #D6E6F5; border-left:4px solid #378ADD; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .info b { color:#185FA5; }
+  .warn { background:#FFF6E8; border:1px solid #F4DDB0; border-left:4px solid #EF9F27; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .danger { background:#FCEBEB; border:1px solid #F3C9C9; border-left:4px solid #E24B4A; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .danger b { color:#A32D2D; }
+  .ok { background:#F0FAF3; border:1px solid #CBE8D4; border-left:4px solid #2F9E57; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .ok b { color:#1D7A40; }
+
+  .flow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:10px 0; }
+  .fbox { border:1.5px solid #d8d8d8; border-radius:9px; padding:8px 12px; font-size:10.5px; font-weight:700; text-align:center; background:#fff; }
+  .farrow { color:#bbb; font-weight:800; }
+
+  table.g { width:100%; border-collapse:collapse; font-size:11px; margin-top:6px; }
+  table.g th { text-align:left; background:#5b21b6; color:#fff; padding:8px 11px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  table.g td { padding:8px 11px; border-bottom:1px solid #eee; vertical-align:top; }
+  table.g tr:nth-child(even) td { background:#fafafa; }
+  table.g td:first-child { font-weight:700; }
+
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .card { border:1px solid #ececec; border-radius:11px; padding:13px 15px; }
+  .card h3 { font-size:13px; margin-bottom:4px; }
+  .tag { display:inline-block; font-size:9px; font-weight:700; padding:2px 7px; border-radius:6px; }
+
+  .split { background:#F6F0FC; border:1.5px solid #C9AEE8; border-radius:12px; padding:13px 15px; font-size:10.5px; break-inside:avoid; }
+  .split .h { font-weight:800; color:#5B21B6; margin-bottom:8px; font-size:11.5px; }
+  .split .row { display:flex; align-items:center; gap:8px; background:#fff; border:1px solid #e7dbf3; border-radius:8px; padding:7px 10px; margin-bottom:6px; }
+  .split .row .c { flex:1; }
+  .split .row .amt { font-family:ui-monospace,monospace; font-weight:700; background:#faf7fd; border:1px solid #ddd; border-radius:6px; padding:3px 8px; min-width:64px; text-align:right; }
+  .split .row .rest { font-size:9px; color:#888; min-width:88px; text-align:right; }
+  .split .foot2 { display:flex; justify-content:space-between; font-weight:700; padding:4px 2px 0; }
+
+  .step { display:flex; gap:10px; align-items:flex-start; margin:9px 0; }
+  .step .n { flex-shrink:0; width:22px; height:22px; border-radius:50%; background:#5b21b6; color:#fff; font-weight:800; font-size:11px; display:inline-flex; align-items:center; justify-content:center; margin-top:1px; }
+
+  .recipe { border:1px solid #e7dbf3; border-radius:11px; padding:12px 14px; margin:10px 0; break-inside:avoid; }
+  .recipe h3 { font-size:12.5px; color:#5B21B6; }
+  .recipe .steps { font-size:10.8px; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="cover">
+  <div class="kicker">No Borders Moving &amp; Storage</div>
+  <h1>Payments, Extras<br>&amp; Job Entry</h1>
+  <div class="sub">Step-by-step guide: enter the job right, collect it right, lose nothing</div>
+  <div class="pill">💼 Job form · 💰 + Payment · ✂️ Assign to charges · On account · ➕ Extras</div>
+
+  <div class="mock">
+    <div class="chip"><div class="n" style="color:#d0a5e0">✂️</div><div class="l">Allocation per charge</div></div>
+    <div class="chip"><div class="n" style="color:#E88">$0</div><div class="l">On account at day's end</div></div>
+    <div class="chip"><div class="n" style="color:#8fd0a5">✓</div><div class="l">Every extra collected</div></div>
+  </div>
+
+  <div class="foot">
+    <div>Version 2.0 · September 2026 · Internal use</div>
+    <div>The tricky part of the CRM, made simple 😅</div>
+  </div>
+</div>
+
+<!-- ============ 1 KEY IDEAS ============ -->
+<h1 class="sec"><span class="num">1</span>The 3 ideas that put everything in order</h1>
+<p class="lead">Understand this page and the rest is just pressing buttons.</p>
+
+<div class="card avoid" style="margin-bottom:10px">
+  <h3>💡 Idea 1 — A charge and a payment are different things</h3>
+  <p style="margin:0">A <b>charge</b> is something the client <b>owes</b>: the job balance (pickup + delivery), the BOL balance, every <b>extra / additional service</b>, and each month of storage billing. A <b>payment</b> is money that <b>came in</b>. The magic is <b>connecting them</b>: every payment is applied against one or more charges. That connection is the <b>allocation</b> ("Assign to charges").</p>
+</div>
+<div class="card avoid" style="margin-bottom:10px">
+  <h3>💡 Idea 2 — The client pays ONE amount, the job has SEVERAL charges</h3>
+  <p style="margin:0">The client doesn't pay "the shuttle" and separately "the balance" — they hand over <b>$1,500 all together</b>. If you enter that as a loose payment, the system can't tell what got paid: the job may look "collected" with an unpaid extra (and the driver's commission stuck), or the other way around. <b>That's why you always allocate.</b></p>
+</div>
+<div class="card avoid">
+  <h3>💡 Idea 3 — Whatever you don't allocate stays "On account" (not an error… if you resolve it)</h3>
+  <p style="margin:0">If money comes in and you don't know yet what it's for, it stays <b>"On account"</b>: received but not applied. It isn't lost — the job shows it as <b>"On account (unallocated)"</b> with an <b>Asignar / Assign</b> button to spread it later. Golden rule: <b>by the end of the day, nothing on account</b>.</p>
+</div>
+
+<h3 style="margin-top:14px">The journey of every dollar</h3>
+<div class="flow">
+  <span class="fbox" style="border-color:#EF9F27;color:#92600B">Charge pending</span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#8B5CF6;color:#5B21B6">Payment entered<br><span style="font-weight:500;font-size:9px">+ Payment</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#8B5CF6;color:#5B21B6">Allocated to its charges<br><span style="font-weight:500;font-size:9px">✂️ Assign</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#E24B4A;color:#A32D2D">In circulation<br><span style="font-weight:500;font-size:9px">if cash / check</span></span><span class="farrow">→</span>
+  <span class="fbox" style="border-color:#2F9E57;color:#1D7A40">Deposited 🏦</span>
+</div>
+<div class="danger avoid"><b>💳 Method rule:</b> <b>digital</b> payments (Zelle, Venmo, card, wire, PayPal, Cash App, Apple Pay) are marked <b>deposited automatically</b>. <b>Physical</b> ones (cash, checks, money orders) stay <b>in circulation</b> — someone is literally holding that money — until you deposit them.</div>
+
+<!-- ============ 2 JOB ENTRY ============ -->
+<h1 class="sec break"><span class="num">2</span>Entering job information — the "+ New job" form 💼</h1>
+<p class="lead">Everything downstream (dispatch, trips, payments, commissions) reads what you type here. The form is split into collapsible sections, and <b>which sections appear depends on the Job type</b>: Full (pickup → storage → delivery), Direct (pickup → delivery), Broker delivery (delivery only).</p>
+
+<table class="g">
+  <tr><th>Section</th><th>What you enter</th></tr>
+  <tr><td>Basic info</td><td><b>Job #*</b> (live duplicate warning: "⚠️ Job X already exists…", with a View job link) · <b>Job type*</b> · Broker · <b>Client*</b> · <b>Client phone</b> · <b>Client email</b> (used later to notify the client and send the BOL for signature) · Rep (internal) · Status · <b>Calendar status (color)</b> · <b>Driver</b> — a checkbox list, tick one or several.</td></tr>
+  <tr><td>Pick up</td><td>Pick up <b>from / to</b> (a date range if not confirmed) · address · city · state · zip · <b>Extra stops</b>.</td></tr>
+  <tr><td>Delivery</td><td><b>FADD*</b> (first available delivery date — drives all urgency colors) · delivery date · address · city · state · zip. On a Direct job, pickup + delivery share one "same day" block.</td></tr>
+  <tr><td>Load / Carga</td><td><b>Volume (CF) — broker estimate</b> · <b>Real CF (measured at loading)</b> — empty = uses the estimate; all occupancy math prefers the real one · Sticker color · Lot number · Carrier notes · Internal notes.</td></tr>
+  <tr><td>Pads</td><td>Pads received from broker · Pads returned · <b>Pads missing (auto)</b> — turns red when &gt; 0.</td></tr>
+  <tr><td>Financial (Full / Direct)</td><td><b>Estimate ($)</b> · <b>Deposit ($)</b> · <b>Pickup balance ($)</b> · <b>Delivery balance ($)</b> · Price / CF ($) · Fuel surcharge (%) · optional <b>🤝 broker share</b> (% of the balance the broker keeps, amount auto).</td></tr>
+  <tr><td>Financial (Broker delivery)</td><td><b>BOL balance to collect from client ($)</b> · Carrier rate / CF · <b>Carrier total (auto)</b> · <b>Closing sheet</b> picker (link to an open sheet or ➕ create one) · <b>BOL collected ($) + Payment method + Collection date</b> · broker share.</td></tr>
+  <tr><td>Storage (optional)</td><td>Unassigned, or tick own warehouses 🏭 and/or rented units, plus <b>Date in</b>.</td></tr>
+  <tr><td>Client storage billing</td><td>Tick "Bill this client for storage (every 30 days)" → monthly rate, first month free?, billing start (auto).</td></tr>
+</table>
+
+<div class="ok avoid"><b>✅ The two money fields that matter most:</b> <b>Pickup balance</b> and <b>Delivery balance</b> — they create the job's base charges. Get them right and every later payment has something true to be allocated against. And if you type a <b>BOL collected</b> amount in the form, the system <b>mirrors it into Payments automatically</b> — never enter that collection a second time.</div>
+
+<h3 style="margin-top:14px">Editing later — the job detail (tap the Job #)</h3>
+<ul>
+  <li><b>Header:</b> job #, status and type badges, sticker/lot, red pills for "FADD overdue" and <b>"$X outstanding"</b>, plus client, broker, rep, 📞 and ✉.</li>
+  <li><b>Status strip:</b> shows what the job actually did, with a status selector pre-loaded with the suggested next step.</li>
+  <li><b>Additional services strip</b> (always visible): one chip per extra with the amount <b>editable inline</b> — anyone can add a service; every add/edit/removal is logged with who and when (see section 5).</li>
+  <li><b>Tabs:</b> <b>Overview</b> (calendar banner, the Route card, the <b>Job total</b> card, Volume &amp; load, "Needs attention" chips, Dispatch notes) · <b>Money</b> (Carrier Settlement, Extras, Payments) · <b>Storage</b> · <b>Timeline</b> (claims + history) · <b>All fields</b> — the full list where <b>every value is edited by clicking on it</b>.</li>
+  <li><b>Dispatch notes:</b> the job's chat — dispatch managers write notes, can <b>@tag a teammate</b> (it lands as a DM in Chats) and <b>notify the client</b> by ✉ Email or 💬 WhatsApp with a pre-composed message.</li>
+</ul>
+<div class="info avoid"><b>💵 The Job total card is your money dashboard for the job:</b> a big <b>Outstanding</b> number over the grand total, a 3-segment bar (Collected / Base pending / Services), then the line items: base job (pickup + delivery + BOL balances) → additional services → <b>Job total</b> → Collected → <b>Outstanding</b>. Its <b>"+ Add payment"</b> button opens the payment composer described next.</div>
+
+<!-- ============ 3 ENTER A PAYMENT ============ -->
+<h1 class="sec"><span class="num">3</span>Entering a payment, step by step 💰</h1>
+<p class="lead">Two doors, same result: <b>"+ Payment"</b> on the Payments page, or <b>"+ Add payment"</b> on the job (fastest — job, balance and driver come pre-loaded).</p>
+
+<div class="step"><span class="n">1</span><span><b>Job.</b> Search by number or client and pick it. If the job has pending extras, the allocation panel arms itself (section 4).</span></div>
+<div class="step"><span class="n">2</span><span><b>Date and amount.</b> The payment date and the <b>total that came in</b> (everything the client handed over, together).</span></div>
+<div class="step"><span class="n">3</span><span><b>Concept.</b> Job / Extra / CC Fee / Storage / <b>On account</b> / Other. If you're going to split across charges, don't sweat this — the allocation rules.</span></div>
+<div class="step"><span class="n">4</span><span><b>Discount</b> (optional) + reason. Net = amount − discount, shown live.</span></div>
+<div class="step"><span class="n">5</span><span><b>Stage:</b> At pick up / At delivery / Other — informational only.</span></div>
+<div class="step"><span class="n">6</span><span><b>Method.</b> Cash, credit card, Zelle, Venmo, check, money order, PayPal, Cash App, wire, Apple Pay. Method-specific fields open up (section 7): check/MO serial + photo, or the card's CC fee.</span></div>
+<div class="step"><span class="n">7</span><span><b>Received:</b> by whom and when (digital methods tick themselves). For physical money: <b>"Who has the money?"</b> — pre-filled with the job's driver. <b>Never leave it empty:</b> it feeds the "In circulation" view.</span></div>
+<div class="step"><span class="n">8</span><span><b>Deposited already?</b> If the cash/check already hit the bank, tick deposited + date + bank account. If not, it stays in circulation (batch deposit later).</span></div>
+<div class="step"><span class="n">9</span><span><b>Allocate</b> with "✂️ Assign to charges" (section 4) and save — the button reads <b>Create payment</b> (or <b>Create split payments</b> if you split).</span></div>
+
+<div class="note avoid"><b>🧾 The payment composer (from the job's Overview tab).</b> The Job total card's <b>+ Add payment</b> works line by line: each row is a <b>Concept + Method + amount</b>, and <b>"+ Another payment method"</b> adds more rows — so "$800 cash + $700 Zelle" (or "balance by check + the extra in cash") is saved as separate payment rows in one shot, with one date and note, and a running Total at the bottom.</div>
+
+<div class="info avoid"><b>🔎 "Does this job have payments?"</b> Search a job number in Payments: a banner answers instantly — ✅ green with count, total and received; 🚫 red "No payments recorded"; or ⚠️ amber if no job matches that number.</div>
+
+<!-- ============ 4 ALLOCATION ============ -->
+<h1 class="sec break"><span class="num">4</span>Allocation: "✂️ Assign to charges"</h1>
+<p class="lead">Split ONE payment across the job's charges, line by line. Thirty seconds that keep everything true.</p>
+
+<div class="step"><span class="n">1</span><span>In the payment modal, tick <b>"✂️ Assign to charges (split)"</b>. The purple panel opens: <i>"Split the payment between the job balance and the pending extras. Whatever you don't assign stays on account."</i></span></div>
+<div class="step"><span class="n">2</span><span>One line appears <b>per charge</b>: the <b>job balance</b> and <b>every active extra</b>, each with its <b>"Pending: $X"</b> (what that charge is still owed).</span></div>
+<div class="step"><span class="n">3</span><span>The system already <b>proposes the split</b>: job balance first, then extras oldest-first. <b>You can override any line by hand.</b></span></div>
+<div class="step"><span class="n">4</span><span>Each line shows <b>"Remaining: $Y"</b> after your allocation — you see live what every charge still owes.</span></div>
+<div class="step"><span class="n">5</span><span>The footer shows <b>"Unassigned (on account): $… / Total: $…"</b> with ✓ or ✗. The ideal: $0 unassigned.</span></div>
+
+<div class="split" style="margin-top:12px">
+  <div class="h">✂️ Assign to charges — what it looks like (example: $1,500 comes in)</div>
+  <div class="row"><span class="c"><b>Job balance</b><br><span class="muted">Pending: $1,200</span></span><span class="amt">1200</span><span class="rest">Remaining: $0 ✓</span></div>
+  <div class="row"><span class="c"><b>Extra · Packing</b><br><span class="muted">Pending: $200</span></span><span class="amt">200</span><span class="rest">Remaining: $0 ✓</span></div>
+  <div class="row"><span class="c"><b>Extra · Long carry</b><br><span class="muted">Pending: $150</span></span><span class="amt">100</span><span class="rest">Remaining: $50</span></div>
+  <div class="foot2"><span>Unassigned (on account): <b style="color:#1D7A40">$0</b></span><span>Total: $1,500 ✓</span></div>
+</div>
+
+<h3 style="margin-top:14px">The panel's rules (what will happen to you)</h3>
+<ul>
+  <li><b>Went over on a line?</b> Allowed: it shows <b>"Overpayment $Z — recorded anyway"</b> (useful when the client overpaid one specific charge).</li>
+  <li><b>Lines add up to more than the payment?</b> That's blocked: an error tells you the allocations exceed the total — lower a line.</li>
+  <li><b>Money left unassigned?</b> It automatically stays <b>on account</b> (section 5). Not an error — but remember to assign it.</li>
+  <li><b>A charge is missing?</b> <b>"+ New extra / another line"</b> creates the charge on the spot: pick the concept (Job / Extra CF / Shuttle / Long carry / Stairs / Packing…), amount and note — and that extra <b>is born straight into the commission system</b> (section 6).</li>
+</ul>
+
+<div class="ok avoid"><b>✅ Why it's worth it:</b> with the payment allocated, the job tells the truth — balance settled, packing paid, long carry owing $50 — and that's what the Dispatching labels (<span class="tag" style="background:#FDE3CF;color:#C2410C">Outstanding</span> / <span class="tag" style="background:#FCEBEB;color:#A32D2D">Not collected</span>), the trips' "To collect", the job's <b>Outstanding</b> pill and the <b>driver commissions</b> all read. An unallocated payment leaves all of that lying.</div>
+
+<!-- ============ 5 ON ACCOUNT ============ -->
+<h1 class="sec"><span class="num">5</span>"On account": money that came in but wasn't applied</h1>
+<p class="lead">Received ✓ · applied ✗. Fixed with the Assign button.</p>
+<ul>
+  <li><b>How it happens:</b> you entered a payment with concept <b>"On account"</b>, or you allocated and left a leftover unassigned.</li>
+  <li><b>Where you see it:</b> in the job detail, Money tab → Payments block: <b>"On account (unallocated): $X"</b> with the <b>Asignar</b> button. Also in the Payments table.</li>
+  <li><b>How to apply it:</b> tap <b>Asignar</b> → the payment reopens with the amount locked and the allocation panel forced on, <b>pre-spread</b> over what the job still owes. Adjust if needed and save.</li>
+</ul>
+<div class="warn avoid"><b>⚠️ Golden rule:</b> "on account" is a <b>transitional</b> state. Money on account = charges still showing unpaid and commissions stuck. Before closing the day, check nothing is left unassigned.</div>
+
+<!-- ============ 6 EXTRAS ============ -->
+<h1 class="sec"><span class="num">6</span>Extras: create them, collect them, commission them ➕</h1>
+<p class="lead">An extra (additional service) is an added charge on a job — shuttle, long carry, packing… — that also splits a commission between driver and rep.</p>
+
+<h3>The 4 ways to create an extra</h3>
+<table class="g">
+  <tr><th>From where</th><th>How</th><th>When it's best</th></tr>
+  <tr><td>1. The job's services strip</td><td>The <b>Additional services</b> strip at the top of the job detail — anyone can add one; amounts edit inline, ✎ opens description + generated by + %.</td><td>The moment the service is agreed with the client — it's always in sight.</td></tr>
+  <tr><td>2. The job's Money tab</td><td>Extras section → <b>"+ Add extra"</b>: type, amount, <b>date</b>, driver, generated by, rep, %.</td><td>Full control over every field, including the reporting month.</td></tr>
+  <tr><td>3. The Extras page</td><td>Each job shows the <b>7 types as rows</b> — tick the box and fill in amount and commissions.</td><td>Bulk load / end-of-week review per driver.</td></tr>
+  <tr><td>4. A payment's split</td><td>In "✂️ Assign to charges" → <b>"+ New extra / another line"</b>: concept + amount.</td><td>The client is already paying for something never entered — create and collect in one step.</td></tr>
+</table>
+
+<h3 style="margin-top:12px">What every extra carries</h3>
+<ul>
+  <li><b>Type:</b> Extra CF · Shuttle · Long carry · Stairs · Packing · Flight charge · Other.</li>
+  <li><b>Amount</b>, <b>date</b> ("Month this extra is reported and paid in" — defaults to today; commissions report under <b>this month</b>, not the job's month), the <b>driver</b> who generated it (defaults to the job's), <b>"Generated by"</b> (Driver only / Driver + Rep / Rep only), the <b>rep</b> if involved, and the <b>commission %</b> — auto-filled by these rules, editable per case:</li>
+</ul>
+<table class="g avoid">
+  <tr><th>Extra</th><th>Driver only</th><th>Driver + Rep</th><th>Rep only</th></tr>
+  <tr><td>Extra CF / Packing / Flight / Other</td><td>Driver 10%</td><td>7% / 3%</td><td>Rep 10%</td></tr>
+  <tr><td>Long carry / Stairs</td><td colspan="3">Always driver 50% (the company keeps 50%). The driver is fixed.</td></tr>
+  <tr><td>Shuttle</td><td>Driver 10%</td><td>7% / 3%</td><td>Rep 5%</td></tr>
+</table>
+
+<h3 style="margin-top:12px">How an extra gets COLLECTED (here's the tricky part)</h3>
+<div class="step"><span class="n">1</span><span>The extra exists → it appears as its <b>own line</b> in the allocation panel of any payment on that job, with its "Pending: $X".</span></div>
+<div class="step"><span class="n">2</span><span>When you assign money to it, the extra turns <b>Paid</b> (green chip on the job). Partial payment = still Pending for the rest.</span></div>
+<div class="step"><span class="n">3</span><span>Extra collected → its <b>commission is locked in</b> and shows in the yellow COMMISSION row of the driver/rep on the Extras page — drivers and reps now share the same table layout (Date · Type · Amount · Generated by · % · Commission) — ready to send with 📋 Copy or 🖨️ PDF.</span></div>
+<div class="danger avoid"><b>🚫 The classic mistake:</b> charging the client "all together" and entering the payment <b>without allocating</b>. Result: the job looks over-collected, the extras stay "Pending", the driver chases his commission and nobody understands anything. <b>A payment that includes extras is ALWAYS entered with the split.</b></div>
+<div class="info avoid"><b>💡 Note:</b> when a split creates a new extra, its commission is then assigned with the <b>"Assign commission"</b> modal (generated by / driver % / rep %) — the system shows the driver / rep / company split live. Long carry and stairs come with the driver fixed at 50%. And remember: every service added or edited on the job posts a <b>note with who and when</b> — the trail can only be deleted by the dispatch manager.</div>
+
+<!-- ============ 7 PAPERWORK METHODS ============ -->
+<h1 class="sec"><span class="num">7</span>Methods with paperwork: check, money order, card 🧾</h1>
+<p class="lead">The three methods that ask for extra data. Enter it complete — it's your backup if something goes missing.</p>
+<div class="two">
+  <div class="card avoid">
+    <h3>🏦 Check</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Type:</b> Cashier's / Personal / Official.</li>
+      <li><b>Serial number</b> — the system warns live if that number <b>is already entered</b> (duplicate check).</li>
+      <li>Bank/issuer, date, memo (and routing/last 4 for personal checks).</li>
+      <li><b>📷 Photo of the check</b> — always take it; it stays on the row (Photo column).</li>
+    </ul>
+  </div>
+  <div class="card avoid">
+    <h3>📮 Money order</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Type:</b> USPS / Western Union / MoneyGram / Other.</li>
+      <li><b>Serial</b> (also duplicate-checked), date, office, purchaser.</li>
+      <li><b>📷 Photo</b> of the money order.</li>
+    </ul>
+  </div>
+</div>
+<div class="card avoid" style="margin-top:12px">
+  <h3>💳 Credit card (CC fee)</h3>
+  <p style="margin:0">Tick <b>"Charge CC fee to client"</b> (3% by default): the system computes the fee and the <b>total to collect</b>, and on save creates a second payment with concept <b>CC Fee</b> <b>by itself</b>. Don't enter it manually — it duplicates. Collected fees show in the purple Payments metric.</p>
+</div>
+<div class="danger avoid" style="margin-top:10px"><b>👐 Cash, checks and money orders stay IN CIRCULATION.</b> The "Who has the money?" field says who's carrying them. In the <b>In circulation</b> tab you see them grouped by person, with the days held: <b>💬 Request deposit</b> sends the pre-written WhatsApp, and the <b>batch deposit</b> (tick → account → date → ✓ Deposit) marks them all deposited in one shot. The <b>red alert</b> lists whatever is 7+ days undeposited: that list must stay empty.</div>
+
+<div class="info avoid"><b>📒 Where do I see everything still owed? AP / AR.</b> The <b>AP / AR</b> page (Finance menu, between Payments and Expenses) is the bird's-eye view: <b>They owe us (AR)</b> — job outstanding balances, storage billing, settlements in our favor — vs <b>We owe (AP)</b> — bills, expenses, settlements against us, driver pay weeks — with aging bars (0-30 / 31-60 / 61-90 / 90+) and one-click jumps back to each job, sheet or bill. If your allocation habits are clean, AR here is the truth.</div>
+
+<!-- ============ 8 RECIPES ============ -->
+<h1 class="sec break"><span class="num">8</span>Recipes: what to do in every typical case 🍳</h1>
+<p class="lead">Find your case and follow the steps. These 8 cover 99% of the days.</p>
+
+<div class="recipe"><h3>1 · The client pays exactly the job balance (the easy one)</h3>
+<div class="steps">Job detail → <b>+ Add payment</b> (job, balance and driver pre-loaded) → method → save. If the job has no extras, no need to open the split: the whole payment goes to the balance.</div></div>
+
+<div class="recipe"><h3>2 · Pays EVERYTHING together: balance + extras</h3>
+<div class="steps">+ Payment → total amount → <b>✂️ Assign to charges</b> → the proposal already splits (balance first, extras after) → check the "Remaining" per line → save as <b>Create split payments</b>. Every extra turns Paid and the commissions lock in.</div></div>
+
+<div class="recipe"><h3>3 · Pays with two methods at once (cash + Zelle)</h3>
+<div class="steps">Job → Overview → Job total card → <b>+ Add payment</b> → one line per method ("+ Another payment method") with its concept and amount → Save payment. Each line becomes its own payment row — the cash goes to circulation, the Zelle auto-deposits.</div></div>
+
+<div class="recipe"><h3>4 · Pays an extra that was NEVER entered</h3>
+<div class="steps">+ Payment → ✂️ Assign to charges → <b>+ New extra / another line</b> → pick the concept (shuttle, packing…), amount and note → save. Then complete the commission with <b>"Assign commission"</b> (generated by / driver % / rep %).</div></div>
+
+<div class="recipe"><h3>5 · A deposit / advance "for the job in general"</h3>
+<div class="steps">+ Payment → concept <b>"On account"</b> (or leave the leftover unassigned in the split) → when it's clear what it's for, <b>Asignar</b> button on the job → the panel opens pre-spread over what's owed → confirm.</div></div>
+
+<div class="recipe"><h3>6 · Pays less (partial) or pays more</h3>
+<div class="steps">Partial: enter what came in → ✂️ split → the proposal fills the job balance first; the "Remaining" numbers say exactly what's still owed. Overpay: assign the overpayment to its line ("Overpayment $Z — recorded anyway") or leave the excess <b>on account</b> for a future charge.</div></div>
+
+<div class="recipe"><h3>7 · Collecting the BOL of a broker delivery</h3>
+<div class="steps">Type it once — in the <b>job form's</b> "BOL collected + method + date" fields, in the job's Carrier Settlement section (<b>Record payment</b>), or on the closing sheet in Settlements. <b>All three mirror into Payments automatically:</b> one record, never two.</div></div>
+
+<div class="recipe"><h3>8 · Monthly storage payment</h3>
+<div class="steps"><b>Storage Billing</b> page → the cycle's charge is generated automatically → <b>Mark paid</b> (or enter the payment with concept Storage and allocate it). The 💬 WhatsApp reminder comes pre-written.</div></div>
+
+<!-- ============ 9 MISTAKES ============ -->
+<h1 class="sec break"><span class="num">9</span>The 8 classic mistakes (and how to avoid them) 🚫</h1>
+<table class="g">
+  <tr><th>Mistake</th><th>What it breaks</th><th>The right way</th></tr>
+  <tr><td>Entering the payment without allocating</td><td>The job "looks" collected but the extras stay pending; commissions stuck.</td><td>Always <b>✂️ Assign to charges</b> when the payment covers more than one charge.</td></tr>
+  <tr><td>Entering the BOL collection twice</td><td>Payments and Settlements duplicated; the settlement math breaks.</td><td>Enter it <b>once</b> (job form, job detail or sheet) — it syncs by itself.</td></tr>
+  <tr><td>Typing the card fee by hand</td><td>Duplicated fee (the system already creates it).</td><td>Use the <b>"Charge CC fee to client"</b> tick and done.</td></tr>
+  <tr><td>"Who has the money?" left empty</td><td>The In circulation view can't tell who to chase; money "floats".</td><td>Always set the holder on physical payments (pre-filled with the driver).</td></tr>
+  <tr><td>Leaving money on account for days</td><td>Charges show unpaid, commissions stuck, the client swears they paid.</td><td>Rule: <b>$0 on account at the end of the day</b> — the Asignar button.</td></tr>
+  <tr><td>Extra without driver/rep or "generated by"</td><td>The commission computes wrong or not at all.</td><td>Complete generated by + % (they auto-fill; double-check them).</td></tr>
+  <tr><td>Wrong extra date</td><td>The commission reports (and pays) in the wrong month.</td><td>The extra's <b>date</b> = the month it's reported and paid in. Default is today — adjust it if you're loading late.</td></tr>
+  <tr><td>Check without photo or serial</td><td>No backup if it's lost; duplicates invisible.</td><td>Serial + 📷 photo ALWAYS (the system flags duplicates by serial).</td></tr>
+</table>
+
+<h3 style="margin-top:16px">Cheat sheet 📌</h3>
+<div class="card avoid" style="background:#2a0f2a;border-color:#2a0f2a;color:#fff">
+  <ul style="margin-bottom:0;color:#e6d7ee">
+    <li><b style="color:#fff">A payment = what came in. The allocation = what it was for.</b> Never enter the first without the second.</li>
+    <li>The job's <b style="color:#fff">balances are born in the form</b> — pickup balance + delivery balance. Type them right.</li>
+    <li>The ✂️ panel already <b style="color:#fff">proposes the split</b> — just check the "Remaining" numbers.</li>
+    <li>Charge missing? <b style="color:#fff">+ New extra / another line</b>, right there.</li>
+    <li>Money left over → <b style="color:#fff">on account</b> → <b style="color:#fff">Asignar</b> button before closing the day.</li>
+    <li>Extra collected = <b style="color:#fff">commission locked</b>. Extra pending = driver chasing you. Extra's date = its <b style="color:#fff">reporting month</b>.</li>
+    <li>BOL: <b style="color:#fff">once</b> — the form, the job and Settlements all talk to Payments.</li>
+    <li>Physical money → <b style="color:#fff">who holds it</b> → batch deposit → red alert at $0.</li>
+  </ul>
+</div>
+
+<p style="margin-top:18px;color:#888">Weird case? Ask in the <span class="mono">general</span> channel in Chats before improvising. 💜</p>
+
+</body>
+</html>
