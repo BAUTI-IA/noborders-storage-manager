@@ -31,10 +31,40 @@ const TOKEN = process.env.SUPABASE_ACCESS_TOKEN;
 const sq = (v) => v == null ? "null" : `'${String(v).replace(/'/g, "''")}'`;
 // One insert per seed category, idempotent by name.
 const CATEGORY_SEED_SQL = SEED_BANK_CATEGORIES.map(c =>
-  `insert into public.bank_categories (name, direction, pnl_group, is_transfer, icon, sort)
-  select ${sq(c.name)}, ${sq(c.direction)}, ${sq(c.pnl_group)}, ${c.is_transfer ? "true" : "false"}, ${sq(c.icon)}, ${c.sort}
+  `insert into public.bank_categories (name, direction, pnl_group, gaap_category, is_transfer, icon, sort)
+  select ${sq(c.name)}, ${sq(c.direction)}, ${sq(c.pnl_group)}, ${sq(c.gaap_category)}, ${c.is_transfer ? "true" : "false"}, ${sq(c.icon)}, ${c.sort}
   where not exists (select 1 from public.bank_categories where lower(name) = lower(${sq(c.name)}));`
 ).join("\n");
+
+// Existing installs: the inserts above are no-ops (the categories already
+// exist), so backfill gaap_category on whatever is already there. Only rows
+// with NO classification yet are touched — anything a person already picked is
+// left alone, so this stays re-runnable and never overwrites a human decision.
+//
+// One statement, evaluated top-down: the named exceptions first (where the
+// accountant's lens genuinely differs from the bookkeeper's Type column), then
+// a generic rule derived from the taxonomy the row already has, which also
+// covers categories the owner added himself and any future one.
+const GAAP_EXCEPTIONS = [
+  ["Refund", "Other Income"],                             // money coming back, not a sale
+  ["Returned Deposit", "Other Income"],
+  ["Commissions", "Selling & Marketing Expense"],         // cost of booking the job, not of doing it
+  ["Loren Expenses", "Owner's Draw / Distribution"],      // equity, not an operating expense
+  ["Bauti Expenses", "Owner's Draw / Distribution"],
+  ["Taxes", "Income Tax Expense"],
+  ["Fines", "Other Expense"],
+];
+const GAAP_BACKFILL_SQL = `update public.bank_categories set gaap_category = case
+${GAAP_EXCEPTIONS.map(([name, gaap]) => `    when lower(name) = lower(${sq(name)}) then ${sq(gaap)}`).join("\n")}
+    when is_transfer then 'Transfer / Not in P&L'
+    when direction = 'in' then 'Revenue'
+    when pnl_group in ('Cost of Revenues', 'Production Expenses', 'Broker') then 'Cost of Goods Sold'
+    when pnl_group = 'Sales & Marketing Expenses' then 'Selling & Marketing Expense'
+    when pnl_group = 'Structure Expenses' then 'General & Administrative Expense'
+    when pnl_group = 'CapEx' then 'Fixed Asset (CapEx)'
+    else null
+  end
+where gaap_category is null or gaap_category = '';`;
 
 const SQL = `create table if not exists public.bank_accounts (
   id bigint generated always as identity primary key,
@@ -85,10 +115,14 @@ create table if not exists public.bank_categories (
   sort int,
   created_at timestamptz default now()
 );
+-- Second lens on the same category: where the accountant posts it on a standard
+-- income statement. Purely descriptive — no P&L math reads it.
+alter table public.bank_categories add column if not exists gaap_category text;
 alter table public.bank_categories enable row level security;
 drop policy if exists "bank_categories_all" on public.bank_categories;
 create policy "bank_categories_all" on public.bank_categories for all to anon, authenticated using (true) with check (true);
 ${CATEGORY_SEED_SQL}
+${GAAP_BACKFILL_SQL}
 
 create table if not exists public.bank_import_batches (
   id bigint generated always as identity primary key,

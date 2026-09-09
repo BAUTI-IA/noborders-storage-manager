@@ -10,7 +10,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { selectAll } from "./db.js";
 import {
-  SEED_BANK_CATEGORIES, PNL_GROUPS, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
+  SEED_BANK_CATEGORIES, PNL_GROUPS, GAAP_CATEGORIES, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
   parseCsv, mapBankCsv, reconcileBank, bankPnlStatement, pnlStatementFromRows,
 } from "./bankData.js";
@@ -570,7 +570,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
   // CSV column mapping
   const [csvRows, setCsvRows] = useState(null);
   const [map, setMap] = useState({ date:"", description:"", amount:"", debit:"", credit:"" });
-  // Master-CSV bulk mode (per-row account_name + category → verified)
+  // Master-CSV bulk mode (per-row account_name + category → review queue)
   const [master, setMaster] = useState(null);
   const [masterProgress, setMasterProgress] = useState("");
 
@@ -620,9 +620,9 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       setFileRef(file.name);
 
       // "CSV maestro": a per-row account_name column + category already set
-      // (the bookkeeper's master export). Rows go straight in as verified,
-      // each matched to its account by name — no manual mapping, no review
-      // queue for 5.000 rows.
+      // (the bookkeeper's master export). Each row is matched to its account by
+      // name and its category is pre-filled from the file — but it still enters
+      // the review queue: NOTHING is verified without a person doing it.
       const h = rows[0].map(x => x.toLowerCase().trim());
       if (h.includes("account_name")) {
         const idx = (name) => h.indexOf(name);
@@ -663,15 +663,24 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
     setBusy(false);
   };
 
-  // Bulk load of the master CSV: rows enter as VERIFIED (they come categorized
-  // from the bookkeeper's file) in chunks; the dedup index makes re-uploads
-  // idempotent.
+  // Bulk load of the master CSV: rows enter UNREVIEWED in chunks; the dedup
+  // index makes re-uploads idempotent. The category from the bookkeeper's file
+  // is kept as a pre-fill, but the categorize→verify double-check is still done
+  // by hand by two different people — no row is ever verified automatically.
+  //
+  // Legacy note: this import used to insert rows straight as 'verified',
+  // stamping categorized_by/verified_by with the same user and timestamp. Those
+  // rows were deliberately LEFT as verified (the rule starts from this change
+  // on), so a bank_transactions row that was never actually double-checked by a
+  // person is still recognizable by that auto-stamp signature:
+  //   source = 'csv_reload'
+  //   and verified_by is not distinct from categorized_by
+  //   and verified_at = categorized_at
   const confirmMasterImport = async () => {
     if (!master?.rows?.length) return;
     setBusy(true); setError("");
     try {
       const who = session?.user?.email || "csv_reload";
-      const now = new Date().toISOString();
       const { data: batch, error: bErr } = await supabase.from("bank_import_batches").insert({
         bank_account_id: null, source: "csv_reload", file_ref: master.fileName || null,
         rows_extracted: master.rows.length, rows_imported: master.rows.length, created_by: who,
@@ -681,8 +690,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         bank_account_id: d.bank_account_id, import_batch_id: batch.id,
         txn_date: d.txn_date, amount: d.amount, direction: d.amount < 0 ? "out" : "in",
         raw_description: d.raw_description || null, category: d.category || null,
-        status: "verified", source: "csv_reload", source_ref: master.fileName || null,
-        categorized_by: who, categorized_at: now, verified_by: who, verified_at: now,
+        status: "unreviewed", source: "csv_reload", source_ref: master.fileName || null,
         created_by: who,
         dedup_hash: dedupHash(d),
       }));
@@ -785,7 +793,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       {mode === "csv" && !csvRows && !master && (
         <div onClick={() => !busy && document.getElementById("bank-csv-input")?.click()}
           style={{ border:"2px dashed #ddd", borderRadius:10, padding:18, textAlign:"center", background:"#fafafa", cursor:"pointer", fontSize:12.5, color:"#888", marginBottom:12 }}>
-          {busy ? "Processing…" : "Tap to upload the CSV exported from the bank (if your bank exports Excel, save it as CSV first). If the CSV has the account_name + category column (master CSV), it loads by itself, already verified."}
+          {busy ? "Processing…" : "Tap to upload the CSV exported from the bank (if your bank exports Excel, save it as CSV first). If the CSV has the account_name + category column (master CSV), it loads by itself with the category pre-filled, pending review."}
           <input id="bank-csv-input" type="file" accept=".csv,text/csv" style={{ display:"none" }}
             onChange={e => { const f = e.target.files[0]; if (f) onCsvFile(f); e.target.value = ""; }} />
         </div>
@@ -807,7 +815,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
               {Object.entries(byAcc).map(([n, c]) => <div key={n}>· {n}: <b>{c.toLocaleString()}</b> transactions</div>)}
               <div>· Months: {[...months].sort()[0]} → {[...months].sort().slice(-1)[0]} · Inflows <b style={{ color:"#3B6D11" }}>{fmt$(tin)}</b> · Outflows <b style={{ color:"#A32D2D" }}>{fmt$(tout)}</b></div>
             </div>
-            <div style={{ fontSize:11.5, color:"#888", margin:"8px 0" }}>Each row goes to its account (by name) with the CSV's category, and enters as <b>verified</b>. Re-uploading the same file doesn't duplicate anything.</div>
+            <div style={{ fontSize:11.5, color:"#888", margin:"8px 0" }}>Each row goes to its account (by name) with the CSV's category pre-filled, and enters as <b>unreviewed</b>: someone has to categorize it and someone else has to verify it. Re-uploading the same file doesn't duplicate anything.</div>
             <div style={{ display:"flex", gap:8 }}>
               <Btn onClick={confirmMasterImport} disabled={busy}>{busy ? `${tr("Loading…", "Cargando…")} ${masterProgress}` : `${tr("⬆ Load", "⬆ Cargar")} ${master.rows.length.toLocaleString()} ${tr("transactions", "movimientos")}`}</Btn>
               <Btn onClick={() => setMaster(null)} disabled={busy}>Cancel</Btn>
@@ -967,13 +975,16 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
   const [editing, setEditing] = useState(null); // row being edited, or null = new
   const [form, setForm] = useState(EMPTY_BANK_CATEGORY);
   const [saving, setSaving] = useState(false);
+  // True once a write comes back complaining about gaap_category → the
+  // setup-bank.mjs migration hasn't been run on this database yet.
+  const [gaapMissing, setGaapMissing] = useState(false);
 
   const usesOf = (name) => txns.filter(t => t.category === name).length;
 
   const openAdd = () => { setEditing(null); setForm(EMPTY_BANK_CATEGORY); setShowModal(true); };
   const openEdit = (c) => {
     setEditing(c);
-    setForm({ name: c.name || "", direction: c.direction || (c.is_transfer ? "" : "out"), pnl_group: c.pnl_group || "", is_transfer: !!c.is_transfer, icon: c.icon || "", active: c.active !== false });
+    setForm({ name: c.name || "", direction: c.direction || (c.is_transfer ? "" : "out"), pnl_group: c.pnl_group || "", gaap_category: c.gaap_category || "", is_transfer: !!c.is_transfer, icon: c.icon || "", active: c.active !== false });
     setShowModal(true);
   };
   const save = async () => {
@@ -985,18 +996,33 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
       name, icon: form.icon || null, is_transfer: !!form.is_transfer, active: form.active !== false,
       direction: form.is_transfer ? null : (form.direction || "out"),
       pnl_group: (form.is_transfer || form.direction === "in") ? null : (form.pnl_group || null),
+      gaap_category: form.gaap_category || null,
     };
-    let error;
-    if (editing) {
-      ({ error } = await supabase.from("bank_categories").update(payload).eq("id", editing.id));
-      // Rename cascades: transactions store the category NAME.
-      if (!error && editing.name !== name) {
-        await supabase.from("bank_transactions").update({ category: name }).eq("category", editing.name);
-        await supabase.from("bank_transactions").update({ ai_suggested_category: name }).eq("ai_suggested_category", editing.name);
-        onReloadTxns();
+    // The gaap_category column arrives with the setup-bank.mjs migration. If the
+    // front is deployed before that runs, PostgREST rejects the whole write for
+    // the unknown column — so retry once without it instead of blocking every
+    // edit on the migration.
+    const write = async (body) => {
+      const q = editing
+        ? supabase.from("bank_categories").update(body).eq("id", editing.id)
+        : supabase.from("bank_categories").insert({ ...body, sort: 100 + list.length });
+      const { error } = await q;
+      // Retry only while the field is actually still in the body, so a stubborn
+      // error mentioning it can never loop.
+      if (error && "gaap_category" in body && /gaap_category/.test(error.message || "")) {
+        setGaapMissing(true);
+        const { gaap_category, ...rest } = body;
+        return write(rest);
       }
-    } else {
-      ({ error } = await supabase.from("bank_categories").insert({ ...payload, sort: 100 + list.length }));
+      return error;
+    };
+
+    const error = await write(payload);
+    // Rename cascades: transactions store the category NAME.
+    if (editing && !error && editing.name !== name) {
+      await supabase.from("bank_transactions").update({ category: name }).eq("category", editing.name);
+      await supabase.from("bank_transactions").update({ ai_suggested_category: name }).eq("ai_suggested_category", editing.name);
+      onReloadTxns();
     }
     setSaving(false);
     if (error) { window.alert(error.message); return; }
@@ -1014,16 +1040,27 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
       <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>
         These are the same categories and groups from the Bank Flows Excel. You can add new ones or rename — already-categorized transactions update by themselves. Deactivating a category removes it from the selector without touching the history.
       </div>
+      {gaapMissing && (
+        <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#854F0B" }}>
+          ⚠️ <b>GAAP category</b>
+          <span> is not in the database yet, so it was not saved. Run scripts/setup-bank.mjs once — it adds the column and fills in the classification of the categories that already exist — and save again.</span>
+        </div>
+      )}
+      <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>
+        📘 <b>GAAP category</b>
+        <span> is a second, independent reading of the same category: where an accountant would post it on a standard income statement. It changes nothing in the P&L — the Excel grouping keeps running the business — it is only so the books can be handed to an accountant. Both readings can legitimately disagree: a broker fee is "Broker" for you and "Cost of Goods Sold" for them.</span>
+      </div>
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
-          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Category", "Direction", "P&L group", "Transactions", "Active", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ borderBottom:"1px solid #f3f3f3" }}>{["Category", "Direction", "P&L group", "GAAP category", "Transactions", "Active", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
           <tbody>
-            {list.length === 0 && <tr><td colSpan={6} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Run the setup-bank.mjs migration to seed the Excel categories.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={7} style={{ ...td, color:"#bbb", textAlign:"center", padding:24 }}>Run the setup-bank.mjs migration to seed the Excel categories.</td></tr>}
             {list.map(c => (
               <tr key={c.id} style={{ borderBottom:"1px solid #f7f7f7", opacity: c.active === false ? 0.5 : 1 }}>
                 <td style={{ ...td, fontWeight:600 }}>{c.icon} {c.name}</td>
                 <td style={td}>{c.is_transfer ? "🔁 Transfer" : c.direction === "in" ? "🟢 Income" : "🔴 Expense"}</td>
                 <td style={td}>{groupLabel(c)}</td>
+                <td style={{ ...td, color: c.gaap_category ? "#444" : "#c9c9c9" }}>{c.gaap_category || tr("Not set", "Sin asignar")}</td>
                 <td style={td}>{usesOf(c.name)}</td>
                 <td style={td}>{c.active === false ? "No" : "Yes"}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>
@@ -1060,6 +1097,12 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
               </select>
             </Field>
           )}
+          <Field label="GAAP category (for the accountant)">
+            <select style={inp} value={form.gaap_category} onChange={e => setForm(f => ({ ...f, gaap_category: e.target.value }))}>
+              <option value="">— not set —</option>
+              {GAAP_CATEGORIES.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </Field>
           <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:12 }}>
             <Btn onClick={() => setShowModal(false)}>Cancelar</Btn>
             <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>
