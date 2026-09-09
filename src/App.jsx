@@ -1486,7 +1486,7 @@ const BASEMAPS = {
 const US_VIEW = { center: [39.5, -98.35], zoom: 4 };
 
 const TRUCK_MAP_CSS = `
-.tlm-wrap{position:relative;border:1px solid #e3e9ef;border-radius:12px;overflow:hidden;background:#e9eef2}
+.tlm-wrap{position:relative;z-index:0;isolation:isolate;border:1px solid #e3e9ef;border-radius:12px;overflow:hidden;background:#e9eef2}
 .tlm-map{height:min(560px,66vh);width:100%}
 .tlm-map .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.75)}
 .tlm-pin{position:relative;width:0;height:0}
@@ -10614,11 +10614,11 @@ export default function App() {
                     {/* Map */}
                     <div>
                       <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} googleKey={googleKey} />
-                      <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, color:"#666", padding:"8px 4px 0", paddingRight:78 }}>
-                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
-                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
-                        <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
-                        <span style={{ marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:8 }}>
+                      <div style={{ display:"flex", gap:14, flexWrap:"nowrap", alignItems:"center", fontSize:11, color:"#666", padding:"8px 4px 0", paddingRight:78, overflow:"hidden" }}>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexShrink:0 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexShrink:0 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
+                        <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexShrink:0 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
+                        <span style={{ marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:8, minWidth:0, whiteSpace:"nowrap" }}>
                           {verizonOn ? (<>
                             {/* A live map should look alive: the dot breathes while the
                                 map is polling on its own, and goes solid red on error. */}
@@ -10626,18 +10626,18 @@ export default function App() {
                               background: fleetSync.error ? "#E24B4A" : "#1A8A4E",
                               animation: fleetSync.error ? "none" : "vzpulse 2s ease-in-out infinite" }} />
                             <style>{`@keyframes vzpulse{0%,100%{opacity:1}50%{opacity:.25}}`}</style>
-                            <span style={{ color: fleetSync.error ? "#b91c1c" : "#aaa" }}>
+                            <span style={{ color: fleetSync.error ? "#b91c1c" : "#aaa", minWidth:0, overflow:"hidden", textOverflow:"ellipsis" }}>
                               {fleetSync.error ? t("Verizon Connect: sync error")
                                 : !fleetSync.at ? t("Live from Verizon Connect")
                                 : tr(`Live from Verizon Connect · updated ${timeAgo(fleetSync.at)} · refreshes every ${FLEET_SYNC_MIN} min`,
                                      `En vivo desde Verizon Connect · actualizado ${timeAgo(fleetSync.at)} · se actualiza sola cada ${FLEET_SYNC_MIN} min`)}
                             </span>
                             <button onClick={() => syncFleet(false)} disabled={fleetSync.busy}
-                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor: fleetSync.busy ? "default" : "pointer", textDecoration:"underline" }}>
+                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor: fleetSync.busy ? "default" : "pointer", textDecoration:"underline", flexShrink:0 }}>
                               {fleetSync.busy ? t("Syncing...") : t("Sync now")}
                             </button>
                             <button onClick={runVzDiag} disabled={vzDiag === "loading"}
-                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>
+                              style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", flexShrink:0 }}>
                               {vzDiag === "loading" ? t("Checking...") : t("Check connection")}
                             </button>
                           </>) : (
