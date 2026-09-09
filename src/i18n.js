@@ -185,6 +185,7 @@ export const I18N_ES = {
   "Verizon Connect returned no vehicles.": "Verizon Connect no devolvió ningún vehículo.",
   "Verizon Connect: sync error": "Verizon Connect: error de sincronización",
   "Verizon driver number": "Número de driver en Verizon",
+  "Verizon linking": "Vinculación con Verizon",
   "Verizon vehicle number": "Número de vehículo en Verizon",
   "Waiting for your confirmation": "Esperando que confirmes",
   "We owe (AP)": "Debemos (AP)",
