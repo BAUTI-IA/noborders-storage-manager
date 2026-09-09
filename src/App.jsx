@@ -799,6 +799,25 @@ create policy "csdocs_update" on storage.objects for update to anon, authenticat
 
 do $$ begin alter publication supabase_realtime add table public.closing_sheets; exception when others then null; end $$;`;
 
+// Position history. trucks.last_* only ever holds the newest fix, so without this
+// every sync erases the previous one and no question about a past day can be
+// answered: did this truck move on Tuesday, when did it start, how long was it
+// out. The rows accumulate from the day this ships, so it ships early.
+const TRUCK_PINGS_SQL = `create table if not exists public.truck_pings (
+  id bigint generated always as identity primary key,
+  truck_id bigint references public.trucks(id) on delete cascade,
+  lat numeric,
+  lng numeric,
+  status text,
+  at timestamptz,
+  created_at timestamptz default now(),
+  unique (truck_id, at)
+);
+create index if not exists truck_pings_truck_at on public.truck_pings (truck_id, at desc);
+alter table public.truck_pings enable row level security;
+drop policy if exists "truck_pings_all" on public.truck_pings;
+create policy "truck_pings_all" on public.truck_pings for all to anon, authenticated using (true) with check (true);`;
+
 // ELD hours. Kept apart from the payroll table on purpose — see the comment on
 // driver_hos_days in the expenses SQL below.
 const HOS_SQL = `alter table public.drivers add column if not exists verizon_driver_id text;
@@ -4534,6 +4553,21 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, tripStopsMissing, loadTripStops]);
+
+  // Probe / auto-migrate truck_pings (GPS history).
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("truck_pings").select("id").limit(1);
+      if (cancelled || !error) return;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: TRUCK_PINGS_SQL });
+        if (!rpcErr) break;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
 
   // Probe / auto-migrate driver_hos_days (real ELD hours).
   useEffect(() => {
