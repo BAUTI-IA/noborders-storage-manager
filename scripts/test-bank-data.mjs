@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   parseCsv, mapBankCsv, dedupHash, signedAmount,
   matchBankToPayments, matchBankToExpenses, reconcileBank, bankPnl, bankPnlStatement, pnlStatementFromRows,
-  SEED_BANK_CATEGORIES, PNL_GROUPS, GAAP_CATEGORIES, catByName, isTransferCat, gaapOf,
+  SEED_BANK_CATEGORIES, PNL_GROUPS, GAAP_CATEGORIES, GAAP_NON_PNL, catByName, isTransferCat, gaapOf,
 } from "../src/bankData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -194,6 +194,82 @@ t("pnlStatementFromRows: builds the same waterfall from bank_pnl RPC rows", () =
 });
 
 // ── Catalog (seed = the Excel taxonomy; helpers accept a live DB catalog) ───
+// ── GAAP lens ───────────────────────────────────────────────────────────────
+// A catalog where the two lenses deliberately disagree, plus a truck purchase:
+// the managerial P&L eats it in the month it is paid, GAAP capitalizes it.
+const gaapCats = [
+  { name: "Job", direction: "in", pnl_group: null, is_transfer: false, gaap_category: "Revenue" },
+  { name: "Fuel", direction: "out", pnl_group: "Cost of Revenues", is_transfer: false, gaap_category: "Cost of Goods Sold" },
+  { name: "Fees", direction: "out", pnl_group: "Structure Expenses", is_transfer: false, gaap_category: "General & Administrative Expense" },
+  { name: "Marketing", direction: "out", pnl_group: "Sales & Marketing Expenses", is_transfer: false, gaap_category: "Selling & Marketing Expense" },
+  { name: "Truck Purchase", direction: "out", pnl_group: "CapEx", is_transfer: false, gaap_category: "Fixed Asset (CapEx)" },
+  { name: "Bauti Expenses", direction: "out", pnl_group: "Structure Expenses", is_transfer: false, gaap_category: "Owner's Equity (Draw / Contribution)" },
+];
+const gaapTxns = [
+  { id: 1, txn_date: "2026-07-01", amount: 10000, direction: "in", status: "verified", category: "Job" },
+  { id: 2, txn_date: "2026-07-02", amount: 3000, direction: "out", status: "verified", category: "Fuel" },
+  { id: 3, txn_date: "2026-07-03", amount: 1000, direction: "out", status: "verified", category: "Fees" },
+  { id: 4, txn_date: "2026-07-04", amount: 500, direction: "out", status: "verified", category: "Marketing" },
+  { id: 5, txn_date: "2026-07-05", amount: 40000, direction: "out", status: "verified", category: "Truck Purchase" },
+  { id: 6, txn_date: "2026-07-06", amount: 2000, direction: "out", status: "verified", category: "Bauti Expenses" },
+];
+const gaapArgs = { bankTxns: gaapTxns, categories: gaapCats, from: "2026-07-01", to: "2026-07-31" };
+
+t("GAAP lens: balance-sheet buckets leave the income statement (and are not lost)", () => {
+  const g = bankPnlStatement({ ...gaapArgs, lens: "gaap" });
+  const groups = g.sections.map(s => s.group);
+  assert.ok(!groups.some(x => GAAP_NON_PNL.includes(x)), "a balance-sheet bucket reached the statement");
+  // The truck and the owner draw are reported separately, not silently dropped.
+  assert.deepEqual(g.excluded.map(e => e.name).sort(), ["Bauti Expenses", "Truck Purchase"]);
+  assert.equal(g.excluded.reduce((s, e) => s + e.total, 0), -42000);
+});
+
+t("GAAP lens: Revenue → Gross Profit → Operating Income → Net Income", () => {
+  const g = bankPnlStatement({ ...gaapArgs, lens: "gaap" });
+  assert.deepEqual(g.sections.map(s => s.group),
+    ["Revenue", "Cost of Goods Sold", "Selling & Marketing Expense", "General & Administrative Expense"]);
+  assert.equal(g.gross.total, 7000);              // 10000 − 3000
+  assert.equal(g.operating.total, 5500);          // 7000 − 500 − 1000
+  assert.equal(g.net.total, 5500);                // nothing below the line here
+  // The subtotals hang off the section they close, so the UI stays generic.
+  assert.equal(g.sections.find(s => s.group === "Cost of Goods Sold").subtotal.label, "GROSS PROFIT");
+  assert.equal(g.sections.find(s => s.group === "General & Administrative Expense").subtotal.label, "OPERATING INCOME");
+});
+
+t("GAAP lens: the two views disagree exactly by the balance-sheet items", () => {
+  const mgmt = bankPnlStatement({ ...gaapArgs, lens: "management" });
+  const gaap = bankPnlStatement({ ...gaapArgs, lens: "gaap" });
+  // Managerial net eats the truck and the draw the month they are paid.
+  assert.equal(mgmt.net.total, -36500);           // 10000 −3000 −1000 −500 −40000 −2000
+  assert.equal(gaap.net.total, 5500);
+  assert.equal(gaap.net.total - mgmt.net.total, 42000);
+  // Same underlying rows either way — only the grouping changed.
+  assert.equal(mgmt.count, gaap.count);
+});
+
+t("GAAP lens: a category with no classification is flagged, never counted", () => {
+  const cats = [...gaapCats, { name: "Mystery", direction: "out", pnl_group: "Structure Expenses", is_transfer: false, gaap_category: null }];
+  const txns = [...gaapTxns, { id: 7, txn_date: "2026-07-07", amount: 900, direction: "out", status: "verified", category: "Mystery" }];
+  const g = bankPnlStatement({ bankTxns: txns, categories: cats, from: "2026-07-01", to: "2026-07-31", lens: "gaap" });
+  const unclassified = g.excluded.find(e => e.name === "Mystery");
+  assert.ok(unclassified, "unclassified category should surface in excluded");
+  assert.equal(unclassified.bucket, "(not classified)");
+  assert.equal(g.net.total, 5500); // untouched by the unclassified row
+});
+
+t("GAAP lens: pnlStatementFromRows resolves the bucket from the live catalog", () => {
+  // The RPC returns no gaap_category — it has to be joined by name here.
+  const rpcRows = [
+    { month: "2026-07", category: "Job", direction: "in", pnl_group: null, total: 10000, txn_count: 1 },
+    { month: "2026-07", category: "Fuel", direction: "out", pnl_group: "Cost of Revenues", total: -3000, txn_count: 1 },
+    { month: "2026-07", category: "Truck Purchase", direction: "out", pnl_group: "CapEx", total: -40000, txn_count: 1 },
+  ];
+  const g = pnlStatementFromRows(rpcRows, { from: "2026-07-01", to: "2026-07-31", categories: gaapCats, lens: "gaap" });
+  assert.deepEqual(g.sections.map(s => s.group), ["Revenue", "Cost of Goods Sold"]);
+  assert.equal(g.net.total, 7000);
+  assert.deepEqual(g.excluded.map(e => e.name), ["Truck Purchase"]);
+});
+
 t("catalog: seed mirrors the Excel taxonomy; transfer detected; PNL groups valid", () => {
   for (const c of SEED_BANK_CATEGORIES) {
     assert.ok(c.is_transfer || ["in", "out"].includes(c.direction), c.name);

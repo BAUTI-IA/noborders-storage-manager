@@ -337,13 +337,115 @@ export function bankPnl({ bankTxns, categories = [], from, to, onlyVerified = tr
   return { income, expense: Math.abs(expense), net: income + expense, categories: catRows, groups, series, count: rows.length };
 }
 
+// ── Statement assembly (shared by both P&L builders and both lenses) ────────
+// catRows are { name, byMonth, total, meta, gaap }; amounts keep their sign
+// (income positive, expenses negative), so subtotals just add.
+const sumLines = (lines) => {
+  const byMonth = {};
+  let total = 0;
+  for (const l of lines) { total += l.total; for (const [m, v] of Object.entries(l.byMonth)) byMonth[m] = (byMonth[m] || 0) + v; }
+  return { byMonth, total };
+};
+const addTotals = (a, b) => {
+  const byMonth = { ...a.byMonth };
+  for (const [m, v] of Object.entries(b.byMonth)) byMonth[m] = (byMonth[m] || 0) + v;
+  return { byMonth, total: a.total + b.total };
+};
+const ZERO = { byMonth: {}, total: 0 };
+
+// The GAAP lens. Buckets here belong on the balance sheet and NEVER on an
+// income statement — this is the substantive difference between the two views:
+// the managerial P&L subtracts a truck purchase in the month it is paid, GAAP
+// capitalizes it and expenses it over its life through depreciation. Same for an
+// owner draw (equity) and loan principal (liability). They are not dropped
+// silently: the statement returns them under `excluded` so the tab can show
+// where the cash went.
+export const GAAP_NON_PNL = [
+  "Fixed Asset (CapEx)",
+  "Owner's Equity (Draw / Contribution)",
+  "Loan Principal (not P&L)",
+  "Transfer / Not in P&L",
+];
+// Income-statement sections, in the order they are read down the page.
+const GAAP_ORDER = [
+  "Revenue",
+  "Cost of Goods Sold",
+  "Selling & Marketing Expense",
+  "General & Administrative Expense",
+  "Depreciation & Amortization",
+  "Other Income",
+  "Other Expense",
+  "Interest Expense",
+  "Income Tax Expense",
+];
+const GAAP_OPEX = ["Selling & Marketing Expense", "General & Administrative Expense", "Depreciation & Amortization"];
+const GAAP_BELOW_THE_LINE = ["Other Income", "Other Expense", "Interest Expense", "Income Tax Expense"];
+const isGaapIncomeSection = (g) => g === "Revenue" || g === "Other Income";
+
+// Managerial view: the bookkeeper's Excel "Type" grouping, Revenue → (Cost of
+// Revenues) → Gross Profit → the rest → Net Profit. Every categorized peso
+// lands somewhere, which is exactly what the owner wants from it.
+function assembleManagement(catRows, isIncomeRow) {
+  const revenueLines = catRows.filter(isIncomeRow).sort((a, b) => b.total - a.total);
+  const sections = [{ group: "Revenue", rows: revenueLines, ...sumLines(revenueLines) }];
+  const expenseRows = catRows.filter(c => !isIncomeRow(c));
+  for (const g of PNL_GROUPS) {
+    const lines = expenseRows.filter(c => c.meta?.pnl_group === g).sort((a, b) => a.total - b.total);
+    if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
+  }
+  const other = expenseRows.filter(c => !c.meta?.pnl_group || !PNL_GROUPS.includes(c.meta.pnl_group)).sort((a, b) => a.total - b.total);
+  if (other.length) sections.push({ group: "Other Expenses", rows: other, ...sumLines(other) });
+
+  let running = sections[0] ? { byMonth: { ...sections[0].byMonth }, total: sections[0].total } : { ...ZERO };
+  const cor = sections.find(s => s.group === "Cost of Revenues");
+  const gross = cor ? addTotals(running, cor) : null; // expenses are negative → add
+  if (gross) cor.subtotal = { label: "GROSS PROFIT", line: gross, bg: "#F8FAFC" };
+  running = sections.slice(1).reduce((acc, sec) => addTotals(acc, sec), running);
+  return { sections, gross, operating: null, net: running, excluded: [] };
+}
+
+// GAAP view: same numbers, regrouped the way an accountant reads them, and with
+// the balance-sheet buckets pulled out of the result entirely.
+function assembleGaap(catRows) {
+  const byBucket = {}, excluded = [];
+  for (const c of catRows) {
+    const g = c.gaap || "";
+    if (!g || GAAP_NON_PNL.includes(g)) { excluded.push({ ...c, bucket: g || "(not classified)" }); continue; }
+    (byBucket[g] = byBucket[g] || []).push(c);
+  }
+  const sections = [];
+  for (const g of GAAP_ORDER) {
+    const lines = (byBucket[g] || []).sort((a, b) => isGaapIncomeSection(g) ? b.total - a.total : a.total - b.total);
+    if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
+  }
+  const find = (g) => sections.find(sec => sec.group === g);
+
+  const revenue = find("Revenue") || ZERO;
+  const cogs = find("Cost of Goods Sold");
+  const gross = cogs ? addTotals(revenue, cogs) : null;
+  if (gross) cogs.subtotal = { label: "GROSS PROFIT", line: gross, bg: "#F8FAFC" };
+
+  const opex = GAAP_OPEX.map(find).filter(Boolean);
+  const operating = opex.length ? opex.reduce(addTotals, gross || revenue) : null;
+  if (operating) opex[opex.length - 1].subtotal = { label: "OPERATING INCOME", line: operating, bg: "#F8FAFC" };
+
+  const below = GAAP_BELOW_THE_LINE.map(find).filter(Boolean);
+  const net = below.reduce(addTotals, operating || gross || revenue);
+  return { sections, gross, operating, net, excluded };
+}
+
+// `lens`: "management" (the Excel grouping) or "gaap".
+function assembleStatement(catRows, lens, isIncomeRow) {
+  return lens === "gaap" ? assembleGaap(catRows) : assembleManagement(catRows, isIncomeRow);
+}
+
 // ── P&L statement (classic income-statement layout) ─────────────────────────
 // Months as columns, waterfall as rows: Revenue at the top, then each expense
 // group subtracting down to Net Profit — the layout the owner reads:
 //   Revenue → (Cost of Revenues) → Gross Profit → (Production) → (Structure)
 //   → (S&M) → (Broker) → (CapEx) → Net Profit.
 // Same filters as bankPnl (verified-only by default, transfers/ignored out).
-export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVerified = true }) {
+export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVerified = true, lens = "management" }) {
   const inRange = (d) => (!from || d >= from) && (!to || d <= to);
   const rows = bankTxns.filter(t =>
     t.status !== "ignored" &&
@@ -367,38 +469,9 @@ export function bankPnlStatement({ bankTxns, categories = [], from, to, onlyVeri
     if (mo) c.byMonth[mo] = (c.byMonth[mo] || 0) + amt;
   }
 
-  const catRows = Object.values(byCat).map(c => ({ ...c, meta: catByName(categories, c.name) }));
+  const catRows = Object.values(byCat).map(c => ({ ...c, meta: catByName(categories, c.name), gaap: gaapOf(categories, c.name) }));
   const isIncomeRow = (c) => c.meta ? (c.meta.direction === "in" && !c.meta.is_transfer) : c.total >= 0;
-  const sumLines = (lines) => {
-    const byMonth = {};
-    let total = 0;
-    for (const l of lines) { total += l.total; for (const [m, v] of Object.entries(l.byMonth)) byMonth[m] = (byMonth[m] || 0) + v; }
-    return { byMonth, total };
-  };
-  const addTotals = (a, b) => {
-    const byMonth = { ...a.byMonth };
-    for (const [m, v] of Object.entries(b.byMonth)) byMonth[m] = (byMonth[m] || 0) + v;
-    return { byMonth, total: a.total + b.total };
-  };
-
-  const revenueLines = catRows.filter(isIncomeRow).sort((a, b) => b.total - a.total);
-  const sections = [{ group: "Revenue", rows: revenueLines, ...sumLines(revenueLines) }];
-  const expenseRows = catRows.filter(c => !isIncomeRow(c));
-  for (const g of PNL_GROUPS) {
-    const lines = expenseRows.filter(c => c.meta?.pnl_group === g).sort((a, b) => a.total - b.total);
-    if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
-  }
-  const other = expenseRows.filter(c => !c.meta?.pnl_group || !PNL_GROUPS.includes(c.meta.pnl_group)).sort((a, b) => a.total - b.total);
-  if (other.length) sections.push({ group: "Other Expenses", rows: other, ...sumLines(other) });
-
-  // Running subtotals: Gross Profit = Revenue − Cost of Revenues; Net = everything.
-  let running = sections[0] ? { byMonth: { ...sections[0].byMonth }, total: sections[0].total } : { byMonth: {}, total: 0 };
-  const cor = sections.find(s => s.group === "Cost of Revenues");
-  const gross = cor ? addTotals(running, cor) : null; // expenses are negative → add
-  running = sections.slice(1).reduce((acc, s) => addTotals(acc, s), running);
-  const net = running;
-
-  return { months, sections, gross, net, count: rows.length };
+  return { months, count: rows.length, lens, ...assembleStatement(catRows, lens, isIncomeRow) };
 }
 
 // Categories that never enter the P&L even if not flagged is_transfer in the
@@ -409,7 +482,7 @@ export const EXCLUDED_PNL_CATEGORIES = ["Transfer Between Accounts", "Financing"
 // bank_pnl RPC returns (month × category aggregates computed IN Postgres, so
 // no client row limit can truncate the result). rpcRows:
 //   { month, category, direction, pnl_group, total, txn_count }
-export function pnlStatementFromRows(rpcRows, { from, to } = {}) {
+export function pnlStatementFromRows(rpcRows, { from, to, categories = [], lens = "management" } = {}) {
   const fromMo = monthOf(from || ""), toMo = monthOf(to || "");
   const dataMonths = [...new Set(rpcRows.map(r => r.month).filter(Boolean))].sort();
   const months = (fromMo && toMo) ? monthsBetween(fromMo, toMo) : dataMonths;
@@ -425,35 +498,9 @@ export function pnlStatementFromRows(rpcRows, { from, to } = {}) {
     count += Number(r.txn_count) || 0;
   }
 
-  const catRows = Object.values(byCat);
+  // The RPC aggregates in Postgres and doesn't know about gaap_category, so the
+  // GAAP bucket is resolved here against the live catalog, by category name.
+  const catRows = Object.values(byCat).map(c => ({ ...c, gaap: gaapOf(categories, c.name) }));
   const isIncomeRow = (c) => c.meta?.direction ? c.meta.direction === "in" : c.total >= 0;
-  const sumLines = (lines) => {
-    const byMonth = {};
-    let total = 0;
-    for (const l of lines) { total += l.total; for (const [m, v] of Object.entries(l.byMonth)) byMonth[m] = (byMonth[m] || 0) + v; }
-    return { byMonth, total };
-  };
-  const addTotals = (a, b) => {
-    const byMonth = { ...a.byMonth };
-    for (const [m, v] of Object.entries(b.byMonth)) byMonth[m] = (byMonth[m] || 0) + v;
-    return { byMonth, total: a.total + b.total };
-  };
-
-  const revenueLines = catRows.filter(isIncomeRow).sort((a, b) => b.total - a.total);
-  const sections = [{ group: "Revenue", rows: revenueLines, ...sumLines(revenueLines) }];
-  const expenseRows = catRows.filter(c => !isIncomeRow(c));
-  for (const g of PNL_GROUPS) {
-    const lines = expenseRows.filter(c => c.meta?.pnl_group === g).sort((a, b) => a.total - b.total);
-    if (lines.length) sections.push({ group: g, rows: lines, ...sumLines(lines) });
-  }
-  const other = expenseRows.filter(c => !c.meta?.pnl_group || !PNL_GROUPS.includes(c.meta.pnl_group)).sort((a, b) => a.total - b.total);
-  if (other.length) sections.push({ group: "Other Expenses", rows: other, ...sumLines(other) });
-
-  let running = sections[0] ? { byMonth: { ...sections[0].byMonth }, total: sections[0].total } : { byMonth: {}, total: 0 };
-  const cor = sections.find(s => s.group === "Cost of Revenues");
-  const gross = cor ? addTotals(running, cor) : null;
-  running = sections.slice(1).reduce((acc, s) => addTotals(acc, s), running);
-  const net = running;
-
-  return { months, sections, gross, net, count };
+  return { months, count, lens, ...assembleStatement(catRows, lens, isIncomeRow) };
 }
