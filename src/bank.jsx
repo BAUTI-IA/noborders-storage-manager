@@ -576,7 +576,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
   // CSV column mapping
   const [csvRows, setCsvRows] = useState(null);
   const [map, setMap] = useState({ date:"", description:"", amount:"", debit:"", credit:"" });
-  // Master-CSV bulk mode (per-row account_name + category → verified)
+  // Master-CSV bulk mode (per-row account_name + category → review queue)
   const [master, setMaster] = useState(null);
   const [masterProgress, setMasterProgress] = useState("");
 
@@ -626,9 +626,9 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       setFileRef(file.name);
 
       // "CSV maestro": a per-row account_name column + category already set
-      // (the bookkeeper's master export). Rows go straight in as verified,
-      // each matched to its account by name — no manual mapping, no review
-      // queue for 5.000 rows.
+      // (the bookkeeper's master export). Each row is matched to its account by
+      // name and its category is pre-filled from the file — but it still enters
+      // the review queue: NOTHING is verified without a person doing it.
       const h = rows[0].map(x => x.toLowerCase().trim());
       if (h.includes("account_name")) {
         const idx = (name) => h.indexOf(name);
@@ -669,15 +669,15 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
     setBusy(false);
   };
 
-  // Bulk load of the master CSV: rows enter as VERIFIED (they come categorized
-  // from the bookkeeper's file) in chunks; the dedup index makes re-uploads
-  // idempotent.
+  // Bulk load of the master CSV: rows enter UNREVIEWED in chunks; the dedup
+  // index makes re-uploads idempotent. The category from the bookkeeper's file
+  // is kept as a pre-fill, but the categorize→verify double-check is still done
+  // by hand by two different people — no row is ever verified automatically.
   const confirmMasterImport = async () => {
     if (!master?.rows?.length) return;
     setBusy(true); setError("");
     try {
       const who = session?.user?.email || "csv_reload";
-      const now = new Date().toISOString();
       const { data: batch, error: bErr } = await supabase.from("bank_import_batches").insert({
         bank_account_id: null, source: "csv_reload", file_ref: master.fileName || null,
         rows_extracted: master.rows.length, rows_imported: master.rows.length, created_by: who,
@@ -687,8 +687,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
         bank_account_id: d.bank_account_id, import_batch_id: batch.id,
         txn_date: d.txn_date, amount: d.amount, direction: d.amount < 0 ? "out" : "in",
         raw_description: d.raw_description || null, category: d.category || null,
-        status: "verified", source: "csv_reload", source_ref: master.fileName || null,
-        categorized_by: who, categorized_at: now, verified_by: who, verified_at: now,
+        status: "unreviewed", source: "csv_reload", source_ref: master.fileName || null,
         created_by: who,
         dedup_hash: dedupHash(d),
       }));
@@ -791,7 +790,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
       {mode === "csv" && !csvRows && !master && (
         <div onClick={() => !busy && document.getElementById("bank-csv-input")?.click()}
           style={{ border:"2px dashed #ddd", borderRadius:10, padding:18, textAlign:"center", background:"#fafafa", cursor:"pointer", fontSize:12.5, color:"#888", marginBottom:12 }}>
-          {busy ? "Processing…" : "Tap to upload the CSV exported from the bank (if your bank exports Excel, save it as CSV first). If the CSV has the account_name + category column (master CSV), it loads by itself, already verified."}
+          {busy ? "Processing…" : "Tap to upload the CSV exported from the bank (if your bank exports Excel, save it as CSV first). If the CSV has the account_name + category column (master CSV), it loads by itself with the category pre-filled, pending review."}
           <input id="bank-csv-input" type="file" accept=".csv,text/csv" style={{ display:"none" }}
             onChange={e => { const f = e.target.files[0]; if (f) onCsvFile(f); e.target.value = ""; }} />
         </div>
@@ -813,7 +812,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
               {Object.entries(byAcc).map(([n, c]) => <div key={n}>· {n}: <b>{c.toLocaleString()}</b> transactions</div>)}
               <div>· Months: {[...months].sort()[0]} → {[...months].sort().slice(-1)[0]} · Inflows <b style={{ color:"#3B6D11" }}>{fmt$(tin)}</b> · Outflows <b style={{ color:"#A32D2D" }}>{fmt$(tout)}</b></div>
             </div>
-            <div style={{ fontSize:11.5, color:"#888", margin:"8px 0" }}>Each row goes to its account (by name) with the CSV's category, and enters as <b>verified</b>. Re-uploading the same file doesn't duplicate anything.</div>
+            <div style={{ fontSize:11.5, color:"#888", margin:"8px 0" }}>Each row goes to its account (by name) with the CSV's category pre-filled, and enters as <b>unreviewed</b>: someone has to categorize it and someone else has to verify it. Re-uploading the same file doesn't duplicate anything.</div>
             <div style={{ display:"flex", gap:8 }}>
               <Btn onClick={confirmMasterImport} disabled={busy}>{busy ? `${tr("Loading…", "Cargando…")} ${masterProgress}` : `${tr("⬆ Load", "⬆ Cargar")} ${master.rows.length.toLocaleString()} ${tr("transactions", "movimientos")}`}</Btn>
               <Btn onClick={() => setMaster(null)} disabled={busy}>Cancel</Btn>
