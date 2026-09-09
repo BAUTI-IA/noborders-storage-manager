@@ -10,7 +10,7 @@ import { SuggestionsSection } from "./suggestions.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, computeDriverPnl } from "./analyticsData.js";
-import { ExpensesPage, EMPTY_EXPENSE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
+import { ExpensesPage, EMPTY_EXPENSE, EMPTY_ADJUSTMENT, FIELD_CAT_BY_BANK, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { BancosSection } from "./bank.jsx";
 import { ApArSection } from "./apar.jsx";
@@ -3738,6 +3738,7 @@ export default function App() {
   const [equipUnloadItem, setEquipUnloadItem] = useState(null); // {item, tripId} being unloaded at a destination
   // Expenses (per-driver cost tracking) + work days + materials ledger
   const [expensesMissing, setExpensesMissing] = useState(false); // expenses tables not yet in DB
+  const [linkingBankTxn, setLinkingBankTxn] = useState(null); // statement line being attributed
   const [expenses, setExpenses] = useState([]);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [expenseForm, setExpenseForm] = useState(EMPTY_EXPENSE);
@@ -6682,7 +6683,30 @@ export default function App() {
   // ── Expenses CRUD ──
   function openAddExpense(prefill = {}) {
     setEditingExpenseId(null);
+    setLinkingBankTxn(null);
     setExpenseForm({ ...EMPTY_EXPENSE, expense_date: today(), ...prefill });
+    setShowExpenseModal(true);
+  }
+  // Attributing a statement line = creating the expense row it stands for, and
+  // linking the two. It has to be an expenses row and not a couple of columns on
+  // bank_transactions, because the driver P&L, the driver payables in AP/AR and
+  // the job cost all read `expenses` filtered by driver_id — an attribution
+  // living on the bank row would be invisible to every one of them.
+  function attributeBankTxn(txn) {
+    setEditingExpenseId(null);
+    setLinkingBankTxn(txn);
+    setExpenseForm({
+      ...EMPTY_EXPENSE,
+      expense_date: txn.txn_date || today(),
+      category: FIELD_CAT_BY_BANK[txn.category] || "other",
+      amount: String(Math.abs(numv(txn.amount))),
+      vendor: (txn.raw_description || "").slice(0, 120),
+      paid_from: "bank",
+      // The line already went through categorize→verify in Banks; re-opening
+      // that review here would be asking the same question twice.
+      status: txn.status === "verified" ? "approved" : "pending",
+      notes: `From the bank · ${txn.category}`,
+    });
     setShowExpenseModal(true);
   }
   function openEditExpense(e) {
@@ -6723,11 +6747,19 @@ export default function App() {
     } else {
       const { data, error: insErr } = await supabase.from("expenses").insert([{ ...payload, created_by: userEmail }]).select("*").single();
       error = insErr;
-      if (!error && data) undoMgr.record("Expense creado", [undoMgr.createEntry("expenses", data)]);
+      if (!error && data) {
+        undoMgr.record("Expense creado", [undoMgr.createEntry("expenses", data)]);
+        // Persist the pairing so the merge stops guessing it: this one is known.
+        if (linkingBankTxn) {
+          await supabase.from("bank_transactions")
+            .update({ matched_expense_id: data.id, match_status: "matched" })
+            .eq("id", linkingBankTxn.id);
+        }
+      }
     }
     setExpenseSaving(false);
     if (error) { window.alert(error.message); return; }
-    setShowExpenseModal(false); setEditingExpenseId(null);
+    setShowExpenseModal(false); setEditingExpenseId(null); setLinkingBankTxn(null);
     loadExpenses();
   }
   async function deleteExpense(e) {
@@ -11715,6 +11747,7 @@ export default function App() {
           onSetStatus={setExpenseStatus} onSettle={settleExpense} onUploadReceipt={uploadExpenseReceipt}
           adjForm={adjForm} setAdjForm={setAdjForm} showAdjModal={showAdjModal} setShowAdjModal={setShowAdjModal}
           adjSaving={adjSaving} onAddAdjustment={openAddAdjustment} onSaveAdjustment={saveAdjustment} onDeleteAdjustment={deleteAdjustment}
+          onAttributeBankTxn={attributeBankTxn}
           setPayPhotoView={setPayPhotoView}
           Btn={Btn} Modal={Modal}
         />

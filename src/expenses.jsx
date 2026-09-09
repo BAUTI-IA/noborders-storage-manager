@@ -98,6 +98,7 @@ export function ExpensesPage(props) {
     onEdit, onSave, onDelete, onSetStatus, onSettle, onUploadReceipt,
     adjForm, setAdjForm, showAdjModal, setShowAdjModal, adjSaving,
     onAddAdjustment, onSaveAdjustment, onDeleteAdjustment,
+    onAttributeBankTxn,
     setPayPhotoView, Btn, Modal, supabase,
   } = props;
 
@@ -235,6 +236,9 @@ export function ExpensesPage(props) {
             <Tile label="Unattributed" value={fmt$(totals.unattributed)} color={totals.unattributed > 0 ? "#C2410C" : "#1A8A4E"} sub={`${totals.unattributedCount} ${tr("with no driver, truck, trip or job", "sin driver, truck, trip ni job")}`} />
           </div>
 
+          <div style={{ fontSize:11.5, color:"#999", marginBottom:12, maxWidth:780 }}>
+            🏦 Lines that came off the statement have no driver, truck or job — the bank never records that. Hit <b>Attribute</b> on one to say who and what it belongs to: it opens the expense form already filled in with the date, amount and vendor, and links the two so the cost is counted once and reaches the driver P&L and the job cost.
+          </div>
           <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
             <input style={{ ...inp, width:"auto", minWidth:200, flex:1, maxWidth:300 }} value={fSearch} onChange={e => setFSearch(e.target.value)} placeholder="🔎 Vendor, job #, notes…" />
             <select value={fDriver} onChange={e => setFDriver(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
@@ -319,7 +323,9 @@ export function ExpensesPage(props) {
                           : <ExpenseStatusBadge status={r.status} />}</td>
                         <td style={{ ...td, whiteSpace:"nowrap" }}>
                           {fromBank ? (
-                            <span style={{ fontSize:10.5, color:"#bbb" }}>edit in Banks</span>
+                            canCreate
+                              ? <Btn style={{ fontSize:11.5, padding:"3px 9px" }} onClick={() => onAttributeBankTxn(e)}>✍️ Attribute</Btn>
+                              : <span style={{ fontSize:10.5, color:"#bbb" }}>—</span>
                           ) : (
                             <>
                               {canEdit && r.status === "pending" && (

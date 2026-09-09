@@ -65,19 +65,41 @@ export const isFieldBankCategory = (name) => Object.prototype.hasOwnProperty.cal
 // double-count every bank-paid expense, which is exactly the trap of showing
 // both ledgers side by side.
 //
-// The pairing reuses matchBankToExpenses (amount within a cent, date within a
-// window), the same heuristic the Bancos reconciliation tab uses. It is a
-// guess, not an identity: `reconciled` is a hint for the reader, never a
-// number the page adds up twice.
+// Two ways a statement line and an expense get paired, in this order:
+//   1. bank_transactions.matched_expense_id — a REAL link, written when somebody
+//      attributed the line (that action creates the expense). Certain.
+//   2. matchBankToExpenses — amount within a cent, date within a window, the
+//      same heuristic the Bancos reconciliation tab uses. A guess.
+// The explicit link always wins, and it also removes the pair from the
+// heuristic's pool so one expense can't be claimed twice.
 export function mergeFieldExpenses({ expenses = [], bankTxns = [], categories = [], windowDays = 7 }) {
   const fieldTxns = bankTxns.filter(t =>
     t.status !== "ignored" &&
     signedAmount(t) < 0 &&
     isFieldBankCategory(t.category));
 
-  const { matched } = matchBankToExpenses({ bankTxns: fieldTxns, expenses, categories, windowDays });
-  const matchedTxnIds = new Set(matched.map(m => m.txn.id));
-  const matchedExpenseIds = new Set(matched.map(m => m.expense.id));
+  const expenseById = new Map(expenses.map(e => [e.id, e]));
+  const matchedTxnIds = new Set(), matchedExpenseIds = new Set();
+  const txnByExpenseId = new Map();
+  for (const t of fieldTxns) {
+    const linked = t.matched_expense_id != null && expenseById.has(t.matched_expense_id);
+    if (!linked) continue;
+    matchedTxnIds.add(t.id);
+    matchedExpenseIds.add(t.matched_expense_id);
+    txnByExpenseId.set(t.matched_expense_id, t.id);
+  }
+
+  // Only what the explicit links didn't already claim goes to the heuristic.
+  const { matched } = matchBankToExpenses({
+    bankTxns: fieldTxns.filter(t => !matchedTxnIds.has(t.id)),
+    expenses: expenses.filter(e => !matchedExpenseIds.has(e.id)),
+    categories, windowDays,
+  });
+  for (const m of matched) {
+    matchedTxnIds.add(m.txn.id);
+    matchedExpenseIds.add(m.expense.id);
+    txnByExpenseId.set(m.expense.id, m.txn.id);
+  }
 
   const rows = expenses.map(e => ({
     key: `m-${e.id}`,
@@ -95,6 +117,7 @@ export function mergeFieldExpenses({ expenses = [], bankTxns = [], categories = 
     paidFrom: e.paid_from || "bank",
     status: e.status || "pending",
     reconciled: matchedExpenseIds.has(e.id),
+    bankTxnId: txnByExpenseId.get(e.id) ?? null,
     raw: e,
   }));
 
@@ -114,6 +137,7 @@ export function mergeFieldExpenses({ expenses = [], bankTxns = [], categories = 
       paidFrom: "bank",
       status: t.status || "unreviewed",
       reconciled: false,
+      bankTxnId: t.id,
       raw: t,
     });
   }
