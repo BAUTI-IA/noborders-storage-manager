@@ -1,9 +1,11 @@
-// Expenses — gastos por driver/truck/trip/job, días trabajados y ledger de materiales.
+// Field Expenses — gastos operativos por driver/truck/trip/job y ajustes de pago.
+// Lo que NO pasa por el banco (cash del driver) vive solo acá; lo que sí pasa se
+// cruza contra el extracto en Bancos → Conciliación.
 // UI only: state, Supabase calls and handlers live in App.jsx (same split as analytics.jsx).
 // Shared Btn/Modal components arrive as props to avoid a circular import with App.jsx.
 import { useMemo, useState } from "react";
 import { tr } from "./i18n.js";
-import { numv, monthOf, driverCashReconciliation, materialShortages, payWeekStart, payWeekDays, addDaysISO, workDayPay } from "./analyticsData.js";
+import { numv, monthOf, driverCashReconciliation, payWeekStart, addDaysISO } from "./analyticsData.js";
 
 // Form/constant definitions live here (exported) so App.jsx state and this UI share one copy.
 export const EMPTY_EXPENSE = {
@@ -36,19 +38,8 @@ export const ADJUSTMENT_KINDS = [
   { v:"deduction", l:"Descuento (fuck-up, daño, faltante…)", icon:"🔻" },
   { v:"bonus", l:"Compensación / bono", icon:"💚" },
 ];
-export const EMPTY_MATERIAL_ITEM = { name:"", category:"", unit:"unit", unit_cost:"", active:true, notes:"" };
-export const EMPTY_MATERIAL_MOVE = { item_id:"", movement_type:"issue", quantity:"", unit_cost:"", driver_id:"", trip_id:"", job_number:"", movement_date:"", notes:"" };
-export const MATERIAL_MOVE_TYPES = [
-  { v:"purchase", l:"Purchase (entra a stock)" },
-  { v:"issue", l:"Issue (entregado al driver)" },
-  { v:"return", l:"Return (devuelto por el driver)" },
-  { v:"consume", l:"Consume (usado en un job)" },
-  { v:"adjust", l:"Adjust (corrección de stock)" },
-];
-
 export const expenseCatMeta = (v) => EXPENSE_CATEGORIES.find(c => c.v === v) || EXPENSE_CATEGORIES[EXPENSE_CATEGORIES.length - 1];
 export const paidFromMeta = (v) => PAID_FROM_OPTIONS.find(p => p.v === v) || PAID_FROM_OPTIONS[0];
-const moveTypeLabel = (v) => MATERIAL_MOVE_TYPES.find(t => t.v === v)?.l || v;
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
@@ -103,18 +94,12 @@ function ReceiptBox({ url, onFile, uploading, onView }) {
 export function ExpensesPage(props) {
   const {
     missing, onShowSetup, expenses, driversList, trucksList, trips, jobs,
-    payAccounts, payments, paymentsMissing, workDays, adjustments, materialItems, materialMovements,
+    payAccounts, payments, paymentsMissing, adjustments,
     can, today,
     form, setForm, showModal, setShowModal, editingId, saving, uploading,
     onEdit, onSave, onDelete, onSetStatus, onSettle, onUploadReceipt,
-    onCycleWorkDay,
     adjForm, setAdjForm, showAdjModal, setShowAdjModal, adjSaving,
     onAddAdjustment, onSaveAdjustment, onDeleteAdjustment,
-    materialItemForm, setMaterialItemForm, showMaterialItemModal, setShowMaterialItemModal,
-    editingMaterialItemId, materialSaving,
-    onAddMaterialItem, onEditMaterialItem, onSaveMaterialItem, onDeleteMaterialItem,
-    materialMoveForm, setMaterialMoveForm, showMaterialMoveModal, setShowMaterialMoveModal,
-    onAddMaterialMove, onSaveMaterialMove, onDeleteMaterialMove,
     setPayPhotoView, Btn, Modal,
   } = props;
 
@@ -181,16 +166,8 @@ export function ExpensesPage(props) {
     return driverCashReconciliation({ payments, expenses, driverName: d.name, driverId: d.id });
   }, [paymentsMissing, form.paid_from, form.driver_id, driverById, payments, expenses]);
 
-  const shortages = useMemo(() => materialShortages({ items: materialItems, movements: materialMovements }), [materialItems, materialMovements]);
-
-  // ── Pay-week (Wed→Tue) grid data ──
-  const wdDays = useMemo(() => payWeekDays(weekStart), [weekStart]);
-  const weekEnd = wdDays[6];
-  const wdByDriverDate = useMemo(() => {
-    const m = {};
-    for (const w of workDays) m[w.driver_id + "|" + w.work_date] = w;
-    return m;
-  }, [workDays]);
+  // Adjustments are filed against the pay week (Wed → Tue), same as driver pay.
+  const weekEnd = addDaysISO(weekStart, 6);
   const weekAdjustments = useMemo(
     () => adjustments.filter(a => { const d = a.adj_date || (a.created_at || "").slice(0, 10); return d >= weekStart && d <= weekEnd; }),
     [adjustments, weekStart, weekEnd]
@@ -206,13 +183,13 @@ export function ExpensesPage(props) {
       <datalist id="expense-jobs-list">{jobNumbers.map(n => <option key={n} value={n} />)}</datalist>
       {missing && (
         <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <span>For Expenses (expenses + worked days + materials), run the setup SQL once in Supabase.</span>
+          <span>For Field Expenses, run the setup SQL once in Supabase.</span>
           <button onClick={onShowSetup} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
         </div>
       )}
 
       <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14, flexWrap:"wrap" }}>
-        {[["gastos","💸 Expenses"],["dias","📆 Worked days"],["materiales","📦 Materials"]].map(([v, l]) => (
+        {[["gastos","💸 Expenses"],["ajustes","⚖️ Driver adjustments"]].map(([v, l]) => (
           <button key={v} onClick={() => setTab(v)} style={{ fontSize:13, padding:"6px 13px", borderRadius:7, cursor:"pointer", border:"none", background: tab===v?"#fff":"none", color: tab===v?"#111":"#888", fontWeight: tab===v?600:400, boxShadow: tab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
         ))}
       </div>
@@ -310,93 +287,21 @@ export function ExpensesPage(props) {
       )}
 
       {/* ── Tab: Semana de pago (miércoles → martes) ── */}
-      {tab === "dias" && !missing && (
+      {/* ── Tab: Driver adjustments ── */}
+      {tab === "ajustes" && !missing && (
         <>
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, flexWrap:"wrap" }}>
             <Btn onClick={() => setWeekStart(addDaysISO(weekStart, -7))}>←</Btn>
             <span style={{ fontWeight:700, fontSize:14, textAlign:"center" }}>Wed {fmtShort(weekStart)} → Tue {fmtShort(weekEnd)}</span>
             <Btn onClick={() => setWeekStart(addDaysISO(weekStart, 7))}>→</Btn>
             {weekStart !== payWeekStart(today()) && <Btn onClick={() => setWeekStart(payWeekStart(today()))}>Hoy</Btn>}
-            <span style={{ fontSize:11, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"3px 10px" }}>paid on Wed {fmtShort(addDaysISO(weekStart, 7))}</span>
             {canCreate && <Btn onClick={() => onAddAdjustment()} style={{ marginLeft:"auto" }}>+ Adjustment (fuck-up / bonus)</Btn>}
           </div>
           <div style={{ fontSize:11.5, color:"#999", marginBottom:10 }}>
-            Clicking a day cycles: empty → full day (✓) → half day (½) → hourly (asks hours) → empty. The rate freezes when marked — changing the driver's rate doesn't rewrite weeks already logged.
-          </div>
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", marginBottom:14 }}>
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-                <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  <th style={{ ...th, position:"sticky", left:0, background:"#fafafa", zIndex:1 }}>Driver</th>
-                  {wdDays.map(d => <th key={d} style={{ ...th, padding:"9px 6px", textAlign:"center" }}>{dayHeader(d)}</th>)}
-                  <th style={{ ...th, textAlign:"right" }}>Days</th>
-                  <th style={{ ...th, textAlign:"right" }}>Pago</th>
-                  <th style={{ ...th, textAlign:"right" }}>Ajustes</th>
-                  <th style={{ ...th, textAlign:"right" }}>Week total</th>
-                </tr></thead>
-                <tbody>
-                  {activeDrivers.length === 0 ? (
-                    <tr><td colSpan={wdDays.length + 5} style={{ padding:"30px", textAlign:"center", color:"#bbb" }}>No active drivers.</td></tr>
-                  ) : activeDrivers.map(d => {
-                    const rows = wdDays.map(day => wdByDriverDate[d.id + "|" + day]);
-                    const worked = rows.filter(Boolean);
-                    const pay = worked.reduce((s, w) => s + workDayPay(w, d), 0);
-                    const fullN = worked.filter(w => (w.day_type || "full") === "full").length;
-                    const halfN = worked.filter(w => w.day_type === "half").length;
-                    const hoursN = worked.filter(w => w.day_type === "hourly").reduce((s, w) => s + numv(w.hours), 0);
-                    const myAdj = weekAdjustments.filter(a => a.driver_id === d.id);
-                    const adjNet = myAdj.reduce((s, a) => s + (a.kind === "bonus" ? numv(a.amount) : -numv(a.amount)), 0);
-                    const rateLabel = [d.daily_rate && `$${Number(d.daily_rate).toLocaleString()}/día`, d.hourly_rate && `$${Number(d.hourly_rate).toLocaleString()}/h`].filter(Boolean).join(" · ");
-                    return (
-                      <tr key={d.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                        <td style={{ ...td, fontWeight:600, whiteSpace:"nowrap", position:"sticky", left:0, background:"#fff", zIndex:1 }}>
-                          {d.name}
-                          <div style={{ fontSize:10, color: rateLabel ? "#999" : "#E24B4A", fontWeight:500 }}>{rateLabel || "no rate set"}</div>
-                        </td>
-                        {wdDays.map((day, i) => {
-                          const w = rows[i];
-                          const t = w ? (w.day_type || "full") : null;
-                          const label = t === "half" ? "½" : t === "hourly" ? `${numv(w.hours)}h` : t === "full" ? "✓" : "";
-                          return (
-                            <td key={day} style={{ padding:3, textAlign:"center" }}>
-                              <button onClick={() => canEdit && onCycleWorkDay(d, day)} disabled={!canEdit}
-                                title={w ? `${t === "full" ? tr("Full day", "Día completo") : t === "half" ? tr("Half day", "Medio día") : `${numv(w.hours)} ${tr("hours", "horas")}`} · ${fmt$(workDayPay(w, d))}` : tr("Didn't work (click to mark)", "No trabajó (click para marcar)")}
-                                style={{ minWidth:30, height:26, borderRadius:6, border:"1px solid " + (w ? (t === "hourly" ? "#7C3AED" : "#639922") : "#eee"), background: w ? (t === "hourly" ? "#EDE9FE" : t === "half" ? "#FEF9C3" : "#EAF3DE") : "#fff", cursor: canEdit ? "pointer" : "default", fontSize:11, color: w ? (t === "hourly" ? "#6D28D9" : "#3B6D11") : "#ddd", fontWeight:700, padding:"0 5px" }}>
-                                {label}
-                              </button>
-                            </td>
-                          );
-                        })}
-                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap" }}>
-                          {fullN > 0 && <b>{fullN}</b>}{halfN > 0 && <span> +{halfN}½</span>}{hoursN > 0 && <span> +{hoursN}h</span>}{worked.length === 0 && <span style={{ color:"#ddd" }}>—</span>}
-                        </td>
-                        <td style={{ ...td, textAlign:"right", fontWeight:700, whiteSpace:"nowrap" }}>{fmt$(pay)}</td>
-                        <td style={{ ...td, textAlign:"right", fontWeight:600, whiteSpace:"nowrap", color: adjNet < 0 ? "#E24B4A" : adjNet > 0 ? "#1A8A4E" : "#ccc" }}>{adjNet !== 0 ? fmt$(adjNet) : "—"}</td>
-                        <td style={{ ...td, textAlign:"right", fontWeight:800, whiteSpace:"nowrap" }}>{fmt$(pay + adjNet)}</td>
-                      </tr>
-                    );
-                  })}
-                  {activeDrivers.length > 0 && (() => {
-                    const totPay = activeDrivers.reduce((s, d) => s + wdDays.reduce((ss, day) => { const w = wdByDriverDate[d.id + "|" + day]; return ss + (w ? workDayPay(w, d) : 0); }, 0), 0);
-                    const totAdj = weekAdjustments.reduce((s, a) => s + (a.kind === "bonus" ? numv(a.amount) : -numv(a.amount)), 0);
-                    return (
-                      <tr style={{ borderTop:"2px solid #eee", fontWeight:800, background:"#fafafa" }}>
-                        <td style={{ ...td, position:"sticky", left:0, background:"#fafafa" }}>Total to pay on Wed {fmtShort(addDaysISO(weekStart, 7))}</td>
-                        <td colSpan={wdDays.length + 1} />
-                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap" }}>{fmt$(totPay)}</td>
-                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap", color: totAdj < 0 ? "#E24B4A" : "#1A8A4E" }}>{totAdj !== 0 ? fmt$(totAdj) : "—"}</td>
-                        <td style={{ ...td, textAlign:"right", whiteSpace:"nowrap", fontSize:14 }}>{fmt$(totPay + totAdj)}</td>
-                      </tr>
-                    );
-                  })()}
-                </tbody>
-              </table>
-            </div>
+            Deductions and compensations for the week. They feed the driver P&L in Analytics and what is owed to each driver in AP / AR.
           </div>
 
-          {/* Ajustes de la semana */}
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16 }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Week adjustments (deductions for fuck-ups / compensations)</div>
             {weekAdjustments.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>No adjustments this week.</div> : weekAdjustments.map(a => {
               const k = ADJUSTMENT_KINDS.find(x => x.v === a.kind) || ADJUSTMENT_KINDS[0];
               return (
@@ -412,92 +317,6 @@ export function ExpensesPage(props) {
                 </div>
               );
             })}
-          </div>
-        </>
-      )}
-
-      {/* ── Tab: Materiales ── */}
-      {tab === "materiales" && !missing && (
-        <>
-          <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
-            {canCreate && <Btn primary onClick={() => onAddMaterialMove()}>+ Movement</Btn>}
-            {canCreate && <Btn onClick={onAddMaterialItem}>+ Material</Btn>}
-          </div>
-
-          {/* En mano por driver (faltantes potenciales) */}
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16, marginBottom:14 }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>On hand per driver (issued − returned − consumed)</div>
-            {shortages.filter(s => s.onHand !== 0).length === 0 ? (
-              <div style={{ fontSize:12.5, color:"#bbb" }}>Nobody has materials pending return.</div>
-            ) : (
-              <div style={{ overflowX:"auto" }}>
-                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5 }}>
-                  <thead><tr style={{ borderBottom:"1px solid #efefef" }}>{["Driver","Material","Entregado","Devuelto","Consumido","On hand","Valor"].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {shortages.filter(s => s.onHand !== 0).map((s, i) => (
-                      <tr key={i} style={{ borderBottom:"1px solid #fafafa" }}>
-                        <td style={{ ...td, fontWeight:600 }}>{driverById[s.driverId]?.name || `#${s.driverId}`}</td>
-                        <td style={td}>{s.itemName}</td>
-                        <td style={td}>{s.issued}</td>
-                        <td style={td}>{s.returned}</td>
-                        <td style={td}>{s.consumed}</td>
-                        <td style={{ ...td, fontWeight:800, color: s.onHand > 0 ? "#E24B4A" : "#185FA5" }}>{s.onHand} {s.unit}</td>
-                        <td style={{ ...td, fontWeight:600, whiteSpace:"nowrap" }}>{fmt$(s.value)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(340px,1fr))", gap:14 }}>
-            {/* Catálogo */}
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Catalog</div>
-              {materialItems.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>No materials. Add pads, boxes, shrink wrap…</div> : (
-                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5 }}>
-                  <thead><tr style={{ borderBottom:"1px solid #efefef" }}>{["Material","Unidad","Costo",""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {materialItems.map(it => (
-                      <tr key={it.id} style={{ borderBottom:"1px solid #fafafa", opacity: it.active === false ? 0.5 : 1 }}>
-                        <td style={{ ...td, fontWeight:600 }}>{it.name}{it.category ? <span style={{ fontSize:10.5, color:"#999" }}> · {it.category}</span> : null}</td>
-                        <td style={td}>{it.unit || "unit"}</td>
-                        <td style={td}>{it.unit_cost != null ? `$${Number(it.unit_cost).toLocaleString()}` : "—"}</td>
-                        <td style={{ ...td, whiteSpace:"nowrap", textAlign:"right" }}>
-                          {canEdit && <button onClick={() => onEditMaterialItem(it)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:13 }}>✏️</button>}
-                          {canEdit && <button onClick={() => onDeleteMaterialItem(it)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:13 }}>🗑️</button>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            {/* Movimientos */}
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:16 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8 }}>Latest movements</div>
-              {materialMovements.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb" }}>No movements yet.</div> : (
-                <div style={{ maxHeight:420, overflowY:"auto" }}>
-                  {materialMovements.slice(0, 100).map(mv => {
-                    const it = materialItems.find(i => i.id === mv.item_id);
-                    return (
-                      <div key={mv.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f4f4f4", fontSize:12, flexWrap:"wrap" }}>
-                        <span style={{ color:"#888", whiteSpace:"nowrap" }}>{mv.movement_date || (mv.created_at || "").slice(0, 10)}</span>
-                        <b>{it?.name || `#${mv.item_id}`}</b>
-                        <span>{moveTypeLabel(mv.movement_type)}</span>
-                        <b>× {numv(mv.quantity)}</b>
-                        {mv.driver_id && <span style={{ color:"#185FA5" }}>{driverById[mv.driver_id]?.name || `#${mv.driver_id}`}</span>}
-                        {mv.job_number && <span style={{ fontFamily:"monospace", color:"#666" }}>{mv.job_number}</span>}
-                        <span style={{ flex:1 }} />
-                        {canEdit && <button onClick={() => onDeleteMaterialMove(mv)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:12 }}>🗑️</button>}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
           </div>
         </>
       )}
@@ -617,61 +436,6 @@ export function ExpensesPage(props) {
         </Modal>
       )}
 
-      {/* ── Modal: material (catálogo) ── */}
-      {showMaterialItemModal && (
-        <Modal title={editingMaterialItemId ? "Edit material" : "New material"} onClose={() => setShowMaterialItemModal(false)}
-          footer={<><Btn onClick={() => setShowMaterialItemModal(false)}>Cancel</Btn><Btn primary disabled={materialSaving} onClick={onSaveMaterialItem}>{materialSaving ? "Saving…" : "Save"}</Btn></>}>
-          <Field label="Nombre"><input style={inp} value={materialItemForm.name} onChange={e => setMaterialItemForm(f => ({ ...f, name: e.target.value }))} placeholder="Moving pads, shrink wrap, boxes M…" /></Field>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"0 14px" }}>
-            <Field label="Category"><input style={inp} value={materialItemForm.category} onChange={e => setMaterialItemForm(f => ({ ...f, category: e.target.value }))} placeholder="packing, protection…" /></Field>
-            <Field label="Unidad"><input style={inp} value={materialItemForm.unit} onChange={e => setMaterialItemForm(f => ({ ...f, unit: e.target.value }))} placeholder="unit, roll, box…" /></Field>
-            <Field label="Costo unitario ($)"><input type="number" min="0" step="0.01" style={inp} value={materialItemForm.unit_cost} onChange={e => setMaterialItemForm(f => ({ ...f, unit_cost: e.target.value }))} /></Field>
-          </div>
-          <Field label="Notas"><input style={inp} value={materialItemForm.notes} onChange={e => setMaterialItemForm(f => ({ ...f, notes: e.target.value }))} /></Field>
-          <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, cursor:"pointer" }}>
-            <input type="checkbox" checked={!!materialItemForm.active} onChange={e => setMaterialItemForm(f => ({ ...f, active: e.target.checked }))} /> Activo
-          </label>
-        </Modal>
-      )}
-
-      {/* ── Modal: movimiento de material ── */}
-      {showMaterialMoveModal && (
-        <Modal title="Material movement" onClose={() => setShowMaterialMoveModal(false)}
-          footer={<><Btn onClick={() => setShowMaterialMoveModal(false)}>Cancel</Btn><Btn primary disabled={materialSaving} onClick={onSaveMaterialMove}>{materialSaving ? "Saving…" : "Save"}</Btn></>}>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 14px" }}>
-            <Field label="Material">
-              <select style={inp} value={materialMoveForm.item_id} onChange={e => setMaterialMoveForm(f => ({ ...f, item_id: e.target.value }))}>
-                <option value="">(choose)</option>
-                {materialItems.filter(i => i.active !== false).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Tipo">
-              <select style={inp} value={materialMoveForm.movement_type} onChange={e => setMaterialMoveForm(f => ({ ...f, movement_type: e.target.value }))}>
-                {MATERIAL_MOVE_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
-              </select>
-            </Field>
-            <Field label="Cantidad"><input type="number" step="0.01" style={inp} value={materialMoveForm.quantity} onChange={e => setMaterialMoveForm(f => ({ ...f, quantity: e.target.value }))} /></Field>
-            <Field label="Fecha"><input type="date" style={inp} value={materialMoveForm.movement_date} onChange={e => setMaterialMoveForm(f => ({ ...f, movement_date: e.target.value }))} /></Field>
-            <Field label="Driver">
-              <select style={inp} value={materialMoveForm.driver_id} onChange={e => setMaterialMoveForm(f => ({ ...f, driver_id: e.target.value }))}>
-                <option value="">(no driver)</option>
-                {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Trip">
-              <select style={inp} value={materialMoveForm.trip_id} onChange={e => setMaterialMoveForm(f => ({ ...f, trip_id: e.target.value }))}>
-                <option value="">(no trip)</option>
-                {trips.map(t => <option key={t.id} value={t.id}>{t.trip_number || `#${t.id}`}</option>)}
-              </select>
-            </Field>
-            <Field label="Job #">
-              <input style={inp} list="expense-jobs-list" value={materialMoveForm.job_number} onChange={e => setMaterialMoveForm(f => ({ ...f, job_number: e.target.value }))} placeholder="(for consume)" />
-            </Field>
-            <Field label="Costo unitario ($, opcional)"><input type="number" min="0" step="0.01" style={inp} value={materialMoveForm.unit_cost} onChange={e => setMaterialMoveForm(f => ({ ...f, unit_cost: e.target.value }))} placeholder="uses catalog cost" /></Field>
-          </div>
-          <Field label="Notas"><input style={inp} value={materialMoveForm.notes} onChange={e => setMaterialMoveForm(f => ({ ...f, notes: e.target.value }))} /></Field>
-        </Modal>
-      )}
     </>
   );
 }

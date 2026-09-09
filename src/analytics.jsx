@@ -15,7 +15,7 @@ import {
   arAging, occupancySeries, lengthOfStayStats, brokerProfitability, marginByState,
   cfMovedSeries, dollarsPerCfSeries, faddCompliance, statusFunnel, jobsFlowSeries,
   topN, monthLabel, monthsBetween, shiftMonth,
-  computeDriverPnl, fuelOutliers, materialShortages,
+  computeDriverPnl, fuelOutliers,
 } from "./analyticsData.js";
 
 // ── Formato ──────────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ ${lang === "es" ? "Answer in Spanish." : "Answer in English."}`;
 export function AnalyticsPage({
   records, jobs, brokers, driversList, payments, jobExtras,
   sit, urgentPayments, faddStats, brokerShareMissing, paymentsMissing, lang,
-  expenses = [], workDays = [], adjustments = [], materialItems = [], materialMovements = [], expensesMissing = false,
+  expenses = [], workDays = [], adjustments = [], expensesMissing = false,
 }) {
   const [todayISO] = useState(() => new Date().toISOString().slice(0, 10));
   const [preset, setPreset] = useState("6m");
@@ -512,7 +512,7 @@ export function AnalyticsPage({
       {/* ═══════════ TAB DRIVER P&L ═══════════ */}
       {tab === "drivers" && (
         <DriversTab ctx={ctx} range={range} driversList={driversList} expenses={expenses}
-          workDays={workDays} adjustments={adjustments} materialItems={materialItems} materialMovements={materialMovements}
+          workDays={workDays} adjustments={adjustments}
           expensesMissing={expensesMissing} />
       )}
     </div>
@@ -522,8 +522,8 @@ export function AnalyticsPage({
 // ── Tab 5: Driver P&L ─────────────────────────────────────────────────────────
 // Cuánto trae vs cuánto cuesta cada driver: revenue atribuido (jobs compartidos
 // se dividen en partes iguales) contra días trabajados × rate + gastos aprobados
-// + comisiones de extras. Señales anti-robo: outliers de fuel y materiales en mano.
-function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, materialItems, materialMovements, expensesMissing }) {
+// + comisiones de extras. Señal anti-robo: outliers de fuel.
+function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, expensesMissing }) {
   const pnl = useMemo(
     () => computeDriverPnl({ driversList, groups: ctx.groups, jobExtras: ctx.extras, expenses, workDays, adjustments, range }),
     [driversList, ctx, expenses, workDays, adjustments, range]
@@ -532,10 +532,6 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
     const inR = (e) => { const m = (e.expense_date || "").slice(0, 7); return !!m && (!range.fromMonth || (m >= range.fromMonth && m <= range.toMonth)); };
     return fuelOutliers({ expenses: expenses.filter(inR) });
   }, [expenses, range]);
-  const shortages = useMemo(
-    () => materialShortages({ items: materialItems, movements: materialMovements }).filter(s => s.onHand > 0),
-    [materialItems, materialMovements]
-  );
   const driverName = (id) => driversList.find(d => d.id === id)?.name || (id ? `#${id}` : "—");
   const { rows, totals } = pnl;
   const chartData = rows.map(r => ({
@@ -650,19 +646,6 @@ function DriversTab({ ctx, range, driversList, expenses, workDays, adjustments, 
           )}
         </div>
 
-        <div style={card}>
-          <Title>Materials not returned</Title>
-          <div style={sub}>Handed out − returned − consumed per driver: what's still unaccounted for (value at cost)</div>
-          {shortages.length === 0 ? <Empty>Nobody owes materials ✓</Empty> : shortages.map((s, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: "#fafafa", marginBottom: 5, fontSize: 12.5 }}>
-              <span>📦</span>
-              <span style={{ fontWeight: 600 }}>{driverName(s.driverId)}</span>
-              <span style={{ flex: 1, color: "#666" }}>{s.itemName}</span>
-              <b style={{ color: C.rojo }}>{s.onHand} {s.unit}</b>
-              <span style={{ color: "#888" }}>{fmtM(s.value)}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </>
   );

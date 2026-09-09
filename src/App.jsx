@@ -9,8 +9,8 @@ import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
-import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, materialShortages, computeDriverPnl } from "./analyticsData.js";
-import { ExpensesPage, EMPTY_EXPENSE, EMPTY_MATERIAL_ITEM, EMPTY_MATERIAL_MOVE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
+import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, computeDriverPnl } from "./analyticsData.js";
+import { ExpensesPage, EMPTY_EXPENSE, EMPTY_ADJUSTMENT, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { BancosSection } from "./bank.jsx";
 import { ApArSection } from "./apar.jsx";
@@ -3136,7 +3136,7 @@ const NAV = [
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
     { id:"apar", label:"AP / AR", icon:"📒" },
-    { id:"expenses", label:"Expenses", icon:"💸" },
+    { id:"expenses", label:"Field Expenses", icon:"💸" },
     { id:"bancos", label:"Banks", icon:"🏛️" },
     { id:"claims", label:"Claims & Incidents", icon:"⚠️" },
     { id:"clientes", label:"Clients", icon:"👥" },
@@ -3209,7 +3209,7 @@ const PAGE_META = {
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
   apar:        { title:"AP / AR", sub:"Accounts receivable and payable · aging and net position" },
-  expenses:    { title:"Expenses", sub:"Expenses per driver, truck and trip · days worked · materials" },
+  expenses:    { title:"Field Expenses", sub:"Operational expenses per driver, truck, trip and job · driver pay adjustments" },
   bancos:      { title:"Banks", sub:"Real bank movements · double-check categorization · reconciliation · P&L" },
   clientes:    { title:"Clients", sub:"Clients and their jobs" },
   drivers:     { title:"Drivers", sub:"Operation drivers" },
@@ -3823,14 +3823,6 @@ export default function App() {
   const [showAdjModal, setShowAdjModal] = useState(false);
   const [adjForm, setAdjForm] = useState(EMPTY_ADJUSTMENT);
   const [adjSaving, setAdjSaving] = useState(false);
-  const [materialItems, setMaterialItems] = useState([]);
-  const [materialMovements, setMaterialMovements] = useState([]);
-  const [showMaterialItemModal, setShowMaterialItemModal] = useState(false);
-  const [materialItemForm, setMaterialItemForm] = useState(EMPTY_MATERIAL_ITEM);
-  const [editingMaterialItemId, setEditingMaterialItemId] = useState(null);
-  const [showMaterialMoveModal, setShowMaterialMoveModal] = useState(false);
-  const [materialMoveForm, setMaterialMoveForm] = useState(EMPTY_MATERIAL_MOVE);
-  const [materialSaving, setMaterialSaving] = useState(false);
   const [addStopModal, setAddStopModal] = useState(null); // { trip } — the "add stop" popup
   const [stopForm, setStopForm] = useState({ category:"maintenance", address:"", note:"" });
   const [stopSaving, setStopSaving] = useState(false);
@@ -4199,14 +4191,6 @@ export default function App() {
   const loadAdjustments = useCallback(async () => {
     const { data, error } = await supabase.from("driver_adjustments").select("*").order("adj_date", { ascending: false });
     if (!error) setAdjustments((data || []).filter(notDel));
-  }, []);
-  const loadMaterialItems = useCallback(async () => {
-    const { data, error } = await supabase.from("material_items").select("*").order("name", { ascending: true });
-    if (!error) setMaterialItems((data || []).filter(notDel));
-  }, []);
-  const loadMaterialMovements = useCallback(async () => {
-    const { data, error } = await supabase.from("material_movements").select("*").order("created_at", { ascending: false });
-    if (!error) setMaterialMovements((data || []).filter(notDel));
   }, []);
   const loadJobEvents = useCallback(async () => {
     const { data, error } = await supabase.from("job_events").select("*").order("created_at", { ascending: true });
@@ -4915,7 +4899,7 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    const loadAll = () => { loadExpenses(); loadWorkDays(); loadAdjustments(); loadMaterialItems(); loadMaterialMovements(); };
+    const loadAll = () => { loadExpenses(); loadWorkDays(); loadAdjustments(); };
     (async () => {
       const { error: eErr } = await supabase.from("expenses").select("id").limit(1);
       const { error: wErr } = await supabase.from("driver_work_days").select("day_type").limit(1);
@@ -4933,7 +4917,7 @@ export default function App() {
       else setExpensesMissing(true);
     })();
     return () => { cancelled = true; };
-  }, [session, loadExpenses, loadWorkDays, loadAdjustments, loadMaterialItems, loadMaterialMovements]);
+  }, [session, loadExpenses, loadWorkDays, loadAdjustments]);
 
   useEffect(() => {
     if (!session || expensesMissing) return;
@@ -4941,11 +4925,9 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => loadExpenses())
       .on("postgres_changes", { event: "*", schema: "public", table: "driver_work_days" }, () => loadWorkDays())
       .on("postgres_changes", { event: "*", schema: "public", table: "driver_adjustments" }, () => loadAdjustments())
-      .on("postgres_changes", { event: "*", schema: "public", table: "material_items" }, () => loadMaterialItems())
-      .on("postgres_changes", { event: "*", schema: "public", table: "material_movements" }, () => loadMaterialMovements())
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [session, expensesMissing, loadExpenses, loadWorkDays, loadAdjustments, loadMaterialItems, loadMaterialMovements]);
+  }, [session, expensesMissing, loadExpenses, loadWorkDays, loadAdjustments]);
 
   // Probe the payment_stage column (added after the initial Payments release).
   useEffect(() => {
@@ -6429,7 +6411,7 @@ export default function App() {
     expenses: loadExpenses, claims: loadClaims, claim_notes: () => editingClaimId && loadClaimNotes(editingClaimId),
     brokers: loadBrokers, drivers: loadDrivers, trucks: loadTrucks, companies: loadCompanies,
     compliance_documents: loadComplianceDocs, closing_sheets: loadClosingSheets, equipment_items: loadEquipment,
-    employees: loadEmployees, material_items: loadMaterialItems, material_movements: loadMaterialMovements,
+    employees: loadEmployees,
     driver_work_days: loadWorkDays, driver_adjustments: loadAdjustments, trips: loadTrips,
     trip_stops: loadTripStops, job_events: loadJobEvents, payment_accounts: loadPayAccounts,
   }[t]);
@@ -6856,41 +6838,6 @@ export default function App() {
   // hourly) so changing the driver's rates never rewrites history. Drivers with
   // ONLY an hourly rate start the cycle at hourly. unique(driver_id, work_date)
   // keeps it idempotent.
-  async function cycleWorkDay(driver, dateISO) {
-    const existing = workDays.find(w => w.driver_id === driver.id && w.work_date === dateISO);
-    const hasDaily = driver.daily_rate != null && driver.daily_rate !== "";
-    const hasHourly = driver.hourly_rate != null && driver.hourly_rate !== "";
-    const cur = existing ? (existing.day_type || "full") : null;
-    let next;
-    if (cur === null) next = (!hasDaily && hasHourly) ? "hourly" : "full";
-    else if (cur === "full") next = "half";
-    else if (cur === "half") next = hasHourly ? "hourly" : null;
-    else next = null; // hourly → empty
-    if (next === "hourly") {
-      const hrs = window.prompt(trAI("Hours worked that day:", "Horas trabajadas ese día:"), existing?.hours || "8");
-      if (hrs === null || isNaN(Number(hrs)) || Number(hrs) <= 0) next = null;
-      else {
-        const payload = { day_type: "hourly", hours: Number(hrs), rate: hasHourly ? Number(driver.hourly_rate) : null };
-        const { error } = existing
-          ? await supabase.from("driver_work_days").update(payload).eq("id", existing.id)
-          : await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, created_by: userEmail, ...payload }]);
-        if (error) { window.alert(error.message); return; }
-        loadWorkDays(); return;
-      }
-    }
-    if (next === null) {
-      if (existing) {
-        if (!(await softDeleteAndRecord("driver_work_days", existing.id, "Día de trabajo quitado"))) return;
-      }
-    } else {
-      const payload = { day_type: next, hours: null, rate: hasDaily ? Number(driver.daily_rate) : null };
-      const { error } = existing
-        ? await supabase.from("driver_work_days").update(payload).eq("id", existing.id)
-        : await supabase.from("driver_work_days").insert([{ driver_id: driver.id, work_date: dateISO, created_by: userEmail, ...payload }]);
-      if (error) { window.alert(error.message); return; }
-    }
-    loadWorkDays();
-  }
 
   // ── Driver pay adjustments (fuck-ups charged to the driver / bonuses) ──
   function openAddAdjustment(prefill = {}) {
@@ -6915,63 +6862,6 @@ export default function App() {
     if (!window.confirm(tr(`Delete ${a.kind === "bonus" ? "bonus" : "deduction"} of $${Math.round(numv(a.amount)).toLocaleString()}?`, `¿Eliminar ${a.kind === "bonus" ? "compensación" : "descuento"} de $${Math.round(numv(a.amount)).toLocaleString()}?`))) return;
     if (!(await softDeleteAndRecord("driver_adjustments", a.id, "Ajuste de driver eliminado"))) return;
     loadAdjustments();
-  }
-
-  // ── Materials catalog + movements ──
-  function openAddMaterialItem() { setEditingMaterialItemId(null); setMaterialItemForm(EMPTY_MATERIAL_ITEM); setShowMaterialItemModal(true); }
-  function openEditMaterialItem(it) {
-    setEditingMaterialItemId(it.id);
-    setMaterialItemForm({ name: it.name || "", category: it.category || "", unit: it.unit || "unit", unit_cost: it.unit_cost ?? "", active: it.active !== false, notes: it.notes || "" });
-    setShowMaterialItemModal(true);
-  }
-  async function saveMaterialItem() {
-    if (!materialItemForm.name.trim()) return;
-    setMaterialSaving(true);
-    const payload = { name: materialItemForm.name.trim(), category: materialItemForm.category || null, unit: materialItemForm.unit || "unit", unit_cost: materialItemForm.unit_cost === "" ? null : Number(materialItemForm.unit_cost), active: !!materialItemForm.active, notes: materialItemForm.notes || null };
-    let error;
-    if (editingMaterialItemId) ({ error } = await supabase.from("material_items").update(payload).eq("id", editingMaterialItemId));
-    else ({ error } = await supabase.from("material_items").insert([payload]));
-    setMaterialSaving(false);
-    if (error) { window.alert(error.message); return; }
-    setShowMaterialItemModal(false); loadMaterialItems();
-  }
-  async function deleteMaterialItem(it) {
-    if (!window.confirm(tr(`Delete material "${it.name}"? Its movements are deleted too.`, `¿Eliminar el material "${it.name}"? Sus movimientos también se borran.`))) return;
-    const mv = await undoMgr.softDelete("material_movements", [it.id], "item_id");
-    if (mv.error) { window.alert(mv.error.message); return; }
-    if (!(await softDeleteAndRecord("material_items", it.id, `Material "${it.name}" eliminado`, mv.entries))) return;
-    loadMaterialItems(); loadMaterialMovements();
-  }
-  function openAddMaterialMove(prefill = {}) {
-    setMaterialMoveForm({ ...EMPTY_MATERIAL_MOVE, movement_date: today(), ...prefill });
-    setShowMaterialMoveModal(true);
-  }
-  async function saveMaterialMove() {
-    const f = materialMoveForm;
-    if (!f.item_id) { window.alert(tr("Pick the material.", "Elegí el material.")); return; }
-    if (f.quantity === "" || isNaN(Number(f.quantity)) || Number(f.quantity) === 0) { window.alert(tr("Enter the quantity.", "Ingresá la cantidad.")); return; }
-    if (["issue", "return", "consume"].includes(f.movement_type) && !f.driver_id) { window.alert(tr("This movement needs the driver.", "Este movimiento necesita el driver.")); return; }
-    setMaterialSaving(true);
-    const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
-    const item = materialItems.find(i => i.id === Number(f.item_id));
-    const jobNumber = (f.job_number || "").trim();
-    const jobRow = jobNumber ? jobs.find(j => normJobNumber(j.job_number) === normJobNumber(jobNumber)) : null;
-    const payload = {
-      item_id: Number(f.item_id), movement_type: f.movement_type, quantity: Number(f.quantity),
-      unit_cost: num(f.unit_cost) ?? (item?.unit_cost ?? null),
-      driver_id: num(f.driver_id), trip_id: num(f.trip_id),
-      job_id: jobRow?.id ?? null, job_number: jobNumber || null,
-      movement_date: f.movement_date || null, notes: f.notes || null, created_by: userEmail,
-    };
-    const { error } = await supabase.from("material_movements").insert([payload]);
-    setMaterialSaving(false);
-    if (error) { window.alert(error.message); return; }
-    setShowMaterialMoveModal(false); loadMaterialMovements();
-  }
-  async function deleteMaterialMove(mv) {
-    if (!window.confirm(tr("Delete this material movement?", "¿Eliminar este movimiento de material?"))) return;
-    if (!(await softDeleteAndRecord("material_movements", mv.id, "Movimiento de material eliminado"))) return;
-    loadMaterialMovements();
   }
 
   // ── Carrier settlements handlers ──
@@ -11890,23 +11780,14 @@ export default function App() {
           missing={expensesMissing} onShowSetup={() => setShowSetup(true)}
           expenses={expenses} driversList={driversList} trucksList={trucksList} trips={trips} jobs={jobs}
           payAccounts={payAccounts} payments={payments} paymentsMissing={paymentsMissing}
-          workDays={workDays} adjustments={adjustments} materialItems={materialItems} materialMovements={materialMovements}
+          adjustments={adjustments}
           can={can} today={today}
           form={expenseForm} setForm={setExpenseForm} showModal={showExpenseModal} setShowModal={setShowExpenseModal}
           editingId={editingExpenseId} saving={expenseSaving} uploading={expenseUploading}
           onAdd={openAddExpense} onEdit={openEditExpense} onSave={saveExpense} onDelete={deleteExpense}
           onSetStatus={setExpenseStatus} onSettle={settleExpense} onUploadReceipt={uploadExpenseReceipt}
-          onCycleWorkDay={cycleWorkDay}
           adjForm={adjForm} setAdjForm={setAdjForm} showAdjModal={showAdjModal} setShowAdjModal={setShowAdjModal}
           adjSaving={adjSaving} onAddAdjustment={openAddAdjustment} onSaveAdjustment={saveAdjustment} onDeleteAdjustment={deleteAdjustment}
-          materialItemForm={materialItemForm} setMaterialItemForm={setMaterialItemForm}
-          showMaterialItemModal={showMaterialItemModal} setShowMaterialItemModal={setShowMaterialItemModal}
-          editingMaterialItemId={editingMaterialItemId} materialSaving={materialSaving}
-          onAddMaterialItem={openAddMaterialItem} onEditMaterialItem={openEditMaterialItem}
-          onSaveMaterialItem={saveMaterialItem} onDeleteMaterialItem={deleteMaterialItem}
-          materialMoveForm={materialMoveForm} setMaterialMoveForm={setMaterialMoveForm}
-          showMaterialMoveModal={showMaterialMoveModal} setShowMaterialMoveModal={setShowMaterialMoveModal}
-          onAddMaterialMove={openAddMaterialMove} onSaveMaterialMove={saveMaterialMove} onDeleteMaterialMove={deleteMaterialMove}
           setPayPhotoView={setPayPhotoView}
           Btn={Btn} Modal={Modal}
         />
@@ -11937,8 +11818,7 @@ export default function App() {
           payments={payments} jobExtras={jobExtras} sit={sit}
           urgentPayments={urgentPayments} faddStats={faddStats}
           brokerShareMissing={brokerShareMissing} paymentsMissing={paymentsMissing}
-          expenses={expenses} workDays={workDays} adjustments={adjustments} materialItems={materialItems}
-          materialMovements={materialMovements} expensesMissing={expensesMissing}
+          expenses={expenses} workDays={workDays} adjustments={adjustments} expensesMissing={expensesMissing}
           lang={lang}
         />
       )}
@@ -16282,8 +16162,6 @@ export default function App() {
                   const row = pnl.rows[0];
                   const myExpenses = expenses.filter(e => e.driver_id === driverD.id && e.status !== "rejected")
                     .sort((a, b) => (b.expense_date || "").localeCompare(a.expense_date || ""));
-                  const myOnHand = materialShortages({ items: materialItems, movements: materialMovements })
-                    .filter(s => s.driverId === driverD.id && s.onHand !== 0);
                   return (
                     <>
                       <SectionLabel>Month P&L (approx.)</SectionLabel>
@@ -16305,19 +16183,6 @@ export default function App() {
                         </div>
                       )}
                       {row && row.jobsCount > 1 && <div style={{ fontSize:10.5, color:"#bbb", marginBottom:6 }}>Revenue from shared jobs is split equally between drivers.</div>}
-                      {myOnHand.length > 0 && (
-                        <>
-                          <SectionLabel>Materials on hand</SectionLabel>
-                          {myOnHand.map((s, i) => (
-                            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, padding:"4px 0", borderBottom:"1px solid #f4f4f4" }}>
-                              <span style={{ fontWeight:600 }}>{s.itemName}</span>
-                              <span style={{ flex:1 }} />
-                              <b style={{ color: s.onHand > 0 ? "#E24B4A" : "#185FA5" }}>{s.onHand} {s.unit}</b>
-                              <span style={{ fontSize:11, color:"#888" }}>(${Math.round(s.value).toLocaleString()})</span>
-                            </div>
-                          ))}
-                        </>
-                      )}
                       <SectionLabel>Recent expenses</SectionLabel>
                       {myExpenses.length === 0 ? <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>No expenses recorded.</div> : (
                         <div style={{ maxHeight:170, overflowY:"auto", marginBottom:4 }}>
