@@ -221,7 +221,7 @@ t("catalog: the GAAP lens is independent of the Excel pnl_group", () => {
   assert.equal(gaapOf([], "Broker"), "Cost of Goods Sold");
   // Owner draws are an expense for the owner but equity for the accountant.
   assert.equal(catByName([], "Loren Expenses").pnl_group, "Structure Expenses");
-  assert.equal(gaapOf([], "Loren Expenses"), "Owner's Draw / Distribution");
+  assert.equal(gaapOf([], "Loren Expenses"), "Owner's Equity (Draw / Contribution)");
   // Unclassified / unknown categories resolve to "" rather than throwing.
   assert.equal(gaapOf([{ name: "Truck Wash", direction: "out" }], "Truck Wash"), "");
   assert.equal(gaapOf([], "nope"), "");

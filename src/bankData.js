@@ -46,8 +46,8 @@ export const GAAP_CATEGORIES = [
   "Income Tax Expense",
   "Other Expense",
   "Fixed Asset (CapEx)",
-  "Owner's Draw / Distribution",
-  "Loan Principal",
+  "Owner's Equity (Draw / Contribution)",
+  "Loan Principal (not P&L)",
   "Transfer / Not in P&L",
 ];
 export const SEED_BANK_CATEGORIES = [
@@ -78,8 +78,8 @@ export const SEED_BANK_CATEGORIES = [
   { name:"Airfare",             direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"✈️", gaap_category:"General & Administrative Expense", sort:33 },
   { name:"Car Rental",          direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚗", gaap_category:"General & Administrative Expense", sort:34 },
   { name:"Office Supplies",     direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🖇️", gaap_category:"General & Administrative Expense", sort:35 },
-  { name:"Loren Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", gaap_category:"Owner's Draw / Distribution", sort:36 },
-  { name:"Bauti Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", gaap_category:"Owner's Draw / Distribution", sort:37 },
+  { name:"Loren Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", gaap_category:"Owner's Equity (Draw / Contribution)", sort:36 },
+  { name:"Bauti Expenses",      direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"👤", gaap_category:"Owner's Equity (Draw / Contribution)", sort:37 },
   { name:"Taxes",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🧾", gaap_category:"Income Tax Expense", sort:38 },
   { name:"Fines",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"🚨", gaap_category:"Other Expense", sort:39 },
   { name:"Other",               direction:"out", pnl_group:"Structure Expenses", is_transfer:false, icon:"💵", gaap_category:"General & Administrative Expense", sort:40 },

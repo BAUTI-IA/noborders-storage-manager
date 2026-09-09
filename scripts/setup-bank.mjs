@@ -18,6 +18,8 @@
 //
 // Usage (Node 18+):
 //   SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-bank.mjs
+//   node scripts/setup-bank.mjs --sql --gaap   # print the gaap_category
+//                                              # migration to paste by hand
 //
 // Get a token at: https://supabase.com/dashboard/account/tokens
 // If scripts/setup-rls.mjs was already applied, re-run it afterwards so the
@@ -49,10 +51,17 @@ const GAAP_EXCEPTIONS = [
   ["Refund", "Other Income"],                             // money coming back, not a sale
   ["Returned Deposit", "Other Income"],
   ["Commissions", "Selling & Marketing Expense"],         // cost of booking the job, not of doing it
-  ["Loren Expenses", "Owner's Draw / Distribution"],      // equity, not an operating expense
-  ["Bauti Expenses", "Owner's Draw / Distribution"],
+  ["Loren Expenses", "Owner's Equity (Draw / Contribution)"],  // equity, not an operating expense
+  ["Bauti Expenses", "Owner's Equity (Draw / Contribution)"],
   ["Taxes", "Income Tax Expense"],
   ["Fines", "Other Expense"],
+  // Financing moves the balance sheet, not the P&L. Without these the generic
+  // rule below would read an incoming loan as Revenue, which is plainly wrong:
+  // borrowed money is a liability, not a sale.
+  ["Financing", "Loan Principal (not P&L)"],
+  ["Financing - Loan", "Loan Principal (not P&L)"],
+  ["Financing - Capital", "Owner's Equity (Draw / Contribution)"],
+  ["Credit Card Payment", "Transfer / Not in P&L"],       // paying the card, not the expense itself
 ];
 const GAAP_BACKFILL_SQL = `update public.bank_categories set gaap_category = case
 ${GAAP_EXCEPTIONS.map(([name, gaap]) => `    when lower(name) = lower(${sq(name)}) then ${sq(gaap)}`).join("\n")}
@@ -204,8 +213,19 @@ do $$ begin alter publication supabase_realtime add table public.bank_categories
 do $$ begin alter publication supabase_realtime add table public.bank_import_batches; exception when others then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.bank_transactions; exception when others then null; end $$;`;
 
+// `--sql` prints the migration instead of running it, so it can be pasted into
+// the Supabase SQL Editor by someone who doesn't have a management token.
+// `--gaap` narrows that to the gaap_category part alone, for a database where
+// the rest of the Bancos module is already installed.
+if (process.argv.includes("--sql")) {
+  console.log(process.argv.includes("--gaap")
+    ? `alter table public.bank_categories add column if not exists gaap_category text;\n\n${GAAP_BACKFILL_SQL}`
+    : SQL);
+  process.exit(0);
+}
+
 if (!TOKEN) {
-  console.error("Missing SUPABASE_ACCESS_TOKEN. Run:\n  SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-bank.mjs");
+  console.error("Missing SUPABASE_ACCESS_TOKEN. Run:\n  SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-bank.mjs\nOr print the SQL to paste into Supabase:\n  node scripts/setup-bank.mjs --sql --gaap");
   process.exit(1);
 }
 
