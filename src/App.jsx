@@ -1571,7 +1571,17 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
 // sits in a public asset.
 
 let gmapsPromise = null;
+// Google reports a rejected key through this global, not through the script's
+// onerror: the script loads fine and then refuses to draw. Without catching it
+// the page just falls back to OpenStreetMap and nobody knows why.
+let gmapsAuthFailed = false;
+const gmapsAuthWatchers = new Set();
+
 function loadGoogleMaps(key) {
+  window.gm_authFailure = () => {
+    gmapsAuthFailed = true;
+    for (const fn of gmapsAuthWatchers) fn();
+  };
   if (window.google?.maps) return Promise.resolve(window.google.maps);
   // One script tag per page no matter how many times the map mounts.
   if (!gmapsPromise) {
@@ -1597,6 +1607,15 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const [ready, setReady] = useState(false);
+
+  // A key Google rejects is the common failure: restrictions that do not match
+  // the domain, Maps JavaScript API not enabled, or billing off.
+  useEffect(() => {
+    if (gmapsAuthFailed) { onFail("auth"); return; }
+    const w = () => onFail("auth");
+    gmapsAuthWatchers.add(w);
+    return () => gmapsAuthWatchers.delete(w);
+  }, [onFail]);
 
   const located = trucks.filter(t => t.last_lat != null && t.last_lng != null);
 
@@ -1692,10 +1711,24 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
 // Google when a key is configured, Leaflet otherwise — and Leaflet again if
 // Google fails to load, so a billing problem never leaves the page mapless.
 function TruckLiveMap({ googleKey, ...props }) {
-  const [googleFailed, setGoogleFailed] = useState(false);
-  const onFail = useCallback((msg) => { console.warn("Google Maps:", msg); setGoogleFailed(true); }, []);
+  const [googleFailed, setGoogleFailed] = useState(null);   // null | "auth" | message
+  const onFail = useCallback((msg) => { console.warn("Google Maps:", msg); setGoogleFailed(msg || "error"); }, []);
   if (googleKey && !googleFailed) return <GoogleTruckMap {...props} apiKey={googleKey} onFail={onFail} />;
-  return <LeafletTruckMap {...props} />;
+  return (
+    <div>
+      {googleKey && googleFailed && (
+        <div style={{ background:"#FCEBEB", border:"1px solid #f0c9c9", borderRadius:10, padding:"9px 12px",
+          marginBottom:8, fontSize:12, color:"#A32D2D", lineHeight:1.5 }}>
+          {googleFailed === "auth"
+            ? tr("Google rejected the Maps key — showing OpenStreetMap instead. Check that the key allows this domain, that Maps JavaScript API is enabled, and that billing is on.",
+                 "Google rechazó la key del mapa — se muestra OpenStreetMap. Revisá que la key permita este dominio, que Maps JavaScript API esté habilitada y que la facturación esté activa.")
+            : tr("Google Maps could not load — showing OpenStreetMap instead.",
+                 "No se pudo cargar Google Maps — se muestra OpenStreetMap.")}
+        </div>
+      )}
+      <LeafletTruckMap {...props} />
+    </div>
+  );
 }
 
 const BILLING_STATUS = {
