@@ -7,9 +7,10 @@
 // and the same confirm-before-write rule.
 import React, { useEffect, useRef, useState } from "react";
 import { VoiceAgentPanel } from "./voiceAgent.jsx";
+import { tr } from "./i18n.js";
 
 const S = {
-  fab: { position: "fixed", right: 22, bottom: 22, zIndex: 4000, width: 56, height: 56, borderRadius: "50%", border: "none", background: "#185FA5", color: "#fff", fontSize: 26, cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.25)" },
+  fab: { position: "fixed", right: 22, bottom: 22, zIndex: 4000, width: 56, height: 56, borderRadius: "50%", border: "none", background: "#111", color: "#fff", fontSize: 24, cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.25)" },
   panel: { position: "fixed", right: 22, bottom: 90, zIndex: 4000, width: 380, maxWidth: "calc(100vw - 44px)", height: 540, maxHeight: "calc(100vh - 130px)", background: "#fff", border: "1px solid #dde5ee", borderRadius: 14, boxShadow: "0 10px 34px rgba(0,0,0,.22)", display: "flex", flexDirection: "column", overflow: "hidden" },
   head: { background: "#185FA5", color: "#fff", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, flexShrink: 0 },
   body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 8, background: "#F6F9FC" },
@@ -31,7 +32,9 @@ const tabStyle = (active) => ({
   cursor: "pointer",
 });
 
-const WELCOME = "¡Hola! Soy el agente del CRM 🚚 Puedo cargar/actualizar jobs (con tu confirmación) y responder cualquier consulta: \"¿qué entregas hay esta semana?\", \"¿cuánto hay por cobrar?\"...\n\nI also speak English — just write to me in either language.";
+// English first: the agent speaks English by default and only switches to
+// Spanish when the person writes in Spanish (see lib/agent.mjs, HOW TO WORK).
+const WELCOME = "Hi! I'm the CRM agent 🚚 I can create/update jobs (with your confirmation) and answer any question: \"what deliveries are there this week?\", \"how much is left to collect?\"...\n\nTambién hablo español — escribime en el idioma que prefieras.";
 
 const MAX_FILE_BYTES = 3 * 1024 * 1024; // must fit Vercel's 4.5MB body cap after base64
 const ACCEPTED = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
@@ -53,8 +56,8 @@ export function AgentChatWidget({ session }) {
   function addFiles(list) {
     const incoming = [...(list || [])];
     for (const f of incoming) {
-      if (!ACCEPTED.includes(f.type)) { setMsgs((m) => [...m, { role: "bot", text: `⚠️ "${f.name}": solo imágenes o PDF.` }]); continue; }
-      if (f.size > MAX_FILE_BYTES) { setMsgs((m) => [...m, { role: "bot", text: `⚠️ "${f.name}" pesa más de 3MB.` }]); continue; }
+      if (!ACCEPTED.includes(f.type)) { setMsgs((m) => [...m, { role: "bot", text: tr(`⚠️ "${f.name}": images or PDF only.`, `⚠️ "${f.name}": solo imágenes o PDF.`) }]); continue; }
+      if (f.size > MAX_FILE_BYTES) { setMsgs((m) => [...m, { role: "bot", text: tr(`⚠️ "${f.name}" is over 3MB.`, `⚠️ "${f.name}" pesa más de 3MB.`) }]); continue; }
       const reader = new FileReader();
       reader.onload = () => {
         const data = String(reader.result).split(",")[1] || "";
@@ -127,7 +130,7 @@ export function AgentChatWidget({ session }) {
       // Stream cut off mid-answer: keep whatever arrived rather than losing it.
       if (answer) settleLive(answer);
     } catch (e) {
-      setMsgs((m) => [...m, { role: "bot", text: "⚠️ No pude conectar con el agente. Probá de nuevo." }]);
+      setMsgs((m) => [...m, { role: "bot", text: tr("⚠️ I couldn't reach the agent. Please try again.", "⚠️ No pude conectar con el agente. Probá de nuevo.") }]);
     } finally {
       setBusy(false);
       setMsgs((m) => m.map((x) => (x.live ? { ...x, live: false } : x)));
@@ -146,11 +149,12 @@ export function AgentChatWidget({ session }) {
       });
       const j = await res.json().catch(() => ({}));
       setMsgs((m) => [...m, { role: "bot", text: res.ok
-        ? `🔗 Tu código es ${j.code} (vence en ${j.expires_in_minutes} min).\nMandale al bot de Telegram: /link ${j.code}`
-        : `⚠️ ${j.error || "No pude generar el código"}` }]);
+        ? tr(`🔗 Your code is ${j.code} (expires in ${j.expires_in_minutes} min).\nSend the Telegram bot: /link ${j.code}`,
+             `🔗 Tu código es ${j.code} (vence en ${j.expires_in_minutes} min).\nMandale al bot de Telegram: /link ${j.code}`)
+        : `⚠️ ${j.error || tr("I couldn't generate the code", "No pude generar el código")}` }]);
       setOpen(true);
     } catch {
-      setMsgs((m) => [...m, { role: "bot", text: "⚠️ No pude generar el código. Probá de nuevo." }]);
+      setMsgs((m) => [...m, { role: "bot", text: tr("⚠️ I couldn't generate the code. Please try again.", "⚠️ No pude generar el código. Probá de nuevo.") }]);
     }
   }
 
@@ -210,7 +214,7 @@ export function AgentChatWidget({ session }) {
           </>)}
         </div>
       )}
-      <button title="CRM Agent" onClick={() => setOpen((o) => !o)} style={S.fab}>{open ? "×" : "🤖"}</button>
+      <button title="CRM Agent" onClick={() => setOpen((o) => !o)} style={S.fab}>{open ? "×" : "✨"}</button>
     </>
   );
 }

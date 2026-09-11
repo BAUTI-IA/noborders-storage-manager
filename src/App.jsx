@@ -3118,9 +3118,15 @@ function Sidebar({ page, setPage, onSignOut, can = () => true, isAdmin = false }
     .filter(group => group.items.length > 0);
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
-      <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3" }}>
-        <div style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.01em", lineHeight:1.2 }}>No Borders Moving</div>
-        <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
+      <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3", display:"flex", alignItems:"center", gap:10 }}>
+        {/* Brand mark: the No Borders chain-link logo inside a small circle. */}
+        <div style={{ width:36, height:36, borderRadius:"50%", flexShrink:0, background:"#fff", border:"1px solid #e6e6e6", boxShadow:"0 1px 2px rgba(0,0,0,0.06)", display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }}>
+          <img src="/logo-mark.svg" alt="" width={16} height={28} style={{ display:"block" }} />
+        </div>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.01em", lineHeight:1.2 }}>No Borders Moving</div>
+          <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
+        </div>
       </div>
       <div style={{ flex:1, overflowY:"auto", padding:"10px" }}>
         {visibleNav.map(group => (
