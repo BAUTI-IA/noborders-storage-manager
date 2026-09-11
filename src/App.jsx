@@ -7055,6 +7055,14 @@ export default function App() {
   const vzUnlinkedTrucks = useMemo(
     () => trucksList.filter(t => !t.verizon_vehicle_id),
     [trucksList]);
+  // Linked to something Verizon's roster has never heard of — a VIN pasted in
+  // place of the vehicle number, or a vehicle since removed. Every call for these
+  // fails, and from the outside it looks the same as a broken API.
+  const vzBadlyLinked = useMemo(() => {
+    if (!vzVehicles?.length) return [];
+    const known = new Set(vzVehicles.map(v => v.number));
+    return trucksList.filter(t => t.verizon_vehicle_id && !known.has(String(t.verizon_vehicle_id)));
+  }, [trucksList, vzVehicles]);
 
   // Asks Verizon, from the server, which of its API products this account can
   // actually reach — so nobody has to go read that off the developer portal.
@@ -10503,7 +10511,7 @@ export default function App() {
                             </div>
                           );
                         })}
-                        {verizonOn && vzVehicles && (vzUnlinkedTrucks.length > 0 || vzUnlinked.length > 0) && (
+                        {verizonOn && vzVehicles && (vzUnlinkedTrucks.length > 0 || vzUnlinked.length > 0 || vzBadlyLinked.length > 0) && (
                           <div style={{ padding:"11px 14px", background:"#FAEEDA", borderTop:"1px solid #f0e0c0" }}>
                             <div style={{ fontSize:10, fontWeight:700, color:"#854F0B", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6 }}>
                               Verizon linking
@@ -10519,6 +10527,23 @@ export default function App() {
                                     <button key={t.id} onClick={() => openEditTruck(t)}
                                       style={{ fontSize:11, fontWeight:600, color:"#854F0B", background:"#fff", border:"1px solid #e8d3a8",
                                         borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>{t.name}</button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {vzBadlyLinked.length > 0 && (
+                              <div style={{ marginBottom:8 }}>
+                                <div style={{ fontSize:11.5, color:"#A32D2D", marginBottom:3 }}>
+                                  {tr(`${vzBadlyLinked.length} truck(s) point at a vehicle Verizon does not know — click to fix:`,
+                                      `${vzBadlyLinked.length} truck(s) apuntan a un vehículo que Verizon no conoce — click para corregir:`)}
+                                </div>
+                                <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                                  {vzBadlyLinked.map(t => (
+                                    <button key={t.id} onClick={() => openEditTruck(t)}
+                                      style={{ fontSize:11, fontWeight:600, color:"#A32D2D", background:"#fff", border:"1px solid #f0c9c9",
+                                        borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>
+                                      {t.name} → {String(t.verizon_vehicle_id).slice(0, 20)}
+                                    </button>
                                   ))}
                                 </div>
                               </div>
