@@ -105,9 +105,10 @@ eq("todas las herramientas tienen forma de función realtime", badTools, []);
 }
 
 // ── Bilingual ────────────────────────────────────────────────────────────────
-// The team speaks both, and mixes them. The agent mirrors whoever is talking;
-// the CRM's own setting only decides the greeting (nobody has spoken yet) and
-// the language of the panel's errors.
+// The team speaks both, and mixes them. English is the default: the greeting
+// goes in English and the agent switches to Spanish only while the person
+// speaks Spanish. The CRM's own setting only decides the language of the
+// panel's errors.
 eq("es-AR es español", voiceLang("es-AR"), "es");
 eq("es es español", voiceLang("es"), "es");
 eq("en es inglés", voiceLang("en"), "en");
@@ -123,10 +124,14 @@ eq("el idioma cambia la copia", vt("es").readOnly === vt("en").readOnly, false);
   const es = await buildVoiceInstructions({ actor: { profile: admin }, canWrite: true, lang: "es" });
   const en = await buildVoiceInstructions({ actor: { profile: admin }, canWrite: true, lang: "en" });
 
-  eq("saluda en español cuando el CRM está en español", es.includes("greeting in Argentine Spanish"), true);
+  // El saludo va en inglés aunque el CRM esté en español: el idioma lo decide
+  // el que habla, no la configuración.
+  eq("saluda en inglés aunque el CRM esté en español", es.includes("greeting in English"), true);
   eq("saluda en inglés cuando el CRM está en inglés", en.includes("greeting in English"), true);
-  // El saludo es lo único que fija el idioma: después sigue al que habla.
+  eq("el CRM en español no fuerza el saludo en español", es.includes("greeting in Argentine Spanish"), false);
+  // Inglés por defecto: después sigue al que habla.
   for (const [name, text] of [["es", es], ["en", en]]) {
+    eq(`${name}: inglés por defecto`, text.includes("English is your DEFAULT"), true);
     eq(`${name}: sigue el idioma del que habla`, text.includes("switch the moment they switch"), true);
     eq(`${name}: nunca pregunta qué idioma`, text.includes("Never ask which language"), true);
     // El bug que motivó esto: derivaba al castellano después de una consulta,
