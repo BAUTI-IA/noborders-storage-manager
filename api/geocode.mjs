@@ -15,6 +15,8 @@
 //                                           to confirm field names.
 //   GET /api/geocode?fleet=hours&from=&to= → pull ELD hours into driver_hos_days.
 //   GET /api/geocode?fleet=mapkey         → browser key for the Google basemap.
+//   GET /api/geocode?fleet=backfill&days= → pull Reveal's GPS history (up to 30
+//                                           days) into truck_pings.
 //   POST /api/verizon-gps                 → Reveal's GPS webhook, pushing positions
 //                                           instead of us polling. Rewritten to
 //                                           ?fleet=webhook in vercel.json so it gets
@@ -28,7 +30,7 @@ import { admin } from "../lib/clients.mjs";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
   mapLocation, normalizeVehicles, resolvedPaths, applyGpsEvents, syncDriverHours,
-  diagnose, SYNC_MIN_INTERVAL_MS,
+  diagnose, backfillHistory, SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -112,6 +114,11 @@ async function fleet(req, res, action) {
     }
     if (action === "diagnose") {
       res.status(200).json({ checks: await diagnose() });
+      return;
+    }
+    if (action === "backfill") {
+      const days = Math.min(30, Math.max(1, parseInt(req.query?.days, 10) || 30));
+      res.status(200).json(await backfillHistory({ days }));
       return;
     }
     if (action === "hours") {
