@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- No Borders chain-link mark -->
+  <rect x="32" y="26" width="20" height="34" rx="10" stroke="#1E6BFF" stroke-width="7"/>
+  <rect x="12" y="4" width="20" height="34" rx="10" stroke="#1E6BFF" stroke-width="7"/>
+  <!-- interlock: hide part of the top link where the bottom link passes over it -->
+  <path d="M35.5 30 v6" stroke="#fff" stroke-width="9" stroke-linecap="butt"/>
+  <path d="M35.5 30 v6" stroke="#1E6BFF" stroke-width="7" stroke-linecap="butt"/>
+</svg>
