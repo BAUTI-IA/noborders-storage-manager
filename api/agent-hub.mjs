@@ -29,9 +29,13 @@ async function sendTelegram(chatId, text) {
 
 async function dailyBrief(req, res) {
   const secret = process.env.CRON_SECRET;
+  // No secret configured → refuse. This endpoint posts the whole brief to
+  // Telegram; it must never become callable by anyone because a var is unset.
+  if (!secret) { res.status(503).json({ error: "server not configured: CRON_SECRET" }); return; }
   // Vercel Cron sends the Bearer header; humans testing from a browser pass ?secret=.
-  const provided = req.headers.authorization === `Bearer ${secret}` || req.query?.secret === secret;
-  if (secret && !provided) { res.status(401).json({ error: "unauthorized" }); return; }
+  const bearer = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const provided = secretMatches(bearer, secret) || secretMatches(req.query?.secret, secret);
+  if (!provided) { res.status(401).json({ error: "unauthorized" }); return; }
   if (!process.env.TELEGRAM_BOT_TOKEN) { res.status(500).json({ error: "server not configured" }); return; }
 
   try {
