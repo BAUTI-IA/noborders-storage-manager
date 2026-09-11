@@ -28,7 +28,15 @@ lives in `src/i18n.js`:
 ## Conventions
 
 - Soft deletes: rows get `deleted_at`; filter with `notDel`. Undo/redo via
-  `src/undo.js` and the Trash / History section.
+  `src/undo.js` and the Trash / History section. Restoring from the Trash
+  goes through `restoreWithChildren` (a job brings back its extras and
+  payments); add new parent→child edges to `CASCADE_CHILDREN` in `src/undo.js`.
+- **Every Supabase write checks its result.** supabase-js resolves a failed
+  mutation to `{ error }` instead of throwing, so a bare `await` swallows it.
+  Wrap fire-and-forget writes with `dbFailed` from `src/db.js`:
+  `if (dbFailed(await supabase.from("t").update(p).eq("id", id), "t")) return;`
+  (reset any saving/busy flag before returning; `{ quiet: true }` for
+  background loops). Never close a modal or reload over an unchecked write.
 - Feature modules are self-contained (receive `supabase` + `session`), with
   pure/testable math split into sibling `*Data.js` files.
 - One-time DB migrations live as SQL strings shown in setup banners and as

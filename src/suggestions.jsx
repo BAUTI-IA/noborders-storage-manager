@@ -4,7 +4,7 @@
 // with an optional written response. Tables: suggestions, suggestion_votes.
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { tr } from "./i18n.js";
-import { selectAll } from "./db.js";
+import { selectAll, dbFailed } from "./db.js";
 
 // Shown in the setup banner when the tables don't exist yet.
 // Keep in sync with scripts/setup-suggestions.mjs (the one-time migration).
@@ -162,25 +162,25 @@ export function SuggestionsSection({ supabase, session, profile, isAdmin = false
   }
 
   async function toggleVote(s) {
-    if (myVotes.has(s.id)) await supabase.from("suggestion_votes").delete().eq("suggestion_id", s.id).eq("user_id", me);
-    else await supabase.from("suggestion_votes").insert({ suggestion_id: s.id, user_id: me });
+    if (myVotes.has(s.id)) { if (dbFailed(await supabase.from("suggestion_votes").delete().eq("suggestion_id", s.id).eq("user_id", me), "suggestion_votes")) return; }
+    else { if (dbFailed(await supabase.from("suggestion_votes").insert({ suggestion_id: s.id, user_id: me }), "suggestion_votes")) return; }
     load();
   }
 
   async function setStatus(s, status) {
-    await supabase.from("suggestions").update({ status }).eq("id", s.id);
+    if (dbFailed(await supabase.from("suggestions").update({ status }).eq("id", s.id), "suggestions")) return;
     load();
   }
 
   async function saveNote(s) {
-    await supabase.from("suggestions").update({ admin_note: noteDraft.trim() || null }).eq("id", s.id);
+    if (dbFailed(await supabase.from("suggestions").update({ admin_note: noteDraft.trim() || null }).eq("id", s.id), "suggestions")) return;
     setNoteEditId(null); setNoteDraft("");
     load();
   }
 
   async function remove(s) {
     if (!window.confirm(tr("Delete this suggestion?", "¿Borrar esta sugerencia?"))) return;
-    await supabase.from("suggestions").delete().eq("id", s.id);
+    if (dbFailed(await supabase.from("suggestions").delete().eq("id", s.id), "suggestions")) return;
     load();
   }
 
