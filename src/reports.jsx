@@ -38,6 +38,7 @@ export function ReportsSection({ supabase, session }) {
   const [trucks, setTrucks] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [kindFilter, setKindFilter] = useState("all");
+  const [backfill, setBackfill] = useState(null);   // null | "busy" | result | {error}
 
   const days = RANGES.find(r => r.key === rangeKey)?.days ?? 7;
   const from = isoDaysAgo(days);
@@ -61,6 +62,23 @@ export function ReportsSection({ supabase, session }) {
   }, [supabase, from]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Reveal keeps 30 days of location history, so the reports do not have to wait
+  // weeks for truck_pings to fill up on its own.
+  const runBackfill = useCallback(async () => {
+    setBackfill("busy");
+    try {
+      const r = await fetch("/api/geocode?fleet=backfill&days=30", {
+        headers: { Authorization: "Bearer " + session.access_token },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error || "failed");
+      setBackfill(d);
+      await load();
+    } catch (e) {
+      setBackfill({ error: e?.message || "failed" });
+    }
+  }, [session, load]);
 
   const { rows, totals, trucksById } = useMemo(() => {
     const byId = Object.fromEntries(trucks.map(x => [x.id, x]));
@@ -87,11 +105,31 @@ export function ReportsSection({ supabase, session }) {
               background: rangeKey === r.key ? "#111" : "#f5f5f5", color: rangeKey === r.key ? "#fff" : "#888",
               fontWeight: rangeKey === r.key ? 600 : 400 }}>{r.label}</button>
         ))}
-        <button onClick={load} style={{ marginLeft: "auto", fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+        <button onClick={runBackfill} disabled={backfill === "busy"}
+          style={{ marginLeft: "auto", fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+          {backfill === "busy" ? t("Bringing history...") : t("Bring 30 days from Verizon")}
+        </button>
+        <button onClick={load} style={{ fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
           {loading ? t("Loading...") : t("Refresh")}
         </button>
       </div>
 
+      {backfill && backfill !== "busy" && (
+        <div style={{ ...card, marginBottom: 12, fontSize: 12.5,
+          background: backfill.error ? "#FCEBEB" : "#EAF3DE",
+          borderColor: backfill.error ? "#f0c9c9" : "#d5e6bd",
+          color: backfill.error ? "#A32D2D" : "#3B6D11" }}>
+          {backfill.error
+            ? tr(`Could not bring history: ${backfill.error}`, `No se pudo traer el historial: ${backfill.error}`)
+            : tr(`${backfill.positions} position(s) brought in for ${backfill.trucks} truck(s).`,
+                 `${backfill.positions} posición(es) traídas para ${backfill.trucks} truck(s).`)}
+          {backfill.errors?.length > 0 && (
+            <div style={{ fontSize: 11.5, marginTop: 4, color: "#A32D2D" }}>
+              {backfill.errors.map(e => `${e.truck}: ${e.error}`).join(" · ")}
+            </div>
+          )}
+        </div>
+      )}
       {missing ? (
         <div style={{ ...card, background: "#FAEEDA", border: "1px solid #EF9F27", color: "#854F0B", fontSize: 13 }}>
           GPS history has not started yet. Open Trips / Live Load once so the CRM creates the table, and positions will start accumulating from that moment.

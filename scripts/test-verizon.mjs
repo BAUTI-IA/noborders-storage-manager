@@ -252,5 +252,18 @@ check("a missing side is never the same fix",
   !v.sameInstant(null, "2026-09-08T12:00:00Z") && !v.sameInstant("2026-09-08T12:00:00Z", null) && !v.sameInstant(null, null));
 check("garbage is never the same fix", !v.sameInstant("nope", "2026-09-08T12:00:00Z"));
 
+// ── GPS history ──────────────────────────────────────────────────────────────
+console.log("\nGPS history");
+const hist = v.normalizeHistory([
+  { Latitude: 33.7, Longitude: -84.4, Speed: 50, UpdateUTC: "2026-09-08T12:00:00Z" },
+  { Latitude: 33.8, Longitude: -84.3, Speed: 0,  UpdateUTC: "2026-09-08T12:05:00Z" },
+]);
+check("a flat history array", hist.length === 2 && hist[0].last_status === "moving" && hist[1].last_status === "stopped");
+check("a wrapped history", v.normalizeHistory({ History: [{ Latitude: 1, Longitude: 2 }] }).length === 1);
+check("rows with no coordinates are dropped, not stored at 0,0",
+  v.normalizeHistory([{ Speed: 10, UpdateUTC: "2026-09-08T12:00:00Z" }]).length === 0);
+check("garbage in → empty, not a crash",
+  v.normalizeHistory(null).length === 0 && v.normalizeHistory("nope").length === 0);
+
 console.log(failures ? `\n${failures} failure(s)\n` : "\nall passing\n");
 process.exit(failures ? 1 : 0);

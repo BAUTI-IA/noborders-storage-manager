@@ -82,6 +82,8 @@ export const I18N_ES = {
   "Bill date": "Fecha de la factura",
   "Both together": "Los dos juntos",
   "Break-even price": "Precio de equilibrio",
+  "Bring 30 days from Verizon": "Traer 30 días de Verizon",
+  "Bringing history...": "Trayendo historial...",
   "Broker price": "Precio del broker",
   "CAREFUL": "OJO",
   "Calibration": "Calibración",
