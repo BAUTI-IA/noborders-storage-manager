@@ -9,6 +9,24 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { tr, t } from "./i18n.js";
 import { truckDays, paidDays, reconcile, reportTotals } from "./reportsData.js";
 
+// The history table, exported so App.jsx's auto-migration and the banner below
+// can never drift apart. The CRM creates it by itself where Supabase exposes an
+// exec_sql RPC; where it does not, somebody has to run this once.
+export const TRUCK_PINGS_SQL = `create table if not exists public.truck_pings (
+  id bigint generated always as identity primary key,
+  truck_id bigint references public.trucks(id) on delete cascade,
+  lat numeric,
+  lng numeric,
+  status text,
+  at timestamptz,
+  created_at timestamptz default now(),
+  unique (truck_id, at)
+);
+create index if not exists truck_pings_truck_at on public.truck_pings (truck_id, at desc);
+alter table public.truck_pings enable row level security;
+drop policy if exists "truck_pings_all" on public.truck_pings;
+create policy "truck_pings_all" on public.truck_pings for all to anon, authenticated using (true) with check (true);`;
+
 const RANGES = [
   { key: "7", days: 7, label: "Last 7 days" },
   { key: "14", days: 14, label: "Last 14 days" },
@@ -38,7 +56,8 @@ export function ReportsSection({ supabase, session }) {
   const [trucks, setTrucks] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [kindFilter, setKindFilter] = useState("all");
-  const [backfill, setBackfill] = useState(null);   // null | "busy" | result | {error}
+  const [backfill, setBackfill] = useState(null);   // null | {busy} | result | {error}
+  const [sqlCopied, setSqlCopied] = useState(false);
 
   const days = RANGES.find(r => r.key === rangeKey)?.days ?? 7;
   const from = isoDaysAgo(days);
@@ -149,7 +168,17 @@ export function ReportsSection({ supabase, session }) {
       )}
       {missing ? (
         <div style={{ ...card, background: "#FAEEDA", border: "1px solid #EF9F27", color: "#854F0B", fontSize: 13 }}>
-          GPS history has not started yet. Open Trips / Live Load once so the CRM creates the table, and positions will start accumulating from that moment.
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>The GPS history table does not exist yet.</div>
+          <div style={{ lineHeight: 1.5, marginBottom: 8 }}>
+            The CRM creates it by itself where Supabase allows it. Here it could not, so run this once in the Supabase SQL editor — nothing else is needed afterwards.
+          </div>
+          <pre style={{ background: "#fff", border: "1px solid #e8d3a8", borderRadius: 8, padding: "10px 12px",
+            fontSize: 10.5, color: "#5b4410", overflowX: "auto", margin: 0, lineHeight: 1.45 }}>{TRUCK_PINGS_SQL}</pre>
+          <button onClick={() => { navigator.clipboard?.writeText(TRUCK_PINGS_SQL); setSqlCopied(true); }}
+            style={{ marginTop: 8, background: "#854F0B", border: "none", color: "#fff", fontWeight: 600,
+              borderRadius: 7, padding: "5px 12px", cursor: "pointer", fontSize: 12 }}>
+            {sqlCopied ? t("Copied") : t("Copy SQL")}
+          </button>
         </div>
       ) : (<>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>

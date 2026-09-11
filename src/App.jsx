@@ -7,7 +7,7 @@ import { BolSection } from "./bol.jsx";
 import { MessagesSection, notifyUser } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
-import { ReportsSection } from "./reports.jsx";
+import { ReportsSection, TRUCK_PINGS_SQL } from "./reports.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, computeDriverPnl } from "./analyticsData.js";
@@ -728,20 +728,6 @@ do $$ begin alter publication supabase_realtime add table public.closing_sheets;
 // every sync erases the previous one and no question about a past day can be
 // answered: did this truck move on Tuesday, when did it start, how long was it
 // out. The rows accumulate from the day this ships, so it ships early.
-const TRUCK_PINGS_SQL = `create table if not exists public.truck_pings (
-  id bigint generated always as identity primary key,
-  truck_id bigint references public.trucks(id) on delete cascade,
-  lat numeric,
-  lng numeric,
-  status text,
-  at timestamptz,
-  created_at timestamptz default now(),
-  unique (truck_id, at)
-);
-create index if not exists truck_pings_truck_at on public.truck_pings (truck_id, at desc);
-alter table public.truck_pings enable row level security;
-drop policy if exists "truck_pings_all" on public.truck_pings;
-create policy "truck_pings_all" on public.truck_pings for all to anon, authenticated using (true) with check (true);`;
 
 // ELD hours. Kept apart from the payroll table on purpose — see the comment on
 // driver_hos_days in the expenses SQL below.
