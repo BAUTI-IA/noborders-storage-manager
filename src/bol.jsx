@@ -7,6 +7,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { tr } from "./i18n.js";
+import { dbFailed } from "./db.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 // ── Job fields that can be mapped onto a template ───────────────────────────
@@ -406,7 +407,7 @@ export function BolSection({ supabase, session, jobs = [], brokers = [], can = (
 
   async function removeTemplate(t) {
     if (!window.confirm(tr(`Delete template "${t.company_name}"?`, `¿Borrar el template "${t.company_name}"?`))) return;
-    await supabase.from("bol_templates").delete().eq("id", t.id);
+    if (dbFailed(await supabase.from("bol_templates").delete().eq("id", t.id), "bol_templates")) return;
     if (t.pdf_path) await supabase.storage.from("bol-templates").remove([t.pdf_path]);
     load();
   }
@@ -1539,7 +1540,7 @@ function DocumentsView({ supabase, session, canEdit, onReopen, onClose, jobs = [
   function urlFor(r) { return r.pdf_path ? supabase.storage.from("bol-generated").getPublicUrl(r.pdf_path).data.publicUrl : null; }
   async function remove(r) {
     if (!window.confirm(tr(`Delete this BOL for ${r.customer || "—"}? This removes the legal record.`, `¿Borrar este BOL de ${r.customer || "—"}? Esto elimina el registro legal.`))) return;
-    await supabase.from("bol_documents").delete().eq("id", r.id);
+    if (dbFailed(await supabase.from("bol_documents").delete().eq("id", r.id), "bol_documents")) return;
     if (r.pdf_path) await supabase.storage.from("bol-generated").remove([r.pdf_path]);
     load();
   }

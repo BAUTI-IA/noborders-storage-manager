@@ -8,6 +8,7 @@
 // Tables: job_calc_settings, job_evaluations, zip_distances, zip_geo.
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { tr, t } from "./i18n.js";
+import { dbFailed } from "./db.js";
 import {
   DEFAULT_SETTINGS, SETTING_FLAGS, ACCESS_TYPES, VERDICT, REASON,
   mergeSettings, evaluateJob, calibrate, calibrationPatch, crewCostPerDay, compareCrews,
@@ -878,7 +879,7 @@ export function JobCalcSection({ supabase, session, profile, can = () => true, i
   }
 
   async function softDelete(id) {
-    await supabase.from("job_evaluations").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+    if (dbFailed(await supabase.from("job_evaluations").update({ deleted_at: new Date().toISOString() }).eq("id", id), "job_evaluations")) return;
     load();
   }
 

@@ -22,12 +22,13 @@ export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   if (!process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "Falta ANTHROPIC_API_KEY en Vercel." }); return; }
 
-  // Require a valid logged-in user (best-effort auth via service role).
-  if (admin) {
-    const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-    const { data: { user } = {}, error } = await admin.auth.getUser(token);
-    if (error || !user) { res.status(401).json({ error: "No autorizado." }); return; }
-  }
+  // Require a valid logged-in user. Fails closed: with no service key there is
+  // no way to verify the session, so the endpoint refuses instead of turning
+  // into an open proxy on ANTHROPIC_API_KEY.
+  if (!admin) { res.status(500).json({ error: "Falta SUPABASE_SERVICE_ROLE_KEY / SUPABASE_URL en Vercel." }); return; }
+  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const { data: { user } = {}, error: authErr } = token ? await admin.auth.getUser(token) : { data: {}, error: true };
+  if (authErr || !user) { res.status(401).json({ error: "No autorizado." }); return; }
 
   const { image_base64, pages } = req.body || {};
   if (!image_base64) { res.status(400).json({ error: "Falta la imagen." }); return; }

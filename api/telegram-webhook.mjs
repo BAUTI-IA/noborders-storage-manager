@@ -6,9 +6,16 @@
 // scripts/setup-telegram-webhook.mjs. Trust comes from the secret token that
 // Telegram echoes back on every update (TELEGRAM_WEBHOOK_SECRET) plus the
 // TELEGRAM_ALLOWED_USERS whitelist.
+import { timingSafeEqual } from "node:crypto";
 import { waitUntil } from "@vercel/functions";
 import { admin, handleIncoming } from "../lib/agent.mjs";
 import { transcribeAudio } from "../lib/transcribe.mjs";
+
+// Constant-time compare of the echoed secret (a plain !== leaks length/prefix timing).
+function secretMatches(got, want) {
+  const a = Buffer.from(String(got || "")), b = Buffer.from(String(want || ""));
+  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
+}
 
 export const maxDuration = 300;
 
@@ -103,8 +110,11 @@ export default async function handler(req, res) {
   }
 
   // Telegram echoes the secret_token registered with setWebhook on every update.
+  // No secret configured → refuse: anyone who finds the URL could otherwise
+  // post updates as any allowed user (never fail open on a missing env var).
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret && req.headers["x-telegram-bot-api-secret-token"] !== secret) {
+  if (!secret) { res.status(503).json({ error: "server not configured: TELEGRAM_WEBHOOK_SECRET" }); return; }
+  if (!secretMatches(req.headers["x-telegram-bot-api-secret-token"], secret)) {
     res.status(401).json({ error: "bad secret" }); return;
   }
 

@@ -4,6 +4,7 @@
 // Realtime Presence. Tables: chat_channels, chat_channel_members, chat_messages.
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { tr, t } from "./i18n.js";
+import { dbFailed } from "./db.js";
 
 // Shown in the setup banner when the chat tables don't exist yet.
 // Keep in sync with scripts/setup-chat.mjs (the one-time migration).
@@ -258,7 +259,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
     const now = new Date().toISOString();
     setCursors(c => ({ ...c, [channelId]: now }));
     setUnread(u => ({ ...u, [channelId]: 0 }));
-    await supabase.from("chat_channel_members").upsert({ channel_id: channelId, user_id: me, last_read_at: now });
+    dbFailed(await supabase.from("chat_channel_members").upsert({ channel_id: channelId, user_id: me, last_read_at: now }), "chat_channel_members", { quiet: true });
   }, [supabase, me]);
 
   // Last connection of every teammate (chat_presence heartbeats). Its absence
@@ -392,7 +393,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
 
   const deleteMessage = async (id) => {
     setMessages(ms => ms.filter(m => m.id !== id));
-    await supabase.from("chat_messages").delete().eq("id", id);
+    dbFailed(await supabase.from("chat_messages").delete().eq("id", id), "chat_messages");
   };
 
   // Private group with hand-picked members (creator + everyone in memberIds).
@@ -407,7 +408,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
       window.alert(error.message); return;
     }
     const rows = [me, ...ids].map(uid => ({ channel_id: data.id, user_id: uid }));
-    await supabase.from("chat_channel_members").insert(rows);
+    dbFailed(await supabase.from("chat_channel_members").insert(rows), "chat_channel_members");
     setShowNewChat(false);
     setNewGroupName(""); setNewChatSearch(""); setGroupSel(new Set());
     setChannels(cs => cs.some(c => c.id === data.id) ? cs : [...cs, data]);
@@ -446,7 +447,7 @@ export function MessagesSection({ supabase, session, profile, isAdmin = false, o
 
   const deleteChannel = async (ch) => {
     if (!window.confirm(tr(`Delete #${ch.name} and all its messages?`, `¿Borrar #${ch.name} y todos sus mensajes?`))) return;
-    await supabase.from("chat_channels").delete().eq("id", ch.id);
+    if (dbFailed(await supabase.from("chat_channels").delete().eq("id", ch.id), "chat_channels")) return;
     setChannels(cs => cs.filter(c => c.id !== ch.id));
     if (activeId === ch.id) setActiveId(null);
   };

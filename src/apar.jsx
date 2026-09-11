@@ -26,7 +26,7 @@ import { numv, dedupeJobs, isPhysical } from "./analyticsData.js";
 import { effectiveBanked } from "./bankShared.js";
 import { paymentNet } from "./paymentAlloc.js";
 import { tr, t } from "./i18n.js";
-import { selectAll } from "./db.js";
+import { selectAll, dbFailed } from "./db.js";
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
@@ -253,8 +253,7 @@ export function ApArSection({
       if (canEdit) {
         const stale = overdueBillIds(bills, today);
         if (stale.length) {
-          await supabase.from("ap_bills").update({ status:"overdue" }).in("id", stale);
-          changed = true;
+          if (!dbFailed(await supabase.from("ap_bills").update({ status:"overdue" }).in("id", stale), "ap_bills", { quiet: true })) changed = true;
         }
       }
       if (canCreate) {
@@ -303,14 +302,14 @@ export function ApArSection({
       bank_account: billForm.bank_account || null,
       notes: billForm.notes || null,
     };
-    if (editingBillId) await supabase.from("ap_bills").update({ ...payload, ...stamp() }).eq("id", editingBillId);
-    else await supabase.from("ap_bills").insert({ ...payload, source:"manual", created_by: myName });
+    if (editingBillId) { if (dbFailed(await supabase.from("ap_bills").update({ ...payload, ...stamp() }).eq("id", editingBillId), "ap_bills")) { setSaving(false); return; } }
+    else { if (dbFailed(await supabase.from("ap_bills").insert({ ...payload, source:"manual", created_by: myName }), "ap_bills")) { setSaving(false); return; } }
     setSaving(false); setShowBill(false); setEditingBillId(null); loadBills();
   };
   const deleteBill = async (b) => {
     if (!canEdit) return;
     if (!window.confirm(tr("Delete this bill?", "¿Borrar esta factura?"))) return;
-    await supabase.from("ap_bills").update({ deleted_at: new Date().toISOString(), ...stamp() }).eq("id", b.id);
+    if (dbFailed(await supabase.from("ap_bills").update({ deleted_at: new Date().toISOString(), ...stamp() }).eq("id", b.id), "ap_bills")) return;
     loadBills();
   };
 
@@ -323,12 +322,12 @@ export function ApArSection({
     if (pay <= 0) return;
     const paidTotal = numv(b.amount_paid) + pay;
     const done = paidTotal >= numv(b.amount) - 0.01;
-    await supabase.from("ap_bills").update({
+    if (dbFailed(await supabase.from("ap_bills").update({
       amount_paid: Math.round(paidTotal * 100) / 100,
       status: done ? "paid" : (b.due_date && b.due_date < today ? "overdue" : "pending"),
       paid_date: done ? today : b.paid_date || null,
       ...stamp(),
-    }).eq("id", b.id);
+    }).eq("id", b.id), "ap_bills")) return;
     // A settled recurring bill immediately opens its next cycle, so the calendar
     // never goes quiet on rent or insurance.
     if (done && canCreate && nextDueDate(b.due_date, b.recurrence)) {
@@ -336,13 +335,13 @@ export function ApArSection({
         bills: [...bills.filter(x => x.id !== b.id), { ...b, status:"paid" }],
         storages: [], todayISO: today,
       });
-      if (next) await supabase.from("ap_bills").insert({ ...next, created_by: myName });
+      if (next) { if (dbFailed(await supabase.from("ap_bills").insert({ ...next, created_by: myName }), "ap_bills")) return; }
     }
     setPayRow(null); setPayAmount(""); loadBills();
   };
 
   const markBillingPaid = async (row) => {
-    await supabase.from("storage_billing").update({ status:"paid", paid_date: today }).eq("id", row.ref.billingId);
+    if (dbFailed(await supabase.from("storage_billing").update({ status:"paid", paid_date: today }).eq("id", row.ref.billingId), "storage_billing")) return;
   };
 
   // Stamps every unpaid part of the driver's pay week at once — days, extra
@@ -353,9 +352,9 @@ export function ApArSection({
   const markWeekPaid = async (row) => {
     const { workDayIds = [], adjustmentIds = [], extraIds = [] } = row.ref;
     if (!window.confirm(tr(`Mark ${row.party}'s week paid?`, `¿Marcar como pagada la semana de ${row.party}?`))) return;
-    if (workDayIds.length) await supabase.from("driver_work_days").update({ paid_date: today }).in("id", workDayIds);
-    if (adjustmentIds.length) await supabase.from("driver_adjustments").update({ paid_date: today }).in("id", adjustmentIds);
-    if (extraIds.length) await supabase.from("job_extras").update({ commission_paid_date: today }).in("id", extraIds);
+    if (workDayIds.length) { if (dbFailed(await supabase.from("driver_work_days").update({ paid_date: today }).in("id", workDayIds), "driver_work_days")) return; }
+    if (adjustmentIds.length) { if (dbFailed(await supabase.from("driver_adjustments").update({ paid_date: today }).in("id", adjustmentIds), "driver_adjustments")) return; }
+    if (extraIds.length) { if (dbFailed(await supabase.from("job_extras").update({ commission_paid_date: today }).in("id", extraIds), "job_extras")) return; }
   };
 
   // ── Setup banner ───────────────────────────────────────────────────────────
