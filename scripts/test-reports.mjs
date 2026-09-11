@@ -87,6 +87,20 @@ const sep5 = rec.find(r => r.date === "2026-09-05");
 check("a paid day with no history at all says so, it is not an accusation",
   sep5.kind === "paid_no_movement" && sep5.noHistory === true);
 
+// A driver with no truck assigned: the day is still payroll, and it used to
+// disappear from the report entirely.
+const noTruck = reconcile({
+  truckDayRows: [],
+  paidDayRows: [{ driverId: 99, driverName: "Sin truck", date: "2026-09-08", pay: 300, hours: 8, truckId: null }],
+  trucksById: {}, driversList: [],
+});
+check("a paid day with no truck assigned still appears", noTruck.length === 1 && noTruck[0].kind === "paid_unlinked");
+check("and it carries its pay", noTruck[0].pay === 300);
+check("it is not counted as a discrepancy",
+  reportTotals(noTruck).movedUnpaid === 0 && reportTotals(noTruck).paidNoMovement === 0);
+check("but it does count as labor paid", reportTotals(noTruck).pay === 300);
+check("and it is counted as uncheckable", reportTotals(noTruck).paidUnlinked === 1);
+
 console.log("\nTotals");
 const tot = reportTotals(rec);
 check("miles add up across the period", tot.miles === 200, String(tot.miles));
