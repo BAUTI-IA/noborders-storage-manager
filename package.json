@@ -14,6 +14,7 @@
     "guide:pdf": "node scripts/render-guide-pdf.mjs",
     "test:jobcalc": "node scripts/test-jobcalc-data.mjs",
     "test:apar": "node scripts/test-apar-data.mjs",
+    "test:undo": "node scripts/test-undo.mjs",
     "agent:prompt": "node scripts/dump-agent-prompt.mjs",
     "test:agent-auth": "node scripts/test-agent-auth.mjs",
     "test:voice": "node scripts/test-voice.mjs",

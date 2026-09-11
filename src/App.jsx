@@ -3016,11 +3016,15 @@ function TrashSection({ supabase, undoMgr, onRestored }) {
     setBusy(false);
   }, [supabase]);
   useEffect(() => { loadAll(); }, [loadAll]);
+  // Restores the row AND whatever was deleted with it (a job's extras and
+  // payments, a claim's notes...) — see restoreWithChildren in undo.js.
   async function restoreRow(table, label, r) {
-    const res = await undoMgr.restore(table, r.id);
+    const res = await undoMgr.restoreWithChildren(table, r.id);
     if (res.error) { window.alert(res.error.message); return; }
-    undoMgr.record(`Restaurado: ${label}`, res.entries);
-    loadAll(); onRestored?.(table);
+    const others = res.entries.filter(e => e.table !== table).length;
+    undoMgr.record(`Restaurado: ${label}` + (others ? ` (+${others} ${tr("related", "relacionados")})` : ""), res.entries);
+    loadAll();
+    for (const t of new Set([table, ...res.entries.map(e => e.table)])) onRestored?.(t);
   }
   const card = { background:"#fff", border:"1px solid #eee", borderRadius:12, padding:16, marginBottom:16 };
   const tabBtn = (id, lbl) => (
