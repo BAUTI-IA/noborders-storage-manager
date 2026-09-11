@@ -65,20 +65,34 @@ export function ReportsSection({ supabase, session }) {
 
   // Reveal keeps 30 days of location history, so the reports do not have to wait
   // weeks for truck_pings to fill up on its own.
+  //
+  // One request per truck: a month for the whole fleet in a single call outlives
+  // the serverless timeout, and a failure there would lose every truck at once.
+  // Walking them also means the page can show where it is instead of hanging.
   const runBackfill = useCallback(async () => {
-    setBackfill("busy");
-    try {
-      const r = await fetch("/api/geocode?fleet=backfill&days=30", {
-        headers: { Authorization: "Bearer " + session.access_token },
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d?.error || "failed");
-      setBackfill(d);
-      await load();
-    } catch (e) {
-      setBackfill({ error: e?.message || "failed" });
+    const linked = trucks.filter(t => t.verizon_vehicle_id);
+    if (!linked.length) { setBackfill({ error: tr("No truck is linked to a Verizon vehicle yet.", "Ningún truck está vinculado a un vehículo de Verizon todavía.") }); return; }
+    const totals = { positions: 0, trucks: 0, errors: [] };
+    for (let i = 0; i < linked.length; i++) {
+      const tk = linked[i];
+      setBackfill({ busy: true, done: i, total: linked.length, current: tk.name });
+      try {
+        const r = await fetch(`/api/geocode?fleet=backfill&days=30&truck=${tk.id}`, {
+          headers: { Authorization: "Bearer " + session.access_token },
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || "failed");
+        totals.positions += d.positions || 0;
+        totals.trucks += 1;
+        // A truck that failed on Verizon's side reports itself; keep going.
+        if (d.errors?.length) totals.errors.push(...d.errors);
+      } catch (e) {
+        totals.errors.push({ truck: tk.name, error: e?.message || "failed" });
+      }
     }
-  }, [session, load]);
+    setBackfill(totals);
+    await load();
+  }, [session, load, trucks]);
 
   const { rows, totals, trucksById } = useMemo(() => {
     const byId = Object.fromEntries(trucks.map(x => [x.id, x]));
@@ -105,16 +119,19 @@ export function ReportsSection({ supabase, session }) {
               background: rangeKey === r.key ? "#111" : "#f5f5f5", color: rangeKey === r.key ? "#fff" : "#888",
               fontWeight: rangeKey === r.key ? 600 : 400 }}>{r.label}</button>
         ))}
-        <button onClick={runBackfill} disabled={backfill === "busy"}
-          style={{ marginLeft: "auto", fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
-          {backfill === "busy" ? t("Bringing history...") : t("Bring 30 days from Verizon")}
+        <button onClick={runBackfill} disabled={backfill?.busy}
+          style={{ marginLeft: "auto", fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: backfill?.busy ? "default" : "pointer", textDecoration: "underline" }}>
+          {backfill?.busy
+            ? tr(`Bringing history… ${backfill.done}/${backfill.total} · ${backfill.current}`,
+                 `Trayendo historial… ${backfill.done}/${backfill.total} · ${backfill.current}`)
+            : t("Bring 30 days from Verizon")}
         </button>
         <button onClick={load} style={{ fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
           {loading ? t("Loading...") : t("Refresh")}
         </button>
       </div>
 
-      {backfill && backfill !== "busy" && (
+      {backfill && !backfill.busy && (
         <div style={{ ...card, marginBottom: 12, fontSize: 12.5,
           background: backfill.error ? "#FCEBEB" : "#EAF3DE",
           borderColor: backfill.error ? "#f0c9c9" : "#d5e6bd",

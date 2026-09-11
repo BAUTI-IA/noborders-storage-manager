@@ -25,6 +25,10 @@
 //
 // Every fleet=* action except `status` needs the caller's Supabase JWT, because
 // the sync writes to trucks through the service role.
+// A month of history for one truck is a real round trip to Verizon plus a bulk
+// write; the default serverless ceiling is not enough for it.
+export const maxDuration = 60;
+
 import { timingSafeEqual } from "node:crypto";
 import { admin } from "../lib/clients.mjs";
 import {
@@ -118,7 +122,10 @@ async function fleet(req, res, action) {
     }
     if (action === "backfill") {
       const days = Math.min(30, Math.max(1, parseInt(req.query?.days, 10) || 30));
-      res.status(200).json(await backfillHistory({ days }));
+      // One truck per call: the whole fleet in a single request outlives the
+      // function. The client walks the list and can show progress.
+      const truckId = req.query?.truck ? parseInt(req.query.truck, 10) : null;
+      res.status(200).json(await backfillHistory({ days, truckId }));
       return;
     }
     if (action === "hours") {
