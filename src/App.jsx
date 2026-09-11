@@ -14702,7 +14702,7 @@ export default function App() {
           const hex = l.kind === "job" ? "#185FA5" : "#6D28D9";
           return (
             <div key={i} style={{ position:"relative", display:"grid", gridTemplateColumns:"24px 1fr", gap:8, alignItems:"start", background: on ? hex + "12" : "#fff", border:`1px solid ${over ? "#E24B4A" : on ? hex : "#e5e5e5"}`, borderRadius:10, padding:"10px 10px 10px 9px", color: on ? "#111" : "#888" }}>
-              <button onClick={() => coverToggle(i)} aria-pressed={on} style={{ border:"none", background:"none", padding:0, cursor:"pointer", marginTop:1 }}>
+              <button onClick={() => coverToggle(i)} aria-pressed={on} aria-label={`Cover ${l.kind === "custom" ? splitConcept(l.concept).l : l.label}`} style={{ border:"none", background:"none", padding:0, cursor:"pointer", marginTop:1 }}>
                 <span style={{ display:"grid", placeItems:"center", width:20, height:20, borderRadius:6, border:`2px solid ${on ? hex : "#ddd"}`, background: on ? hex : "#fff", fontSize:12, fontWeight:800, color:"#fff" }}>{on ? "✓" : ""}</span>
               </button>
               <div style={{ display:"grid", gap:3, minWidth:0 }}>
