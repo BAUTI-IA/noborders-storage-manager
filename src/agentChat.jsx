@@ -9,7 +9,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { VoiceAgentPanel } from "./voiceAgent.jsx";
 
 const S = {
-  fab: { position: "fixed", right: 22, bottom: 22, zIndex: 4000, width: 56, height: 56, borderRadius: "50%", border: "none", background: "#185FA5", color: "#fff", fontSize: 26, cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.25)" },
+  fab: { position: "fixed", right: 22, bottom: 22, zIndex: 4000, width: 56, height: 56, borderRadius: "50%", border: "none", background: "#111", color: "#fff", fontSize: 24, cursor: "pointer", boxShadow: "0 4px 14px rgba(0,0,0,.25)" },
   panel: { position: "fixed", right: 22, bottom: 90, zIndex: 4000, width: 380, maxWidth: "calc(100vw - 44px)", height: 540, maxHeight: "calc(100vh - 130px)", background: "#fff", border: "1px solid #dde5ee", borderRadius: 14, boxShadow: "0 10px 34px rgba(0,0,0,.22)", display: "flex", flexDirection: "column", overflow: "hidden" },
   head: { background: "#185FA5", color: "#fff", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, flexShrink: 0 },
   body: { flex: 1, minHeight: 0, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 8, background: "#F6F9FC" },
@@ -210,7 +210,7 @@ export function AgentChatWidget({ session }) {
           </>)}
         </div>
       )}
-      <button title="CRM Agent" onClick={() => setOpen((o) => !o)} style={S.fab}>{open ? "×" : "🤖"}</button>
+      <button title="CRM Agent" onClick={() => setOpen((o) => !o)} style={S.fab}>{open ? "×" : "✨"}</button>
     </>
   );
 }
