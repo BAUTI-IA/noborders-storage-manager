@@ -9,7 +9,7 @@ import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { ReportsSection } from "./reports.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
-import { buildJobCharges, proposeAllocation, serializeAllocLines } from "./paymentAlloc.js";
+import { buildJobCharges, proposeAllocation, serializeAllocLines, pourLinesOverCharges } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, computeDriverPnl } from "./analyticsData.js";
 import { ExpensesPage, EMPTY_EXPENSE, EMPTY_ADJUSTMENT, FIELD_CAT_BY_BANK, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
@@ -298,9 +298,50 @@ const EMPTY_PAYMENT = {
   mo_payment_for:"", mo_issuer_location:"", mo_photo_url:"",
   // credit-card fee
   cc_fee_enabled:true, cc_fee_pct:"3", cc_fee_amount:"", cc_fee_payment_id:null,
-  // split payment (form-only; never sent verbatim)
-  split_enabled:false, split_lines:[{ concept:"job", amount:"", notes:"" }],
+  // form-only: how the client paid (one line per method) and what it covers
+  // (alloc_lines, seeded from the job's charges). Never sent verbatim.
+  pay_lines:[], alloc_lines:null, no_job:false,
 };
+// One method line of the payment form: the client paid this much this way.
+// `money` is where that part is now: pending (still with the client),
+// received (in circulation under cash_with_whom) or deposited (bank_account).
+let payLineSeq = 0;
+function newPayLine(method = "cash", amount = "", extra = {}) {
+  return {
+    id: ++payLineSeq, method, amount: amount == null ? "" : String(amount),
+    check_type:"", check_serial:"", check_transaction_number:"", check_remitter:"", check_purchased_by:"", check_bank:"",
+    check_from:"", check_routing:"", check_account_last4:"", check_date:"", check_memo:"", check_photo_url:"",
+    mo_type:"usps", mo_serial:"", mo_date:"", mo_post_office:"", mo_from_name:"", mo_from_address:"", mo_payment_for:"", mo_issuer_location:"", mo_photo_url:"",
+    cc_fee_enabled:true, cc_fee_pct:"3",
+    money: isDigitalMethod(method) ? "deposited" : "received", cash_with_whom:"", bank_account:"", banked_date:"",
+    ...extra,
+  };
+}
+// A saved payments row → one form line (edit mode).
+function payLineFromRow(p) {
+  return newPayLine(p.method || "cash", p.amount ?? "", {
+    check_type: p.check_type || "", check_serial: p.check_serial || "", check_transaction_number: p.check_transaction_number || "", check_remitter: p.check_remitter || "",
+    check_purchased_by: p.check_purchased_by || "", check_bank: p.check_bank || "", check_from: p.check_from || "", check_routing: p.check_routing || "",
+    check_account_last4: p.check_account_last4 || "", check_date: p.check_date || "", check_memo: p.check_memo || "", check_photo_url: p.check_photo_url || "",
+    mo_type: p.mo_type || "usps", mo_serial: p.mo_serial || "", mo_date: p.mo_date || "", mo_post_office: p.mo_post_office || "", mo_from_name: p.mo_from_name || "",
+    mo_from_address: p.mo_from_address || "", mo_payment_for: p.mo_payment_for || "", mo_issuer_location: p.mo_issuer_location || "", mo_photo_url: p.mo_photo_url || "",
+    cc_fee_enabled: p.cc_fee_enabled !== false, cc_fee_pct: p.cc_fee_pct ?? "3",
+    money: !p.received ? "pending" : p.banked ? "deposited" : "received",
+    cash_with_whom: p.cash_with_whom || "", bank_account: p.bank_account || "", banked_date: p.banked_date || "",
+  });
+}
+// The fields a line contributes to the row payload (payPayload reads them off the form).
+function payLineFields(l) {
+  const { id, money, amount, ...rest } = l;
+  const digital = isDigitalMethod(l.method);
+  return { ...rest, amount, received: digital || money !== "pending", banked: digital || money === "deposited" };
+}
+const payLinesTotal = (lines) => (lines || []).reduce((s, l) => s + numv(l.amount), 0);
+const PAY_MONEY_STATES = [
+  { v:"pending", l:"Not received", hint:"Still with the client" },
+  { v:"received", l:"In circulation", hint:"Someone holds it" },
+  { v:"deposited", l:"Deposited", hint:"In the bank" },
+];
 
 // ── Legal & Compliance module ──
 const EMPTY_COMPANY = { name:"", dot_number:"", mc_number:"", ein:"", state:"", address:"", phone:"", email:"", active:true, notes:"" };
@@ -3878,6 +3919,7 @@ export default function App() {
   const [accountSaving, setAccountSaving] = useState(false);
   const [showPayModal, setShowPayModal] = useState(false);
   const [payForm, setPayForm] = useState(EMPTY_PAYMENT);
+  const [payStep, setPayStep] = useState(1);                // New payment modal: 1 job · 2 payment · 3 applies to · 4 money
   const [editingPayId, setEditingPayId] = useState(null);
   const [paySaving, setPaySaving] = useState(false);
   const [payJobSearch, setPayJobSearch] = useState("");   // job search inside the payment form
@@ -6129,10 +6171,6 @@ export default function App() {
   // Debounced real-time field checks for the open forms.
   const [jobNumDeb, jobNumChecking] = useDebounced(jobForm.job_number || "");
   const jobNumberDup = useMemo(() => findJobNumberDup(jobNumDeb), [jobNumDeb, findJobNumberDup]);
-  const [chkSerialDeb, chkSerialChecking] = useDebounced(payForm.check_serial || "");
-  const checkSerialDup = useMemo(() => payForm.method === "check" ? findCheckSerialDup(chkSerialDeb) : null, [chkSerialDeb, payForm.method, findCheckSerialDup]);
-  const [moSerialDeb, moSerialChecking] = useDebounced(payForm.mo_serial || "");
-  const moSerialDup = useMemo(() => payForm.method === "money_order" ? findMoSerialDup(moSerialDeb) : null, [moSerialDeb, payForm.method, findMoSerialDup]);
   const [stBrandDeb, stBrandChecking] = useDebounced(`${form.brand || ""}|${form.unit || ""}|${form.state || ""}`);
   const storageDup = useMemo(() => {
     if (editId) return null;            // only warn for NEW units
@@ -8250,27 +8288,20 @@ export default function App() {
       extra_type: l.kind === "extra" ? (charges.extraCharges.find(c => Number(c.extra.id) === Number(l.job_extra_id))?.extra.extra_type || null) : null,
     }));
   }
-  // A job "wants" allocation when it has extras with something still unpaid.
-  function jobWantsAllocation(jobId) {
-    const k = jobKeyByRowId[Number(jobId)];
-    if (!k) return false;
-    return chargeStateByJobKey(k).extraCharges.some(c => c.remaining > 0);
-  }
-
   function openAddPayment(prefill = {}) {
     setEditingPayId(null); setReallocPay(null);
-    const base = { ...EMPTY_PAYMENT, split_enabled: false, split_lines: [{ concept: "job", amount: "", notes: "" }], alloc_lines: null, payment_date: today(), received: true, received_date: today(), ...prefill };
-    // Auto-arm the allocation panel when the job has pending extras.
-    if (!splitMissing && !allocMissing && base.job_id && jobWantsAllocation(base.job_id)) {
-      base.split_enabled = true;
-      base.alloc_lines = seedAllocLines(base.job_id, base.amount);
-    }
+    const base = { ...EMPTY_PAYMENT, alloc_lines: null, no_job: false, payment_date: today(), received: true, received_date: today(), ...prefill };
+    // The prefill (job drawer, "+ Payment" on a job) describes one line: method, amount, who holds it.
+    base.pay_lines = [newPayLine(base.method || "cash", base.amount, { cash_with_whom: base.cash_with_whom || "", money: isDigitalMethod(base.method) ? "deposited" : (base.received === false ? "pending" : "received") })];
     setPayForm(base);
+    setPayStep(1);
     setPayJobSearch(""); setShowPayModal(true);
   }
   function openEditPayment(p) {
     setEditingPayId(p.id);
+    setPayStep(1);
     setPayForm({
+      pay_lines: [payLineFromRow(p)], alloc_lines: null, no_job: !p.job_id,
       job_id: p.job_id || "", payment_date: p.payment_date || "", amount: p.amount ?? "", concept: p.concept || "job",
       method: p.method || "cash", method_id: p.method_id || "", check_type: p.check_type || "",
       discount: p.discount ?? "", discount_reason: p.discount_reason || "",
@@ -8293,10 +8324,13 @@ export default function App() {
   function openReallocatePayment(p) {
     openEditPayment(p);
     setReallocPay(p);
-    setPayForm(f => ({ ...f, split_enabled: true, alloc_lines: seedAllocLines(p.job_id, numv(p.amount)) }));
+    setPayStep(3);
+    setPayForm(f => ({ ...f, alloc_lines: seedAllocLines(p.job_id, numv(p.amount)) }));
   }
   // Upload a check / money-order photo to the payment-docs bucket; stash url in the form field.
-  async function uploadPaymentDoc(file, field) {
+  // The photo belongs to one method line (a check, a money order), so `lineIdx`
+  // says which line's field to fill.
+  async function uploadPaymentDoc(file, field, lineIdx) {
     if (!file) return;
     setPayDocUploading(true);
     try {
@@ -8305,7 +8339,7 @@ export default function App() {
       const { error } = await supabase.storage.from("payment-docs").upload(path, file, { upsert: true, contentType: file.type || undefined });
       if (error) { window.alert("Upload error: " + error.message); setPayDocUploading(false); return; }
       const { data } = supabase.storage.from("payment-docs").getPublicUrl(path);
-      setPayForm(f => ({ ...f, [field]: data?.publicUrl || "" }));
+      setPayForm(f => ({ ...f, pay_lines: (f.pay_lines || []).map((l, i) => i === lineIdx ? { ...l, [field]: data?.publicUrl || "" } : l) }));
     } catch (e) { window.alert("Error: " + e.message); }
     setPayDocUploading(false);
   }
@@ -8399,145 +8433,6 @@ export default function App() {
     loadExtras();
     advanceCommQueue();
   }
-  // Split payment: one entered total fanned out into several linked payment rows
-  // (same job/date/method/check/MO), with extra lines auto-linked to job_extras.
-  async function saveSplitPayment(f) {
-    const lines = (f.split_lines || []).filter(l => l.amount !== "" && numv(l.amount) !== 0);
-    const total = numv(f.amount);
-    const splitTotal = lines.reduce((s, l) => s + numv(l.amount), 0);
-    if (!lines.length) { window.alert("Add at least one line with an amount."); return; }
-    if (Math.abs(splitTotal - total) > 0.01) { window.alert(tr(`The split lines total ($${splitTotal.toLocaleString()}) doesn't match the entered amount ($${total.toLocaleString()}).`, `El total de las divisiones ($${splitTotal.toLocaleString()}) no coincide con el monto ingresado ($${total.toLocaleString()}).`)); return; }
-    const hasExtra = lines.some(l => splitConcept(l.concept).extra);
-    if (hasExtra && !f.job_id) { window.alert("Select a job to record the extras and their commissions."); return; }
-    setPaySaving(true);
-    const group = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now());
-    const base = payPayload(f);
-    base.discount = 0; base.discount_reason = null;          // discounts not split across lines
-    if (!payColsMissing) { base.cc_fee_enabled = false; base.cc_fee_amount = null; base.cc_fee_payment_id = null; }
-    const createdExtras = [];
-    let jobLineSum = 0, err = null;
-    for (const l of lines) {
-      const sc = splitConcept(l.concept);
-      const linePayload = { ...base, amount: numv(l.amount), concept: sc.pay, notes: l.notes || base.notes };
-      if (!splitMissing) { linePayload.split_group = group; linePayload.extra_type = sc.extra || null; }
-      const { data: pd, error: insErr } = await supabase.from("payments").insert([linePayload]).select("id").single();
-      if (insErr) { err = insErr; break; }
-      if (sc.pay === "job") jobLineSum += numv(l.amount);
-      if (sc.extra && f.job_id && !extrasMissing && !splitMissing) {
-        // If the job already has an active extra of this type (added via "+ Add extra"),
-        // the payment counts as collected against it — creating another row would
-        // double the billed total. Only auto-create the extra when none exists yet.
-        const k = jobKeyByRowId[Number(f.job_id)];
-        const jobExs = k ? (extrasByJobKey[k] || []) : jobExtras.filter(e => e.job_id === Number(f.job_id));
-        const alreadyBilled = jobExs.some(e => e.active !== false && e.extra_type === sc.extra);
-        if (!alreadyBilled) {
-          const exPayload = {
-            job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
-            amount: numv(l.amount), generated_by: "driver_only",
-            driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
-            driver_commission_amount: 0, rep_commission_amount: 0, company_amount: numv(l.amount),
-            active: true, source: "payment_split", payment_id: pd?.id || null,
-          };
-          const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
-          if (ed) createdExtras.push(ed);
-        }
-      }
-    }
-    // Two-way sync: job-concept lines mirror bol_collected on the storage_job rows.
-    if (!err && jobLineSum > 0 && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-    }
-    setPaySaving(false);
-    if (err) { window.alert(err.message); return; }
-    setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
-    // Prompt to assign commission for each auto-created extra.
-    if (createdExtras.length) {
-      const toAssign = [];
-      for (const e of createdExtras) {
-        if (window.confirm(tr(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`, `Se registró ${extraTypeLabel(e.extra_type)} por $${Math.round(numv(e.amount)).toLocaleString()}. ¿Asignar la comisión ahora?`))) toAssign.push(e);
-      }
-      if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
-    }
-  }
-  // Save a payment allocated against the job's charges. One payments row per
-  // allocation line (grouped by split_group like the legacy split flow):
-  //   job line   → concept "job" (bol_collected sync preserved)
-  //   extra line → concept "extra" + job_extra_id (pays an EXISTING charge —
-  //                no new job_extras row, no commission prompt)
-  //   custom line→ legacy behavior (new extra on the fly / cc_fee / other)
-  //   remainder  → concept "on_account" ("a cuenta", re-assignable later)
-  async function saveAllocatedPayment(f) {
-    const { rows, unassigned, error: allocErr } = serializeAllocLines(f.alloc_lines, numv(f.amount));
-    if (allocErr) { window.alert(allocErr); return; }
-    if (!rows.length && unassigned <= 0) { window.alert("Add at least one line with an amount."); return; }
-    setPaySaving(true);
-    const base = payPayload(f);
-    base.discount = 0; base.discount_reason = null;
-    if (!payColsMissing) { base.cc_fee_enabled = false; base.cc_fee_amount = null; base.cc_fee_payment_id = null; }
-    const single = rows.length === 1 && unassigned <= 0;
-    const group = single ? null : ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now()));
-    const createdExtras = [];
-    let jobLineSum = 0, err = null;
-    const insertRow = async (payload) => {
-      if (group && !splitMissing) payload.split_group = group;
-      const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("id").single();
-      if (insErr) err = insErr;
-      return data;
-    };
-    for (const l of rows) {
-      if (err) break;
-      if (l.kind === "job") {
-        await insertRow({ ...base, amount: l.amount, concept: "job", notes: l.notes || base.notes });
-        jobLineSum += l.amount;
-      } else if (l.kind === "extra") {
-        const payload = { ...base, amount: l.amount, concept: "extra", notes: l.notes || base.notes };
-        if (!splitMissing) payload.extra_type = l.extra_type || null;
-        if (!allocMissing) payload.job_extra_id = l.job_extra_id || null;
-        await insertRow(payload);
-      } else { // custom line — same semantics as the legacy split builder
-        const sc = splitConcept(l.concept);
-        const payload = { ...base, amount: l.amount, concept: sc.pay, notes: l.notes || base.notes };
-        if (!splitMissing) payload.extra_type = sc.extra || null;
-        const pd = await insertRow(payload);
-        if (sc.pay === "job") jobLineSum += l.amount;
-        if (sc.extra && f.job_id && !extrasMissing && !splitMissing && pd?.id) {
-          const exPayload = {
-            job_id: Number(f.job_id), extra_type: sc.extra, description: l.notes || null,
-            amount: l.amount, generated_by: "driver_only",
-            driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
-            driver_commission_amount: 0, rep_commission_amount: 0, company_amount: l.amount,
-            active: true, source: "payment_split", payment_id: pd.id,
-          };
-          const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
-          if (ed) {
-            createdExtras.push(ed);
-            if (!allocMissing) await supabase.from("payments").update({ job_extra_id: ed.id }).eq("id", pd.id);
-          }
-        }
-      }
-    }
-    if (!err && unassigned > 0) {
-      await insertRow({ ...base, amount: unassigned, concept: "on_account", notes: "A cuenta — sin imputar" });
-    }
-    // Two-way sync: job lines mirror bol_collected on the storage_job rows.
-    if (!err && jobLineSum > 0 && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-    }
-    setPaySaving(false);
-    if (err) { window.alert(err.message); return; }
-    setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
-    if (createdExtras.length) {
-      const toAssign = [];
-      for (const e of createdExtras) {
-        if (window.confirm(tr(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`, `Se registró ${extraTypeLabel(e.extra_type)} por $${Math.round(numv(e.amount)).toLocaleString()}. ¿Asignar la comisión ahora?`))) toAssign.push(e);
-      }
-      if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
-    }
-  }
   // Convert an "A cuenta" payment into allocated lines: the original row
   // becomes the first line (method/check/photo details preserved) and the
   // rest are inserted as siblings sharing its split_group.
@@ -8585,31 +8480,128 @@ export default function App() {
     if (err) { window.alert(err.message); return; }
     setReallocPay(null); setEditingPayId(null); setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
   }
-  async function savePaymentRow() {
-    const f = payForm;
-    if (reallocPay) { await saveReallocation(); return; }
-    // Duplicate check / money-order serial → block with an explicit confirmation.
-    const serialDup = f.method === "check" ? findCheckSerialDup(f.check_serial) : f.method === "money_order" ? findMoSerialDup(f.mo_serial) : null;
-    if (serialDup && !window.confirm(tr(`Number ${serialDup.serial} was already recorded ($${Math.round(serialDup.amount).toLocaleString()} on ${serialDup.date}, job ${serialDup.job_number}).\n\nThis serial number is already in the system. Are you sure you want to save a duplicate?`, `El número ${serialDup.serial} ya fue registrado ($${Math.round(serialDup.amount).toLocaleString()} el ${serialDup.date}, job ${serialDup.job_number}).\n\nEste número de serie ya está en el sistema. ¿Seguro que querés guardar un duplicado?`))) return;
-    if (f.split_enabled && !editingPayId && !splitMissing) {
-      if (!allocMissing && f.job_id && Array.isArray(f.alloc_lines)) { await saveAllocatedPayment(f); return; }
-      await saveSplitPayment(f); return;
+  // What a charge row (from serializeAllocLines) contributes to a payments row.
+  function chargeRowFields(c) {
+    if (!c) return { concept: "on_account", extra_type: null, job_extra_id: null };
+    if (c.kind === "job") return { concept: "job", extra_type: null, job_extra_id: null };
+    if (c.kind === "extra") return { concept: "extra", extra_type: c.extra_type || null, job_extra_id: c.job_extra_id || null };
+    if (c.kind === "plain") return { concept: c.concept || "job", extra_type: null, job_extra_id: null };
+    const sc = splitConcept(c.concept);           // custom line: new extra on the fly / cc_fee / other
+    return { concept: sc.pay, extra_type: sc.extra || null, job_extra_id: null };
+  }
+  // Save a NEW payment. The client paid `lines` (one per method); the money is
+  // applied to the job's charges (`f.alloc_lines`, or a single concept when the
+  // job has no charge tracking). Each saved row keeps one method and one charge:
+  //   job charge    → concept "job" (bol_collected sync preserved)
+  //   extra charge  → concept "extra" + job_extra_id (pays an EXISTING charge)
+  //   custom line   → new extra on the fly / cc_fee / other (commission prompt)
+  //   remainder     → concept "on_account" ("a cuenta", re-assignable later)
+  // Rows share a split_group whenever there is more than one.
+  async function saveNewPayment(f, lines) {
+    const total = payLinesTotal(lines);
+    const allocated = !!f.job_id && !allocMissing && !splitMissing && Array.isArray(f.alloc_lines);
+    let chargeRows, unassigned = 0;
+    if (allocated) {
+      const ser = serializeAllocLines(f.alloc_lines, total);
+      if (ser.error) { window.alert(ser.error); return; }
+      chargeRows = ser.rows; unassigned = ser.unassigned;
+      if (!chargeRows.length && unassigned <= 0) { window.alert(tr("Cover at least one charge.", "Cubrí al menos un cargo.")); return; }
+    } else {
+      chargeRows = [{ kind: "plain", concept: f.concept || "job", amount: total }];
     }
+    const pieces = pourLinesOverCharges(lines, chargeRows, unassigned);
+    if (!pieces.length) return;
+    setPaySaving(true);
+    const group = pieces.length > 1 && !splitMissing ? ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now())) : null;
+    const entries = [], createdExtras = [];
+    const firstRowOfLine = new Map();     // line id → first saved row id (cc_fee link)
+    const customFirst = new Map();        // custom charge → { id, sum }
+    let jobLineSum = 0, discountLeft = numv(f.discount), err = null;
+    for (const piece of pieces) {
+      const payload = payPayload({ ...f, ...payLineFields(piece.line), amount: piece.amount, discount: "", discount_reason: "" });
+      Object.assign(payload, chargeRowFields(piece.charge));
+      if (allocMissing) delete payload.job_extra_id;
+      if (splitMissing) delete payload.extra_type;
+      if (group) payload.split_group = group;
+      if (payload.concept === "on_account") payload.notes = payload.notes || "A cuenta — sin imputar";
+      if (piece.charge?.notes) payload.notes = piece.charge.notes;
+      // The discount rides on the first job row (paymentNet = amount − discount), else on the first row.
+      if (discountLeft > 0 && (payload.concept === "job" || piece === pieces[pieces.length - 1])) { payload.discount = discountLeft; payload.discount_reason = f.discount_reason || null; discountLeft = 0; }
+      if (!payColsMissing) { payload.cc_fee_enabled = false; payload.cc_fee_amount = null; payload.cc_fee_payment_id = null; }
+      const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("*").single();
+      if (insErr) { err = insErr; break; }
+      entries.push(undoMgr.createEntry("payments", data));
+      if (!firstRowOfLine.has(piece.line.id)) firstRowOfLine.set(piece.line.id, data.id);
+      if (payload.concept === "job") jobLineSum += piece.amount;
+      if (piece.charge && piece.charge.kind === "custom") {
+        const cf = customFirst.get(piece.charge) || { id: data.id, sum: 0, rows: [] };
+        cf.sum += piece.amount; cf.rows.push(data.id); customFirst.set(piece.charge, cf);
+      }
+    }
+    // A custom line that names an extra creates it on the job (once, for the whole line).
+    for (const [c, cf] of customFirst) {
+      if (err) break;
+      const sc = splitConcept(c.concept);
+      if (!sc.extra || !f.job_id || extrasMissing || splitMissing) continue;
+      const exPayload = {
+        job_id: Number(f.job_id), extra_type: sc.extra, description: c.notes || null,
+        amount: cf.sum, generated_by: "driver_only",
+        driver_id: null, rep_id: null, driver_commission_pct: null, rep_commission_pct: null,
+        driver_commission_amount: 0, rep_commission_amount: 0, company_amount: cf.sum,
+        active: true, source: "payment_split", payment_id: cf.id,
+      };
+      const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
+      if (ed) {
+        createdExtras.push(ed);
+        if (!allocMissing) await supabase.from("payments").update({ job_extra_id: ed.id }).in("id", cf.rows);
+      }
+    }
+    // Credit-card fee → a SEPARATE linked cc_fee row per credit-card line.
+    if (!err && !payColsMissing) {
+      for (const l of lines) {
+        if (l.method !== "credit_card" || !l.cc_fee_enabled) continue;
+        const feeAmt = numv(l.amount) * numv(l.cc_fee_pct) / 100;
+        const mainId = firstRowOfLine.get(l.id);
+        if (feeAmt <= 0 || !mainId) continue;
+        const d = f.payment_date || today();
+        const feePayload = { job_id: f.job_id ? Number(f.job_id) : null, payment_date: d, amount: feeAmt, concept: "cc_fee", method: "credit_card", received: true, received_date: f.received_date || d, banked: true, banked_date: d, received_by: f.received_by || null, bank_account: l.bank_account || null };
+        if (group) feePayload.split_group = group;
+        const { data: fd } = await supabase.from("payments").insert([feePayload]).select("*").single();
+        if (fd?.id) {
+          entries.push(undoMgr.createEntry("payments", fd));
+          await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId);
+        }
+      }
+    }
+    // Two-way sync: job rows mirror bol_collected on the storage_job rows.
+    if (!err && jobLineSum > 0 && f.job_id) {
+      const k = jobKeyByRowId[Number(f.job_id)];
+      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    }
+    setPaySaving(false);
+    if (err) { window.alert(err.message); return; }
+    undoMgr.record("Pago registrado", entries);
+    setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
+    // Prompt to assign commission for each auto-created extra.
+    if (createdExtras.length) {
+      const toAssign = [];
+      for (const e of createdExtras) {
+        if (window.confirm(tr(`$${Math.round(numv(e.amount)).toLocaleString()} ${extraTypeLabel(e.extra_type)} recorded. Assign commission now?`, `Se registró ${extraTypeLabel(e.extra_type)} por $${Math.round(numv(e.amount)).toLocaleString()}. ¿Asignar la comisión ahora?`))) toAssign.push(e);
+      }
+      if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
+    }
+  }
+  // Edit an EXISTING row: one line, one row, same fields as always.
+  async function saveEditedPayment(f) {
     setPaySaving(true);
     const payload = payPayload(f);
-    let mainId = editingPayId, error = null;
     const payEntries = [];
-    if (editingPayId) {
-      const prevPay = payments.find(p => p.id === editingPayId);
-      ({ error } = await supabase.from("payments").update(payload).eq("id", editingPayId));
-      if (!error && prevPay) payEntries.push(undoMgr.updateEntry("payments", prevPay, payload));
-    } else {
-      const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("*").single();
-      error = insErr; mainId = data?.id;
-      if (!error && data) payEntries.push(undoMgr.createEntry("payments", data));
-    }
-    // Credit-card fee → keep a SEPARATE linked cc_fee payment record in sync.
-    if (!error && !payColsMissing && mainId && f.concept !== "cc_fee") {
+    const prevPay = payments.find(p => p.id === editingPayId);
+    let { error } = await supabase.from("payments").update(payload).eq("id", editingPayId);
+    if (!error && prevPay) payEntries.push(undoMgr.updateEntry("payments", prevPay, payload));
+    // Credit-card fee → keep the SEPARATE linked cc_fee payment record in sync.
+    if (!error && !payColsMissing && f.concept !== "cc_fee") {
       const feeEnabled = f.method === "credit_card" && !!f.cc_fee_enabled;
       const feeAmt = feeEnabled ? (numv(f.amount) * numv(f.cc_fee_pct) / 100) : 0;
       const existingFeeId = f.cc_fee_payment_id ? Number(f.cc_fee_payment_id) : null;
@@ -8624,13 +8616,13 @@ export default function App() {
           const { data: fd } = await supabase.from("payments").insert([feePayload]).select("*").single();
           if (fd?.id) {
             payEntries.push(undoMgr.createEntry("payments", fd));
-            await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId);
+            await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", editingPayId);
           }
         }
       } else if (existingFeeId) {
         const r = await undoMgr.softDelete("payments", existingFeeId);
         if (!r.error) payEntries.push(...r.entries);
-        await supabase.from("payments").update({ cc_fee_payment_id: null }).eq("id", mainId);
+        await supabase.from("payments").update({ cc_fee_payment_id: null }).eq("id", editingPayId);
       }
     }
     // Two-way sync: a "job" payment mirrors bol_collected on the storage_job.
@@ -8643,8 +8635,21 @@ export default function App() {
     }
     setPaySaving(false);
     if (error) { window.alert(error.message); return; }
-    undoMgr.record(editingPayId ? "Pago editado" : "Pago registrado", payEntries);
+    undoMgr.record("Pago editado", payEntries);
     setShowPayModal(false); loadPayments(); loadJobs();
+  }
+  async function savePaymentRow() {
+    const f = payForm;
+    if (reallocPay) { await saveReallocation(); return; }
+    const lines = (f.pay_lines || []).filter(l => numv(l.amount) > 0);
+    if (!lines.length) { window.alert(tr("Enter how much the client paid.", "Ingresá cuánto pagó el cliente.")); return; }
+    // Duplicate check / money-order serial → block with an explicit confirmation.
+    for (const l of lines) {
+      const serialDup = l.method === "check" ? findCheckSerialDup(l.check_serial) : l.method === "money_order" ? findMoSerialDup(l.mo_serial) : null;
+      if (serialDup && !window.confirm(tr(`Number ${serialDup.serial} was already recorded ($${Math.round(serialDup.amount).toLocaleString()} on ${serialDup.date}, job ${serialDup.job_number}).\n\nThis serial number is already in the system. Are you sure you want to save a duplicate?`, `El número ${serialDup.serial} ya fue registrado ($${Math.round(serialDup.amount).toLocaleString()} el ${serialDup.date}, job ${serialDup.job_number}).\n\nEste número de serie ya está en el sistema. ¿Seguro que querés guardar un duplicado?`))) return;
+    }
+    if (editingPayId) { await saveEditedPayment({ ...f, ...payLineFields(lines[0]) }); return; }
+    await saveNewPayment(f, lines);
   }
   // Mirror a job's recorded collection into the payments table (concept = "job"),
   // creating or updating a single canonical row. Called from the Settlement flow.
@@ -14407,365 +14412,447 @@ export default function App() {
       })()}
 
       {showPayModal && (() => {
+        // ── New payment: 1 job · 2 payment (one line per method) · 3 applies to · 4 money ──
+        const f = payForm;
+        const setF = (fields) => setPayForm(x => ({ ...x, ...fields }));
+        const editing = !!editingPayId && !reallocPay;
         const groups = [...extraJobGroups.values()];
         const q = payJobSearch.trim().toLowerCase();
-        const matches = (q ? groups.filter(g => (g.job_number || "").toLowerCase().includes(q) || (g.customer || "").toLowerCase().includes(q)) : groups).slice(0, 40);
-        const selectedG = payForm.job_id ? groups.find(g => String(g.repId) === String(payForm.job_id) || g.ids.includes(Number(payForm.job_id))) : null;
-        const digital = isDigitalMethod(payForm.method);
-        const physical = isPhysical(payForm.method);
-        const setF = (fields) => setPayForm(f => ({ ...f, ...fields }));
-        const net = numv(payForm.amount) - numv(payForm.discount);
-        const whoList = [...driversList.map(d => d.name), ...employees.map(e => e.name)].filter(Boolean);
-        // Split-payment helpers (only available when creating, with columns present).
-        const canSplit = (!editingPayId || !!reallocPay) && !splitMissing;
-        const splitOn = canSplit && payForm.split_enabled;
-        const splitLines = payForm.split_lines || [];
-        const splitSum = splitLines.reduce((s, l) => s + numv(l.amount), 0);
-        const splitMatches = Math.abs(splitSum - numv(payForm.amount)) < 0.01;
-        const setLines = (lines) => setF({ split_lines: lines });
-        const patchLine = (i, fields) => setLines(splitLines.map((l, ix) => ix === i ? { ...l, ...fields } : l));
-        // Charge-allocation mode: split against the job's real outstanding charges.
-        const allocOn = splitOn && !allocMissing && payForm.job_id && Array.isArray(payForm.alloc_lines);
-        const allocLines = payForm.alloc_lines || [];
-        const allocTotal = numv(reallocPay ? reallocPay.amount : payForm.amount);
-        const allocState = allocOn ? serializeAllocLines(allocLines, allocTotal) : null;
+        const matches = (q ? groups.filter(g => (g.job_number || "").toLowerCase().includes(q) || (g.customer || "").toLowerCase().includes(q)) : groups).slice(0, 8);
+        const selectedG = f.job_id ? groups.find(g => String(g.repId) === String(f.job_id) || g.ids.includes(Number(f.job_id))) : null;
+        const owedOf = (g) => { if (!g || allocMissing) return 0; const c = chargeStateByJobKey(g.key); return c.jobCharge.remaining + c.extraCharges.reduce((s, x) => s + x.remaining, 0); };
+        const chargesSel = selectedG && !allocMissing ? chargeStateByJobKey(selectedG.key) : null;
+        const owed = owedOf(selectedG);
+        const r2 = (n) => Math.round(n * 100) / 100;
+        const fmt = (n) => "$" + r2(numv(n)).toLocaleString(undefined, { maximumFractionDigits: 2 });
+        const lines = f.pay_lines || [];
+        const total = reallocPay ? numv(reallocPay.amount) : payLinesTotal(lines);
+        const setLines = (ls) => setF({ pay_lines: ls });
+        const patchLine = (i, fields) => setLines(lines.map((l, ix) => ix === i ? { ...l, ...fields } : l));
+        const multiOk = !editing && !splitMissing;
+        const allocAvailable = !!selectedG && !allocMissing && !splitMissing && !editing;
+        const allocLines = f.alloc_lines || [];
+        const allocTouched = allocLines.some(l => l.touched);
+        const allocState = allocAvailable && Array.isArray(f.alloc_lines) ? serializeAllocLines(allocLines, total) : null;
+        const unassigned = allocState && !allocState.error ? allocState.unassigned : 0;
+        const exactCover = allocAvailable && !reallocPay && total > 0 && Math.abs(total - owed) < 0.01 && !allocTouched;
+        const skip3 = !allocAvailable || exactCover;
         const patchAlloc = (i, fields) => setF({ alloc_lines: allocLines.map((l, ix) => ix === i ? { ...l, ...fields, touched: true } : l) });
-        // Re-seed the proposal while the user hasn't touched any line.
-        const onAmountChange = (v) => {
-          const fields = { amount: v };
-          if (allocOn && !allocLines.some(l => l.touched)) fields.alloc_lines = seedAllocLines(payForm.job_id, v);
-          setF(fields);
+        const step = reallocPay ? 3 : payStep;
+        const linesOk = total > 0 && lines.every(l => numv(l.amount) > 0);
+        const canGo = (n) => (n < 2 || editing || !!selectedG || !!f.no_job) && (n < 3 || linesOk) && (n < 4 || !allocState || !allocState.error);
+        const goTo = (n) => {
+          if (!canGo(n)) return;
+          if (n >= 3 && allocAvailable && !allocTouched) setF({ alloc_lines: seedAllocLines(f.job_id, total) });
+          setPayStep(n);
         };
-        const saveDisabled = paySaving || (reallocPay ? (!allocState || !!allocState.error || !allocState.rows.length)
-          : (payForm.amount === "" || (allocOn ? !!allocState.error : (splitOn && (!splitMatches || splitLines.every(l => l.amount === ""))))));
-        return (
-          <Modal title={reallocPay ? "Assign on-account payment" : editingPayId ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); }}
-            footer={<>
-              <Btn onClick={() => { setShowPayModal(false); setReallocPay(null); }}>Cancel</Btn>
-              <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : (reallocPay ? "Asignar" : editingPayId ? "Save changes" : splitOn ? (allocOn ? "Create payment" : "Create split payments") : "Create payment")}</Btn>
-            </>}>
+        const next = () => goTo(step + 1 === 3 && skip3 ? 4 : step + 1);
+        const back = () => goTo(step - 1 === 3 && skip3 ? 2 : step - 1);
+        const whoList = [...driversList.map(d => d.name), ...employees.map(e => e.name)].filter(Boolean);
+        const lineStatus = (l) => isDigitalMethod(l.method) ? "deposited" : l.money;
+        const lineSerial = (l) => l.method === "check" ? l.check_serial : l.method === "money_order" ? l.mo_serial : "";
+        const lineName = (l) => l.method === "check" ? (checkTypeLabel(l.check_type) || "Check") : l.method === "money_order" ? `${moTypeLabel(l.mo_type)} MO` : payMethodLabel(l.method);
+        // Ticking a charge gives it what is still unplaced; if nothing is unplaced it takes
+        // from the last ticked charges, so the total stays what the client actually paid.
+        const coverToggle = (i) => {
+          const ls = allocLines.map(x => ({ ...x }));
+          const l = ls[i]; l.touched = true;
+          if (numv(l.amount) > 0) { l.amount = ""; setF({ alloc_lines: ls }); return; }
+          const free = Math.max(0, unassigned);
+          const need = l.kind === "custom" ? free : l.remaining;
+          let give = Math.min(need, free), short = need - give;
+          for (let k = ls.length - 1; k >= 0 && short > 0.009; k--) {
+            if (k === i) continue; const have = numv(ls[k].amount); if (have <= 0) continue;
+            const take = Math.min(have, short); ls[k].amount = have - take > 0.009 ? String(r2(have - take)) : ""; ls[k].touched = true; short -= take; give += take;
+          }
+          l.amount = give > 0.009 ? String(r2(give)) : "";
+          setF({ alloc_lines: ls });
+        };
+        const chargeName = (l) => l.kind === "job" ? "Job balance" : l.kind === "extra" ? tr(`the ${l.label} extra`, `el extra ${l.label}`) : tr(`a new ${splitConcept(l.concept).l} extra`, `un extra nuevo ${splitConcept(l.concept).l}`);
+        const coverSentence = () => {
+          if (!allocState) return "";
+          if (allocState.error) return allocState.error;
+          const covered = allocLines.filter(l => numv(l.amount) > 0);
+          if (exactCover) return tr(`Everything owed, all in full: ${covered.map(chargeName).join(", ")}. Nothing on account.`, `Todo lo que debe, completo: ${covered.map(chargeName).join(", ")}. Nada a cuenta.`);
+          const parts = covered.map(l => {
+            const e = numv(l.amount), nm = chargeName(l);
+            if (l.kind === "custom") return tr(`${fmt(e)} for ${nm}`, `${fmt(e)} para ${nm}`);
+            if (e > l.remaining + 0.01) return tr(`${nm} in full plus ${fmt(e - l.remaining)} over`, `${nm} completo más ${fmt(e - l.remaining)} de más`);
+            if (Math.abs(e - l.remaining) < 0.01) return tr(`${nm} in full`, `${nm} completo`);
+            return tr(`${fmt(e)} of ${nm}`, `${fmt(e)} de ${nm}`);
+          });
+          const list = parts.length ? (parts.length === 1 ? parts[0] : parts.slice(0, -1).join(", ") + tr(" and ", " y ") + parts[parts.length - 1]) : tr("nothing yet", "nada todavía");
+          const tail = unassigned > 0.009 ? tr(` ${fmt(unassigned)} stays on account.`, ` ${fmt(unassigned)} queda a cuenta.`) : parts.length ? tr(" Nothing on account.", " Nada a cuenta.") : "";
+          return tr(`Covers ${list}.`, `Cubre ${list}.`) + tail;
+        };
+        // How it lands in the table: one row per method line and charge.
+        const chargeRowsForSummary = allocState && !allocState.error ? allocState.rows : [{ kind: "plain", concept: f.concept || "job", amount: total }];
+        const pieces = pourLinesOverCharges(reallocPay ? [{ ...lines[0], amount: total }] : lines, chargeRowsForSummary, unassigned);
+        const pieceLabel = (c) => !c ? tr("On account", "A cuenta") : c.kind === "job" ? "Job balance" : c.kind === "extra" ? `${c.label} (extra)` : c.kind === "plain" ? payConceptLabel(c.concept) : `${splitConcept(c.concept).l} (${tr("new extra", "extra nuevo")})`;
+        const saveDisabled = paySaving || (reallocPay ? (!allocState || !!allocState.error || !allocState.rows.length) : (!linesOk || (allocState && !!allocState.error)));
+        const stepValues = [
+          selectedG ? `${selectedG.job_number || "(no #)"} · ${selectedG.customer || "—"}` : f.no_job ? tr("Not for a job", "Sin job") : "",
+          total > 0 ? `${fmt(total)} · ${lines.length > 1 ? tr(`${lines.length} methods`, `${lines.length} métodos`) : payMethodLabel(lines[0]?.method)}` : "",
+          editing || f.no_job || (selectedG && !allocAvailable) ? payConceptLabel(f.concept) : exactCover ? tr("Everything owed", "Todo lo que debe") : allocState && !allocState.error ? (() => { const c = allocLines.filter(l => numv(l.amount) > 0); if (!c.length) return tr("Nothing yet", "Nada todavía"); const ex = c.filter(l => l.kind !== "job").length; return [c.some(l => l.kind === "job") ? "Job" : "", ex ? tr(`${ex} extra${ex > 1 ? "s" : ""}`, `${ex} extra${ex > 1 ? "s" : ""}`) : "", unassigned > 0.009 ? tr(`${fmt(unassigned)} on account`, `${fmt(unassigned)} a cuenta`) : ""].filter(Boolean).join(" + "); })() : "",
+          step >= 4 ? (() => { const dep = lines.filter(l => lineStatus(l) === "deposited").length, circ = lines.filter(l => lineStatus(l) === "received").length; return [dep ? tr(`${dep} deposited`, `${dep} depositado${dep > 1 ? "s" : ""}`) : "", circ ? tr(`${circ} in circulation`, `${circ} en circulación`) : ""].filter(Boolean).join(" · ") || tr("Not received", "No recibido"); })() : "",
+        ];
+        const stepNames = ["Job", "Payment", "Applies to", "Money"], stepEmpty = ["Pick the job", "How and how much", "Job, extras, on account", "Who holds it"];
+        const pillStyle = (on, hex) => ({ fontSize:12, fontWeight:600, padding:"5px 11px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? hex : "#e5e5e5"}`, background: on ? hex : "#fff", color: on ? "#fff" : hex });
+        const dupNote = (dup) => dup && <div style={{ fontSize:11, color:"#b91c1c", marginTop:4 }}>⚠️ #{dup.serial} already recorded — ${Math.round(dup.amount).toLocaleString()} on {dup.date}, job {dup.job_number}.{dup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(dup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</div>;
+
+        const lineDetails = (l, i) => {
+          if (payColsMissing) return null;
+          if (l.method === "check") {
+            const ck = l.check_type, isPersonal = ck === "personal_check";
+            return (
+              <div style={{ marginTop:8 }}>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom: ck ? 10 : 0 }}>
+                  {CHECK_TYPES.map(t => <button key={t.v} onClick={() => patchLine(i, { check_type: t.v })} style={pillStyle(ck === t.v, "#185FA5")}>{t.l}</button>)}
+                </div>
+                {!ck ? <div style={{ fontSize:12, color:"#888", marginTop:8 }}>Choose the check type.</div> : (
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                    <Field label="Check number (serial)"><input style={inp} value={l.check_serial} onChange={e => patchLine(i, { check_serial:e.target.value })} placeholder="N°" />{dupNote(findCheckSerialDup(l.check_serial))}</Field>
+                    {isPersonal
+                      ? <Field label="From (titular)"><input style={inp} value={l.check_from} onChange={e => patchLine(i, { check_from:e.target.value })} placeholder="Account holder" /></Field>
+                      : <Field label="Remitter (who bought it)"><input style={inp} value={l.check_remitter} onChange={e => patchLine(i, { check_remitter:e.target.value })} placeholder="Remitter" /></Field>}
+                    {isPersonal
+                      ? <Field label="Bank name"><input style={inp} value={l.check_bank} onChange={e => patchLine(i, { check_bank:e.target.value })} placeholder="Bank" /></Field>
+                      : <Field label="Bank / Issuer"><select style={inp} value={l.check_bank} onChange={e => patchLine(i, { check_bank:e.target.value })}><option value="">— Select —</option>{CHECK_BANKS.map(b => <option key={b} value={b}>{b}</option>)}</select></Field>}
+                    <Field label="Date on check"><input style={inp} type="date" value={l.check_date} onChange={e => patchLine(i, { check_date:e.target.value })} /></Field>
+                    <details style={{ gridColumn:"1/-1" }}>
+                      <summary style={{ cursor:"pointer", fontSize:12, color:"#888", fontWeight:600 }}>More check details</summary>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
+                        {isPersonal ? <>
+                          <Field label="Routing (optional)"><input style={inp} value={l.check_routing} onChange={e => patchLine(i, { check_routing:e.target.value })} placeholder="Routing" /></Field>
+                          <Field label="Account last 4 (optional)"><input style={inp} maxLength={4} value={l.check_account_last4} onChange={e => patchLine(i, { check_account_last4:e.target.value })} placeholder="1234" /></Field>
+                        </> : <>
+                          <Field label="Transaction number"><input style={inp} value={l.check_transaction_number} onChange={e => patchLine(i, { check_transaction_number:e.target.value })} placeholder="Transaction #" /></Field>
+                          <Field label="Purchased by"><input style={inp} value={l.check_purchased_by} onChange={e => patchLine(i, { check_purchased_by:e.target.value })} placeholder="Buyer" /></Field>
+                        </>}
+                        <Field label="Memo" full><input style={inp} value={l.check_memo} onChange={e => patchLine(i, { check_memo:e.target.value })} placeholder="Memo" /></Field>
+                      </div>
+                    </details>
+                    <div style={{ gridColumn:"1/-1" }}><PayPhotoBox url={l.check_photo_url} uploading={payDocUploading} onFile={(file) => uploadPaymentDoc(file, "check_photo_url", i)} label="Check photo" /></div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+          if (l.method === "money_order") {
+            const isUsps = l.mo_type === "usps";
+            return (
+              <div style={{ marginTop:8 }}>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
+                  {MO_TYPES.map(t => <button key={t.v} onClick={() => patchLine(i, { mo_type: t.v })} style={pillStyle(l.mo_type === t.v, "#0E7490")}>{t.l}</button>)}
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <Field label="Serial number"><input style={inp} value={l.mo_serial} onChange={e => patchLine(i, { mo_serial:e.target.value })} placeholder="Serial" />{dupNote(findMoSerialDup(l.mo_serial))}</Field>
+                  <Field label="Date"><input style={inp} type="date" value={l.mo_date} onChange={e => patchLine(i, { mo_date:e.target.value })} /></Field>
+                  <Field label={isUsps ? "From name" : "Purchaser name"}><input style={inp} value={l.mo_from_name} onChange={e => patchLine(i, { mo_from_name:e.target.value })} placeholder="From" /></Field>
+                  {isUsps
+                    ? <Field label="Post office #"><input style={inp} value={l.mo_post_office} onChange={e => patchLine(i, { mo_post_office:e.target.value })} placeholder="Post office" /></Field>
+                    : <Field label="Issuer location"><input style={inp} value={l.mo_issuer_location} onChange={e => patchLine(i, { mo_issuer_location:e.target.value })} placeholder="Location" /></Field>}
+                  <details style={{ gridColumn:"1/-1" }}>
+                    <summary style={{ cursor:"pointer", fontSize:12, color:"#888", fontWeight:600 }}>More money order details</summary>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
+                      <Field label={isUsps ? "From address" : "Pay to the order of"}><input style={inp} value={l.mo_from_address} onChange={e => patchLine(i, { mo_from_address:e.target.value })} placeholder={isUsps ? "Address" : "Pay to…"} /></Field>
+                      {!isUsps && <Field label="Payment for / Acct #"><input style={inp} value={l.mo_payment_for} onChange={e => patchLine(i, { mo_payment_for:e.target.value })} placeholder="Payment for / Acct" /></Field>}
+                    </div>
+                  </details>
+                  <div style={{ gridColumn:"1/-1" }}><PayPhotoBox url={l.mo_photo_url} uploading={payDocUploading} onFile={(file) => uploadPaymentDoc(file, "mo_photo_url", i)} label="Money order photo" /></div>
+                </div>
+              </div>
+            );
+          }
+          if (l.method === "credit_card") {
+            const amt = numv(l.amount), pct = numv(l.cc_fee_pct), fee = l.cc_fee_enabled ? amt * pct / 100 : 0;
+            return (
+              <div style={{ marginTop:8, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, cursor:"pointer", fontWeight:600 }}>
+                  <input type="checkbox" checked={!!l.cc_fee_enabled} onChange={e => patchLine(i, { cc_fee_enabled: e.target.checked })} />
+                  Charge CC fee to client
+                </label>
+                {l.cc_fee_enabled && <>
+                  <input style={{ ...inp, width:64 }} type="number" value={l.cc_fee_pct} onChange={e => patchLine(i, { cc_fee_pct:e.target.value })} title="CC fee %" />
+                  <span style={{ fontSize:12, color:"#854F0B", fontWeight:700 }}>+{fmt(fee)}</span>
+                  <span style={{ fontSize:11, color:"#999" }}>Recorded as a separate CC Fee payment.</span>
+                </>}
+              </div>
+            );
+          }
+          return null;
+        };
+
+        const step1 = () => (
+          <>
+            <div style={{ fontSize:15, fontWeight:600, marginBottom:2 }}>Which job is this payment for?</div>
+            <div style={{ fontSize:12, color:"#888", marginBottom:12 }}>Pick the job to see what it owes.</div>
             <Field label="Job">
-              {selectedG ? (
-                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                  <span style={{ fontFamily:"monospace", fontWeight:700 }}>{selectedG.job_number || "(no #)"}</span>
-                  <span style={{ fontSize:12, color:"#666" }}>{selectedG.customer || "—"}</span>
-                  <button onClick={() => setF({ job_id:"" })} style={{ border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:12, textDecoration:"underline" }}>cambiar</button>
+              {selectedG || f.no_job ? (
+                <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", padding:"10px 12px", border:"1px solid #eee", borderRadius:9, background:"#fafafa" }}>
+                  {selectedG ? <>
+                    <span style={{ fontFamily:"monospace", fontWeight:700, fontSize:14 }}>{selectedG.job_number || "(no #)"}</span>
+                    <span style={{ fontSize:13 }}>{selectedG.customer || "—"}</span>
+                  </> : <span style={{ fontSize:13, color:"#666" }}>Not for a job (other income)</span>}
+                  {!reallocPay && <button onClick={() => { setF({ job_id:"", no_job:false, alloc_lines:null }); setPayJobSearch(""); }} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#999", fontSize:12, textDecoration:"underline" }}>change</button>}
                 </div>
               ) : (
                 <>
-                  <input style={inp} value={payJobSearch} onChange={e => setPayJobSearch(e.target.value)} placeholder="Search by job # or client…" />
-                  {q && (
-                    <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:160, overflowY:"auto" }}>
-                      {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>No results.</div>
-                        : matches.map(g => (
-                          <button key={g.key} onClick={() => {
-                              const fields = { job_id: g.repId };
-                              // Auto-arm charge allocation when the job has pending extras.
-                              if (canSplit && !allocMissing && !editingPayId && jobWantsAllocation(g.repId)) {
-                                fields.split_enabled = true;
-                                fields.alloc_lines = seedAllocLines(g.repId, payForm.amount);
-                              } else if (!editingPayId && !allocMissing) {
-                                fields.alloc_lines = seedAllocLines(g.repId, payForm.amount);
-                              }
-                              setF(fields); setPayJobSearch("");
-                            }} style={{ display:"block", width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
-                            <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(no #)"}</span> · {g.customer || "—"}
+                  <input style={inp} value={payJobSearch} onChange={e => setPayJobSearch(e.target.value)} placeholder="Search by job # or client…" autoFocus />
+                  <div style={{ border:"1px solid #f0f0f0", borderRadius:8, marginTop:6, maxHeight:220, overflowY:"auto" }}>
+                    {matches.length === 0 ? <div style={{ padding:"10px", fontSize:12, color:"#bbb" }}>No results.</div>
+                      : matches.map(g => {
+                        const o = owedOf(g); const nEx = allocMissing ? 0 : chargeStateByJobKey(g.key).extraCharges.filter(c => c.remaining > 0).length;
+                        return (
+                          <button key={g.key} onClick={() => { setF({ job_id: g.repId, no_job:false, alloc_lines:null }); setPayJobSearch(""); }} style={{ display:"grid", gridTemplateColumns:"64px 1fr auto", gap:10, alignItems:"center", width:"100%", textAlign:"left", padding:"8px 10px", border:"none", borderBottom:"1px solid #f6f6f6", background:"#fff", cursor:"pointer", fontSize:12.5 }}>
+                            <span style={{ fontFamily:"monospace", fontWeight:600 }}>{g.job_number || "(no #)"}</span>
+                            <span>{g.customer || "—"}</span>
+                            <span style={{ fontSize:11, color:"#888", textAlign:"right", whiteSpace:"nowrap" }}>{allocMissing ? "" : <>Owes <b style={{ color:"#111" }}>{fmt(o)}</b>{nEx ? <><br />{nEx} extra{nEx > 1 ? "s" : ""} pending</> : null}</>}</span>
                           </button>
-                        ))}
-                    </div>
-                  )}
+                        );
+                      })}
+                  </div>
+                  {!editing && <button onClick={() => setF({ job_id:"", no_job:true, alloc_lines:null })} style={{ marginTop:8, border:"none", background:"none", cursor:"pointer", color:"#888", fontSize:12, textDecoration:"underline", padding:0 }}>This payment is not for a job</button>}
                 </>
               )}
             </Field>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
-              <Field label="Payment date"><input style={inp} type="date" value={payForm.payment_date} onChange={e => setF({ payment_date:e.target.value })} /></Field>
-              <Field label={splitOn ? "Total amount ($) *" : "Amount ($) *"}><input style={inp} type="number" value={payForm.amount} disabled={!!reallocPay} onChange={e => onAmountChange(e.target.value)} placeholder="0" /></Field>
-              {!splitOn && <Field label="Concept">
-                <select style={inp} value={payForm.concept} onChange={e => setF({ concept:e.target.value })}>
-                  {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                </select>
-              </Field>}
-              {!splitOn && <Field label="Discount ($)"><input style={inp} type="number" value={payForm.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>}
-              {!splitOn && <Field label="Discount reason"><input style={inp} value={payForm.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Reason" /></Field>}
-              {!payStageMissing && <Field label="Payment stage">
-                <select style={inp} value={payForm.payment_stage} onChange={e => setF({ payment_stage:e.target.value })}>
-                  <option value="">— Select —</option>
-                  <option value="pickup">At pick up</option>
-                  <option value="delivery">At delivery</option>
-                  <option value="other">Other</option>
-                </select>
-              </Field>}
-            </div>
-
-            {/* Split payment toggle + builder (charge allocation when possible) */}
-            {canSplit && (
-              <div style={{ marginTop:10 }}>
-                {!reallocPay && (
-                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
-                    <input type="checkbox" checked={!!payForm.split_enabled} onChange={e => {
-                      const on = e.target.checked;
-                      const fields = { split_enabled: on };
-                      if (on && !allocMissing && payForm.job_id) fields.alloc_lines = payForm.alloc_lines || seedAllocLines(payForm.job_id, payForm.amount);
-                      if (on && !fields.alloc_lines && !splitLines.length) fields.split_lines = [{ concept:"job", amount:"", notes:"" }];
-                      setF(fields);
-                    }} />
-                    {!allocMissing && payForm.job_id ? "✂️ Assign to charges (split)" : "✂️ Split the payment"}
-                  </label>
-                )}
-                {allocOn && (
-                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
-                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Split the payment between the job balance and the pending extras. Whatever you don't assign stays <b>on account</b>.</div>
-                    {allocLines.map((l, i) => {
-                      const entered = numv(l.amount);
-                      const after = Math.max(0, l.remaining - entered);
-                      const over = entered > l.remaining + 0.01;
-                      return (
-                        <div key={i} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:7, flexWrap:"wrap" }}>
-                          <div style={{ flex:"1 1 170px", minWidth:150 }}>
-                            <div style={{ fontSize:12.5, fontWeight:600 }}>{l.kind === "custom" ? (
-                              <select style={{ ...inp, padding:"5px 8px" }} value={l.concept} onChange={e => patchAlloc(i, { concept: e.target.value })}>
-                                {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                              </select>
-                            ) : l.label}</div>
-                            {l.kind !== "custom" && <div style={{ fontSize:10.5, color:"#888" }}>Pending: ${l.remaining.toLocaleString(undefined,{maximumFractionDigits:2})}</div>}
-                          </div>
-                          <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchAlloc(i, { amount: e.target.value })} placeholder="$" />
-                          {l.kind !== "custom" && (
-                            over
-                              ? <span style={{ fontSize:11, color:"#C2410C", fontWeight:600 }}>Overpayment ${ (entered - l.remaining).toLocaleString(undefined,{maximumFractionDigits:2}) } — recorded anyway</span>
-                              : <span style={{ fontSize:11, color: after > 0 ? "#92760B" : "#1A8A4E" }}>Remaining: ${after.toLocaleString(undefined,{maximumFractionDigits:2})}</span>
-                          )}
-                          {l.kind === "custom" && (
-                            <>
-                              <input style={{ ...inp, flex:"1 1 120px", minWidth:110 }} value={l.notes} onChange={e => patchAlloc(i, { notes: e.target.value })} placeholder="Notes (optional)" />
-                              <button onClick={() => setF({ alloc_lines: allocLines.filter((_, ix) => ix !== i) })} title="Remove line" style={{ border:"none", background:"none", cursor:"pointer", color:"#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                    <button onClick={() => setF({ alloc_lines: [...allocLines, { kind:"custom", concept:"packing", amount:"", notes:"", touched:true }] })} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ New extra / another line</button>
-                    {(() => {
-                      const st = allocState || { unassigned: 0, error: null };
-                      return (
-                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
-                          <span style={{ color:"#666" }}>Unassigned (on account): <b style={{ color: st.error ? "#E24B4A" : st.unassigned > 0 ? "#92760B" : "#1A8A4E" }}>${(st.error ? 0 : st.unassigned).toLocaleString(undefined,{maximumFractionDigits:2})}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${allocTotal.toLocaleString(undefined,{maximumFractionDigits:2})}</span></span>
-                          {st.error ? <span style={{ color:"#E24B4A" }}>✗ {st.error}</span> : <span style={{ color:"#1A8A4E" }}>✓</span>}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-                {splitOn && !allocOn && (
-                  <div style={{ marginTop:8, padding:"10px 12px", background:"#F6F4FC", border:"1px solid #E3DCF6", borderRadius:9 }}>
-                    <div style={{ fontSize:11, color:"#6D28D9", marginBottom:8 }}>Split the total amount into concepts. Extra lines are recorded automatically for commissions.</div>
-                    {splitLines.map((l, i) => (
-                      <div key={i} style={{ display:"flex", gap:6, alignItems:"flex-start", marginBottom:7, flexWrap:"wrap" }}>
-                        <select style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.concept} onChange={e => patchLine(i, { concept: e.target.value })}>
-                          {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                        </select>
-                        <input style={{ ...inp, flex:"0 0 100px", width:100 }} type="number" value={l.amount} onChange={e => patchLine(i, { amount: e.target.value })} placeholder="$" />
-                        <input style={{ ...inp, flex:"1 1 130px", minWidth:120 }} value={l.notes} onChange={e => patchLine(i, { notes: e.target.value })} placeholder="Notes (optional)" />
-                        <button onClick={() => setLines(splitLines.filter((_, ix) => ix !== i))} disabled={splitLines.length <= 1} title="Remove line" style={{ border:"none", background:"none", cursor: splitLines.length <= 1 ? "not-allowed" : "pointer", color: splitLines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:18, lineHeight:1, padding:"6px 4px" }}>×</button>
-                      </div>
-                    ))}
-                    <button onClick={() => setLines([...splitLines, { concept:"job", amount:"", notes:"" }])} style={{ fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Add line</button>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, paddingTop:8, borderTop:"1px solid #E3DCF6", fontSize:13, fontWeight:700 }}>
-                      <span style={{ color:"#666" }}>Split total: <b style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>${splitSum.toLocaleString(undefined, { maximumFractionDigits:2 })}</b> <span style={{ fontWeight:400, color:"#999" }}>/ Total: ${numv(payForm.amount).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></span>
-                      <span style={{ color: splitMatches ? "#1A8A4E" : "#E24B4A" }}>{splitMatches ? "✓ matches" : `✗ difiere $${Math.abs(splitSum - numv(payForm.amount)).toLocaleString(undefined, { maximumFractionDigits:2 })}`}</span>
-                    </div>
-                  </div>
-                )}
+            {selectedG && !allocMissing && (
+              <div style={{ marginTop:14, border:"1px solid #eee", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 12px", background:"#fafafa", fontWeight:700 }}><span>Owes</span><span style={{ fontSize:16 }}>{fmt(owed)}</span></div>
+                <div style={{ padding:"8px 12px", fontSize:12, color:"#888", borderTop:"1px solid #eee" }}>
+                  {chargesSel.extraCharges.filter(c => c.remaining > 0).length
+                    ? tr(`Job balance plus ${chargesSel.extraCharges.filter(c => c.remaining > 0).length} extra(s). You split the payment between them in step 3 only if it doesn't cover everything.`, `Job balance más ${chargesSel.extraCharges.filter(c => c.remaining > 0).length} extra(s). Repartís el pago entre ellos en el paso 3 solo si no cubre todo.`)
+                    : "Job balance only, no extras pending."}
+                </div>
               </div>
             )}
+          </>
+        );
 
-            {/* Method pill tabs */}
-            <div style={{ marginTop:12 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Method</div>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {PAY_METHODS.map(pm => {
-                  const on = payForm.method === pm.v;
-                  const hex = PAY_METHOD_META[pm.v] || "#666";
-                  return <button key={pm.v} onClick={() => setF({ method: pm.v })} style={{ fontSize:12, fontWeight:600, padding:"6px 12px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? hex : "#e5e5e5"}`, background: on ? hex+"1a" : "#fff", color: on ? hex : "#666" }}>{pm.l}</button>;
-                })}
-              </div>
-            </div>
-
+        const step2 = () => (
+          <>
+            <div style={{ fontSize:15, fontWeight:600, marginBottom:2 }}>How did the client pay?</div>
+            <div style={{ fontSize:12, color:"#888", marginBottom:12 }}>{multiOk ? "One line per method. Paid several ways? Add a line for each." : "Digital methods count as received and deposited automatically."}</div>
             {payColsMissing && (
-              <div style={{ marginTop:8, fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px" }}>
+              <div style={{ marginBottom:10, fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px" }}>
                 Run the updated SQL to save check / money order / CC fee details. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>View SQL</button>
               </div>
             )}
-
-            {/* CHECK details */}
-            {payForm.method === "check" && !payColsMissing && (() => {
-              const ck = payForm.check_type;
-              const isPersonal = ck === "personal_check";
+            {lines.map((l, i) => {
+              const hex = PAY_METHOD_META[l.method] || "#666";
               return (
-                <div style={{ marginTop:10, padding:"10px 12px", background:"#F2F7FC", border:"1px solid #D6E6F5", borderRadius:9 }}>
-                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
-                    {CHECK_TYPES.map(t => { const on = ck === t.v; return <button key={t.v} onClick={() => setF({ check_type: t.v })} style={{ fontSize:12, fontWeight:600, padding:"5px 11px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? "#185FA5" : "#cfe0f0"}`, background: on ? "#185FA5" : "#fff", color: on ? "#fff" : "#185FA5" }}>{t.l}</button>; })}
+                <div key={l.id} style={{ border:"1px solid #eee", borderLeft:`4px solid ${hex}`, borderRadius:9, padding:"9px 10px 9px 12px", marginBottom:6 }}>
+                  <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                    <select style={{ ...inp, width:"auto", flex:"1 1 140px", fontWeight:600 }} value={l.method} onChange={e => patchLine(i, { method: e.target.value, money: isDigitalMethod(e.target.value) ? "deposited" : (l.money === "deposited" && isDigitalMethod(l.method) ? "received" : l.money) })}>
+                      {PAY_METHODS.map(pm => <option key={pm.v} value={pm.v}>{pm.l}</option>)}
+                    </select>
+                    <div style={{ display:"flex", alignItems:"center", gap:4, flex:"0 1 150px" }}>
+                      <span style={{ fontWeight:700, color:"#888" }}>$</span>
+                      <input style={{ ...inp, fontWeight:700 }} type="number" value={l.amount} onChange={e => patchLine(i, { amount: e.target.value })} placeholder="0" autoFocus={i === 0 && lines.length === 1 && !l.amount} />
+                    </div>
+                    <span style={{ fontSize:11, color:"#aaa", flex:"1 1 auto" }}>{isDigitalMethod(l.method) ? "Digital · deposited automatically" : "Physical"}</span>
+                    {multiOk && <span style={{ display:"flex", gap:2 }}>
+                      <button onClick={() => setLines([...lines.slice(0, i + 1), newPayLine(l.method, l.amount, { check_type: l.check_type, mo_type: l.mo_type, money: l.money, cash_with_whom: l.cash_with_whom, bank_account: l.bank_account }), ...lines.slice(i + 1)])} title="Duplicate line (a second money order or check)" style={{ border:"none", background:"none", cursor:"pointer", color:"#aaa", fontSize:15, padding:"2px 5px" }}>⧉</button>
+                      <button onClick={() => setLines(lines.filter((_, ix) => ix !== i))} disabled={lines.length <= 1} title="Remove line" style={{ border:"none", background:"none", cursor: lines.length <= 1 ? "not-allowed" : "pointer", color: lines.length <= 1 ? "#ddd" : "#E24B4A", fontSize:16, padding:"2px 5px" }}>×</button>
+                    </span>}
                   </div>
-                  {!ck ? <div style={{ fontSize:12, color:"#888" }}>Choose the check type.</div> : isPersonal ? (
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Check number (serial)">
-                        <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
-                        <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
-                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} on {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
-                        </DupHint>
-                      </Field>
-                      <Field label="From (titular)"><input style={inp} value={payForm.check_from} onChange={e => setF({ check_from:e.target.value })} placeholder="Account holder" /></Field>
-                      <Field label="Bank name"><input style={inp} value={payForm.check_bank} onChange={e => setF({ check_bank:e.target.value })} placeholder="Banco" /></Field>
-                      <Field label="Date on check"><input style={inp} type="date" value={payForm.check_date} onChange={e => setF({ check_date:e.target.value })} /></Field>
-                      <Field label="Routing (opcional)"><input style={inp} value={payForm.check_routing} onChange={e => setF({ check_routing:e.target.value })} placeholder="Routing" /></Field>
-                      <Field label="Account last 4 (opcional)"><input style={inp} maxLength={4} value={payForm.check_account_last4} onChange={e => setF({ check_account_last4:e.target.value })} placeholder="1234" /></Field>
-                      <Field label="Memo" full><input style={inp} value={payForm.check_memo} onChange={e => setF({ check_memo:e.target.value })} placeholder="Memo" /></Field>
-                    </div>
-                  ) : (
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Check number (serial)">
-                        <input style={inp} value={payForm.check_serial} onChange={e => setF({ check_serial:e.target.value })} placeholder="N°" />
-                        <DupHint checking={chkSerialChecking && (payForm.check_serial || "").trim() !== ""} tone="danger">
-                          {checkSerialDup && <span>⚠️ Check #{checkSerialDup.serial} already recorded — ${Math.round(checkSerialDup.amount).toLocaleString()} on {checkSerialDup.date}, job {checkSerialDup.job_number}.{checkSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(checkSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
-                        </DupHint>
-                      </Field>
-                      <Field label="Transaction number"><input style={inp} value={payForm.check_transaction_number} onChange={e => setF({ check_transaction_number:e.target.value })} placeholder="Transaction #" /></Field>
-                      <Field label="Remitter (who bought it)"><input style={inp} value={payForm.check_remitter} onChange={e => setF({ check_remitter:e.target.value })} placeholder="Remitter" /></Field>
-                      <Field label="Purchased by"><input style={inp} value={payForm.check_purchased_by} onChange={e => setF({ check_purchased_by:e.target.value })} placeholder="Comprador" /></Field>
-                      <Field label="Bank / Issuer">
-                        <select style={inp} value={payForm.check_bank} onChange={e => setF({ check_bank:e.target.value })}>
-                          <option value="">— Select —</option>
-                          {CHECK_BANKS.map(b => <option key={b} value={b}>{b}</option>)}
-                        </select>
-                      </Field>
-                      <Field label="Date on check"><input style={inp} type="date" value={payForm.check_date} onChange={e => setF({ check_date:e.target.value })} /></Field>
-                      <Field label="Memo" full><input style={inp} value={payForm.check_memo} onChange={e => setF({ check_memo:e.target.value })} placeholder="Memo" /></Field>
-                    </div>
-                  )}
-                  {ck && <PayPhotoBox url={payForm.check_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "check_photo_url")} label="Check photo" />}
+                  {lineDetails(l, i)}
                 </div>
               );
-            })()}
-
-            {/* MONEY ORDER details */}
-            {payForm.method === "money_order" && !payColsMissing && (() => {
-              const isUsps = payForm.mo_type === "usps";
-              return (
-                <div style={{ marginTop:10, padding:"10px 12px", background:"#F1FAFB", border:"1px solid #CFE9EC", borderRadius:9 }}>
-                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
-                    {MO_TYPES.map(t => { const on = payForm.mo_type === t.v; return <button key={t.v} onClick={() => setF({ mo_type: t.v })} style={{ fontSize:12, fontWeight:600, padding:"5px 11px", borderRadius:20, cursor:"pointer", border:`1px solid ${on ? "#0E7490" : "#CFE9EC"}`, background: on ? "#0E7490" : "#fff", color: on ? "#fff" : "#0E7490" }}>{t.l}</button>; })}
-                  </div>
-                  {isUsps ? (
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Serial number">
-                        <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
-                        <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
-                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} on {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
-                        </DupHint>
-                      </Field>
-                      <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
-                      <Field label="Post office #"><input style={inp} value={payForm.mo_post_office} onChange={e => setF({ mo_post_office:e.target.value })} placeholder="Post office" /></Field>
-                      <Field label="From name"><input style={inp} value={payForm.mo_from_name} onChange={e => setF({ mo_from_name:e.target.value })} placeholder="From" /></Field>
-                      <Field label="From address" full><input style={inp} value={payForm.mo_from_address} onChange={e => setF({ mo_from_address:e.target.value })} placeholder="Address" /></Field>
-                    </div>
-                  ) : (
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Serial number">
-                        <input style={inp} value={payForm.mo_serial} onChange={e => setF({ mo_serial:e.target.value })} placeholder="Serial" />
-                        <DupHint checking={moSerialChecking && (payForm.mo_serial || "").trim() !== ""} tone="danger">
-                          {moSerialDup && <span>⚠️ MO #{moSerialDup.serial} already recorded — ${Math.round(moSerialDup.amount).toLocaleString()} on {moSerialDup.date}, job {moSerialDup.job_number}.{moSerialDup.job_key && <> <a onClick={() => { setShowPayModal(false); setJobDetailKey(moSerialDup.job_key); }} style={{ cursor:"pointer", textDecoration:"underline", fontWeight:700 }}>View payment</a></>}</span>}
-                        </DupHint>
-                      </Field>
-                      <Field label="Date"><input style={inp} type="date" value={payForm.mo_date} onChange={e => setF({ mo_date:e.target.value })} /></Field>
-                      <Field label="Purchaser name"><input style={inp} value={payForm.mo_from_name} onChange={e => setF({ mo_from_name:e.target.value })} placeholder="Comprador" /></Field>
-                      <Field label="Pay to the order of"><input style={inp} value={payForm.mo_from_address} onChange={e => setF({ mo_from_address:e.target.value })} placeholder="Pay to…" /></Field>
-                      <Field label="Payment for / Acct #"><input style={inp} value={payForm.mo_payment_for} onChange={e => setF({ mo_payment_for:e.target.value })} placeholder="Payment for / Acct" /></Field>
-                      <Field label="Issuer location"><input style={inp} value={payForm.mo_issuer_location} onChange={e => setF({ mo_issuer_location:e.target.value })} placeholder="Location" /></Field>
-                    </div>
-                  )}
-                  <PayPhotoBox url={payForm.mo_photo_url} uploading={payDocUploading} onFile={(f) => uploadPaymentDoc(f, "mo_photo_url")} label="Money order photo" />
-                </div>
-              );
-            })()}
-
-            {/* CREDIT CARD fee */}
-            {payForm.method === "credit_card" && !payColsMissing && !splitOn && (() => {
-              const amt = numv(payForm.amount), pct = numv(payForm.cc_fee_pct), fee = payForm.cc_fee_enabled ? (amt * pct / 100) : 0;
-              return (
-                <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF6EC", border:"1px solid #F4DDB0", borderRadius:9 }}>
-                  <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", fontWeight:600 }}>
-                    <input type="checkbox" checked={!!payForm.cc_fee_enabled} onChange={e => setF({ cc_fee_enabled: e.target.checked })} />
-                    Charge CC fee to client
-                  </label>
-                  {payForm.cc_fee_enabled && (
-                    <>
-                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginTop:10 }}>
-                        <Field label="Payment amount ($)"><input style={{ ...inp, background:"#f3f3f3" }} type="number" value={payForm.amount} readOnly /></Field>
-                        <Field label="CC fee %"><input style={inp} type="number" value={payForm.cc_fee_pct} onChange={e => setF({ cc_fee_pct:e.target.value })} /></Field>
-                        <Field label="CC fee amount"><input style={{ ...inp, background:"#f3f3f3" }} value={fee ? `$${fee.toLocaleString(undefined, { maximumFractionDigits:2 })}` : "$0"} readOnly /></Field>
-                      </div>
-                      <div style={{ marginTop:10, background:"#fff", border:"1px solid #f0e0c0", borderRadius:8, padding:"8px 11px", fontSize:12.5 }}>
-                        <div style={{ display:"flex", justifyContent:"space-between" }}><span>Payment amount</span><b>${amt.toLocaleString()}</b></div>
-                        <div style={{ display:"flex", justifyContent:"space-between" }}><span>+ CC fee ({pct}%)</span><b style={{ color:"#854F0B" }}>${fee.toLocaleString(undefined, { maximumFractionDigits:2 })}</b></div>
-                        <div style={{ display:"flex", justifyContent:"space-between", borderTop:"1px solid #f0e0c0", marginTop:5, paddingTop:5, fontWeight:800 }}><span>Total to collect</span><span style={{ color:"#1A8A4E" }}>${(amt + fee).toLocaleString(undefined, { maximumFractionDigits:2 })}</span></div>
-                      </div>
-                      <div style={{ fontSize:11, color:"#999", marginTop:6 }}>A separate payment with concept <b>CC Fee</b> is created on save.</div>
-                    </>
-                  )}
-                </div>
-              );
-            })()}
-
-            <div style={{ marginTop:10, padding:"10px 12px", background:"#fafafa", borderRadius:8 }}>
-              <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer" }}>
-                <input type="checkbox" checked={digital ? true : payForm.received} disabled={digital} onChange={e => setF({ received:e.target.checked })} />
-                <b>Received</b>{digital && <span style={{ fontSize:11, color:"#888" }}>(automatic for digital payments)</span>}
-              </label>
-              {(digital || payForm.received) && (
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
-                  <Field label="Received by">
-                    <input style={inp} list="who-list" value={payForm.received_by} onChange={e => setF({ received_by:e.target.value })} placeholder="Driver / rep" />
-                  </Field>
-                  <Field label="Received date"><input style={inp} type="date" value={payForm.received_date} onChange={e => setF({ received_date:e.target.value })} /></Field>
-                </div>
-              )}
+            })}
+            {multiOk && <button onClick={() => setLines([...lines, newPayLine("cash", "")])} style={{ fontSize:12, fontWeight:600, color:"#185FA5", border:"1px dashed #cfe0f0", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Another method</button>}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginTop:12, padding:"10px 12px", borderRadius:10, background:"#fafafa" }}>
+              <span style={{ fontSize:12, color:"#888" }}>Total received{lines.length > 1 ? ` · ${lines.length} ${tr("methods", "métodos")}` : ""}</span>
+              <b style={{ fontSize:22 }}>{fmt(total)}</b>
             </div>
+            {!editing && lines.length === 1 && selectedG && !allocMissing && owed > 0 && (
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:8 }}>
+                <button onClick={() => patchLine(0, { amount: String(r2(owed)) })} style={{ fontSize:11.5, fontWeight:600, border:"1px dashed #ddd", background:"#fff", color:"#666", borderRadius:20, padding:"4px 10px", cursor:"pointer" }}>Everything owed · {fmt(owed)}</button>
+                {chargesSel.jobCharge.remaining > 0 && chargesSel.jobCharge.remaining < owed && <button onClick={() => patchLine(0, { amount: String(r2(chargesSel.jobCharge.remaining)) })} style={{ fontSize:11.5, fontWeight:600, border:"1px dashed #ddd", background:"#fff", color:"#666", borderRadius:20, padding:"4px 10px", cursor:"pointer" }}>Job balance only · {fmt(chargesSel.jobCharge.remaining)}</button>}
+              </div>
+            )}
+            <details style={{ marginTop:12 }}>
+              <summary style={{ cursor:"pointer", fontSize:12, color:"#888", fontWeight:600 }}>Date, stage and discount</summary>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:10 }}>
+                <Field label="Payment date"><input style={inp} type="date" value={f.payment_date} onChange={e => setF({ payment_date:e.target.value })} /></Field>
+                {!payStageMissing && <Field label="Payment stage">
+                  <select style={inp} value={f.payment_stage} onChange={e => setF({ payment_stage:e.target.value })}>
+                    <option value="">— Select —</option>
+                    <option value="pickup">At pick up</option>
+                    <option value="delivery">At delivery</option>
+                    <option value="other">Other</option>
+                  </select>
+                </Field>}
+                {(editing || f.no_job || (selectedG && !allocAvailable)) && <Field label="Concept">
+                  <select style={inp} value={f.concept} onChange={e => setF({ concept:e.target.value })}>
+                    {PAY_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+                  </select>
+                </Field>}
+                <Field label="Discount ($)"><input style={inp} type="number" value={f.discount} onChange={e => setF({ discount:e.target.value })} placeholder="0" /></Field>
+                <Field label="Discount reason"><input style={inp} value={f.discount_reason} onChange={e => setF({ discount_reason:e.target.value })} placeholder="Reason" /></Field>
+              </div>
+            </details>
+          </>
+        );
 
-            {physical && (
-              <div style={{ marginTop:10, padding:"10px 12px", background:"#FFF8F0", borderRadius:8, border:"1px solid #FAE6CF" }}>
-                <Field label="Who has the money?">
-                  <input style={inp} list="who-list" value={payForm.cash_with_whom} onChange={e => setF({ cash_with_whom:e.target.value })} placeholder="Person holding the cash/check" />
-                </Field>
-                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, cursor:"pointer", marginTop:10 }}>
-                  <input type="checkbox" checked={payForm.banked} onChange={e => setF({ banked:e.target.checked })} />
-                  <b>Deposited</b>
-                </label>
-                {payForm.banked && (
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:8 }}>
-                    <Field label="Deposit date"><input style={inp} type="date" value={payForm.banked_date} onChange={e => setF({ banked_date:e.target.value })} /></Field>
-                    <Field label="Bank account">
-                      <select style={inp} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
-                        <option value="">— Select —</option>
-                        {payAccounts.filter(a => a.active !== false || a.name === payForm.bank_account).map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
-                      </select>
-                    </Field>
-                  </div>
+        const coverCard = (l, i) => {
+          const e = numv(l.amount), on = e > 0;
+          const over = l.kind !== "custom" && e > l.remaining + 0.01;
+          const full = l.kind !== "custom" && !over && l.remaining > 0 && Math.abs(e - l.remaining) < 0.01;
+          const hex = l.kind === "job" ? "#185FA5" : "#6D28D9";
+          return (
+            <div key={i} style={{ position:"relative", display:"grid", gridTemplateColumns:"24px 1fr", gap:8, alignItems:"start", background: on ? hex + "12" : "#fff", border:`1px solid ${over ? "#E24B4A" : on ? hex : "#e5e5e5"}`, borderRadius:10, padding:"10px 10px 10px 9px", color: on ? "#111" : "#888" }}>
+              <button onClick={() => coverToggle(i)} aria-pressed={on} style={{ border:"none", background:"none", padding:0, cursor:"pointer", marginTop:1 }}>
+                <span style={{ display:"grid", placeItems:"center", width:20, height:20, borderRadius:6, border:`2px solid ${on ? hex : "#ddd"}`, background: on ? hex : "#fff", fontSize:12, fontWeight:800, color:"#fff" }}>{on ? "✓" : ""}</span>
+              </button>
+              <div style={{ display:"grid", gap:3, minWidth:0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
+                  {l.kind === "job" ? <span style={{ fontSize:10, fontWeight:700, padding:"1px 7px", borderRadius:20, background:"#E6F1FB", color:"#185FA5" }}>Job</span>
+                    : l.kind === "extra" ? <span style={{ fontSize:10, fontWeight:700, padding:"1px 7px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Extra</span>
+                    : <span style={{ fontSize:10, fontWeight:700, padding:"1px 7px", borderRadius:20, background:"#FEF3C7", color:"#92760B" }}>New extra</span>}
+                  {l.kind === "custom"
+                    ? <select style={{ ...inp, padding:"4px 6px", fontWeight:700, fontSize:12.5 }} value={l.concept} onChange={e => patchAlloc(i, { concept: e.target.value })}>{SPLIT_CONCEPTS.filter(c => c.v !== "job").map(c => <option key={c.v} value={c.v}>{c.l}</option>)}</select>
+                    : <span style={{ fontSize:13, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{l.label}</span>}
+                </div>
+                <small style={{ fontSize:11, color:"#888" }}>{l.kind === "custom" ? "Gets created on the job when you save" : <>Owes {fmt(l.remaining)}</>}</small>
+                {on ? <>
+                  <div style={{ display:"flex", alignItems:"center", gap:4, marginTop:4 }}><span style={{ fontWeight:700, color:"#888" }}>$</span><input style={{ ...inp, padding:"5px 8px", fontWeight:700, maxWidth:120 }} type="number" value={l.amount} onChange={e => patchAlloc(i, { amount: e.target.value })} placeholder="0" /></div>
+                  {l.kind === "custom" && <input style={{ ...inp, padding:"5px 8px", fontSize:12 }} value={l.notes || ""} onChange={e => patchAlloc(i, { notes: e.target.value })} placeholder="Notes (optional)" />}
+                  {over ? <small style={{ fontSize:11, color:"#E24B4A", fontWeight:700 }}>{fmt(e - l.remaining)} {tr("more than owed", "más de lo que debe")}</small>
+                    : full ? <small style={{ fontSize:11, color:"#1A8A4E", fontWeight:600 }}>Paid in full</small>
+                    : l.kind === "custom" ? <small style={{ fontSize:11, color:"#888" }}>Recorded as a new extra</small>
+                    : <small style={{ fontSize:11, color:"#888" }}>Partial · {fmt(l.remaining - e)} {tr("still owed", "todavía debe")}</small>}
+                </> : <small style={{ fontSize:11, color:"#aaa" }}>Not covered by this payment</small>}
+              </div>
+              {l.kind === "custom" && <button onClick={() => setF({ alloc_lines: allocLines.filter((_, ix) => ix !== i) })} title="Remove line" style={{ position:"absolute", top:4, right:6, border:"none", background:"none", color:"#bbb", fontSize:16, cursor:"pointer", lineHeight:1 }}>×</button>}
+            </div>
+          );
+        };
+        const step3 = () => {
+          const jobCards = allocLines.map((l, i) => l.kind === "job" ? coverCard(l, i) : null).filter(Boolean);
+          const extraCards = allocLines.map((l, i) => l.kind !== "job" ? coverCard(l, i) : null).filter(Boolean);
+          const nPending = chargesSel ? chargesSel.extraCharges.filter(c => c.remaining > 0).length : 0;
+          return (
+            <>
+              <div style={{ fontSize:15, fontWeight:600, marginBottom:2 }}>{reallocPay ? "Assign on-account payment" : tr(`What does the ${fmt(total)} cover?`, `¿Qué cubre el pago de ${fmt(total)}?`)}</div>
+              <div style={{ fontSize:12, color:"#888", marginBottom:12 }}>{exactCover ? "It matches everything owed, so this step was skipped. Change it here only if the client meant something else." : "Ticked in order: job balance first, then extras. Whatever is left stays on account."}</div>
+              <div style={{ border:"1px solid #E3DCF6", background:"#F6F4FC", borderRadius:10, padding:"10px 12px" }}>
+                <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#888", marginBottom:6 }}>The job</div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(190px, 1fr))", gap:8 }}>{jobCards}</div>
+                <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#888", margin:"10px 0 6px", display:"flex", gap:8, alignItems:"baseline", flexWrap:"wrap" }}>Extras on this job <span style={{ fontWeight:500, textTransform:"none", letterSpacing:0, color:"#aaa" }}>{nPending ? tr(`${nPending} pending · each one pays its own commission`, `${nPending} pendiente(s) · cada uno paga su comisión`) : "none pending"}</span></div>
+                {extraCards.length ? <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(190px, 1fr))", gap:8 }}>{extraCards}</div>
+                  : <div style={{ fontSize:12, color:"#888", padding:"8px 10px", border:"1px dashed #E3DCF6", borderRadius:8, background:"#fff" }}>No extras charged on this job. If the client paid for one anyway, add it below.</div>}
+                <div style={{ marginTop:10, padding:"9px 12px", borderRadius:8, background:"#fff", border:"1px solid #E3DCF6", fontSize:13, lineHeight:1.45, color: allocState?.error ? "#E24B4A" : "#111" }}>{coverSentence()}</div>
+                <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginTop:10, fontSize:12.5, color:"#666" }}>
+                  <span>{allocState && !allocState.error ? <><b style={{ color:"#111" }}>{fmt(Math.min(allocState.rows.reduce((s, r) => s + r.amount, 0), total))}</b> {tr("covered of", "cubierto de")} {fmt(total)}</> : ""}</span>
+                  <button onClick={() => setF({ alloc_lines: [...allocLines, { kind:"custom", concept:"packing", amount: unassigned > 0.009 ? String(unassigned) : "", notes:"", touched:true }] })} style={{ marginLeft:"auto", fontSize:12, fontWeight:600, color:"#6D28D9", border:"1px dashed #C4B5FD", background:"#fff", borderRadius:7, padding:"6px 11px", cursor:"pointer" }}>+ Add an extra the client paid for</button>
+                </div>
+              </div>
+            </>
+          );
+        };
+
+        const step4 = () => {
+          const dep = lines.filter(l => lineStatus(l) === "deposited"), circ = lines.filter(l => lineStatus(l) === "received"), pend = lines.filter(l => lineStatus(l) === "pending");
+          const sumOf = (ls) => ls.reduce((s, l) => s + numv(l.amount), 0);
+          const where = [dep.length ? tr(`${fmt(sumOf(dep))} deposited`, `${fmt(sumOf(dep))} depositado`) : "", circ.length ? tr(`${fmt(sumOf(circ))} in circulation`, `${fmt(sumOf(circ))} en circulación`) : "", pend.length ? tr(`${fmt(sumOf(pend))} not received`, `${fmt(sumOf(pend))} sin recibir`) : ""].filter(Boolean).join(" · ");
+          const feeTotal = payColsMissing ? 0 : lines.filter(l => l.method === "credit_card" && l.cc_fee_enabled).reduce((s, l) => s + numv(l.amount) * numv(l.cc_fee_pct) / 100, 0);
+          const net = total - numv(f.discount);
+          const rowStyle = { display:"flex", justifyContent:"space-between", gap:12, padding:"7px 12px", borderTop:"1px solid #eee", fontSize:12.5 };
+          return (
+            <>
+              <div style={{ fontSize:15, fontWeight:600, marginBottom:2 }}>Where is the money now?</div>
+              <div style={{ fontSize:12, color:"#888", marginBottom:12 }}>Who holds each part, or which account it went into.</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                <Field label="Received by"><input style={inp} list="who-list" value={f.received_by} onChange={e => setF({ received_by:e.target.value })} placeholder="Driver / rep" /></Field>
+                <Field label="Received date"><input style={inp} type="date" value={f.received_date} onChange={e => setF({ received_date:e.target.value })} /></Field>
+              </div>
+              <div style={{ marginTop:12 }}>
+                {lines.map((l, i) => {
+                  const dig = isDigitalMethod(l.method), cur = lineStatus(l);
+                  return (
+                    <div key={l.id} style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", padding:"7px 10px", border:"1px solid #eee", borderRadius:9, marginBottom:6 }}>
+                      <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", flex:"1 1 150px", minWidth:0 }}>
+                        <PaymentMethodBadge method={l.method} />
+                        {lineSerial(l) && <span style={{ fontFamily:"monospace", fontSize:11.5, color:"#666" }}>#{lineSerial(l)}</span>}
+                        <b>{fmt(numv(l.amount))}</b>
+                      </div>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", background:"#F3F3F1", border:"1px solid #e5e5e5", borderRadius:9, padding:3, gap:3, flex:"1 1 250px" }}>
+                        {PAY_MONEY_STATES.map(st => {
+                          const on = cur === st.v, off = dig && st.v !== "deposited";
+                          return <button key={st.v} disabled={off} onClick={() => patchLine(i, { money: st.v })} aria-pressed={on} title={st.hint} style={{ border:"none", background: on ? "#fff" : "transparent", borderRadius:7, padding:"5px 2px", cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.45 : 1, color: on ? (st.v === "deposited" ? "#1A8A4E" : st.v === "received" ? "#C2410C" : "#111") : "#888", fontSize:11, fontWeight:600, whiteSpace:"nowrap", boxShadow: on ? "0 1px 3px rgba(0,0,0,0.12)" : "none" }}>{st.l}</button>;
+                        })}
+                      </div>
+                      <div style={{ flex:"1 1 150px", display:"grid", gap:6 }}>
+                        {cur === "received" ? <input style={inp} list="who-list" value={l.cash_with_whom} onChange={e => patchLine(i, { cash_with_whom:e.target.value })} placeholder="Who has it" title="Blank = the job's driver" />
+                          : cur === "deposited" ? <>
+                            <select style={inp} value={l.bank_account} onChange={e => patchLine(i, { bank_account:e.target.value })}>
+                              <option value="">— Account —</option>
+                              {payAccounts.filter(a => a.active !== false || a.name === l.bank_account).map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                            </select>
+                            {!dig && <input style={inp} type="date" value={l.banked_date} onChange={e => patchLine(i, { banked_date:e.target.value })} title="Deposit date" />}
+                          </>
+                          : <span style={{ fontSize:11, color:"#888" }}>Still with the client</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <Field label="Notes"><input style={inp} value={f.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notes" /></Field>
+              <div style={{ marginTop:14, border:"1px solid #eee", borderRadius:10, overflow:"hidden" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 12px", background:"#fafafa", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#888" }}><span>Summary</span><span>{f.payment_date || "—"}</span></div>
+                <div style={rowStyle}><span style={{ color:"#888" }}>Job</span><b>{selectedG ? `${selectedG.job_number || "(no #)"} · ${selectedG.customer || "—"}` : "—"}</b></div>
+                <div style={rowStyle}><span style={{ color:"#888" }}>Paid with</span><b style={{ textAlign:"right" }}>{lines.map(l => `${lineName(l)} ${fmt(numv(l.amount))}`).join(" · ")}</b></div>
+                {(allocState || editing || f.no_job) && <div style={{ ...rowStyle, display:"grid", gap:3 }}><span style={{ color:"#888" }}>Covers</span><span style={{ lineHeight:1.45 }}>{allocState ? coverSentence() : payConceptLabel(f.concept)}</span></div>}
+                <div style={rowStyle}><span style={{ color:"#888" }}>Money</span><b style={{ textAlign:"right" }}>{where}</b></div>
+                {numv(f.discount) > 0 && <div style={rowStyle}><span style={{ color:"#888" }}>Discount{f.discount_reason ? ` · ${f.discount_reason}` : ""}</span><b>−{fmt(f.discount)}</b></div>}
+                {feeTotal > 0 && <div style={rowStyle}><span style={{ color:"#888" }}>CC fee, collected separately</span><b>+{fmt(feeTotal)}</b></div>}
+                <div style={{ ...rowStyle, fontSize:14 }}><span style={{ color:"#888" }}>Net</span><b style={{ color:"#1A8A4E", fontSize:18 }}>{fmt(net)}</b></div>
+                {!editing && pieces.length > 0 && (
+                  <details style={{ borderTop:"1px solid #eee", padding:"8px 12px" }}>
+                    <summary style={{ cursor:"pointer", fontSize:12, color:"#888", fontWeight:600 }}>{tr(`Saved as ${pieces.length} payment row${pieces.length === 1 ? "" : "s"}`, `Se guarda como ${pieces.length} fila${pieces.length === 1 ? "" : "s"} de pago`)}</summary>
+                    <div style={{ display:"grid", gap:6, marginTop:8 }}>
+                      {pieces.map((p, ix) => (
+                        <div key={ix} style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", fontSize:12, paddingTop: ix ? 6 : 0, borderTop: ix ? "1px dashed #eee" : "none" }}>
+                          <PaymentMethodBadge method={p.line.method} />
+                          {lineSerial(p.line) && <span style={{ fontFamily:"monospace", fontSize:11, color:"#666" }}>#{lineSerial(p.line)}</span>}
+                          <span style={{ marginLeft:"auto", color: p.charge ? "#111" : "#92760B" }}>{fmt(p.amount)} → {pieceLabel(p.charge)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize:11, color:"#999", marginTop:6 }}>Each row keeps one method and one charge, so the extras, the driver settlement and the bank read it as today.</div>
+                  </details>
                 )}
               </div>
-            )}
-            {digital && (
-              <div style={{ marginTop:10, padding:"8px 12px", background:"#E6F1FB", borderRadius:8, fontSize:12.5, color:"#185FA5" }}>
-                💳 Digital payment — automatically marked as deposited.
-                <div style={{ marginTop:6 }}>
-                  <select style={{ ...inp, width:"auto" }} value={payForm.bank_account} onChange={e => setF({ bank_account:e.target.value })}>
-                    <option value="">— Account (optional) —</option>
-                    {payAccounts.filter(a => a.active !== false || a.name === payForm.bank_account).map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
-                  </select>
-                </div>
+            </>
+          );
+        };
+
+        return (
+          <Modal title={reallocPay ? "Assign on-account payment" : editing ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); }}
+            footer={<>
+              <span style={{ marginRight:"auto", fontSize:13, color:"#666" }}>Total: <b style={{ color:"#1A8A4E", fontSize:16 }}>{fmt(total)}</b></span>
+              {reallocPay || step === 1
+                ? <Btn onClick={() => { setShowPayModal(false); setReallocPay(null); }}>Cancel</Btn>
+                : <Btn onClick={back}>Back</Btn>}
+              {!reallocPay && step < 4
+                ? <Btn primary disabled={!canGo(step + 1 === 3 && skip3 ? 4 : step + 1)} onClick={next}>Next</Btn>
+                : <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : reallocPay ? "Assign" : editing ? "Save changes" : "Create payment"}</Btn>}
+            </>}>
+            {!reallocPay && (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(120px, 1fr))", gap:6, marginBottom:14 }}>
+                {stepNames.map((nm, ix) => {
+                  const n = ix + 1, v = stepValues[ix], cur = step === n, ok = canGo(n) && !(n === 3 && !allocAvailable);
+                  return (
+                    <button key={n} onClick={() => goTo(n)} disabled={!ok} aria-current={cur ? "step" : undefined} style={{ border:`1px solid ${cur ? "#111" : "#e5e5e5"}`, boxShadow: cur ? "inset 0 0 0 1px #111" : "none", borderRadius:9, padding:"7px 10px", background:"#fff", textAlign:"left", cursor: ok ? "pointer" : "not-allowed", opacity: ok ? 1 : 0.6, display:"grid", gap:1, minWidth:0 }}>
+                      <span style={{ fontSize:10, fontWeight:700, color: v && n < step ? "#1A8A4E" : "#aaa", letterSpacing:"0.06em", textTransform:"uppercase" }}>{n} · {nm}</span>
+                      <span style={{ fontSize:12, fontWeight: v ? 600 : 500, color: v ? "#111" : "#bbb", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{v || stepEmpty[ix]}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
-            <Field label="Notes" full><input style={{ ...inp, marginTop:10 }} value={payForm.notes} onChange={e => setF({ notes:e.target.value })} placeholder="Notes" /></Field>
-            <div style={{ marginTop:10, fontSize:13, textAlign:"right", color:"#666" }}>Net: <b style={{ color:"#1A8A4E" }}>${net.toLocaleString()}</b></div>
+            {step === 1 ? step1() : step === 2 ? step2() : step === 3 ? step3() : step4()}
             <datalist id="who-list">{whoList.map((n, i) => <option key={i} value={n} />)}</datalist>
           </Modal>
         );
