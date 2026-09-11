@@ -177,6 +177,7 @@ export const I18N_ES = {
   "Other": "Otro",
   "Paid and moved": "Pagado y se movió",
   "Paid, no movement": "Pagado, sin movimiento",
+  "Paid, no truck to check": "Pagado, sin truck para cruzar",
   "Pay from": "Se paga desde",
   "Payable": "Por pagar",
   "Quarterly": "Trimestral",

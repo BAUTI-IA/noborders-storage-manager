@@ -41,6 +41,7 @@ const KIND = {
   ok:               { l: "Paid and moved",   bg: "#EAF3DE", text: "#3B6D11" },
   moved_unpaid:     { l: "Moved, unpaid",    bg: "#FCEBEB", text: "#A32D2D" },
   paid_no_movement: { l: "Paid, no movement", bg: "#FAEEDA", text: "#854F0B" },
+  paid_unlinked:    { l: "Paid, no truck to check", bg: "#EEF2F6", text: "#5B6B7C" },
 };
 
 const card = { background: "#fff", borderRadius: 10, border: "1px solid #efefef", padding: "12px 14px" };
@@ -132,6 +133,7 @@ export function ReportsSection({ supabase, session }) {
     all: rows.length,
     moved_unpaid: rows.filter(r => r.kind === "moved_unpaid").length,
     paid_no_movement: rows.filter(r => r.kind === "paid_no_movement" && !r.noHistory).length,
+    paid_unlinked: rows.filter(r => r.kind === "paid_unlinked").length,
   };
 
   return (
@@ -220,10 +222,21 @@ export function ReportsSection({ supabase, session }) {
           Miles are straight-line between GPS fixes, so the real road distance is higher. Hours here are the window between a truck's first and last movement, not hours driven — driver hours need the ELD, which is not connected yet.
         </div>
 
+        {totals.paidUnlinked > 0 && (
+          <div style={{ ...card, marginBottom: 12, background: "#EEF2F6", borderColor: "#d9e2ec", fontSize: 12.5, color: "#42536B", lineHeight: 1.5 }}>
+            {tr(`${totals.paidUnlinked} paid day(s) could not be cross-checked: those drivers have no truck assigned, so there is nothing to compare their day against.`,
+                `${totals.paidUnlinked} día(s) pagados no se pudieron cruzar: esos drivers no tienen truck asignado, así que no hay contra qué comparar su día.`)}
+            {" "}
+            {tr("Assign one in Fleet → Drivers and they start being checked.",
+                "Asignáselo en Fleet → Drivers y empiezan a cruzarse.")}
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           {[["all", `${tr("All", "Todos")} (${counts.all})`],
             ["moved_unpaid", `${tr("Moved, unpaid", "Se movió, sin pagar")} (${counts.moved_unpaid})`],
-            ["paid_no_movement", `${tr("Paid, no movement", "Pagado, sin movimiento")} (${counts.paid_no_movement})`]].map(([v, l]) => (
+            ["paid_no_movement", `${tr("Paid, no movement", "Pagado, sin movimiento")} (${counts.paid_no_movement})`],
+            ["paid_unlinked", `${tr("Paid, no truck to check", "Pagado, sin truck para cruzar")} (${counts.paid_unlinked})`]].map(([v, l]) => (
             <button key={v} onClick={() => setKindFilter(v)}
               style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 20, cursor: "pointer", border: "1px solid",
                 borderColor: kindFilter === v ? "#111" : "#e5e5e5", background: kindFilter === v ? "#111" : "#fff",
@@ -246,7 +259,7 @@ export function ReportsSection({ supabase, session }) {
                 return (
                   <tr key={`${r.truckId}|${r.date}|${i}`}>
                     <td style={td}>{r.date}</td>
-                    <td style={{ ...td, fontWeight: 700 }}>{r.truckName}</td>
+                    <td style={{ ...td, fontWeight: 700, color: r.truckName ? "#111" : "#bbb" }}>{r.truckName || "—"}</td>
                     <td style={{ ...td, color: r.driverKnown ? "#111" : "#bbb" }}>
                       {r.driverName || tr("not assigned", "sin asignar")}
                     </td>
