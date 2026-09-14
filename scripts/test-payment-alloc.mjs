@@ -1,7 +1,7 @@
 // Fixture tests for the payment-allocation math (src/paymentAlloc.js).
 // Run: node scripts/test-payment-alloc.mjs
 import assert from "node:assert/strict";
-import { paymentNet, buildJobCharges, proposeAllocation, serializeAllocLines } from "../src/paymentAlloc.js";
+import { paymentNet, buildJobCharges, proposeAllocation, serializeAllocLines, pourLinesOverCharges } from "../src/paymentAlloc.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
 
@@ -91,6 +91,31 @@ t("reallocation serializer: exact fit, no remainder", () => {
   const s = serializeAllocLines(lines, 350);
   assert.equal(unassigned, 0); assert.equal(s.error, null);
   assert.equal(s.rows.reduce((x, l) => x + l.amount, 0), 350);
+});
+
+t("pour: five method lines over job + two extras, one method and one charge per row", () => {
+  // Job owes 4200 + packing 500 + shuttle 300 = 5000; paid 2500 cash, 785 zelle, 2×500 MO, 715 check.
+  const charges = [{ kind: "job", amount: 4200 }, { kind: "extra", job_extra_id: 1, amount: 500 }, { kind: "extra", job_extra_id: 2, amount: 300 }];
+  const lines = [{ method: "cash", amount: 2500 }, { method: "zelle", amount: 785 }, { method: "money_order", amount: 500 }, { method: "money_order", amount: 500 }, { method: "check", amount: 715 }];
+  const rows = pourLinesOverCharges(lines, charges, 0);
+  assert.equal(rows.length, 7);
+  assert.deepEqual(rows.map(r => [r.line.method, r.charge?.kind ?? "on_account", r.amount]), [
+    ["cash", "job", 2500], ["zelle", "job", 785], ["money_order", "job", 500],
+    ["money_order", "job", 415], ["money_order", "extra", 85],
+    ["check", "extra", 415], ["check", "extra", 300],
+  ]);
+  assert.equal(rows.reduce((s, r) => s + r.amount, 0), 5000);
+  assert.equal(rows.filter(r => r.charge?.job_extra_id === 1).reduce((s, r) => s + r.amount, 0), 500);
+});
+
+t("pour: single line degrades to one row per charge; remainder goes on account", () => {
+  const rows = pourLinesOverCharges([{ method: "cash", amount: 1300 }], [{ kind: "job", amount: 1000 }, { kind: "extra", amount: 200 }], 100);
+  assert.deepEqual(rows.map(r => [r.charge?.kind ?? "on_account", r.amount]), [["job", 1000], ["extra", 200], ["on_account", 100]]);
+});
+
+t("pour: a line beyond every charge lands on account even when nothing was unassigned", () => {
+  const rows = pourLinesOverCharges([{ method: "cash", amount: 100 }, { method: "zelle", amount: 50 }], [{ kind: "job", amount: 100 }], 0);
+  assert.deepEqual(rows.map(r => [r.line.method, r.charge?.kind ?? "on_account", r.amount]), [["cash", "job", 100], ["zelle", "on_account", 50]]);
 });
 
 console.log(process.exitCode ? "\nSOME TESTS FAILED" : "\nALL ALLOCATION TESTS PASSED");
