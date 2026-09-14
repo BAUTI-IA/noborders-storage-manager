@@ -3753,7 +3753,6 @@ export default function App() {
   const [editingCsId, setEditingCsId] = useState(null);
   const [csSaving, setCsSaving] = useState(false);
   const [csJobSearch, setCsJobSearch] = useState("");
-  const [payModal, setPayModal] = useState(null);      // { job, amount, method, date, notes, entries:[] }
   const [docUploading, setDocUploading] = useState(false);
   const [calView, setCalView] = useState("week");      // week | month
   const [calAnchor, setCalAnchor] = useState(today());  // ISO date inside the visible range
@@ -8733,19 +8732,6 @@ export default function App() {
     window.open("https://wa.me/?text=" + encodeURIComponent(txt), "_blank");
   }
 
-  async function savePayment() {
-    if (!payModal) return;
-    const ids = jobs.filter(j => jobKey(j) === payModal.jobKey).map(j => j.id);
-    if (!ids.length) { setPayModal(null); return; }
-    if (dbFailed(await supabase.from("storage_jobs").update({
-      bol_collected: numv(payModal.amount), bol_payment_method: payModal.method || null, bol_payment_notes: payModal.notes || null,
-      bol_collected_date: payModal.date || today(), updated_by: userEmail, updated_at: new Date().toISOString(),
-    }).in("id", ids), "storage_jobs")) return;
-    // Two-way sync: mirror this collection into the Payments table.
-    if (!paymentsMissing) await upsertJobPayment(payModal.jobKey, { amount: payModal.amount, method: payModal.method, date: payModal.date });
-    setPayModal(null);
-    loadJobs();
-  }
   async function uploadCsDoc(file, sheet) {
     if (!file) return;
     setDocUploading(true);
@@ -10116,7 +10102,7 @@ export default function App() {
                           <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600, color:"#1A8A4E" }}>{money(j.bol_collected) || "$0"}</td>
                           <td style={{ padding:"10px 12px", fontSize:12 }}>{j.bol_payment_method ? (PAY_METHODS.find(p=>p.v===j.bol_payment_method)?.l || j.bol_payment_method) : "—"}</td>
                           <td style={{ padding:"10px 12px" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span></td>
-                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><Btn onClick={() => setPayModal({ jobKey:k, amount: j.bol_collected ?? "", method: j.bol_payment_method || "", date: j.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"4px 9px", fontSize:11 }}>Record payment</Btn></td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><Btn disabled={paymentsMissing} onClick={() => { const drv = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || ""; const owed = jobOutstanding(j, k); openAddPayment({ job_id: j.id, received_by: drv, cash_with_whom: drv, amount: owed > 0 ? String(Math.round(owed)) : "" }); }} style={{ padding:"4px 9px", fontSize:11 }}>Record payment</Btn></td>
                         </tr>
                       );
                     })}
@@ -16090,23 +16076,6 @@ export default function App() {
             <Field label="Notes" full><input style={inp} value={csForm.notes} onChange={e => setCsForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
           </div>
           {editingCsId && <div style={{ marginTop:12 }}><Btn danger onClick={() => { setShowCsModal(false); deleteCs(closingSheets.find(x=>x.id===editingCsId)); }}>Delete closing sheet</Btn></div>}
-        </Modal>
-      )}
-
-      {payModal && (
-        <Modal title="Record collection (BOL)" onClose={() => setPayModal(null)}
-          footer={<>
-            <Btn onClick={() => setPayModal(null)}>Cancel</Btn>
-            <Btn primary onClick={savePayment}>Save collection</Btn>
-          </>}>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-            <Field label="Amount collected ($)"><input style={inp} type="number" value={payModal.amount} onChange={e => setPayModal(p => ({...p, amount:e.target.value}))} placeholder="0" /></Field>
-            <Field label="Collection date"><input style={inp} type="date" value={payModal.date} onChange={e => setPayModal(p => ({...p, date:e.target.value}))} /></Field>
-            <Field label="Payment method" full>
-              <PaymentMethodSelect style={inp} value={payModal.method} onChange={v => setPayModal(p => ({...p, method: v || ""}))} />
-            </Field>
-            <Field label="Notes" full><input style={inp} value={payModal.notes} onChange={e => setPayModal(p => ({...p, notes:e.target.value}))} placeholder="Collection notes (e.g. split cash + zelle)" /></Field>
-          </div>
         </Modal>
       )}
 
