@@ -222,6 +222,10 @@ export function ReportsSection({ supabase, session }) {
           Miles are straight-line between GPS fixes, so the real road distance is higher. Hours here are the window between a truck's first and last movement, not hours driven — driver hours need the ELD, which is not connected yet.
         </div>
 
+        <div style={{ ...card, marginBottom: 12, background: "#FAEEDA", borderColor: "#f0e0c0", fontSize: 12.5, color: "#854F0B", lineHeight: 1.5 }}>
+          <strong>Driver hours from the ELD are not connected.</strong> Everything on this page comes from the trucks' GPS, so the hours are a truck's working window and the driver column is whoever the CRM has assigned. Real per-driver hours need Verizon's Logbook API.
+        </div>
+
         {totals.paidUnlinked > 0 && (
           <div style={{ ...card, marginBottom: 12, background: "#EEF2F6", borderColor: "#d9e2ec", fontSize: 12.5, color: "#42536B", lineHeight: 1.5 }}>
             {tr(`${totals.paidUnlinked} paid day(s) could not be cross-checked: those drivers have no truck assigned, so there is nothing to compare their day against.`,
