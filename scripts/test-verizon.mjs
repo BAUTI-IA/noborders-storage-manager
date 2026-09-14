@@ -252,6 +252,16 @@ check("a missing side is never the same fix",
   !v.sameInstant(null, "2026-09-08T12:00:00Z") && !v.sameInstant("2026-09-08T12:00:00Z", null) && !v.sameInstant(null, null));
 check("garbage is never the same fix", !v.sameInstant("nope", "2026-09-08T12:00:00Z"));
 
+// A per-driver endpoint has no reason to repeat the driver in every row.
+check("the driver we asked about fills in when the rows omit it",
+  v.normalizeDutyEvents([{ DutyStatus: "Driving", StartUTC: "2026-09-08T12:00:00Z" }], "DRV7")[0]?.driver === "DRV7");
+check("a driver named in the row still wins over the fallback",
+  v.normalizeDutyEvents([{ DriverNumber: "DRV1", DutyStatus: "D", StartUTC: "2026-09-08T12:00:00Z" }], "DRV7")[0].driver === "DRV1");
+check("without a fallback, rows naming no driver are still dropped",
+  v.normalizeDutyEvents([{ DutyStatus: "D", StartUTC: "2026-09-08T12:00:00Z" }]).length === 0);
+check("a Statuses wrapper is read",
+  v.normalizeDutyEvents({ Statuses: [{ DutyStatus: "D", StartUTC: "2026-09-08T12:00:00Z" }] }, "DRV7").length === 1);
+
 // ── GPS history ──────────────────────────────────────────────────────────────
 console.log("\nGPS history");
 const hist = v.normalizeHistory([
