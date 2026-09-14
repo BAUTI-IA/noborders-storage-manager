@@ -692,12 +692,30 @@ function FaddCell({ group, onSet }) {
 // One row of the "Entregas por agendar" panel on the delivery calendar: job info +
 // FADD urgency + a date picker (defaults to max(FADD, today)) + one-click schedule.
 // Module-level so the date input keeps focus across App re-renders (see FaddCell).
-function ScheduleDeliveryRow({ cand, onSchedule, onOpen }) {
+function ScheduleDeliveryRow({ cand, onSchedule, onOpen, compact }) {
   const td = today();
   const [date, setDate] = useState((cand.fadd && cand.fadd > td) ? cand.fadd : td);
   const where = cand.warehouse ? `🏭 ${cand.warehouse}`
     : cand.storage_id ? "🏬 Storage"
     : [cand.delivery_city, cand.delivery_state].filter(Boolean).join(", ");
+  // Compact: stacked, for the narrow "To schedule" column beside the calendar.
+  if (compact) return (
+    <div style={{ padding:"9px 12px", borderTop:"1px solid #f6f6f6", fontSize:12 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:7, flexWrap:"wrap" }}>
+        <span style={{ fontSize:13, fontWeight:800, letterSpacing:"0.02em" }}>{(cand.pickup_state || "?").toUpperCase()} → {(cand.delivery_state || "?").toUpperCase()}</span>
+        <button onClick={() => onOpen(cand.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:12 }}>#{cand.job_number || "(no #)"}</button>
+        <FaddBadge fadd={cand.fadd} />
+      </div>
+      <div style={{ color:"#999", fontSize:11.5, marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+        {[cand.customer || "—", cand.job_type === "broker_delivery" ? "Broker delivery" : where].filter(Boolean).join(" · ")}
+      </div>
+      <div style={{ display:"flex", gap:6, marginTop:7, alignItems:"center" }}>
+        <input type="date" value={date} min={cand.fadd || undefined} onChange={e => setDate(e.target.value)}
+          style={{ flex:1, minWidth:0, fontSize:12, padding:"4px 7px", borderRadius:7, border:"1px solid #ddd" }} />
+        <Btn primary disabled={!date} onClick={() => onSchedule(cand, date)} style={{ padding:"4px 11px", fontSize:11.5 }}>Schedule</Btn>
+      </div>
+    </div>
+  );
   return (
     <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderBottom:"1px solid #f6f6f6", fontSize:12.5, flexWrap:"wrap" }}>
       <button onClick={() => onOpen(cand.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline", fontSize:12.5 }}>{cand.job_number || "(no #)"}</button>
@@ -3818,7 +3836,17 @@ export default function App() {
   const [dupFocus, setDupFocus] = useState(null);           // null = all; "jobs" | "payments" | "storages" scopes the modal to one section
   const [dismissedDups, setDismissedDups] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem("dismissedDups") || "[]")); } catch { return new Set(); } });
   const [tab, setTab] = useState("active");           // jobs page sub-tab: active/delivered/wh:*
-  const [dispatchFilter, setDispatchFilter] = useState("all"); // all/pickups/deliveries/longhaul/nofadd
+  // Dispatching is one page with three views: Today (the agenda), Jobs (the
+  // table, filtered by a status chip + an issue chip) and Calendar.
+  const [dispatchView, setDispatchView] = useState("today");    // today | jobs | calendar
+  const [dispatchStatus, setDispatchStatus] = useState("all");  // all | any job status
+  const [dispatchIssue, setDispatchIssue] = useState(null);     // null | pickups_today | deliveries_today | overdue | no_driver_today | no_trip | nofadd | no_delivery | no_sticker
+  // The Pickup Calendar / Delivery Calendar nav entries open the same page with
+  // the calendar already showing that side.
+  useEffect(() => {
+    if (page === "calendario") { setDispatchView("calendar"); setCalMode("pickup"); }
+    else if (page === "calendario_entregas") { setDispatchView("calendar"); setCalMode("delivery"); }
+  }, [page]);
   const [showAlertsModal, setShowAlertsModal] = useState(false); // per-section alerts popup (payments due / jobs needing attention / expiring docs)
   useEffect(() => { setShowAlertsModal(false); }, [page]);       // the popup's content is per-section, so close it when navigating
   const [search, setSearch] = useState("");
@@ -3913,21 +3941,20 @@ export default function App() {
   const [csSaving, setCsSaving] = useState(false);
   const [csJobSearch, setCsJobSearch] = useState("");
   const [docUploading, setDocUploading] = useState(false);
+  // One calendar for pickups and deliveries. `calMode` says which of the two the
+  // grid draws; the Pickup / Delivery nav entries just preselect it.
   const [calView, setCalView] = useState("week");      // week | month
+  const [calMode, setCalMode] = useState("both");      // pickup | delivery | both
   const [calAnchor, setCalAnchor] = useState(today());  // ISO date inside the visible range
   const [calDayMenu, setCalDayMenu] = useState(null);   // ISO date — "what to add" menu for a clicked day
   const [calAddExisting, setCalAddExisting] = useState(null); // { date } — search existing jobs to put on the calendar
   const [calAddSearch, setCalAddSearch] = useState("");
   const [calAddDate, setCalAddDate] = useState("");
   const [pickupEditor, setPickupEditor] = useState(null); // { from, to } — inline pickup-date editor inside job detail
-  // Delivery calendar (same UX as the pickup calendar, indexed by delivery_date)
-  const [dcalView, setDcalView] = useState("week");      // week | month
-  const [dcalAnchor, setDcalAnchor] = useState(today()); // ISO date inside the visible range
-  const [dcalDayMenu, setDcalDayMenu] = useState(null);  // ISO date — "what to add" menu for a clicked day
+  // "Add an existing job to this day" for the delivery side of the calendar.
   const [dcalAddExisting, setDcalAddExisting] = useState(null); // { date } — search existing jobs to put on the delivery calendar
   const [dcalAddSearch, setDcalAddSearch] = useState("");
   const [dcalAddDate, setDcalAddDate] = useState("");
-  const [dcalPanelOpen, setDcalPanelOpen] = useState(true); // "Entregas por agendar" strip
   // Trips / Live Load + trucks
   const [tripsMissing, setTripsMissing] = useState(false);
   const [truckLocMissing, setTruckLocMissing] = useState(false); // live-load location columns not yet in DB
@@ -5539,26 +5566,39 @@ export default function App() {
       if (!map.has(key)) map.set(key, { key, job_number:p.job_number, customer:p.customer, driver:p.driver, date_in:p.date_in, fadd:p.fadd, volume:p.volume, lot_number:p.lot_number, sticker_color:p.sticker_color, job_type:p.job_type, status:p.status, broker_id:p.broker_id, rep:p.rep, client_phone:p.client_phone, client_email:p.client_email, driver_ids:p.driver_ids, extra_stops:p.extra_stops, price_per_cf:p.price_per_cf, fuel_surcharge_pct:p.fuel_surcharge_pct, estimate:p.estimate, deposit:p.deposit, carrier_notes:p.carrier_notes, billing_active:p.billing_active, client_monthly_rate:p.client_monthly_rate, first_month_free:p.first_month_free, billing_start_date:p.billing_start_date, pickup_balance:p.pickup_balance, delivery_balance:p.delivery_balance, closing_sheet_id:p.closing_sheet_id, carrier_rate_per_cf:p.carrier_rate_per_cf, bol_balance:p.bol_balance, bol_collected:p.bol_collected, pads_received:p.pads_received, pads_returned:p.pads_returned, trip_id:p.trip_id, trip_stop_order:p.trip_stop_order, pickup_date:p.pickup_date, pickup_date_from:p.pickup_date_from, pickup_date_to:p.pickup_date_to, pickup_address:p.pickup_address, pickup_city:p.pickup_city, pickup_state:p.pickup_state, pickup_zip:p.pickup_zip, delivery_date:p.delivery_date, delivery_address:p.delivery_address, delivery_city:p.delivery_city, delivery_state:p.delivery_state, delivery_zip:p.delivery_zip, notes:p.notes, parts:[] });
       map.get(key).parts.push(p);
     }
-    let arr = [...map.values()];
-    const td = today();
-    if (dispatchFilter === "pickups_today") arr = arr.filter(g => { const f = g.pickup_date_from || g.pickup_date; return f && f <= td && td <= (g.pickup_date_to || f); });
-    else if (dispatchFilter === "deliveries_today") arr = arr.filter(g => g.delivery_date === td);
-    else if (dispatchFilter === "in_storage") arr = arr.filter(g => (g.status || "scheduled") === "in_storage");
-    else if (dispatchFilter === "on_hold") arr = arr.filter(g => (g.status || "scheduled") === "on_hold");
-    else if (dispatchFilter === "no_trip") arr = arr.filter(g => !g.trip_id);
-    else if (dispatchFilter === "nofadd") arr = arr.filter(g => !g.fadd);
-    else if (dispatchFilter === "no_delivery") arr = arr.filter(g => !g.delivery_date);
-    // Same "no driver today" rule as the alert banner, so the tab and the banner
-    // can never disagree about which jobs are unmanned.
-    else if (dispatchFilter === "no_driver_today") arr = arr.filter(g => (g.pickup_date === td || g.delivery_date === td) && !jobDriverNames(g));
-    else if (dispatchFilter === "no_sticker") arr = arr.filter(g => !g.sticker_color);
+    const arr = [...map.values()];
     // Most urgent FADD first; jobs with no FADD sink to the bottom.
     arr.sort((a, b) => {
       const da = daysUntilFadd(a.fadd), db = daysUntilFadd(b.fadd);
       return (da === null ? Infinity : da) - (db === null ? Infinity : db);
     });
     return arr;
-  }, [jobs, storageById, search, driverFilter, dispatchFilter, jobDriverNames]);
+  }, [jobs, storageById, search, driverFilter]);
+
+  // Does this job have this problem? One rule per issue chip, shared by the
+  // chips, the counters and the Needs-attention list, so they can never disagree.
+  const jobHasIssue = useCallback((g, k) => {
+    const td = today();
+    const pkFrom = g.pickup_date_from || g.pickup_date;
+    switch (k) {
+      case "pickups_today": return !!pkFrom && pkFrom <= td && td <= (g.pickup_date_to || pkFrom);
+      case "deliveries_today": return g.delivery_date === td;
+      case "overdue": { const d = daysUntilFadd(g.fadd); return d !== null && d < 0; }
+      // Same "no driver today" rule as the alert banner.
+      case "no_driver_today": return (g.pickup_date === td || g.delivery_date === td) && !jobDriverNames(g);
+      case "no_trip": return !g.trip_id;
+      case "nofadd": return !g.fadd;
+      case "no_delivery": return !g.delivery_date;
+      case "no_sticker": return !g.sticker_color;
+      default: return true;
+    }
+  }, [jobDriverNames]);
+
+  // The Jobs table: the board narrowed by the status chip and the issue chip.
+  const dispatchRows = useMemo(() => dispatchGroups
+    .filter(g => dispatchStatus === "all" || (g.status || "scheduled") === dispatchStatus)
+    .filter(g => !dispatchIssue || jobHasIssue(g, dispatchIssue)),
+    [dispatchGroups, dispatchStatus, dispatchIssue, jobHasIssue]);
 
   // Calendar: pickups grouped by job and indexed by date. A job with a date range
   // (pickup_date_from..pickup_date_to) is shown spanning every day in that range.
@@ -5569,7 +5609,7 @@ export default function App() {
       const from = j.pickup_date_from || j.pickup_date;
       if (!from) continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, calendar_status:j.calendar_status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, pickup_date:j.pickup_date, pickup_date_from:from, pickup_date_to:(j.pickup_date_to || from), pickup_state:j.pickup_state, delivery_state:j.delivery_state });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, calendar_status:j.calendar_status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, trip_id:j.trip_id, pickup_date:j.pickup_date, pickup_date_from:from, pickup_date_to:(j.pickup_date_to || from), pickup_city:j.pickup_city, pickup_state:j.pickup_state, delivery_state:j.delivery_state });
     }
     for (const g of map.values()) {
       let d = g.pickup_date_from;
@@ -5588,7 +5628,7 @@ export default function App() {
     for (const j of jobs) {
       if (!j.delivery_date) continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, calendar_status:j.calendar_status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, delivery_date:j.delivery_date, pickup_state:j.pickup_state, delivery_state:j.delivery_state });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, status:j.status, calendar_status:j.calendar_status, job_type:j.job_type, driver:j.driver, driver_ids:j.driver_ids, trip_id:j.trip_id, delivery_date:j.delivery_date, delivery_city:j.delivery_city, pickup_state:j.pickup_state, delivery_state:j.delivery_state });
     }
     for (const g of map.values()) (byDate[g.delivery_date] = byDate[g.delivery_date] || []).push(g);
     return byDate;
@@ -5608,7 +5648,7 @@ export default function App() {
       const stored = st === "in_storage" || st === "picked_up" || j.storage_id || j.warehouse;
       if (!stored && j.job_type !== "broker_delivery") continue;
       const k = jobKey(j);
-      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, fadd:j.fadd, job_type:j.job_type, status:st, warehouse:j.warehouse, storage_id:j.storage_id, delivery_city:j.delivery_city, delivery_state:j.delivery_state, ids:[] });
+      if (!map.has(k)) map.set(k, { key:k, job_number:j.job_number, customer:j.customer, fadd:j.fadd, job_type:j.job_type, status:st, warehouse:j.warehouse, storage_id:j.storage_id, pickup_state:j.pickup_state, delivery_city:j.delivery_city, delivery_state:j.delivery_state, ids:[] });
       const g = map.get(k);
       g.ids.push(j.id);
       // Split jobs: a later row may carry the field the first one lacks.
@@ -6526,7 +6566,7 @@ export default function App() {
   function openAddJobDeliveryDate(dateStr) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, delivery_date: dateStr }); setJobErr(null); setShowAddJob(true); }
   // Open the "add existing job to the delivery calendar" search modal, optionally seeded with a day.
   function openDcalAddExisting(dateStr) {
-    setDcalDayMenu(null);
+    setCalDayMenu(null);
     setDcalAddSearch("");
     setDcalAddDate(dateStr || today());
     setDcalAddExisting({ date: dateStr || "" });
@@ -9341,410 +9381,491 @@ export default function App() {
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
       {/* ───────────────────────── DISPATCHING ───────────────────────── */}
-      {page === "dispatching" && (
-        <>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:10, marginBottom:16 }}>
-            {[
-              { label:"Pickups today", value:dispatchMetrics.pickups, color:"#185FA5" },
-              { label:"Deliveries today", value:dispatchMetrics.deliveries, color:"#3B6D11" },
-              { label:"FADD overdue", value:faddStats.overdue, color:"#A32D2D" },
-              { label:"FADD this week", value:faddStats.dueWeek, color:"#C2410C" },
-              { label:"In storage", value:dispatchMetrics.inStorage, color:"#7C3AED" },
-              { label:"Balance pickup pend.", value:"$"+dispatchMetrics.puBal.toLocaleString(), color:"#1A8A4E" },
-              { label:"Balance delivery pend.", value:"$"+dispatchMetrics.delBal.toLocaleString(), color:"#1A8A4E" },
-              { label:"Billing overdue", value:billingOverdueCount, color:"#A32D2D" },
-            ].map(m => (
-              <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
-                <div style={{ fontSize:11, color:"#aaa", fontWeight:500, marginBottom:4 }}>{m.label}</div>
-                <div style={{ fontSize:22, fontWeight:700, color:m.color }}>{m.value}</div>
+      {/* ── DISPATCHING: one page, three views (Today · Jobs · Calendar). The
+           Pickup / Delivery Calendar nav entries land on the Calendar view with
+           that side preselected. ── */}
+      {(page === "dispatching" || page === "calendario" || page === "calendario_entregas") && (() => {
+        const td = today();
+        const o = dispatchOverview;
+        const card = { background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"14px 16px" };
+        const cap = { fontSize:10.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", display:"flex", alignItems:"center", gap:8, marginBottom:10 };
+        const right = { marginLeft:"auto", fontWeight:500, letterSpacing:0, textTransform:"none", fontSize:11, color:"#bbb" };
+        const track = { display:"block", height:12, borderRadius:4 };
+        const countIssue = (k) => dispatchGroups.filter(g => jobHasIssue(g, k)).length;
+        const goJobs = (status, issue) => { setDispatchView("jobs"); setDispatchStatus(status || "all"); setDispatchIssue(issue || null); };
+        const pickupsToday = dispatchGroups.filter(g => jobHasIssue(g, "pickups_today"));
+        const deliveriesToday = dispatchGroups.filter(g => jobHasIssue(g, "deliveries_today"));
+        const overdueJobs = dispatchGroups.filter(g => jobHasIssue(g, "overdue"));
+        const unmannedToday = [...pickupsToday, ...deliveriesToday].filter((g, i, a) => a.findIndex(x => x.key === g.key) === i)
+          .filter(g => !jobDriverNames(g) || !g.trip_id).length;
+        const cfOf = (g) => (g.parts || []).reduce((s, p) => s + effCf(p), 0);
+        const storeLabelOf = (g) => [...new Set((g.parts || []).map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U" + p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))].join(" · ");
+        // The route is the job's headline everywhere: pickup state → delivery state.
+        const RouteTitle = ({ g, size = 14 }) => (
+          <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:size, fontWeight:800, letterSpacing:"0.02em", whiteSpace:"nowrap" }}>
+            <span style={{ color: g.pickup_state ? "#111" : "#B91C1C" }}>{(g.pickup_state || "?").toUpperCase()}</span>
+            <span style={{ color:"#c8c8c8", fontWeight:500 }}>→</span>
+            <span style={{ color: g.delivery_state ? "#111" : "#B91C1C" }}>{(g.delivery_state || "?").toUpperCase()}</span>
+          </span>
+        );
+        const warn = { color:"#B91C1C", fontWeight:700 };
+
+        // One row of the Today agenda: the route, who is on it, what is missing
+        // and the button that moves the job to its next status.
+        const agendaRow = (g, kind) => {
+          const ns = nextStatus(g);
+          const gTrip = g.trip_id ? tripById[g.trip_id] : null;
+          const drv = jobDriverNames(g);
+          const bal = kind === "pickup" ? numv(g.pickup_balance) : numv(g.delivery_balance);
+          return (
+            <div key={g.key + kind} onClick={() => setJobDetailKey(g.key)}
+              style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", borderTop:"1px solid #f4f4f4", cursor:"pointer" }}>
+              <span style={{ width:4, alignSelf:"stretch", borderRadius:3, background: kind === "pickup" ? "#378ADD" : "#639922", flexShrink:0 }} />
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                  <RouteTitle g={g} />
+                  <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:"#888" }}>#{g.job_number || "(no #)"}</span>
+                  <StatusBadge status={g.status} />
+                  {g.job_type === "broker_delivery" && <TypeBadge type={g.job_type} />}
+                </div>
+                <div style={{ display:"flex", gap:12, flexWrap:"wrap", fontSize:12, color:"#888", marginTop:3 }}>
+                  <span>{g.customer || "—"}</span>
+                  <span>{kind === "pickup" ? "📍" : "🎯"} {[kind === "pickup" ? g.pickup_city : g.delivery_city, kind === "pickup" ? g.pickup_state : g.delivery_state].filter(Boolean).join(", ") || "—"}</span>
+                  <span>{drv ? <>🧑‍✈️ <b style={{ color:"#333" }}>{drv}</b></> : <span style={warn}>⚠ {tr("No driver", "Sin driver")}</span>}</span>
+                  <span>{gTrip ? <>🛣️ <b style={{ color:"#6D28D9" }}>{gTrip.trip_number || "#" + gTrip.id}</b></> : <span style={warn}>⚠ {tr("No trip", "Sin trip")}</span>}</span>
+                  {bal > 0 && <span>💵 <b style={{ color:"#1A8A4E" }}>{money(bal)}</b> {kind === "pickup" ? tr("at pickup", "en el pickup") : tr("to collect", "a cobrar")}</span>}
+                </div>
               </div>
-            ))}
+              {ns && <Btn onClick={(e) => { e.stopPropagation(); advanceStatus(g); }} style={{ padding:"4px 10px", fontSize:11.5 }}>→ {statusMeta(ns).l}</Btn>}
+            </div>
+          );
+        };
+
+        return (
+        <>
+          {/* ── The three views ── */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+              {[["today", "Today", pickupsToday.length + deliveriesToday.length],
+                ["jobs", "Jobs", dispatchGroups.length],
+                ["calendar", "Calendar", deliveryCandidates.length]].map(([v, l, n]) => (
+                <button key={v} onClick={() => setDispatchView(v)}
+                  style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", display:"inline-flex", alignItems:"center", gap:6,
+                    background: dispatchView === v ? "#fff" : "none", color: dispatchView === v ? "#111" : "#888", fontWeight: dispatchView === v ? 600 : 400,
+                    boxShadow: dispatchView === v ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>
+                  {l}
+                  <span style={{ fontSize:10.5, fontWeight:700, color: v === "calendar" && n > 0 ? "#B91C1C" : "#bbb" }}>{v === "calendar" && n > 0 ? tr(`${n} to schedule`, `${n} por agendar`) : n || ""}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {duplicateReport.total > 0 && (
             <div onClick={() => { setDupFocus(null); setShowDupModal(true); }} style={{ background:"#FFF6E8", border:"1px solid #F4DDB0", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#B45309", display:"flex", alignItems:"center", gap:8, cursor:"pointer", flexWrap:"wrap" }}>
               <span style={{ fontSize:16 }}>🔍</span>
-              <b>{duplicateReport.total} posible{duplicateReport.total === 1 ? "" : "s"} duplicate{duplicateReport.total === 1 ? "" : "s"}</b>
-              <span style={{ color:"#a07d3a" }}>· Jobs {duplicateReport.jobs.length} · Payments {duplicateReport.payments.length} · Storages {duplicateReport.storages.length}</span>
+              <b>{tr(`${duplicateReport.total} possible duplicate(s)`, `${duplicateReport.total} posible(s) duplicado(s)`)}</b>
+              <span style={{ color:"#a07d3a" }}>{tr(`· Jobs ${duplicateReport.jobs.length} · Payments ${duplicateReport.payments.length} · Storages ${duplicateReport.storages.length}`, `· Jobs ${duplicateReport.jobs.length} · Pagos ${duplicateReport.payments.length} · Storages ${duplicateReport.storages.length}`)}</span>
               <span style={{ marginLeft:"auto", textDecoration:"underline", fontWeight:600 }}>Review →</span>
             </div>
           )}
 
-          <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["overview","Overview"],["all","All"],["pickups_today","Pickups today"],["deliveries_today","Deliveries today"],["in_storage","In storage"],["on_hold","On hold"],["no_trip","No trip assigned"],["nofadd","No FADD"],["no_delivery","No delivery"],["no_driver_today","No driver today"],["no_sticker","No sticker"]].map(([t,l]) => (
-              <button key={t} onClick={() => setDispatchFilter(t)}
-                style={{ fontSize:13, fontWeight: dispatchFilter === t ? 600 : 400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: dispatchFilter === t ? "#111" : "#999", borderBottom: dispatchFilter === t ? "2px solid #111" : "2px solid transparent" }}>{l}</button>
-            ))}
-          </div>
-
-          <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search by job #, client, driver, pickup, delivery..."
-              style={{ ...inp, flex:1, minWidth:180 }} />
-            <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
-              <option value="">All drivers</option>
-              {drivers.map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </div>
-
-          {dispatchFilter === "overview" && (() => {
-            const o = dispatchOverview;
-            const card = { background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" };
-            const cap = { fontSize:13, fontWeight:700, letterSpacing:"-0.01em", display:"flex", alignItems:"baseline", gap:8, marginBottom:14 };
-            const right = { marginLeft:"auto", fontSize:11, color:"#bbb", fontWeight:400 };
-            const track = { height:16, background:"#f5f5f5", borderRadius:4 };
-            const go = (tab) => setDispatchFilter(tab);
-            return (
-              <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-
-                {/* ── Pipeline + FADD urgency ── */}
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))", gap:14, alignItems:"start" }}>
-                  <div style={card}>
-                    <div style={cap}>Pipeline<span style={right}>{tr(`${o.totals.jobs} active jobs · ${Math.round(o.totals.cf).toLocaleString()} CF`, `${o.totals.jobs} jobs activos · ${Math.round(o.totals.cf).toLocaleString()} CF`)}</span></div>
-                    {o.totals.jobs > 0 && (
-                      <div style={{ display:"flex", height:9, borderRadius:5, overflow:"hidden", marginBottom:16 }}>
-                        {o.pipeline.filter(r => r.count > 0).map(r => (
-                          <div key={r.v} title={`${r.meta.l} · ${r.count}`} style={{ width:`${r.count / o.totals.jobs * 100}%`, background:r.meta.dot }} />
-                        ))}
-                      </div>
-                    )}
-                    {o.pipeline.map(r => (
-                      <div key={r.v} onClick={() => go(r.v === "in_storage" ? "in_storage" : r.v === "on_hold" ? "on_hold" : "all")}
-                        title={tr("Filter the table by this status", "Filtrar la tabla por este estado")}
-                        style={{ display:"grid", gridTemplateColumns:"142px 1fr 78px", alignItems:"center", gap:10, marginBottom:9, cursor:"pointer" }}>
-                        <span style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:"#444" }}>
-                          <span style={{ width:7, height:7, borderRadius:"50%", background:r.meta.dot, flexShrink:0 }} />
-                          <span style={{ fontSize:11 }}>{statusIcon(r.v)}</span>{r.meta.l}
-                        </span>
-                        <span style={track}><span style={{ display:"block", height:16, borderRadius:4, background:r.meta.bg, border:`1px solid ${r.meta.dot}44`, width:`${Math.max(2, r.count / o.maxPipe * 100)}%` }} /></span>
-                        <span style={{ textAlign:"right", fontSize:12 }}>
-                          <b style={{ color:r.meta.text }}>{r.count}</b>
-                          <span style={{ color:"#bbb", fontSize:10.5, display:"block", marginTop:1 }}>{Math.round(r.cf).toLocaleString()} CF</span>
-                        </span>
-                      </div>
-                    ))}
-                    <div style={{ fontSize:10.5, color:"#ccc", marginTop:12 }}>Click a row to filter the table by that status.</div>
+          {/* ══ TODAY ══ */}
+          {dispatchView === "today" && (<>
+            {/* Five numbers, each one a filter. */}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", border:"1px solid #efefef", borderRadius:12, overflow:"hidden", background:"#fff", marginBottom:16 }}>
+              {[
+                { l:"Pickups today", v:pickupsToday.length, c:"#185FA5", sub: tr(`${Math.round(pickupsToday.reduce((s, g) => s + cfOf(g), 0)).toLocaleString()} CF`, `${Math.round(pickupsToday.reduce((s, g) => s + cfOf(g), 0)).toLocaleString()} CF`), go: () => goJobs("all", "pickups_today") },
+                { l:"Deliveries today", v:deliveriesToday.length, c:"#1A8A4E", sub: tr(`${money(deliveriesToday.reduce((s, g) => s + numv(g.delivery_balance), 0)) || "$0"} to collect`, `${money(deliveriesToday.reduce((s, g) => s + numv(g.delivery_balance), 0)) || "$0"} a cobrar`), go: () => goJobs("all", "deliveries_today") },
+                { l:"FADD overdue", v:overdueJobs.length, c:"#B91C1C", sub: tr(`${Math.round(o.overdueCf).toLocaleString()} CF`, `${Math.round(o.overdueCf).toLocaleString()} CF`), go: () => goJobs("all", "overdue") },
+                { l:"To schedule", v:deliveryCandidates.length, c:"#92760B", sub: tr(`${deliveryToSchedule} with FADD ≤ 7 days`, `${deliveryToSchedule} con FADD ≤ 7 días`), go: () => { setDispatchView("calendar"); setCalMode("delivery"); } },
+                { l:"Unmanned today", v:unmannedToday, c: unmannedToday ? "#B91C1C" : "#bbb", sub: tr("no driver or trip", "sin driver ni trip"), go: () => goJobs("all", "no_driver_today") },
+              ].map((m, i) => (
+                <button key={m.l} onClick={m.go} style={{ border:"none", borderLeft: i ? "1px solid #f0f0f0" : "none", background:"none", textAlign:"left", padding:"12px 15px", cursor:"pointer" }}>
+                  <div style={{ fontSize:11, color:"#999", marginBottom:3 }}>{m.l}</div>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:7 }}>
+                    <span style={{ fontSize:22, fontWeight:800, letterSpacing:"-0.02em", color:m.c, fontVariantNumeric:"tabular-nums" }}>{m.v}</span>
+                    <span style={{ fontSize:11, color:"#bbb" }}>{m.sub}</span>
                   </div>
+                </button>
+              ))}
+            </div>
 
-                  <div style={card}>
-                    <div style={cap}>FADD urgency<span style={right}>{tr(`${o.totals.jobs} jobs`, `${o.totals.jobs} jobs`)}</span></div>
-                    {o.fadd.map(b => (
-                      <div key={b.k} onClick={() => go(b.tab)} style={{ display:"grid", gridTemplateColumns:"100px 1fr 36px", alignItems:"center", gap:9, marginBottom:13, cursor:"pointer" }}>
-                        <span style={{ fontSize:9.5, fontWeight:700, borderRadius:10, padding:"2px 7px", background:b.pill.bg, color:b.pill.text, textAlign:"center" }}>{b.l}</span>
-                        <span style={track}><span style={{ display:"block", height:16, borderRadius:4, background:b.color, width:`${Math.max(2, b.count / o.maxFadd * 100)}%` }} /></span>
-                        <span style={{ textAlign:"right", fontSize:13, fontWeight:700, color:b.pill.text }}>{b.count}</span>
-                      </div>
-                    ))}
-                    <div style={{ display:"flex", gap:8, marginTop:14, paddingTop:12, borderTop:"1px solid #f5f5f5" }}>
-                      <div style={{ flex:1, background:"#FCEBEB", borderRadius:8, padding:"9px 11px" }}>
-                        <div style={{ fontSize:10, color:"#c48787", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em" }}>Oldest overdue</div>
-                        <div style={{ fontSize:12.5, fontWeight:700, color:"#A32D2D", marginTop:3 }}>
-                          {o.oldest ? tr(`${o.oldest.g.job_number || "(no #)"} · ${Math.abs(o.oldest.d)} days`, `${o.oldest.g.job_number || "(sin #)"} · ${Math.abs(o.oldest.d)} días`) : "—"}
-                        </div>
-                      </div>
-                      <div style={{ flex:1, background:"#fafafa", borderRadius:8, padding:"9px 11px" }}>
-                        <div style={{ fontSize:10, color:"#bbb", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em" }}>CF overdue</div>
-                        <div style={{ fontSize:12.5, fontWeight:700, marginTop:3 }}>{Math.round(o.overdueCf).toLocaleString()} CF</div>
-                      </div>
-                    </div>
-                  </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))", gap:14, alignItems:"start" }}>
+              <div style={{ minWidth:0, gridColumn: "span 1" }}>
+                {/* The agenda of the day. */}
+                <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden", marginBottom:14 }}>
+                  <div style={{ ...cap, margin:0, padding:"9px 14px", background:"#fafafa", color:"#185FA5" }}>📍 Pickups today<span style={{ color:"#111", fontWeight:800 }}>{pickupsToday.length}</span><span style={right}>{tr(`${Math.round(pickupsToday.reduce((s, g) => s + cfOf(g), 0)).toLocaleString()} CF`, `${Math.round(pickupsToday.reduce((s, g) => s + cfOf(g), 0)).toLocaleString()} CF`)}</span></div>
+                  {pickupsToday.length === 0 ? <div style={{ padding:"14px", fontSize:12.5, color:"#bbb", borderTop:"1px solid #f4f4f4" }}>No pickups today.</div> : pickupsToday.map(g => agendaRow(g, "pickup"))}
+                  <div style={{ ...cap, margin:0, padding:"9px 14px", background:"#fafafa", color:"#3B6D11", borderTop:"1px solid #f0f0f0" }}>🎯 Deliveries today<span style={{ color:"#111", fontWeight:800 }}>{deliveriesToday.length}</span><span style={right}>{tr(`${money(deliveriesToday.reduce((s, g) => s + numv(g.delivery_balance), 0)) || "$0"} to collect`, `${money(deliveriesToday.reduce((s, g) => s + numv(g.delivery_balance), 0)) || "$0"} a cobrar`)}</span></div>
+                  {deliveriesToday.length === 0 ? <div style={{ padding:"14px", fontSize:12.5, color:"#bbb", borderTop:"1px solid #f4f4f4" }}>No deliveries today.</div> : deliveriesToday.map(g => agendaRow(g, "delivery"))}
                 </div>
 
-                {/* ── Next 7 days ── */}
+                {/* The week ahead, as a strip. Clicking a day opens the calendar there. */}
+                <div style={cap}>Next 7 days<span style={right}>{tr(`${o.totals.pickups} pickups · ${o.totals.deliveries} deliveries · ${o.totals.unmanned} without driver or trip`, `${o.totals.pickups} pickups · ${o.totals.deliveries} deliveries · ${o.totals.unmanned} sin driver ni trip`)}</span></div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:6 }}>
+                  {o.days.map(d => {
+                    const dt = new Date(d.date + "T00:00:00");
+                    const isToday = d.date === td;
+                    return (
+                      <button key={d.date} onClick={() => { setDispatchView("calendar"); setCalAnchor(d.date); }} title="Open this day in the calendar"
+                        style={{ border:`1px solid ${isToday ? "#378ADD" : "#efefef"}`, background:"#fff", borderRadius:9, padding:"7px 6px", cursor:"pointer", textAlign:"center" }}>
+                        <div style={{ fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em" }}>{isToday ? tr("Today", "Hoy") : `${t(DOW_EN[dt.getDay()])} ${dt.getDate()}`}</div>
+                        <div style={{ display:"flex", justifyContent:"center", gap:7, marginTop:5, fontSize:12, fontWeight:700 }}>
+                          <span style={{ color: d.pickups.length ? "#185FA5" : "#ccc" }}>{d.pickups.length} pk</span>
+                          <span style={{ color: d.deliveries.length ? "#3B6D11" : "#ccc" }}>{d.deliveries.length} dl</span>
+                        </div>
+                        <div style={{ fontSize:10, fontWeight:700, color:"#B91C1C", marginTop:3, minHeight:12 }}>{d.unmanned ? tr(`⚠ ${d.unmanned} unmanned`, `⚠ ${d.unmanned} sin cubrir`) : ""}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gap:14, minWidth:0 }}>
+                {/* What is wrong, each row a filter. */}
                 <div style={card}>
-                  <div style={cap}>Next 7 days<span style={right}>{tr(`${o.totals.pickups} pickups · ${o.totals.deliveries} deliveries · ${o.totals.unmanned} without driver or trip`, `${o.totals.pickups} pickups · ${o.totals.deliveries} deliveries · ${o.totals.unmanned} sin driver ni trip`)}</span></div>
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
-                    {o.days.map(d => {
-                      const dt = new Date(d.date + "T00:00:00");
-                      const isToday = d.date === today();
-                      const shown = [...d.pickups.map(g => ({ g, kind:"p" })), ...d.deliveries.map(g => ({ g, kind:"d" }))];
-                      return (
-                        <div key={d.date} style={{ border:`1px solid ${isToday ? "#378ADD" : "#efefef"}`, borderRadius:9, minHeight:132, display:"flex", flexDirection:"column", overflow:"hidden" }}>
-                          <div style={{ padding:"6px 8px", borderBottom:"1px solid #f5f5f5", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                            <b style={{ fontSize:11 }}>{t(DOW_EN[dt.getDay()])} {dt.getDate()}</b>
-                            <span style={{ fontSize:10, color:"#bbb" }}>{isToday ? tr("Today", "Hoy") : t(MONTHS_EN[dt.getMonth()])}</span>
-                          </div>
-                          <div style={{ display:"flex", gap:5, padding:"7px 8px 4px" }}>
-                            <div onClick={() => go("pickups_today")} style={{ flex:1, textAlign:"center", borderRadius:6, padding:"4px 0", cursor:"pointer", background: d.pickups.length ? "#E6F1FB" : "#f6f6f6", color: d.pickups.length ? "#185FA5" : "#bbb" }}>
-                              <b style={{ display:"block", fontSize:15, lineHeight:1.1 }}>{d.pickups.length}</b>
-                              <span style={{ fontSize:8.5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em", opacity:0.75 }}>Pickup</span>
-                            </div>
-                            <div onClick={() => go("deliveries_today")} style={{ flex:1, textAlign:"center", borderRadius:6, padding:"4px 0", cursor:"pointer", background: d.deliveries.length ? "#EAF3DE" : "#f6f6f6", color: d.deliveries.length ? "#3B6D11" : "#bbb" }}>
-                              <b style={{ display:"block", fontSize:15, lineHeight:1.1 }}>{d.deliveries.length}</b>
-                              <span style={{ fontSize:8.5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.04em", opacity:0.75 }}>Deliv.</span>
-                            </div>
-                          </div>
-                          {shown.slice(0, 2).map(({ g, kind }) => {
-                            const bad = !jobDriverNames(g) || !g.trip_id;
-                            // The left border always says pickup-or-delivery, even when the
-                            // chip turns red: a job with both on the same day shows twice, and
-                            // two identical red chips read as a duplicate rather than two events.
-                            const bar = kind === "p" ? "#378ADD" : "#639922";
-                            const c = bad ? { bar, bg:"#FCEBEB", text:"#A32D2D" }
-                              : kind === "p" ? { bar, bg:"#E6F1FB", text:"#185FA5" } : { bar, bg:"#EAF3DE", text:"#3B6D11" };
-                            return (
-                              <div key={g.key + kind} onClick={() => setJobDetailKey(g.key)}
-                                style={{ margin:"0 8px 4px", borderLeft:`3px solid ${c.bar}`, background:c.bg, color:c.text, borderRadius:4, padding:"3px 6px", fontSize:9.5, lineHeight:1.35, cursor:"pointer" }}>
-                                <b style={{ fontFamily:"monospace", fontSize:9.5 }}>{g.job_number || "(job)"}</b>
-                                <div style={{ fontWeight: bad ? 700 : 400 }}>
-                                  {bad ? (!jobDriverNames(g) ? tr("⚠ No driver", "⚠ Sin driver") : tr("⚠ No trip", "⚠ Sin trip"))
-                                       : [g.pickup_state, g.delivery_state].filter(Boolean).join(" → ") || (g.customer || "")}
-                                </div>
-                              </div>
-                            );
-                          })}
-                          {shown.length > 2 && <div style={{ fontSize:9, color:"#bbb", padding:"0 8px 6px" }}>{tr(`+${shown.length - 2} more`, `+${shown.length - 2} más`)}</div>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* ── Active trips + what needs attention ── */}
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))", gap:14, alignItems:"start" }}>
-                  <div style={card}>
-                    <div style={cap}>Active trips<span style={right}>{tr(`${o.activeTrips.length} trips · ${Math.round(o.cfOnBoard).toLocaleString()} CF on board`, `${o.activeTrips.length} trips · ${Math.round(o.cfOnBoard).toLocaleString()} CF a bordo`)}</span></div>
-                    {o.activeTrips.length === 0 ? (
-                      <div style={{ fontSize:12.5, color:"#bbb" }}>No active trips right now.</div>
-                    ) : o.activeTrips.map(({ t, c }, i) => {
-                      // Red past 90%: a truck that full has no room for the next stop.
-                      const occ = c.occPct;
-                      const occColor = occ == null ? "#ccc" : occ >= 90 ? "#E24B4A" : occ >= 70 ? "#639922" : "#EAB308";
-                      return (
-                        <div key={t.id} onClick={() => setPage("trips")} style={{ borderBottom: i < o.activeTrips.length - 1 ? "1px solid #f6f6f6" : "none", padding:"11px 0", cursor:"pointer" }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
-                            <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:"#6D28D9" }}>{t.trip_number || "#" + t.id}</span>
-                            <TripBadge status={t.status} />
-                            <span style={{ marginLeft:"auto", fontSize:11, color:"#bbb" }}>{t.departure_date || "—"}</span>
-                          </div>
-                          <div style={{ fontSize:11, color:"#999", marginBottom:7 }}>
-                            {[truckById[t.truck_id]?.name, driverById[t.driver_id]?.name && `🧑‍✈️ ${driverById[t.driver_id].name}`,
-                              tr(`${c.count} stops`, `${c.count} stops`),
-                              tr(`${c.delivered} of ${c.deliveryCount} delivered`, `${c.delivered} de ${c.deliveryCount} entregados`)].filter(Boolean).join(" · ")}
-                          </div>
-                          <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                            <span style={{ flex:1, height:8, background:"#f2f2f2", borderRadius:4 }}>
-                              <span style={{ display:"block", height:8, borderRadius:4, background:occColor, width:`${Math.min(100, occ ?? 0)}%` }} />
-                            </span>
-                            <span style={{ fontSize:11.5, fontWeight:700, width:132, textAlign:"right", whiteSpace:"nowrap" }}>
-                              {occ == null ? tr("No capacity set", "Sin capacidad") : `${occ}%`}
-                              <span style={{ color:"#bbb", fontWeight:500, fontSize:10 }}> {Math.round(c.loadedCf).toLocaleString()}{c.cap ? ` / ${Math.round(c.cap).toLocaleString()}` : ""} CF</span>
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div style={{ fontSize:10.5, color:"#ccc", marginTop:12 }}>Click a trip to open it in Trips / Live Load.</div>
-                  </div>
-
-                  <div style={card}>
-                    <div style={cap}>Needs attention<span style={right}>{tr(`${o.totals.flags} flags`, `${o.totals.flags} flags`)}</span></div>
-                    {[["🧑‍✈️","No driver today","no_driver_today","#A32D2D"],["🛣️","No trip assigned","no_trip","#C2410C"],
-                      ["📅","No FADD","nofadd","#C2410C"],["📦","No delivery date","no_delivery","#92760B"],
-                      ["🏷️","Sticker unassigned","no_sticker","#92760B"]].map(([ic, l, k, color]) => (
-                      <div key={k} onClick={() => go(k)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:"1px solid #f6f6f6", fontSize:12.5, cursor:"pointer" }}>
+                  <div style={cap}>Needs attention<span style={right}>{tr("tap a row → Jobs, filtered", "tocá una fila → Jobs, filtrado")}</span></div>
+                  {[["🧑‍✈️", "No driver today", "no_driver_today", "#A32D2D"], ["🛣️", "No trip assigned", "no_trip", "#C2410C"],
+                    ["📅", "No FADD", "nofadd", "#C2410C"], ["📦", "No delivery date", "no_delivery", "#92760B"],
+                    ["🏷️", "Sticker unassigned", "no_sticker", "#92760B"]].map(([ic, l, k, c]) => {
+                    const n = countIssue(k);
+                    return (
+                      <div key={k} onClick={() => goJobs("all", k)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:"1px solid #f6f6f6", fontSize:12.5, cursor:"pointer" }}>
                         <span style={{ width:20, textAlign:"center", fontSize:13 }}>{ic}</span>{l}
-                        <span style={{ marginLeft:"auto", fontWeight:700, fontSize:14, color: o.flags[k] ? color : "#ddd" }}>{o.flags[k]}</span>
+                        <span style={{ marginLeft:"auto", fontWeight:700, fontSize:14, color: n ? c : "#ddd" }}>{n}</span>
                         <span style={{ color:"#ddd", fontSize:12 }}>›</span>
                       </div>
-                    ))}
-                    <div style={{ fontSize:10.5, color:"#ccc", marginTop:12 }}>Each row jumps to the matching tab with the table already filtered.</div>
+                    );
+                  })}
+                </div>
+
+                {/* Trucks on the road. */}
+                <div style={card}>
+                  <div style={cap}>Active trips<span style={right}>{tr(`${o.activeTrips.length} trips · ${Math.round(o.cfOnBoard).toLocaleString()} CF on board`, `${o.activeTrips.length} trips · ${Math.round(o.cfOnBoard).toLocaleString()} CF a bordo`)}</span></div>
+                  {o.activeTrips.length === 0 ? (
+                    <div style={{ fontSize:12.5, color:"#bbb" }}>No active trips right now.</div>
+                  ) : o.activeTrips.map(({ t: trip, c }, i) => {
+                    // Red past 90%: a truck that full has no room for the next stop.
+                    const occ = c.occPct;
+                    const occColor = occ == null ? "#ccc" : occ >= 90 ? "#E24B4A" : occ >= 70 ? "#639922" : "#EAB308";
+                    return (
+                      <div key={trip.id} onClick={() => setPage("trips")} style={{ borderBottom: i < o.activeTrips.length - 1 ? "1px solid #f6f6f6" : "none", padding:"10px 0", cursor:"pointer" }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+                          <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:"#6D28D9" }}>{trip.trip_number || "#" + trip.id}</span>
+                          <TripBadge status={trip.status} />
+                          <span style={{ marginLeft:"auto", fontSize:11, color:"#bbb" }}>{trip.departure_date || "—"}</span>
+                        </div>
+                        <div style={{ fontSize:11, color:"#999", marginBottom:6 }}>
+                          {[truckById[trip.truck_id]?.name, driverById[trip.driver_id]?.name && `🧑‍✈️ ${driverById[trip.driver_id].name}`,
+                            tr(`${c.count} stops`, `${c.count} stops`),
+                            tr(`${c.delivered} of ${c.deliveryCount} delivered`, `${c.delivered} de ${c.deliveryCount} entregados`)].filter(Boolean).join(" · ")}
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                          <span style={{ flex:1, height:8, background:"#f2f2f2", borderRadius:4 }}>
+                            <span style={{ display:"block", height:8, borderRadius:4, background:occColor, width:`${Math.min(100, occ ?? 0)}%` }} />
+                          </span>
+                          <span style={{ fontSize:11.5, fontWeight:700, whiteSpace:"nowrap" }}>
+                            {occ == null ? tr("No capacity set", "Sin capacidad") : `${occ}%`}
+                            <span style={{ color:"#bbb", fontWeight:500, fontSize:10 }}> {Math.round(c.loadedCf).toLocaleString()}{c.cap ? ` / ${Math.round(c.cap).toLocaleString()}` : ""} CF</span>
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* How close the FADDs are. */}
+                <div style={card}>
+                  <div style={cap}>FADD urgency<span style={right}>{tr(`${o.totals.jobs} jobs`, `${o.totals.jobs} jobs`)}</span></div>
+                  {o.fadd.map(b => (
+                    <div key={b.k} onClick={() => goJobs("all", b.k === "none" ? "nofadd" : b.k === "overdue" ? "overdue" : null)}
+                      style={{ display:"grid", gridTemplateColumns:"92px 1fr 30px", alignItems:"center", gap:9, marginBottom:8, cursor:"pointer" }}>
+                      <span style={{ fontSize:11.5, color:"#666" }}>{b.l}</span>
+                      <span style={{ ...track, background:"#f5f5f5" }}><span style={{ ...track, background:b.color, width:`${Math.max(2, b.count / o.maxFadd * 100)}%` }} /></span>
+                      <span style={{ textAlign:"right", fontSize:12.5, fontWeight:700, color: b.count ? b.pill.text : "#ddd" }}>{b.count}</span>
+                    </div>
+                  ))}
+                  {o.oldest && <div style={{ fontSize:11, color:"#A32D2D", marginTop:8, paddingTop:8, borderTop:"1px solid #f5f5f5" }}>{tr(`Oldest overdue: ${o.oldest.g.job_number || "(no #)"} · ${Math.abs(o.oldest.d)} days`, `Más atrasado: ${o.oldest.g.job_number || "(sin #)"} · ${Math.abs(o.oldest.d)} días`)}</div>}
+                </div>
+              </div>
+            </div>
+          </>)}
+
+          {/* ══ JOBS ══ */}
+          {dispatchView === "jobs" && (<>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", marginBottom:12 }}>
+              {[["all", "All", dispatchGroups.length], ...STATUS_FLOW.filter(v => v !== "delivered").concat(["on_hold"]).map(v => [v, statusMeta(v).l, dispatchGroups.filter(g => (g.status || "scheduled") === v).length])].map(([k, l, n]) => (
+                <button key={k} onClick={() => setDispatchStatus(k)}
+                  style={{ border:`1px solid ${dispatchStatus === k ? "#111" : "#e5e5e5"}`, background: dispatchStatus === k ? "#111" : "#fff", color: dispatchStatus === k ? "#fff" : "#888",
+                    borderRadius:20, padding:"4px 11px", fontSize:12, cursor:"pointer", display:"inline-flex", gap:5, alignItems:"center" }}>
+                  {l}<span style={{ fontWeight:700, opacity:0.65 }}>{n}</span>
+                </button>
+              ))}
+              <span style={{ width:1, height:18, background:"#eee", margin:"0 4px" }} />
+              {[["no_driver_today", "No driver today"], ["no_trip", "No trip"], ["nofadd", "No FADD"], ["no_delivery", "No delivery date"], ["no_sticker", "No sticker"], ["overdue", "FADD overdue"]].map(([k, l]) => {
+                const on = dispatchIssue === k;
+                return (
+                  <button key={k} onClick={() => setDispatchIssue(on ? null : k)}
+                    style={{ border:`1px solid ${on ? "#B91C1C" : "#e5e5e5"}`, background: on ? "#B91C1C" : "#fff", color: on ? "#fff" : "#B91C1C",
+                      borderRadius:20, padding:"4px 11px", fontSize:12, cursor:"pointer", display:"inline-flex", gap:5, alignItems:"center" }}>
+                    ⚠ {l}<span style={{ fontWeight:700, opacity:0.65 }}>{countIssue(k)}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search by job #, client, broker, city, driver…"
+                style={{ ...inp, flex:1, minWidth:180 }} />
+              <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} style={{ ...inp, minWidth:150 }}>
+                <option value="">All drivers</option>
+                {drivers.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+
+            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5, minWidth:1040 }}>
+                  <thead>
+                    <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                      {["Job", "Status", "FADD", "Pickup", "Delivery", "Driver · Trip", "Storage", "Balance", ""].map((h, i) => (
+                        <th key={i} style={{ padding:"9px 12px", textAlign: h === "Balance" ? "right" : "left", fontWeight:700, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dispatchRows.length === 0 ? (
+                      <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>No jobs to dispatch in this filter.</td></tr>
+                    ) : dispatchRows.map(g => {
+                      const storeLabel = storeLabelOf(g);
+                      const mapHref = routeUrl(g);
+                      const ns = nextStatus(g);
+                      const gTrip = g.trip_id ? tripById[g.trip_id] : null;
+                      const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
+                        ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalOutstanding, jobOutstanding, tripSequenceByTrip[gTrip.id]); })()
+                        : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
+                      const pkFrom = g.pickup_date_from || g.pickup_date;
+                      const drv = jobDriverNames(g);
+                      const bal = numv(g.pickup_balance) + numv(g.delivery_balance);
+                      const outstanding = paymentsMissing ? 0 : jobOutstanding(g, g.key);
+                      const delivered = g.status === "delivered" || g.parts?.some(p => p.date_out);
+                      return (
+                        <tr key={g.key} onClick={() => setJobDetailKey(g.key)} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top", cursor:"pointer" }}>
+                          <td style={{ padding:"10px 12px", minWidth:210 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:7, flexWrap:"wrap" }}>
+                              <RouteTitle g={g} size={13.5} />
+                              <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:"#888" }}>#{g.job_number || "(no #)"}</span>
+                            </div>
+                            <div style={{ fontSize:12, color:"#888", marginTop:2 }}>
+                              <b style={{ color:"#111" }}>{g.customer || "—"}</b>{brokerName(g.broker_id) ? ` · 🏢 ${brokerName(g.broker_id)}` : ""}
+                            </div>
+                            <div style={{ display:"flex", gap:4, marginTop:4, flexWrap:"wrap" }}>
+                              {g.job_type && g.job_type !== "full" && <TypeBadge type={g.job_type} />}
+                              {jobKeysWithExtras.has(g.key) && <span title="Has extras recorded" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>}
+                              {outstanding > 0 && (delivered
+                                ? <span title={tr(`Delivered, not collected · ${money(outstanding)}`, `Entregado, sin cobrar · ${money(outstanding)}`)} style={{ fontSize:9.5, fontWeight:700, color:"#B91C1C", background:"#FEE2E2", borderRadius:10, padding:"1px 6px" }}>Not collected</span>
+                                : <span title={tr(`Outstanding balance · ${money(outstanding)}`, `Saldo pendiente · ${money(outstanding)}`)} style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Outstanding</span>)}
+                            </div>
+                          </td>
+                          <td style={{ padding:"10px 12px" }}><StatusBadge status={g.status} /></td>
+                          <td style={{ padding:"10px 12px" }} onClick={e => e.stopPropagation()}><FaddCell group={g} onSet={setJobFadd} /></td>
+                          <td style={{ padding:"10px 12px", minWidth:120 }}>
+                            <div style={{ fontWeight:600, color: pkFrom ? "#111" : "#B91C1C" }}>{pkFrom ? (g.pickup_date_to && g.pickup_date_to !== pkFrom ? `${pkFrom} → ${g.pickup_date_to}` : (pkFrom === td ? tr("Today", "Hoy") : pkFrom)) : tr("No date", "Sin fecha")}</div>
+                            <div style={{ color:"#aaa", fontSize:11, marginTop:2 }}>{[g.pickup_city, g.pickup_state].filter(Boolean).join(", ") || "—"}</div>
+                          </td>
+                          <td style={{ padding:"10px 12px", minWidth:120 }}>
+                            <div style={{ fontWeight:600, color: g.delivery_date ? "#111" : "#B91C1C" }}>{g.delivery_date ? (g.delivery_date === td ? tr("Today", "Hoy") : g.delivery_date) : tr("Not scheduled", "Sin agendar")}</div>
+                            <div style={{ color:"#aaa", fontSize:11, marginTop:2 }}>{[g.delivery_city, g.delivery_state].filter(Boolean).join(", ") || "—"}</div>
+                          </td>
+                          <td style={{ padding:"10px 12px", minWidth:120 }}>
+                            <div style={{ fontWeight:600, color: drv ? "#111" : "#B91C1C" }}>{drv || tr("No driver", "Sin driver")}</div>
+                            <div style={{ fontSize:11, marginTop:2 }}>
+                              {gTrip
+                                ? <button onClick={e => { e.stopPropagation(); setPage("trips"); }} style={{ fontFamily:"monospace", fontSize:11, fontWeight:700, color:"#6D28D9", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>🛣️ {gTrip.trip_number || "#" + gTrip.id}</button>
+                                : <span style={{ color:"#B91C1C", fontWeight:700 }}>{tr("No trip", "Sin trip")}</span>}
+                            </div>
+                          </td>
+                          <td style={{ padding:"10px 12px", fontSize:12, color:"#555", minWidth:120 }}>
+                            {storeLabel || <span style={{ color:"#ccc" }}>—</span>}
+                            <div style={{ color:"#aaa", fontSize:11, marginTop:2 }}>
+                              {tr(`${Math.round(cfOf(g)).toLocaleString()} CF`, `${Math.round(cfOf(g)).toLocaleString()} CF`)}
+                              {g.sticker_color ? ` · ${g.sticker_color}` : <span style={{ color:"#B91C1C", fontWeight:700 }}> · {tr("no sticker", "sin sticker")}</span>}
+                            </div>
+                          </td>
+                          <td style={{ padding:"10px 12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                            <div style={{ fontWeight:700, fontVariantNumeric:"tabular-nums", color: bal > 0 ? "#1A8A4E" : "#ccc" }}>{money(bal) || "$0"}</div>
+                            <div style={{ fontSize:10.5, color:"#bbb", marginTop:2 }}>{[numv(g.pickup_balance) > 0 ? `pk ${money(g.pickup_balance)}` : "", numv(g.delivery_balance) > 0 ? `dl ${money(g.delivery_balance)}` : ""].filter(Boolean).join(" · ")}</div>
+                          </td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }} onClick={e => e.stopPropagation()}>
+                            <div style={{ display:"flex", gap:5, alignItems:"center" }}>
+                              {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
+                              {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" title="Open route" style={{ fontSize:14, textDecoration:"none" }}>🗺️</a>}
+                              <a href={waHref} target="_blank" rel="noreferrer" title="WhatsApp" style={{ fontSize:14, textDecoration:"none" }}>💬</a>
+                              <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ddd", fontSize:13, padding:0 }}>🗑</button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{tr(`${dispatchRows.length} job(s) · sorted by FADD, most urgent first · click a row to open the job`, `${dispatchRows.length} job(s) · ordenados por FADD, el más urgente primero · hacé clic en una fila para abrir el job`)}</div>
+            </div>
+          </>)}
+
+          {/* ══ CALENDAR: pickups and deliveries on one grid ══ */}
+          {dispatchView === "calendar" && (() => {
+            const range = calView === "week" ? weekDays(calAnchor) : null;
+            const grid = calView === "month" ? monthGrid(calAnchor) : null;
+            const anchorD = new Date(calAnchor + "T00:00:00");
+            const title = calView === "week"
+              ? (() => { const w = weekDays(calAnchor); return `${w[0]} → ${w[6]}`; })()
+              : `${t(MONTHS_EN[anchorD.getMonth()])} ${anchorD.getFullYear()}`;
+            const step = calView === "week" ? 7 : 30;
+            const showPk = calMode !== "delivery", showDl = calMode !== "pickup";
+            // A day's events: pickups first, then deliveries, each tagged with its side.
+            const eventsOn = (ds) => [
+              ...(showPk ? (pickupEvents[ds] || []).map(g => ({ g, kind:"pickup" })) : []),
+              ...(showDl ? (deliveryEvents[ds] || []).map(g => ({ g, kind:"delivery" })) : []),
+            ];
+            const CalEvent = ({ g, kind }) => {
+              const cs = calStatusOf(g);
+              const bad = !jobDriverNames(g) || !g.trip_id;
+              // The left bar always says pickup-or-delivery; the fill says what is wrong.
+              const bar = kind === "pickup" ? "#378ADD" : "#639922";
+              const c = cs !== "active" ? calEventColor(g)
+                : bad ? { bg:"#FCEBEB", text:"#A32D2D" }
+                : kind === "pickup" ? { bg:"#E6F1FB", text:"#185FA5" } : { bg:"#EAF3DE", text:"#3B6D11" };
+              return (
+                <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
+                  style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
+                  <div style={{ fontWeight:800, letterSpacing:"0.02em", whiteSpace:"nowrap" }}>{(g.pickup_state || "?").toUpperCase()} → {(g.delivery_state || "?").toUpperCase()}</div>
+                  <div style={{ opacity:0.85 }}>
+                    <span style={{ fontFamily:"monospace", fontWeight:700 }}>#{g.job_number || "—"}</span>
+                    {g.job_type === "broker_delivery" ? " · Broker" : ""}
+                    {jobDriverNames(g) ? ` · ${jobDriverNames(g).split(" ")[0]}` : tr(" · no driver", " · sin driver")}
+                    {!g.trip_id ? tr(" · no trip", " · sin trip") : ""}
                   </div>
+                </div>
+              );
+            };
+            return (
+              <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) 300px", gap:14, alignItems:"start" }}>
+                <div style={{ minWidth:0 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+                    <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, -step))} style={{ padding:"5px 11px", fontSize:12 }}>←</Btn>
+                    <Btn onClick={() => setCalAnchor(today())} style={{ padding:"5px 11px", fontSize:12 }}>Today</Btn>
+                    <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, step))} style={{ padding:"5px 11px", fontSize:12 }}>→</Btn>
+                    <strong style={{ fontSize:14.5, marginLeft:6 }}>{title}</strong>
+                    <span style={{ flex:1 }} />
+                    <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+                      {[["pickup", "Pickups"], ["delivery", "Deliveries"], ["both", "Both"]].map(([v, l]) => (
+                        <button key={v} onClick={() => setCalMode(v)} style={{ fontSize:12.5, padding:"5px 12px", borderRadius:7, cursor:"pointer", border:"none", background: calMode === v ? "#fff" : "none", color: calMode === v ? "#111" : "#888", fontWeight: calMode === v ? 600 : 400, boxShadow: calMode === v ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
+                      ))}
+                    </div>
+                    <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
+                      {[["week", "Week"], ["month", "Month"]].map(([v, l]) => (
+                        <button key={v} onClick={() => setCalView(v)} style={{ fontSize:12.5, padding:"5px 12px", borderRadius:7, cursor:"pointer", border:"none", background: calView === v ? "#fff" : "none", color: calView === v ? "#111" : "#888", fontWeight: calView === v ? 600 : 400, boxShadow: calView === v ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={{ display:"flex", gap:12, marginBottom:10, flexWrap:"wrap", fontSize:11, color:"#666", alignItems:"center" }}>
+                    {[["#378ADD", "Pickup"], ["#639922", "Delivery"], ["#E24B4A", "No driver or trip"], ["#FACC15", "On hold / Redispatch"], ["#7C3AED", "Long haul"]].map(([c, l]) => (
+                      <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
+                    ))}
+                    <span style={{ marginLeft:"auto", color:"#bbb" }}>Click a day to add · click an event to open the job</span>
+                  </div>
+
+                  {calView === "week" ? (
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(7,minmax(0,1fr))", gap:6 }}>
+                      {range.map(ds => {
+                        const d = new Date(ds + "T00:00:00");
+                        const evs = eventsOn(ds);
+                        const isToday = ds === td;
+                        return (
+                          <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday ? "#378ADD" : "#efefef"}`, borderRadius:10, minHeight:170, display:"flex", flexDirection:"column", minWidth:0 }}>
+                            <div onClick={() => setCalDayMenu(ds)} title="Add to this day" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                              <span style={{ fontSize:11, fontWeight:700 }}>{t(DOW_EN[d.getDay()])} {d.getDate()}</span>
+                              <span style={{ color:"#bbb", fontSize:11 }}>{evs.length || "+"}</span>
+                            </div>
+                            <div style={{ padding:6, flex:1, minWidth:0 }}>{evs.map(({ g, kind }) => <CalEvent key={g.key + kind} g={g} kind={kind} />)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:10, overflow:"hidden" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+                        {DOW_EN.map(d => <div key={d} style={{ padding:"8px 6px", textAlign:"center", fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", borderBottom:"1px solid #efefef" }}>{t(d)}</div>)}
+                      </div>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,minmax(0,1fr))" }}>
+                        {grid.map(({ date, inMonth }) => {
+                          const d = new Date(date + "T00:00:00");
+                          const evs = eventsOn(date);
+                          const isToday = date === td;
+                          return (
+                            <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth ? "#fff" : "#fafafa", opacity: inMonth ? 1 : 0.6, minWidth:0 }}>
+                              <div onClick={() => setCalDayMenu(date)} title="Add to this day" style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday ? "#185FA5" : "#666", marginBottom:3 }}>{d.getDate()}</div>
+                              {evs.slice(0, 3).map(({ g, kind }) => <CalEvent key={g.key + kind} g={g} kind={kind} />)}
+                              {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>{tr(`+${evs.length - 3} more`, `+${evs.length - 3} más`)}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Deliveries waiting for a date: pick one and it lands on the grid. */}
+                <div style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:11, overflow:"hidden" }}>
+                  <div style={{ padding:"9px 12px", background:"#FFF9EE", display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:12.5, fontWeight:700, color:"#854F0B" }}>📋 To schedule</span>
+                    <span style={{ fontSize:11, color:"#B58B3D" }}>{deliveryCandidates.length}</span>
+                    {deliveryToSchedule > 0 && <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, background:"#E24B4A", color:"#fff", borderRadius:10, padding:"1px 7px" }}>{tr(`${deliveryToSchedule} with FADD ≤ 7 days`, `${deliveryToSchedule} con FADD ≤ 7 días`)}</span>}
+                  </div>
+                  {deliveryCandidates.length === 0 ? (
+                    <div style={{ padding:"12px", fontSize:12, color:"#bbb" }}>Everything in storage has a delivery date.</div>
+                  ) : deliveryCandidates.slice(0, 12).map(c => (
+                    <ScheduleDeliveryRow key={c.key} cand={c} compact
+                      onOpen={setJobDetailKey}
+                      onSchedule={(cand, date) => { setJobDelivery(cand.ids, date); showToast(tr(`Delivery of ${cand.job_number || "job"} scheduled for ${date}`, `Entrega de ${cand.job_number || "job"} agendada para ${date}`).replace(/\s+/g, " ").trim()); }} />
+                  ))}
+                  {deliveryCandidates.length > 12 && (
+                    <div style={{ padding:"8px 12px", fontSize:11.5, color:"#999" }}>
+                      {tr(`+${deliveryCandidates.length - 12} more`, `+${deliveryCandidates.length - 12} más`)} — <button onClick={() => openDcalAddExisting("")} style={{ border:"none", background:"none", color:"#185FA5", cursor:"pointer", padding:0, fontSize:11.5, textDecoration:"underline" }}>search them</button>
+                    </div>
+                  )}
+                  <div style={{ padding:"8px 12px", borderTop:"1px solid #f6f6f6", fontSize:10.5, color:"#c0c0c0" }}>In storage or picked up, with no delivery date. Sorted by FADD.</div>
                 </div>
               </div>
             );
           })()}
-
-          {dispatchFilter !== "overview" && (<>
-          <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-                <thead>
-                  <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Status","Job #","Type","Broker","Rep","Client","FADD","Pickup","Delivery","CF","Sticker","Driver","Trip","Bal. pickup","Bal. delivery","Storage","Actions"].map((h, i) => (
-                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {dispatchGroups.length === 0 ? (
-                    <tr><td colSpan={17} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>No jobs to dispatch in this filter.</td></tr>
-                  ) : dispatchGroups.map(g => {
-                    const stores = [...new Set(g.parts.map(p => p.warehouse ? `Warehouse ${p.warehouse}` : [p.storage?.brand, p.storage?.unit && "U"+p.storage.unit, p.storage?.state].filter(Boolean).join(" ")).filter(Boolean))];
-                    const storeLabel = stores.join(" · ");
-                    const mapHref = routeUrl(g);
-                    const ns = nextStatus(g);
-                    const gTrip = g.trip_id ? tripById[g.trip_id] : null;
-                    const waHref = (gTrip && TRIP_ACTIVE(gTrip.status))
-                      ? (() => { const tc = tripCalc(gTrip); return tripManifestLink(gTrip, truckById[gTrip.truck_id]?.name, driverById[gTrip.driver_id]?.name, tc.jobsIn, tc.loadedCf, tc.occPct, tc.totalOutstanding, jobOutstanding, tripSequenceByTrip[gTrip.id]); })()
-                      : waLink(g, storeLabel, brokerName(g.broker_id), jobGroupLink(g));
-                    const pickupAddr = [g.pickup_address, [g.pickup_city, g.pickup_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
-                    const deliveryAddr = [g.delivery_address, [g.delivery_city, g.delivery_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
-                    return (
-                    <tr key={g.key} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
-                      <td style={{ padding:"12px" }}><StatusBadge status={g.status} /></td>
-                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                        <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
-                          {!g.sticker_color && <span title="Sticker unassigned" style={{ cursor:"help" }}>⚠️</span>}
-                          <button onClick={() => setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontSize:12, fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.job_number || "(view)"}</button>
-                          {g.job_type === "broker_delivery" && (g.status === "delivered" || g.parts?.some(p => p.date_out)) && numv(g.bol_collected) < numv(g.bol_balance) && numv(g.bol_balance) > 0 && (
-                            <span title="BOL collection pending" style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Collection pending</span>
-                          )}
-                          {jobKeysWithExtras.has(g.key) && (
-                            <span title="Has extras recorded" style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:10, padding:"1px 6px" }}>Extras</span>
-                          )}
-                          {!paymentsMissing && (() => {
-                            const outstanding = jobOutstanding(g, g.key);
-                            if (outstanding <= 0) return null;
-                            const delivered = g.status === "delivered" || g.parts?.some(p => p.date_out);
-                            return delivered
-                              ? <span title={`Delivered, not collected · $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#B91C1C", background:"#FEE2E2", borderRadius:10, padding:"1px 6px" }}>Not collected</span>
-                              : <span title={`Outstanding balance · $${Math.round(outstanding).toLocaleString()}`} style={{ fontSize:9.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:10, padding:"1px 6px" }}>Outstanding</span>;
-                          })()}
-                        </span>
-                      </td>
-                      <td style={{ padding:"12px" }}><TypeBadge type={g.job_type} /></td>
-                      <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>{brokerName(g.broker_id) || "—"}</td>
-                      <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>{g.rep || "—"}</td>
-                      <td style={{ padding:"12px" }}>{g.customer||"—"}</td>
-                      <td style={{ padding:"12px" }}><FaddCell group={g} onSet={setJobFadd} /></td>
-                      <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
-                        <div style={{ fontWeight:600 }}>{(() => { const f = g.pickup_date_from || g.pickup_date; if (!f) return "—"; const t = g.pickup_date_to; return t && t !== f ? `${f} → ${t}` : f; })()}</div>
-                        {pickupAddr && <div style={{ color:"#888", marginTop:2 }}>{pickupAddr}</div>}
-                      </td>
-                      <td style={{ padding:"12px", fontSize:12, minWidth:130 }}>
-                        <div style={{ fontWeight:600 }}>{g.delivery_date || "—"}</div>
-                        {deliveryAddr && <div style={{ color:"#888", marginTop:2 }}>{deliveryAddr}</div>}
-                      </td>
-                      <td style={{ padding:"12px" }}>{g.volume||"—"}</td>
-                      <td style={{ padding:"12px" }}>
-                        <Sticker color={g.sticker_color} />
-                        {g.lot_number && <div style={{ fontFamily:"monospace", fontSize:11, color:"#888", marginTop:2 }}>{g.lot_number}</div>}
-                      </td>
-                      <td style={{ padding:"12px" }}>{jobDriverNames(g)||"—"}</td>
-                      <td style={{ padding:"12px", fontSize:12, whiteSpace:"nowrap" }}>
-                        {gTrip
-                          ? <button onClick={() => setPage("trips")} style={{ fontFamily:"monospace", fontSize:11.5, fontWeight:600, color:"#6D28D9", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{gTrip.trip_number || ("#"+gTrip.id)}</button>
-                          : <span style={{ color:"#bbb" }}>— Unassigned —</span>}
-                      </td>
-                      <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.pickup_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.pickup_balance) || "—"}</td>
-                      <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:600, color: money(g.delivery_balance) ? "#1A8A4E" : "#bbb" }}>{money(g.delivery_balance) || "—"}</td>
-                      <td style={{ padding:"12px", fontSize:12, color:"#555" }}>
-                        {stores.length ? stores.map((s, i) => <div key={i} style={{ marginBottom: i < stores.length-1 ? 3 : 0 }}>{s}</div>) : "—"}
-                      </td>
-                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                        <div style={{ display:"flex", flexDirection:"column", gap:5, alignItems:"flex-start" }}>
-                          {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" style={{ color:"#185FA5", textDecoration:"none", fontSize:12 }}>🗺️ Route</a>}
-                          <a href={waHref} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none", fontSize:12 }}>💬 WhatsApp</a>
-                          {ns && <Btn onClick={() => advanceStatus(g)} style={{ padding:"4px 9px", fontSize:11 }}>→ {statusMeta(ns).l}</Btn>}
-                          <button onClick={() => deleteJob(g)} title="Delete job" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:14, padding:0, alignSelf:"flex-start" }}>🗑 Delete</button>
-                        </div>
-                      </td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{dispatchGroups.length} job(s)</div>
-          </div>
-          </>)}
         </>
-      )}
-
-      {/* ───────────────────────── CALENDARIO ───────────────────────── */}
-      {page === "calendario" && (() => {
-        const range = calView === "week" ? weekDays(calAnchor) : null;
-        const grid = calView === "month" ? monthGrid(calAnchor) : null;
-        const anchorD = new Date(calAnchor + "T00:00:00");
-        const title = calView === "week"
-          ? (() => { const w = weekDays(calAnchor); return `${w[0]} → ${w[6]}`; })()
-          : `${MONTHS_ES[anchorD.getMonth()]} ${anchorD.getFullYear()}`;
-        const step = calView === "week" ? 7 : 30;
-        const Event = ({ g }) => {
-          const c = calEventColor(g);
-          const route = [g.pickup_state, g.delivery_state].filter(Boolean).join(" to ");
-          const drv = jobDriverNames(g);
-          return (
-            <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
-              style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${c.bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
-              <div style={{ fontWeight:700, fontFamily:"monospace" }}>{g.job_number || "(job)"}</div>
-              {route && <div>{route}</div>}
-              {drv && <div style={{ opacity:0.85 }}>🧑‍✈️ {drv}</div>}
-            </div>
-          );
-        };
-        return (
-          <>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
-              <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, -step))}>←</Btn>
-              <Btn onClick={() => setCalAnchor(today())}>Today</Btn>
-              <Btn onClick={() => setCalAnchor(shiftDate(calAnchor, step))}>→</Btn>
-              <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
-              <span style={{ flex:1 }} />
-              <Btn onClick={() => openCalAddExisting("")}>➕ Add existing job</Btn>
-              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
-                {[["week","Week"],["month","Month"]].map(([v,l]) => (
-                  <button key={v} onClick={() => setCalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: calView===v?"#fff":"none", color: calView===v?"#111":"#888", fontWeight: calView===v?600:400, boxShadow: calView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap", fontSize:11, color:"#666" }}>
-              {[["#639922","Active"],["#FACC15","On hold / Redispatch"],["#E24B4A","Cancelled"],["#7C3AED","Long haul"],["#378ADD","Delivered"]].map(([c,l]) => (
-                <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
-              ))}
-            </div>
-
-            {calView === "week" ? (
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
-                {range.map(ds => {
-                  const d = new Date(ds + "T00:00:00");
-                  const evs = pickupEvents[ds] || [];
-                  const isToday = ds === today();
-                  return (
-                    <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday?"#378ADD":"#efefef"}`, borderRadius:10, minHeight:160, display:"flex", flexDirection:"column" }}>
-                      <div onClick={() => setCalDayMenu(ds)} title="Add to this day" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                        <span style={{ fontSize:11, fontWeight:600 }}>{DOW_ES[d.getDay()]} {d.getDate()}</span>
-                        <span style={{ color:"#bbb", fontSize:13 }}>+</span>
-                      </div>
-                      <div style={{ padding:7, flex:1 }}>{evs.map(g => <Event key={g.key} g={g} />)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:10, overflow:"hidden" }}>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
-                  {DOW_ES.map(d => <div key={d} style={{ padding:"8px 6px", textAlign:"center", fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", borderBottom:"1px solid #efefef" }}>{d}</div>)}
-                </div>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
-                  {grid.map(({ date, inMonth }) => {
-                    const d = new Date(date + "T00:00:00");
-                    const evs = pickupEvents[date] || [];
-                    const isToday = date === today();
-                    return (
-                      <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth?"#fff":"#fafafa", opacity: inMonth?1:0.6 }}>
-                        <div onClick={() => setCalDayMenu(date)} title="Add to this day" style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
-                        {evs.slice(0,3).map(g => <Event key={g.key} g={g} />)}
-                        {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} more</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </>
         );
       })()}
 
-      {/* Calendar: "what do you want to add to this day?" menu */}
+      {/* Calendar: "what do you want to add to this day?" menu — pickup or delivery. */}
       {calDayMenu && (
         <Modal title={`Add to ${calDayMenu}`} onClose={() => setCalDayMenu(null)}
           footer={<><Btn onClick={() => setCalDayMenu(null)}>Cancel</Btn></>}>
-          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-            <Btn primary onClick={() => { const d = calDayMenu; setCalDayMenu(null); openAddJobDate(d); }} style={{ justifyContent:"center", padding:"12px" }}>🆕 Create new job on this day</Btn>
-            <Btn onClick={() => openCalAddExisting(calDayMenu)} style={{ justifyContent:"center", padding:"12px" }}>📋 Add an existing job to this day</Btn>
+          <div style={{ display:"grid", gap:14 }}>
+            <div>
+              <SectionLabel>Pickup</SectionLabel>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                <Btn primary onClick={() => { const d = calDayMenu; setCalDayMenu(null); openAddJobDate(d); }} style={{ justifyContent:"center", padding:"11px" }}>🆕 Create a job picking up this day</Btn>
+                <Btn onClick={() => openCalAddExisting(calDayMenu)} style={{ justifyContent:"center", padding:"11px" }}>📋 Add an existing job's pickup</Btn>
+              </div>
+            </div>
+            <div>
+              <SectionLabel>Delivery</SectionLabel>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                <Btn primary onClick={() => { const d = calDayMenu; setCalDayMenu(null); openAddJobDeliveryDate(d); }} style={{ justifyContent:"center", padding:"11px" }}>🆕 Create a job delivering this day</Btn>
+                <Btn onClick={() => { const d = calDayMenu; setCalDayMenu(null); openDcalAddExisting(d); }} style={{ justifyContent:"center", padding:"11px" }}>📋 Schedule an existing job's delivery</Btn>
+              </div>
+            </div>
           </div>
         </Modal>
       )}
@@ -9797,129 +9918,6 @@ export default function App() {
           </Modal>
         );
       })()}
-
-      {/* ───────────────────── DELIVERY CALENDAR ───────────────────── */}
-      {page === "calendario_entregas" && (() => {
-        const range = dcalView === "week" ? weekDays(dcalAnchor) : null;
-        const grid = dcalView === "month" ? monthGrid(dcalAnchor) : null;
-        const anchorD = new Date(dcalAnchor + "T00:00:00");
-        const title = dcalView === "week"
-          ? (() => { const w = weekDays(dcalAnchor); return `${w[0]} → ${w[6]}`; })()
-          : `${MONTHS_ES[anchorD.getMonth()]} ${anchorD.getFullYear()}`;
-        const step = dcalView === "week" ? 7 : 30;
-        const Event = ({ g }) => {
-          const c = calEventColor(g);
-          const route = [g.pickup_state, g.delivery_state].filter(Boolean).join(" to ");
-          const drv = jobDriverNames(g);
-          return (
-            <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
-              style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${c.bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
-              <div style={{ fontWeight:700, fontFamily:"monospace" }}>{g.job_number || "(job)"}{g.job_type === "broker_delivery" && <span style={{ fontWeight:600, opacity:0.8 }}> · Broker</span>}</div>
-              {route && <div>{route}</div>}
-              {drv && <div style={{ opacity:0.85 }}>🧑‍✈️ {drv}</div>}
-            </div>
-          );
-        };
-        return (
-          <>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
-              <Btn onClick={() => setDcalAnchor(shiftDate(dcalAnchor, -step))}>←</Btn>
-              <Btn onClick={() => setDcalAnchor(today())}>Today</Btn>
-              <Btn onClick={() => setDcalAnchor(shiftDate(dcalAnchor, step))}>→</Btn>
-              <strong style={{ fontSize:15, marginLeft:6 }}>{title}</strong>
-              <span style={{ flex:1 }} />
-              <Btn onClick={() => openDcalAddExisting("")}>➕ Add existing job</Btn>
-              <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3 }}>
-                {[["week","Week"],["month","Month"]].map(([v,l]) => (
-                  <button key={v} onClick={() => setDcalView(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: dcalView===v?"#fff":"none", color: dcalView===v?"#111":"#888", fontWeight: dcalView===v?600:400, boxShadow: dcalView===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display:"flex", gap:10, marginBottom:12, flexWrap:"wrap", fontSize:11, color:"#666" }}>
-              {[["#639922","Active"],["#FACC15","On hold / Redispatch"],["#E24B4A","Cancelled"],["#7C3AED","Long haul"],["#378ADD","Delivered"]].map(([c,l]) => (
-                <span key={l} style={{ display:"inline-flex", alignItems:"center", gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:c }} />{l}</span>
-              ))}
-            </div>
-
-            {/* Jobs picked up & waiting (or broker deliveries) with no delivery date yet. */}
-            {deliveryCandidates.length > 0 && (
-              <div style={{ background:"#fff", border:"1px solid #F4DDB0", borderRadius:10, marginBottom:14, overflow:"hidden" }}>
-                <div onClick={() => setDcalPanelOpen(o => !o)} style={{ padding:"10px 14px", cursor:"pointer", display:"flex", alignItems:"center", gap:8, background:"#FFF9EE" }}>
-                  <span style={{ fontSize:13, fontWeight:700, color:"#854F0B" }}>📋 Deliveries to schedule ({deliveryCandidates.length})</span>
-                  {deliveryToSchedule > 0 && <span style={{ fontSize:10.5, fontWeight:700, background:"#E24B4A", color:"#fff", borderRadius:10, padding:"1px 7px" }}>{deliveryToSchedule} with FADD ≤ 7 days</span>}
-                  <span style={{ flex:1 }} />
-                  <span style={{ color:"#B58B3D", fontSize:12 }}>{dcalPanelOpen ? "▾ hide" : "▸ show"}</span>
-                </div>
-                {dcalPanelOpen && (
-                  <>
-                    {deliveryCandidates.slice(0, 10).map(c => (
-                      <ScheduleDeliveryRow key={c.key} cand={c}
-                        onOpen={setJobDetailKey}
-                        onSchedule={(cand, date) => { setJobDelivery(cand.ids, date); showToast(tr(`Delivery of ${cand.job_number || "job"} scheduled for ${date}`, `Entrega de ${cand.job_number || "job"} agendada para ${date}`).replace(/\s+/g, " ").trim()); }} />
-                    ))}
-                    {deliveryCandidates.length > 10 && (
-                      <div style={{ padding:"8px 14px", fontSize:11.5, color:"#999" }}>
-                        +{deliveryCandidates.length - 10} more — <button onClick={() => openDcalAddExisting("")} style={{ border:"none", background:"none", color:"#185FA5", cursor:"pointer", padding:0, fontSize:11.5, textDecoration:"underline" }}>search with “Add existing job”</button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {dcalView === "week" ? (
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
-                {range.map(ds => {
-                  const d = new Date(ds + "T00:00:00");
-                  const evs = deliveryEvents[ds] || [];
-                  const isToday = ds === today();
-                  return (
-                    <div key={ds} style={{ background:"#fff", border:`1px solid ${isToday?"#378ADD":"#efefef"}`, borderRadius:10, minHeight:160, display:"flex", flexDirection:"column" }}>
-                      <div onClick={() => setDcalDayMenu(ds)} title="Add to this day" style={{ padding:"7px 9px", borderBottom:"1px solid #f3f3f3", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                        <span style={{ fontSize:11, fontWeight:600 }}>{DOW_ES[d.getDay()]} {d.getDate()}</span>
-                        <span style={{ color:"#bbb", fontSize:13 }}>+</span>
-                      </div>
-                      <div style={{ padding:7, flex:1 }}>{evs.map(g => <Event key={g.key} g={g} />)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:10, overflow:"hidden" }}>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
-                  {DOW_ES.map(d => <div key={d} style={{ padding:"8px 6px", textAlign:"center", fontSize:10, fontWeight:700, color:"#aaa", textTransform:"uppercase", borderBottom:"1px solid #efefef" }}>{d}</div>)}
-                </div>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
-                  {grid.map(({ date, inMonth }) => {
-                    const d = new Date(date + "T00:00:00");
-                    const evs = deliveryEvents[date] || [];
-                    const isToday = date === today();
-                    return (
-                      <div key={date} style={{ borderRight:"1px solid #f4f4f4", borderBottom:"1px solid #f4f4f4", minHeight:96, padding:5, background: inMonth?"#fff":"#fafafa", opacity: inMonth?1:0.6 }}>
-                        <div onClick={() => setDcalDayMenu(date)} title="Add to this day" style={{ cursor:"pointer", fontSize:10.5, fontWeight:600, color: isToday?"#185FA5":"#666", marginBottom:3 }}>{d.getDate()}</div>
-                        {evs.slice(0,3).map(g => <Event key={g.key} g={g} />)}
-                        {evs.length > 3 && <div style={{ fontSize:9, color:"#999" }}>+{evs.length-3} more</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </>
-        );
-      })()}
-
-      {/* Delivery calendar: "what do you want to add to this day?" menu */}
-      {dcalDayMenu && (
-        <Modal title={`Add to ${dcalDayMenu}`} onClose={() => setDcalDayMenu(null)}
-          footer={<><Btn onClick={() => setDcalDayMenu(null)}>Cancel</Btn></>}>
-          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-            <Btn primary onClick={() => { const d = dcalDayMenu; setDcalDayMenu(null); openAddJobDeliveryDate(d); }} style={{ justifyContent:"center", padding:"12px" }}>🆕 Create new job on this day</Btn>
-            <Btn onClick={() => openDcalAddExisting(dcalDayMenu)} style={{ justifyContent:"center", padding:"12px" }}>📋 Add an existing job to this day</Btn>
-          </div>
-        </Modal>
-      )}
 
       {/* Delivery calendar: search existing jobs (no delivery date yet) and put them on a date */}
       {dcalAddExisting && (() => {
