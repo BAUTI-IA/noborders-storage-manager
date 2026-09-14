@@ -13863,6 +13863,10 @@ export default function App() {
             <Field label="Verizon driver number" full>
               <input style={inp} value={driverForm.verizon_driver_id} onChange={e => setDriverForm(f => ({...f, verizon_driver_id:e.target.value}))} placeholder="As it appears in the Reveal logbook" />
             </Field>
+            <div style={{ gridColumn:"1/-1", fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #f0e0c0",
+              borderRadius:8, padding:"7px 10px", marginTop:2, lineHeight:1.5 }}>
+              Driver hours from Verizon are not connected yet — the Logbook API is missing. This field is stored but nothing reads it until then, so filling it in changes nothing today.
+            </div>
             <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="e.g. 25 (optional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
