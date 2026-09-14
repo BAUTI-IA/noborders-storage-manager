@@ -7,6 +7,7 @@
 // does not know who was driving instead of guessing.
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { tr, t } from "./i18n.js";
+import { dbFailed } from "./db.js";
 import { paidDays, reconcile, reportTotals } from "./reportsData.js";
 
 // The history table, exported so App.jsx's auto-migration and the banner below
@@ -61,6 +62,7 @@ export function ReportsSection({ supabase, session }) {
   const [backfill, setBackfill] = useState(null);   // null | {busy} | result | {error}
   const [sqlCopied, setSqlCopied] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
+  const [chain, setChain] = useState(null);   // null | { step, detail } | summary
 
   const days = RANGES.find(r => r.key === rangeKey)?.days ?? 7;
   const from = isoDaysAgo(days);
@@ -88,6 +90,109 @@ export function ReportsSection({ supabase, session }) {
   }, [supabase, session, from, days]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Everything Verizon needs, in one run: link what can be linked by name, pull
+  // the month of history, then the ELD hours. Each of these was its own screen;
+  // stringing them together is the difference between a setup somebody finishes
+  // and one they abandon halfway.
+  const auth = useCallback(() => ({ Authorization: "Bearer " + session.access_token }), [session]);
+
+  const nameKey = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  // Only exact, unambiguous matches. A wrong id does not fail loudly — it reads
+  // somebody else's data in silence, which is worse than an empty field.
+  const matchByName = (rows, roster, currentKey) => {
+    const byName = new Map();
+    for (const r of roster) {
+      if (!r.name && !r.number) continue;
+      for (const candidate of [r.name, r.number]) {
+        if (!candidate) continue;
+        const k = nameKey(candidate);
+        if (!k) continue;
+        byName.set(k, byName.has(k) && byName.get(k) !== r ? null : r);
+      }
+    }
+    const known = new Set(roster.map(r => r.number));
+    const taken = new Set(rows.map(r => r[currentKey]).filter(Boolean).map(String)
+      .filter(v => known.has(v)));
+    const out = [];
+    for (const row of rows) {
+      const current = row[currentKey] ? String(row[currentKey]) : null;
+      // Already pointing somewhere real: leave it alone.
+      if (current && known.has(current)) continue;
+      const hit = byName.get(nameKey(row.name));
+      if (!hit || taken.has(hit.number) || hit.number === current) continue;
+      taken.add(hit.number);
+      out.push({ row, number: hit.number, wasWrong: Boolean(current) });
+    }
+    return out;
+  };
+
+  const runChain = useCallback(async () => {
+    const step = (s, detail) => setChain({ step: s, detail });
+    const summary = { trucksLinked: 0, trucksFixed: 0, driversLinked: 0, positions: 0, hourDays: 0, errors: [] };
+    try {
+      step(tr("Reading Verizon's rosters", "Leyendo los listados de Verizon"));
+      const [vRes, dRes] = await Promise.all([
+        fetch("/api/geocode?fleet=vehicles", { headers: auth() }).then(r => r.json()).catch(() => ({})),
+        fetch("/api/geocode?fleet=drivers", { headers: auth() }).then(r => r.json()).catch(() => ({})),
+      ]);
+      const vehicles = vRes?.vehicles || [];
+      const roster = dRes?.drivers || [];
+      if (!vehicles.length) summary.errors.push({ truck: "Verizon", error: tr("no vehicles came back", "no volvió ningún vehículo") });
+
+      step(tr("Linking trucks", "Vinculando trucks"));
+      for (const m of matchByName(trucks, vehicles, "verizon_vehicle_id")) {
+        if (dbFailed(await supabase.from("trucks").update({ verizon_vehicle_id: m.number }).eq("id", m.row.id), "trucks", { quiet: true })) {
+          summary.errors.push({ truck: m.row.name, error: tr("could not save the link", "no se pudo guardar la vinculación") });
+          continue;
+        }
+        if (m.wasWrong) summary.trucksFixed++; else summary.trucksLinked++;
+      }
+
+      step(tr("Linking drivers", "Vinculando drivers"));
+      for (const m of matchByName(drivers, roster, "verizon_driver_id")) {
+        if (dbFailed(await supabase.from("drivers").update({ verizon_driver_id: m.number }).eq("id", m.row.id), "drivers", { quiet: true })) {
+          summary.errors.push({ truck: m.row.name, error: tr("could not save the link", "no se pudo guardar la vinculación") });
+          continue;
+        }
+        summary.driversLinked++;
+      }
+
+      // Re-read: the backfill runs per truck and needs the links just written.
+      const { data: fresh } = await supabase.from("trucks").select("*");
+      const linked = (fresh || []).filter(tk => !tk.deleted_at && tk.verizon_vehicle_id);
+      for (let i = 0; i < linked.length; i++) {
+        step(tr("Bringing 30 days of history", "Trayendo 30 días de historial"), `${i + 1}/${linked.length} · ${linked[i].name}`);
+        try {
+          const r = await fetch(`/api/geocode?fleet=backfill&days=30&truck=${linked[i].id}`, { headers: auth() });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d?.error || "failed");
+          summary.positions += d.positions || 0;
+          if (d.errors?.length) summary.errors.push(...d.errors);
+        } catch (e) {
+          summary.errors.push({ truck: linked[i].name, error: e?.message || "failed" });
+        }
+      }
+
+      step(tr("Reading ELD hours", "Leyendo horas del ELD"));
+      try {
+        const r = await fetch("/api/geocode?fleet=hours&from=" + isoDaysAgo(30), { headers: auth() });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || "failed");
+        summary.hourDays = d.days || 0;
+        if (d.errors?.length) summary.errors.push(...d.errors.map(e => ({ truck: e.driver, error: e.error })));
+      } catch (e) {
+        summary.errors.push({ truck: "ELD", error: e?.message || "failed" });
+      }
+
+      setChain(summary);
+      await load();
+    } catch (e) {
+      setChain({ ...summary, fatal: e?.message || "failed" });
+    }
+  }, [auth, trucks, drivers, supabase, load]);
 
   // Reveal keeps 30 days of location history, so the reports do not have to wait
   // weeks for truck_pings to fill up on its own.
@@ -145,8 +250,13 @@ export function ReportsSection({ supabase, session }) {
               background: rangeKey === r.key ? "#111" : "#f5f5f5", color: rangeKey === r.key ? "#fff" : "#888",
               fontWeight: rangeKey === r.key ? 600 : 400 }}>{r.label}</button>
         ))}
+        <button onClick={runChain} disabled={Boolean(chain?.step) || backfill?.busy}
+          style={{ marginLeft: "auto", background: "#111", border: "none", color: "#fff", fontWeight: 600,
+            borderRadius: 7, padding: "6px 14px", cursor: chain?.step ? "default" : "pointer", fontSize: 12 }}>
+          {chain?.step ? t("Setting up...") : t("Connect everything with Verizon")}
+        </button>
         <button onClick={runBackfill} disabled={backfill?.busy}
-          style={{ marginLeft: "auto", fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: backfill?.busy ? "default" : "pointer", textDecoration: "underline" }}>
+          style={{ fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: backfill?.busy ? "default" : "pointer", textDecoration: "underline" }}>
           {backfill?.busy
             ? tr(`Bringing history… ${backfill.done}/${backfill.total} · ${backfill.current}`,
                  `Trayendo historial… ${backfill.done}/${backfill.total} · ${backfill.current}`)
@@ -157,6 +267,36 @@ export function ReportsSection({ supabase, session }) {
         </button>
       </div>
 
+      {chain?.step && (
+        <div style={{ ...card, marginBottom: 12, fontSize: 12.5, background: "#EEF2F6", borderColor: "#d9e2ec", color: "#42536B" }}>
+          <strong>{chain.step}</strong>{chain.detail ? ` · ${chain.detail}` : ""}
+        </div>
+      )}
+      {chain && !chain.step && (
+        <div style={{ ...card, marginBottom: 12, fontSize: 12.5,
+          background: chain.fatal ? "#FCEBEB" : chain.errors?.length ? "#FAEEDA" : "#EAF3DE",
+          borderColor: chain.fatal ? "#f0c9c9" : chain.errors?.length ? "#EF9F27" : "#d5e6bd",
+          color: chain.fatal ? "#A32D2D" : chain.errors?.length ? "#854F0B" : "#3B6D11", lineHeight: 1.6 }}>
+          {chain.fatal
+            ? tr(`Setup stopped: ${chain.fatal}`, `El setup se cortó: ${chain.fatal}`)
+            : tr(`Linked ${chain.trucksLinked} truck(s), fixed ${chain.trucksFixed} wrongly linked, linked ${chain.driversLinked} driver(s). Brought ${chain.positions.toLocaleString()} position(s) and ${chain.hourDays} day(s) of ELD hours.`,
+                 `Vinculé ${chain.trucksLinked} truck(s), corregí ${chain.trucksFixed} mal vinculados, vinculé ${chain.driversLinked} driver(s). Traje ${chain.positions.toLocaleString()} posición(es) y ${chain.hourDays} día(s) de horas del ELD.`)}
+          {chain.errors?.length > 0 && (
+            <div style={{ fontSize: 11.5, marginTop: 6 }}>
+              {tr(`${chain.errors.length} thing(s) Verizon would not answer for.`, `${chain.errors.length} cosa(s) que Verizon no contestó.`)}
+              <button onClick={() => setShowErrors(v => !v)}
+                style={{ marginLeft: 6, fontSize: 11, color: "#185FA5", background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
+                {showErrors ? t("Hide detail") : t("Show detail")}
+              </button>
+              {showErrors && (
+                <div style={{ fontSize: 10.5, color: "#999", marginTop: 4, fontFamily: "monospace", maxHeight: 160, overflowY: "auto", lineHeight: 1.5 }}>
+                  {chain.errors.map((e, i) => <div key={i}>{e.truck}: {e.error}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       {backfill && !backfill.busy && (() => {
         // Named once: a partial result is not a success, and a green box saying
         // so while listing six failures is how a screen stops being believed.
