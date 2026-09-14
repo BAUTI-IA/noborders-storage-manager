@@ -406,7 +406,7 @@ function DocCell({ label, doc, onAdd, onEdit, onFile }) {
   );
 }
 
-const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", real_cf:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", bol_collected:"", bol_payment_method:"", bol_payment_notes:"", bol_collected_date:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
+const EMPTY_JOB = { storage_ids:[], warehouses:[], driver_ids:[], job_number:"", customer:"", driver:"", date_in:"", fadd:"", volume:"", real_cf:"", lot_number:"", sticker_color:"", job_type:"full", status:"scheduled", calendar_status:"active", broker_id:"", rep:"", client_phone:"", client_email:"", pickup_balance:"", delivery_balance:"", price_per_cf:"", fuel_surcharge_pct:"", estimate:"", deposit:"", carrier_notes:"", extra_stops:"", pickup_date:"", pickup_date_from:"", pickup_date_to:"", pickup_address:"", pickup_city:"", pickup_state:"", pickup_zip:"", delivery_date:"", delivery_address:"", delivery_city:"", delivery_state:"", delivery_zip:"", billing_active:false, client_monthly_rate:"", first_month_free:false, billing_start_date:"", closing_sheet_id:"", carrier_rate_per_cf:"", bol_balance:"", pads_received:"", pads_returned:"", broker_job_share_pct:"", notes:"" };
 
 // A job physically occupies its storage/warehouse only while it's actually there:
 // not delivered (date_out) and not already loaded onto a truck (out_for_delivery,
@@ -6481,7 +6481,7 @@ export default function App() {
       pickup_date: jd.pickup_date || "", pickup_date_from: jd.pickup_date_from || jd.pickup_date || "", pickup_date_to: jd.pickup_date_to || "", pickup_address: jd.pickup_address || "", pickup_city: jd.pickup_city || "", pickup_state: jd.pickup_state || "", pickup_zip: jd.pickup_zip || "",
       delivery_date: jd.delivery_date || "", delivery_address: jd.delivery_address || "", delivery_city: jd.delivery_city || "", delivery_state: jd.delivery_state || "", delivery_zip: jd.delivery_zip || "",
       billing_active: !!jd.billing_active, client_monthly_rate: jd.client_monthly_rate ?? "", first_month_free: !!jd.first_month_free, billing_start_date: jd.billing_start_date || "",
-      closing_sheet_id: jd.closing_sheet_id ?? "", carrier_rate_per_cf: jd.carrier_rate_per_cf ?? "", bol_balance: jd.bol_balance ?? "", bol_collected: jd.bol_collected ?? "", bol_payment_method: jd.bol_payment_method || "", bol_payment_notes: jd.bol_payment_notes || "", bol_collected_date: jd.bol_collected_date || "", pads_received: jd.pads_received ?? "", pads_returned: jd.pads_returned ?? "",
+      closing_sheet_id: jd.closing_sheet_id ?? "", carrier_rate_per_cf: jd.carrier_rate_per_cf ?? "", bol_balance: jd.bol_balance ?? "", pads_received: jd.pads_received ?? "", pads_returned: jd.pads_returned ?? "",
       broker_job_share_pct: jd.broker_job_share_pct ?? "", broker_job_share_enabled: numv(jd.broker_job_share_pct) > 0,
       notes: jd.notes || "",
     });
@@ -6569,25 +6569,17 @@ export default function App() {
       fields.closing_sheet_id = csId;
       fields.carrier_rate_per_cf = jobForm.carrier_rate_per_cf !== "" ? Number(jobForm.carrier_rate_per_cf) : null;
       fields.bol_balance = jobForm.bol_balance !== "" ? Number(jobForm.bol_balance) : null;
-      fields.bol_collected = jobForm.bol_collected !== "" ? Number(jobForm.bol_collected) : 0;
-      fields.bol_payment_method = jobForm.bol_payment_method || null;
-      fields.bol_payment_notes = jobForm.bol_payment_notes || null;
-      fields.bol_collected_date = jobForm.bol_collected_date || null;
       fields.pads_received = jobForm.pads_received !== "" ? parseInt(jobForm.pads_received) : 0;
       fields.pads_returned = jobForm.pads_returned !== "" ? parseInt(jobForm.pads_returned) : 0;
     }
     if (!brokerShareMissing) {
       const bjPct = jobForm.broker_job_share_pct !== "" ? Number(jobForm.broker_job_share_pct) : 0;
-      const collected = numv(jobForm.bol_collected) || (numv(jobForm.pickup_balance) + numv(jobForm.delivery_balance));
+      const saveRows = editingJobKey ? jobs.filter(j => jobKey(j) === editingJobKey) : [];
+      const saveRep = saveRows.length ? (saveRows.find(r => !r.split_group) || saveRows[0]) : null;
+      const collected = (saveRep ? (paymentsMissing ? numv(saveRep.bol_collected) : jobCollectedFor(saveRep, editingJobKey)) : 0) || (numv(jobForm.pickup_balance) + numv(jobForm.delivery_balance));
       fields.broker_job_share_pct = bjPct;
       fields.broker_job_share_amount = collected * bjPct / 100;
     }
-
-    // A collection typed straight into the job form (BOL collected) must reach
-    // the Payments module too, else Dispatching and Payments disagree on what's
-    // still owed. Capture the pre-save value to sync only on a real change.
-    const prevRows = editingJobKey ? jobs.filter(j => jobKey(j) === editingJobKey) : [];
-    const prevBolCollected = numv((prevRows.find(p => !p.split_group) || prevRows[0])?.bol_collected);
 
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
     const jobEntries = [];
@@ -6653,11 +6645,6 @@ export default function App() {
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
       undoMgr.record(`Job ${jobForm.job_number || ""} creado`.replace(/\s+/g, " ").trim(), (data || []).map(r => undoMgr.createEntry("storage_jobs", r)));
-    }
-    // Mirror the form's collected amount into Payments (concept "job"), same as
-    // the "Record payment" flow, so both modules stay connected.
-    if (!settlementsMissing && !paymentsMissing && editingJobKey && numv(jobForm.bol_collected) > 0 && numv(jobForm.bol_collected) !== prevBolCollected) {
-      await upsertJobPayment(editingJobKey, { amount: jobForm.bol_collected, method: jobForm.bol_payment_method, date: jobForm.bol_collected_date });
     }
     setShowAddJob(false);
     loadJobs();
@@ -8626,29 +8613,6 @@ export default function App() {
     }
     if (editingPayId) { await saveEditedPayment({ ...f, ...payLineFields(lines[0]) }); return; }
     await saveNewPayment(f, lines);
-  }
-  // Mirror a job's recorded collection into the payments table (concept = "job"),
-  // creating or updating a single canonical row. Called from the Settlement flow.
-  async function upsertJobPayment(jobKeyStr, { amount, method, date }) {
-    const rows = jobs.filter(j => jobKey(j) === jobKeyStr);
-    if (!rows.length || numv(amount) <= 0) return;
-    const repId = Math.min(...rows.map(r => r.id));
-    const f = rows[0];
-    const driverName = (Array.isArray(f.driver_ids) && f.driver_ids.length ? driverById[f.driver_ids[0]]?.name : "") || f.driver || "";
-    const digital = isDigitalMethod(method);
-    const banked = digital;
-    const d = date || today();
-    const payload = {
-      job_id: repId, amount: numv(amount), concept: "job", method: method || null,
-      payment_date: d, received: true, received_date: d,
-      banked, banked_date: banked ? d : null,
-      cash_with_whom: (isPhysical(method) && !banked) ? (driverName || null) : null,
-    };
-    const rowIds = new Set(rows.map(r => r.id));
-    const existing = payments.find(p => p.concept === "job" && rowIds.has(p.job_id));
-    if (existing) { if (dbFailed(await supabase.from("payments").update(payload).eq("id", existing.id), "payments")) return; }
-    else { if (dbFailed(await supabase.from("payments").insert([payload]), "payments")) return; }
-    loadPayments();
   }
   async function deletePaymentRow(p) {
     if (!window.confirm("Delete this payment?")) return;
@@ -13397,6 +13361,10 @@ export default function App() {
             );
 
             const padsMissingForm = Math.max(0, (jobForm.pads_received !== "" ? parseInt(jobForm.pads_received) : 0) - (jobForm.pads_returned !== "" ? parseInt(jobForm.pads_returned) : 0));
+            // The job being edited (its money row) and what Payments says was collected on it.
+            const editRows = editingJobKey ? jobs.filter(j => jobKey(j) === editingJobKey) : [];
+            const editRep = editRows.length ? (editRows.find(r => !r.split_group) || editRows.reduce((a, b) => (b.id < a.id ? b : a))) : null;
+            const formCollected = editRep ? (paymentsMissing ? numv(editRep.bol_collected) : jobCollectedFor(editRep, editingJobKey)) : 0;
             const pads = (
               <FormSection title="Pads">
                 <div style={fgrid}>
@@ -13410,7 +13378,7 @@ export default function App() {
             // Broker keeps a % of the collected job balance (reduces net job revenue).
             const brokerJobShareBlock = !brokerShareMissing && (() => {
               const on = numv(jobForm.broker_job_share_pct) > 0 || jobForm.broker_job_share_enabled;
-              const collected = numv(jobForm.bol_collected) || (numv(jobForm.pickup_balance) + numv(jobForm.delivery_balance));
+              const collected = formCollected || (numv(jobForm.pickup_balance) + numv(jobForm.delivery_balance));
               const shareAmt = collected * numv(jobForm.broker_job_share_pct) / 100;
               return (
                 <div style={{ gridColumn:"1/-1", padding:"10px 12px", background:"#FFF8F0", border:"1px solid #FAE6CF", borderRadius:9, marginTop:4 }}>
@@ -13458,9 +13426,18 @@ export default function App() {
                       </select>
                     </Field>
                   )}
-                  <Field label="BOL collected ($)"><input style={inp} type="number" value={jobForm.bol_collected} onChange={u("bol_collected")} placeholder="0" /></Field>
-                  <Field label="Payment method"><PaymentMethodSelect style={inp} value={jobForm.bol_payment_method} onChange={v => setJobForm(f => ({...f, bol_payment_method: v || ""}))} /></Field>
-                  <Field label="Collection date"><input style={inp} type="date" value={jobForm.bol_collected_date} onChange={u("bol_collected_date")} /></Field>
+                  {/* Collected is what the Payments module says, never typed here:
+                       a collection is recorded through the same 4-step flow as everywhere. */}
+                  <Field label="BOL collected" full>
+                    <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", ...inp, background:"#fafafa" }}>
+                      <span style={{ fontWeight:700, color:"#1A8A4E" }}>{money(formCollected) || "$0"}</span>
+                      {editRep && (() => { const cs = collectionStatus({ ...editRep, bol_collected: formCollected }); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
+                      <span style={{ flex:1 }} />
+                      {editRep
+                        ? <Btn disabled={paymentsMissing} onClick={() => { const drv = (Array.isArray(editRep.driver_ids) && editRep.driver_ids.length ? driverById[editRep.driver_ids[0]]?.name : "") || ""; const owed = jobOutstanding(editRep, editingJobKey); openAddPayment({ job_id: editRep.id, received_by: drv, cash_with_whom: drv, amount: owed > 0 ? String(Math.round(owed)) : "" }); }} style={{ padding:"4px 10px", fontSize:11.5 }}>Record payment</Btn>
+                        : <span style={{ fontSize:11, color:"#999" }}>Save the job first, then record what was collected.</span>}
+                    </div>
+                  </Field>
                   {brokerJobShareBlock}
                 </div>
               </FormSection>

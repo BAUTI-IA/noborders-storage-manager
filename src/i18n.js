@@ -2064,6 +2064,7 @@ export const I18N_ES = {
   "Account last 4 (optional)": "Últimos 4 de la cuenta (opcional)",
   "Buyer": "Comprador",
   "change": "cambiar",
+  "Save the job first, then record what was collected.": "Guardá el job primero y después registrá lo cobrado.",
 };
 const i18nCache = new WeakMap();   // text node -> original English value
 export function i18nApply() {
