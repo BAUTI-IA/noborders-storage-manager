@@ -3677,8 +3677,7 @@ export default function App() {
   const [noteMentions, setNoteMentions] = useState([]);   // profile ids alerted by the next note
   const [teamPeople, setTeamPeople] = useState([]);       // active teammates, for @mentions
   const [svcEditId, setSvcEditId] = useState(null);
-  const [jobPayLines, setJobPayLines] = useState(null);   // null = composer closed
-  useEffect(() => { setJobTab("overview"); setNoteDraft(""); setNoteMentions([]); setSvcEditId(null); setJobPayLines(null); }, [jobDetailKey]);
+  useEffect(() => { setJobTab("overview"); setNoteDraft(""); setNoteMentions([]); setSvcEditId(null); }, [jobDetailKey]);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -8029,35 +8028,6 @@ export default function App() {
     await loadExtras();
     await logServiceNote(repId, `${extraTypeLabel(type)} ${tr("added", "agregado")}`);
   }
-  // Save the payment lines composed at the bottom of Job total: one payments row
-  // per line, so a collection split across methods — or between the balance and
-  // an extra — stays split in the ledger instead of collapsing into one number.
-  async function saveJobPayLines(repId) {
-    const f = jobPayLines; if (!f) return;
-    const lines = f.lines.filter(l => numv(l.amount) > 0);
-    if (!lines.length) { window.alert(tr("Add at least one line with an amount.", "Agregá al menos una línea con monto.")); return; }
-    const entries = [];
-    for (const l of lines) {
-      const sc = splitConcept(l.concept);
-      const payload = {
-        ...payPayload({
-          job_id: repId, payment_date: f.date, amount: l.amount, method: l.method,
-          received: true, received_date: f.date, received_by: userEmail,
-          banked: isDigitalMethod(l.method), banked_date: f.date, notes: f.notes,
-        }),
-        concept: sc.pay,
-      };
-      if (sc.extra) payload.extra_type = sc.extra;
-      const { data, error } = await supabase.from("payments").insert([payload]).select("*").single();
-      if (error) { window.alert(error.message); return; }
-      if (data) entries.push(undoMgr.createEntry("payments", data));
-    }
-    if (entries.length) undoMgr.record("Pago registrado", entries);
-    setJobPayLines(null);
-    await loadPayments();
-    showToast("Payment saved");
-  }
-
   // ── Extras & commissions handlers ──
   // Build a job_extras payload. For Extra CF the amount = total charged (CF + fuel)
   // and commissions are computed on the chosen base (with/without fuel surcharge).
@@ -8298,7 +8268,7 @@ export default function App() {
     // The prefill (job drawer, "+ Payment" on a job) describes one line: method, amount, who holds it.
     base.pay_lines = [newPayLine(base.method || "cash", base.amount, { cash_with_whom: base.cash_with_whom || "", money: isDigitalMethod(base.method) ? "deposited" : (base.received === false ? "pending" : "received") })];
     setPayForm(base);
-    setPayStep(1);
+    setPayStep(base.job_id ? 2 : 1);   // the job is known: go straight to "how did the client pay?"
     setPayJobSearch(""); setShowPayModal(true);
   }
   function openEditPayment(p) {
@@ -12190,6 +12160,7 @@ export default function App() {
       {jobDetail && (() => {
         const P = jobDetail.parts;
         const repId = Math.min(...P.map(p => p.id));
+        const drawerDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
         const jkey = jobDetail.key;
         const partIdSet = new Set(P.map(p => p.id));
         const jobCf = P.reduce((sum, p) => sum + effCf(p), 0);
@@ -12528,45 +12499,13 @@ export default function App() {
                 <div style={kvS}><span style={kS}>Collected</span><span style={{ fontWeight:600, color:"#1A8A4E" }}>−${Math.round(collected + svcCollected).toLocaleString()}</span></div>
                 <div style={{ ...kvS, borderTop:"1px solid #f0d0d0", borderBottom:"none", paddingTop:8, marginTop:2 }}><span style={{ ...kS, color:"#111", fontWeight:700 }}>Outstanding</span><span style={{ fontSize:15, fontWeight:700, color: outstanding > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</span></div>
 
-                {/* ── Add payment: as many lines as methods used, so a split
-                     collection stays split in the ledger. ── */}
+                {/* ── Add payment: opens the 4-step flow with this job already
+                     picked, so cash + Zelle + checks land as one grouped payment
+                     applied to the balance and each extra. ── */}
                 {!paymentsMissing && (
                   <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
-                    {!jobPayLines ? (
-                      <Btn primary onClick={() => setJobPayLines({ date: today(), notes:"", lines:[{ concept:"job", method:"cash", amount: outstanding > 0 ? String(Math.round(outstanding)) : "" }] })}
-                        style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
-                    ) : (
-                      <div style={{ border:"1px solid #e2e2e2", borderRadius:10, padding:"11px 12px", background:"#fff" }}>
-                        <div style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:9 }}>Record payment</div>
-                        {jobPayLines.lines.map((l, i) => (
-                          <div key={i} style={{ display:"flex", gap:6, alignItems:"center", marginBottom:7 }}>
-                            <select value={l.concept} onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, concept: ev.target.value } : x) }))}
-                              style={{ ...inp, width:132, fontSize:12, padding:"6px 7px" }}>
-                              {SPLIT_CONCEPTS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-                            </select>
-                            <PaymentMethodSelect style={{ ...inp, width:138, fontSize:12, padding:"6px 7px" }} value={l.method}
-                              onChange={v => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, method: v || "" } : x) }))} />
-                            <input type="number" placeholder="0" value={l.amount}
-                              onChange={ev => setJobPayLines(f => ({ ...f, lines: f.lines.map((x, ix) => ix === i ? { ...x, amount: ev.target.value } : x) }))}
-                              style={{ ...inp, flex:1, minWidth:70, fontSize:12, padding:"6px 7px", fontWeight:600 }} />
-                            <button onClick={() => setJobPayLines(f => ({ ...f, lines: f.lines.filter((_, ix) => ix !== i) }))} title="Remove line"
-                              disabled={jobPayLines.lines.length === 1}
-                              style={{ border:"none", background:"none", cursor: jobPayLines.lines.length === 1 ? "default" : "pointer", color:"#ccc", fontSize:15, padding:0 }}>×</button>
-                          </div>
-                        ))}
-                        <button onClick={() => setJobPayLines(f => ({ ...f, lines: [...f.lines, { concept:"job", method:"cash", amount:"" }] }))}
-                          style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:8, padding:"5px 11px", fontSize:11.5, color:"#888", cursor:"pointer", marginBottom:9 }}>+ Another payment method</button>
-                        <div style={{ display:"flex", gap:6, marginBottom:9 }}>
-                          <input type="date" value={jobPayLines.date} onChange={ev => setJobPayLines(f => ({ ...f, date: ev.target.value }))} style={{ ...inp, width:150, fontSize:12, padding:"6px 7px" }} />
-                          <input value={jobPayLines.notes} onChange={ev => setJobPayLines(f => ({ ...f, notes: ev.target.value }))} placeholder="Payment notes" style={{ ...inp, flex:1, fontSize:12, padding:"6px 7px" }} />
-                        </div>
-                        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                          <Btn primary onClick={() => saveJobPayLines(repId)} style={{ padding:"6px 14px", fontSize:12 }}>Save payment</Btn>
-                          <Btn onClick={() => setJobPayLines(null)} style={{ padding:"6px 12px", fontSize:12 }}>Cancel</Btn>
-                          <span style={{ marginLeft:"auto", fontSize:12, color:"#666" }}>Total <b>${Math.round(jobPayLines.lines.reduce((s, l) => s + numv(l.amount), 0)).toLocaleString()}</b></span>
-                        </div>
-                      </div>
-                    )}
+                    <Btn primary onClick={() => openAddPayment({ job_id: repId, received_by: drawerDriverName, cash_with_whom: drawerDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })}
+                      style={{ padding:"7px 13px", fontSize:12 }}>+ Add payment</Btn>
                   </div>
                 )}
               </div>
@@ -12761,7 +12700,7 @@ export default function App() {
                   <span style={{ display:"inline-flex", alignItems:"center", gap:10 }}>
                     <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
                     {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
-                    <Btn onClick={() => setPayModal({ jobKey:jobDetail.key, amount: jobDetail.bol_collected ?? "", method: jobDetail.bol_payment_method || "", date: jobDetail.bol_collected_date || today(), notes:"", entries:[{ method:"cash", amount:"" }] })} style={{ padding:"3px 9px", fontSize:11 }}>Record payment</Btn>
+                    {!paymentsMissing && <Btn onClick={() => openAddPayment({ job_id: repId, received_by: drawerDriverName, cash_with_whom: drawerDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })} style={{ padding:"3px 9px", fontSize:11 }}>Record payment</Btn>}
                   </span>
                 </EditRow>
               </>); })()}
