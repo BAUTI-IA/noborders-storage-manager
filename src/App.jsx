@@ -3941,6 +3941,8 @@ export default function App() {
   const [fleetSync, setFleetSync] = useState({ busy:false, at:null, error:null });
   const [vzVehicles, setVzVehicles] = useState(null);      // Reveal roster | null
   const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
+  const [vzDrivers, setVzDrivers] = useState(null);       // Reveal driver roster | null
+  const [vzDriversErr, setVzDriversErr] = useState(null);
   const [hosMissing, setHosMissing] = useState(false);
   const [vzDiag, setVzDiag] = useState(null);       // null | "loading" | checks[]
   const [googleKey, setGoogleKey] = useState(null);
@@ -7269,6 +7271,18 @@ export default function App() {
       setVzDiag([{ key:"config", ok:false, detail: e?.message || "failed" }]);
     }
   }, [session]);
+
+  // Reveal's driver roster, so the logbook field is a list and not a typed-in
+  // number — the same mistake that put a VIN on BT003 would break the ELD here.
+  useEffect(() => {
+    if (!showDriverModal || !verizonOn || vzDrivers || !session?.access_token) return;
+    let alive = true;
+    fetch("/api/geocode?fleet=drivers", { headers: { Authorization: "Bearer " + session.access_token } })
+      .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
+      .then((d) => { if (alive) { setVzDrivers(d.drivers || []); setVzDriversErr(null); } })
+      .catch((e) => { if (alive) setVzDriversErr(e?.message || "failed"); });
+    return () => { alive = false; };
+  }, [showDriverModal, verizonOn, vzDrivers, session]);
 
   // Reveal's vehicle roster, pulled the first time a truck form is opened so the
   // Verizon field can offer the real list instead of asking somebody to copy
@@ -13898,11 +13912,18 @@ export default function App() {
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="e.g. T-12" /></Field>
             <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="e.g. 250" /></Field>
             <Field label="Verizon driver number" full>
-              <input style={inp} value={driverForm.verizon_driver_id} onChange={e => setDriverForm(f => ({...f, verizon_driver_id:e.target.value}))} placeholder="As it appears in the Reveal logbook" />
+              <VehiclePicker value={driverForm.verizon_driver_id} options={vzDrivers}
+                onChange={val => setDriverForm(f => ({...f, verizon_driver_id:val}))}
+                placeholder="As it appears in the Reveal logbook" />
             </Field>
-            <div style={{ gridColumn:"1/-1", fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #f0e0c0",
-              borderRadius:8, padding:"7px 10px", marginTop:2, lineHeight:1.5 }}>
-              Driver hours from Verizon are not connected yet — the Logbook API is missing. This field is stored but nothing reads it until then, so filling it in changes nothing today.
+            <div style={{ gridColumn:"1/-1", fontSize:11.5, color: vzDriversErr ? "#b91c1c" : "#999", marginTop:2, lineHeight:1.5 }}>
+              {!verizonOn
+                ? "Links this driver to Verizon's logbook so their real hours can be read."
+                : vzDriversErr ? t("Could not read the driver list from Verizon Connect.")
+                : !vzDrivers ? t("Reading the driver list from Verizon Connect...")
+                : vzDrivers.length === 0 ? t("Verizon Connect returned no drivers.")
+                : tr(`${vzDrivers.length} driver(s) in Verizon Connect — click the field to pick one.`,
+                     `${vzDrivers.length} driver(s) en Verizon Connect — hacé click en el campo para elegir.`)}
             </div>
             <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="e.g. 25 (optional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>

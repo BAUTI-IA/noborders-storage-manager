@@ -42,7 +42,7 @@ import { truckDays } from "../src/reportsData.js";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
   mapLocation, normalizeVehicles, resolvedPaths, applyGpsEvents, syncDriverHours,
-  diagnose, backfillHistory, SYNC_MIN_INTERVAL_MS,
+  diagnose, backfillHistory, fetchDriverRoster, normalizeDrivers, SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -160,6 +160,10 @@ async function fleet(req, res, action) {
       const to = iso(req.query?.to) || new Date().toISOString().slice(0, 10);
       const from = iso(req.query?.from) || new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
       res.status(200).json(await syncDriverHours({ from, to }));
+      return;
+    }
+    if (action === "drivers") {
+      res.status(200).json({ drivers: normalizeDrivers(await fetchDriverRoster()) });
       return;
     }
     if (action === "vehicles") {
