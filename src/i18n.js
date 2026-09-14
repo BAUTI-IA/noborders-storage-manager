@@ -154,6 +154,8 @@ export const I18N_ES = {
   "Last 30 days": "Últimos 30 días",
   "Last 7 days": "Últimos 7 días",
   "Last move": "Último movimiento",
+  "Link them": "Vincularlos",
+  "Linking...": "Vinculando...",
   "Links this driver to Verizon's logbook so their real hours can be read.": "Vincula este driver con el logbook de Verizon para poder leer sus horas reales.",
   "Links this truck to Verizon Connect so its position updates on the live map by itself. Leave it empty to keep setting the location by hand.": "Vincula este truck con Verizon Connect para que su posición se actualice sola en el live map. Dejalo vacío si querés seguir cargando la ubicación a mano.",
   "Live from Verizon Connect": "En vivo desde Verizon Connect",

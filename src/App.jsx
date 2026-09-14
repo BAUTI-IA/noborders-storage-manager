@@ -3943,6 +3943,7 @@ export default function App() {
   const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
   const [vzDrivers, setVzDrivers] = useState(null);       // Reveal driver roster | null
   const [vzDriversErr, setVzDriversErr] = useState(null);
+  const [vzAutoLink, setVzAutoLink] = useState(null);   // null | "busy" | summary
   const [hosMissing, setHosMissing] = useState(false);
   const [vzDiag, setVzDiag] = useState(null);       // null | "loading" | checks[]
   const [googleKey, setGoogleKey] = useState(null);
@@ -7275,14 +7276,57 @@ export default function App() {
   // Reveal's driver roster, so the logbook field is a list and not a typed-in
   // number — the same mistake that put a VIN on BT003 would break the ELD here.
   useEffect(() => {
-    if (!showDriverModal || !verizonOn || vzDrivers || !session?.access_token) return;
+    const wants = showDriverModal || page === "drivers";
+    if (!wants || !verizonOn || vzDrivers || !session?.access_token) return;
     let alive = true;
     fetch("/api/geocode?fleet=drivers", { headers: { Authorization: "Bearer " + session.access_token } })
       .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
       .then((d) => { if (alive) { setVzDrivers(d.drivers || []); setVzDriversErr(null); } })
       .catch((e) => { if (alive) setVzDriversErr(e?.message || "failed"); });
     return () => { alive = false; };
-  }, [showDriverModal, verizonOn, vzDrivers, session]);
+  }, [showDriverModal, page, verizonOn, vzDrivers, session]);
+
+  // Matching by name, because that is the only thing the two systems share. Only
+  // exact, unambiguous matches are linked: a wrong driver number does not fail
+  // loudly, it quietly reads somebody else's hours, so a near-miss is worse than
+  // leaving the field empty for a person to fill.
+  const vzNameKey = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  const vzDriverMatches = useMemo(() => {
+    if (!vzDrivers?.length) return [];
+    const byName = new Map();
+    for (const v of vzDrivers) {
+      if (!v.name) continue;
+      const k = vzNameKey(v.name);
+      // A name Verizon lists twice cannot identify anybody.
+      byName.set(k, byName.has(k) ? null : v);
+    }
+    const taken = new Set(driversList.map(d => d.verizon_driver_id).filter(Boolean).map(String));
+    const out = [];
+    for (const d of driversList) {
+      if (d.verizon_driver_id) continue;
+      const hit = byName.get(vzNameKey(d.name));
+      if (!hit || taken.has(hit.number)) continue;
+      out.push({ driver: d, vz: hit });
+    }
+    return out;
+  }, [driversList, vzDrivers]);
+
+  const runVzAutoLink = useCallback(async () => {
+    if (!vzDriverMatches.length) return;
+    setVzAutoLink("busy");
+    let linked = 0;
+    for (const m of vzDriverMatches) {
+      if (dbFailed(await supabase.from("drivers").update({ verizon_driver_id: m.vz.number }).eq("id", m.driver.id), "drivers")) {
+        setVzAutoLink(null);
+        return;
+      }
+      linked++;
+    }
+    setVzAutoLink({ linked });
+    loadDrivers();
+  }, [vzDriverMatches, loadDrivers]);
 
   // Reveal's vehicle roster, pulled the first time a truck form is opened so the
   // Verizon field can offer the real list instead of asking somebody to copy
@@ -9996,6 +10040,26 @@ export default function App() {
       )}
 
       {/* ───────────────────────── DRIVERS ───────────────────────── */}
+      {page === "drivers" && verizonOn && vzDriverMatches.length > 0 && (
+        <div style={{ background:"#EAF3DE", border:"1px solid #d5e6bd", borderRadius:12, padding:"11px 14px", marginBottom:12,
+          display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", fontSize:12.5, color:"#3B6D11" }}>
+          <span>
+            {tr(`${vzDriverMatches.length} driver(s) match a Verizon driver by name and can be linked in one go: `,
+                `${vzDriverMatches.length} driver(s) coinciden por nombre con un driver de Verizon y se pueden vincular de una: `)}
+            <strong>{vzDriverMatches.map(m => m.driver.name).join(", ")}</strong>
+          </span>
+          <button onClick={runVzAutoLink} disabled={vzAutoLink === "busy"}
+            style={{ marginLeft:"auto", background:"#3B6D11", border:"none", color:"#fff", fontWeight:600,
+              borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>
+            {vzAutoLink === "busy" ? t("Linking...") : t("Link them")}
+          </button>
+        </div>
+      )}
+      {page === "drivers" && vzAutoLink && vzAutoLink !== "busy" && (
+        <div style={{ background:"#EAF3DE", border:"1px solid #d5e6bd", borderRadius:12, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#3B6D11" }}>
+          {tr(`${vzAutoLink.linked} driver(s) linked to Verizon.`, `${vzAutoLink.linked} driver(s) vinculados a Verizon.`)}
+        </div>
+      )}
       {page === "drivers" && (
         <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
           <div style={{ overflowX:"auto" }}>
