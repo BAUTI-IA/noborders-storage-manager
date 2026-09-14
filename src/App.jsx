@@ -2567,10 +2567,22 @@ function VehiclePicker({ value, onChange, options, placeholder, takenBy = {}, se
 // Status picker for a job. The flow's next step arrives pre-selected as a
 // suggestion and every status stays pickable: the app proposes an order, the
 // dispatch manager owns it. Read-only users see the suggestion, greyed out.
-function StatusSelect({ current, suggested, canEdit, onApply }) {
+function StatusSelect({ current, suggested, canEdit, onApply, compact }) {
   const [val, setVal] = useState(suggested || current);
   useEffect(() => { setVal(suggested || current); }, [suggested, current]);
   const label = (v) => `${statusIcon(v)} ${statusMeta(v).l}${v === current ? tr(" · current", " · actual") : v === suggested ? tr(" · suggested", " · sugerido") : ""}`;
+  // Compact: just the select + Apply, for the one-line rail in the job drawer.
+  if (compact) return (
+    <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }} title={canEdit ? "Dispatch manager" : "Read only"}>
+      <select value={val} disabled={!canEdit} onChange={e => setVal(e.target.value)}
+        style={{ ...inp, width:200, fontWeight:600, padding:"6px 8px", fontSize:12, cursor: canEdit ? "pointer" : "default", background: canEdit ? "#fff" : "#fafafa" }}>
+        {STATUS_FLOW.map(v => <option key={v} value={v}>{label(v)}</option>)}
+        <option disabled>──────────</option>
+        {OFF_FLOW_STATUSES.map(v => <option key={v} value={v}>{label(v)}</option>)}
+      </select>
+      <Btn primary disabled={!canEdit || val === current} onClick={() => onApply(val)} style={{ padding:"6px 12px", fontSize:12 }}>Apply</Btn>
+    </div>
+  );
   return (
     <div style={{ width:330, flexShrink:0, background:"#fff", border:"1px solid #e6e6e6", borderRadius:10, padding:"9px 11px 8px" }}>
       <div style={{ fontSize:9.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", display:"flex", alignItems:"center", gap:6, marginBottom:7 }}>
@@ -2623,9 +2635,9 @@ function StatusRail({ group }) {
   );
 }
 
-function Btn({ onClick, primary, danger, disabled, children, style }) {
+function Btn({ onClick, primary, danger, disabled, children, style, title }) {
   return (
-    <button onClick={onClick} disabled={disabled} style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border: danger ? "1px solid #fca5a5" : "1px solid #e5e5e5", background: primary ? "#111" : danger ? "#fef2f2" : "#fff", color: primary ? "#fff" : danger ? "#b91c1c" : "#111", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, display:"inline-flex", alignItems:"center", gap:6, ...style }}>
+    <button onClick={onClick} disabled={disabled} title={title} style={{ fontSize:13, fontWeight:500, padding:"8px 16px", borderRadius:8, border: danger ? "1px solid #fca5a5" : "1px solid #e5e5e5", background: primary ? "#111" : danger ? "#fef2f2" : "#fff", color: primary ? "#fff" : danger ? "#b91c1c" : "#111", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, display:"inline-flex", alignItems:"center", gap:6, ...style }}>
       {children}
     </button>
   );
@@ -3822,7 +3834,9 @@ export default function App() {
   const [noteMentions, setNoteMentions] = useState([]);   // profile ids alerted by the next note
   const [teamPeople, setTeamPeople] = useState([]);       // active teammates, for @mentions
   const [svcEditId, setSvcEditId] = useState(null);
-  useEffect(() => { setJobTab("overview"); setNoteDraft(""); setNoteMentions([]); setSvcEditId(null); }, [jobDetailKey]);
+  const [jobMenuOpen, setJobMenuOpen] = useState(false);   // the ⋯ menu in the drawer header
+  const [actFilter, setActFilter] = useState("all");       // Activity tab: all | notes | events | claims
+  useEffect(() => { setJobTab("overview"); setNoteDraft(""); setNoteMentions([]); setSvcEditId(null); setJobMenuOpen(false); setActFilter("all"); }, [jobDetailKey]);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -12281,251 +12295,354 @@ export default function App() {
         const rightS = { marginLeft:"auto", fontWeight:500, letterSpacing:0, textTransform:"none", fontSize:11, color:"#bbb" };
         const kvS = { display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid #f6f6f6", fontSize:12.5 };
         const kS = { color:"#999", width:132, flexShrink:0 };
+        // ── Needs attention: what is actually wrong with THIS job. Shared by the
+        //    Overview chips, the tab dot and the header. Each flag knows which
+        //    tab holds the field that fixes it. ──
+        const flags = [];
+        if (faddDays !== null && faddDays < 0) flags.push({ ic:"⚠️", c:"#A32D2D", tab:"details", l: tr(`FADD ${Math.abs(faddDays)} days overdue`, `FADD vencido hace ${Math.abs(faddDays)} días`) });
+        if (!jobDetail.fadd) flags.push({ ic:"📅", c:"#C2410C", tab:"details", l: tr("No FADD set", "Sin FADD") });
+        if (!jobDetail.delivery_date) flags.push({ ic:"📦", c:"#C2410C", tab:"details", l: tr("No delivery date set", "Sin fecha de delivery") });
+        if (!jobDetail.trip_id) flags.push({ ic:"🛣️", c:"#92760B", tab:"details", l: tr("No trip assigned", "Sin trip asignado") });
+        if (!drvNames) flags.push({ ic:"🧑‍✈️", c:"#92760B", tab:"details", l: tr("No driver assigned", "Sin driver asignado") });
+        if (!jobDetail.sticker_color) flags.push({ ic:"🏷️", c:"#92760B", tab:"details", l: tr("Sticker unassigned", "Sticker sin asignar") });
+        if (padsMissingCount > 0) flags.push({ ic:"🧺", c:"#92760B", tab:"details", l: tr(`${padsMissingCount} pads missing`, `faltan ${padsMissingCount} pads`) });
+        if (jobClaimsCount > 0) flags.push({ ic:"🩹", c:"#A32D2D", tab:"activity", l: tr(`${jobClaimsCount} open claim(s)`, `${jobClaimsCount} claim(s) abierto(s)`) });
+
+        // ── Activity: dispatch notes, service entries, trip events, manual
+        //    events and claims in one feed, newest first. ──
+        const actItems = [];
+        if (!tripEventsMissing) for (const e of tripEvents) {
+          if (!partIdSet.has(e.job_id)) continue;
+          const m = TRIP_EVENT_META[e.event_type] || { l:e.event_type, icon:"•" };
+          actItems.push({ id:"t"+e.id, kind:"event", source:"trip", icon:m.icon, label:m.l, date:e.created_at, sort:(e.created_at || "").slice(0,10)+"|"+(e.created_at || ""), notes:e.notes, by:e.created_by, tripBadge: e.trip_id ? (tripById[e.trip_id]?.trip_number || "#"+e.trip_id) : null, storageBadge: e.storage_id ? (storageById[e.storage_id]?.brand || "storage") : null });
+        }
+        if (!jobEventsMissing) for (const e of jobEvents) {
+          if (!partIdSet.has(e.job_id)) continue;
+          const isNote = e.event_type === "note" || e.event_type === "service";
+          const m = jobEventMeta(e.event_type);
+          actItems.push({ id:"j"+e.id, kind: isNote ? "note" : "event", source:"manual", raw:e, auto: e.event_type === "service", icon:m.icon, label:m.l, date: isNote ? e.created_at : (e.event_date || e.created_at), sort:(isNote ? "" : e.event_date || (e.created_at || "").slice(0,10)) || (e.created_at || "").slice(0,10), sortTs: e.created_at || "", notes:e.notes, by:e.created_by, tripBadge: e.trip_ref || null, storageBadge: e.storage_label || (e.storage_id ? (storageById[e.storage_id]?.brand || "storage") : null) });
+        }
+        for (const it of actItems) if (it.source === "manual") it.sort = it.sort + "|" + it.sortTs;
+        actItems.sort((a, b) => b.sort.localeCompare(a.sort));
+        const jobClaims = (!claimsMissing && can("claims","view") && jobDetail.job_number) ? claims.filter(cl => normJobNumber(cl.job_number) === normJobNumber(jobDetail.job_number)) : [];
+        const actCount = actItems.length + jobClaims.length;
+
+        // ── Money in circulation: received but not yet in the bank. ──
+        const jobPays = paymentsMissing ? [] : (paymentsByJobKey[jkey] || []);
+        const circPays = jobPays.filter(p => moneyStatus(p) === "circulation");
+        const circTotal = circPays.reduce((s, p) => s + paymentNet(p), 0);
+        const circWith = [...new Set(circPays.map(p => p.cash_with_whom || p.received_by || "").filter(Boolean))];
+
+        const pkSt = (jobDetail.pickup_state || "").toUpperCase();
+        const dlSt = (jobDetail.delivery_state || "").toUpperCase();
+        const stTitle = { fontSize:24, fontWeight:800, letterSpacing:"0.02em", lineHeight:1 };
+        const menuDo = (fn) => () => { setJobMenuOpen(false); fn(); };
+        const menuItem = { display:"block", width:"100%", textAlign:"left", border:"none", background:"none", padding:"8px 14px", fontSize:13, cursor:"pointer", color:"#111", whiteSpace:"nowrap" };
+        const pkFrom = jobDetail.pickup_date_from || jobDetail.pickup_date || "";
+        const pkTo = jobDetail.pickup_date_to || "";
+        const onCal = !!pkFrom;
+        const chipS = (c) => ({ display:"inline-flex", alignItems:"center", gap:6, border:"1px solid #f0f0f0", background:"#fff", borderRadius:8, padding:"6px 11px", fontSize:12.5, fontWeight:600, color:c, cursor:"pointer" });
+        const dGroup = (title, rows) => (
+          <div style={{ minWidth:0 }}>
+            <div style={{ ...capS, marginBottom:2 }}>{title}</div>
+            {rows}
+          </div>
+        );
         const TABS = [
-          ["overview", "Overview", null],
-          ["money", "Money", svcs.length + (paymentsMissing ? 0 : (paymentsByJobKey[jkey] || []).length)],
-          ["storage", "Storage", P.length],
-          ["timeline", "Timeline", null],
-          ["fields", "All fields", null],
+          ["overview", "Overview"],
+          ["money", "Money"],
+          ["storage", "Storage"],
+          ["activity", "Activity"],
+          ["details", "Details"],
         ];
+        const noteRow = (n) => {
+          const who = (n.by || "").split("@")[0] || "—";
+          const initials = (who.split(/[.\-_\s]+/).filter(Boolean).map(x => x[0]).join("") || who).slice(0, 2).toUpperCase();
+          return (
+            <div key={n.id} style={{ display:"flex", alignItems:"flex-start", gap:9, padding:"7px 0", borderBottom:"1px solid #f7f7f7" }}>
+              <span style={{ fontSize:10.5, color:"#bbb", width:38, flexShrink:0, paddingTop:3, fontVariantNumeric:"tabular-nums" }}>{String(n.date || "").slice(11, 16) || "—"}</span>
+              <span style={{ width:22, height:22, borderRadius:"50%", background: n.auto ? "#EAF3DE" : "#EDE9FE", color: n.auto ? "#3B6D11" : "#6D28D9", fontSize:9, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{initials}</span>
+              <div style={{ flex:1, fontSize:12.5, lineHeight:1.45, minWidth:0 }}>
+                <b style={{ fontSize:12 }}>{who}</b>
+                {n.auto && <span style={{ fontSize:9, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:9, padding:"1px 6px", marginLeft:4 }}>service</span>}
+                <div style={{ color:"#444", marginTop:2 }}>
+                  {(() => {
+                    if (!mentionRe) return n.notes;
+                    return String(n.notes || "").split(mentionRe).map((part, pi) => pi % 2
+                      ? <b key={pi} style={{ color:"#6D28D9" }}>@{part}</b>
+                      : <span key={pi}>{part}</span>);
+                  })()}
+                </div>
+              </div>
+              {isMgr && !n.auto && (
+                <button onClick={() => deleteJobEvent(n.raw)} title="Delete note" style={{ border:"none", background:"none", cursor:"pointer", color:"#d8d8d8", fontSize:13, flexShrink:0, paddingTop:2 }}>🗑</button>
+              )}
+            </div>
+          );
+        };
+        const eventRow = (it) => (
+          <div key={it.id} style={{ display:"flex", gap:9, padding:"7px 0", borderBottom:"1px solid #f7f7f7" }}>
+            <span style={{ fontSize:10.5, color:"#bbb", width:38, flexShrink:0, paddingTop:3, fontVariantNumeric:"tabular-nums" }}>{String(it.date || "").slice(11, 16) || "—"}</span>
+            <div style={{ fontSize:15, lineHeight:1.3, width:22, textAlign:"center", flexShrink:0 }}>{it.icon}</div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                <b style={{ fontSize:12.5 }}>{it.label}</b>
+                {it.source === "trip" && <span style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>auto</span>}
+                {it.tripBadge && <span style={{ fontSize:9.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px", fontFamily:"monospace" }}>🛣️ {it.tripBadge}</span>}
+                {it.storageBadge && <span style={{ fontSize:9.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>📦 {it.storageBadge}</span>}
+                {it.by && <span style={{ fontSize:11, color:"#aaa" }}>· {String(it.by).split("@")[0]}</span>}
+              </div>
+              {it.notes && <div style={{ fontSize:12, color:"#555", marginTop:2 }}>{it.notes}</div>}
+            </div>
+            {it.source === "manual" && (!JOB_EVENT_AUTO[it.raw?.event_type] || isMgr) && <button onClick={() => deleteJobEvent(it.raw)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
+          </div>
+        );
         return (
         <Modal wide bodyStyle={{ padding:0, background:"#fcfcfc" }} onClose={() => setJobDetailKey(null)}
           header={<>
-            <div style={{ display:"flex", alignItems:"center", gap:9, flexWrap:"wrap" }}>
-              <span style={{ fontFamily:"monospace", fontSize:21, fontWeight:700, letterSpacing:"-0.02em" }}>{jobDetail.job_number || tr("(no number)", "(sin número)")}</span>
+            {/* Row 1: the route is the title. Pickup state → delivery state,
+                then the job number, status and money at a glance; actions right. */}
+            <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}>
+                <span style={{ ...stTitle, color: pkSt ? "#111" : "#B91C1C" }}>{pkSt || "?"}</span>
+                <span style={{ fontSize:20, color:"#bbb", fontWeight:500 }}>→</span>
+                <span style={{ ...stTitle, color: dlSt ? "#111" : "#B91C1C" }}>{dlSt || "?"}</span>
+              </span>
+              <span style={{ fontFamily:"monospace", fontSize:16, fontWeight:700, color:"#888" }}>#{jobDetail.job_number || tr("(no number)", "(sin número)")}</span>
               <StatusBadge status={jobDetail.status} />
-              <TypeBadge type={jobDetail.job_type} />
-              {jobDetail.sticker_color && <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, color:"#666", border:"1px solid #eee", borderRadius:6, padding:"2px 8px" }}><Sticker color={jobDetail.sticker_color} />{jobDetail.lot_number ? `Lot ${jobDetail.lot_number}` : ""}</span>}
               {faddDays !== null && faddDays < 0 && <span style={{ fontSize:11, fontWeight:600, color:"#A32D2D", background:"#FCEBEB", borderRadius:20, padding:"3px 9px" }}>⚠ {tr(`FADD ${Math.abs(faddDays)} days overdue`, `FADD vencido hace ${Math.abs(faddDays)} días`)}</span>}
-              {outstanding > 0 && <span style={{ fontSize:11, fontWeight:600, color:"#B91C1C", background:"#FEE2E2", borderRadius:20, padding:"3px 9px" }}>{tr(`$${Math.round(outstanding).toLocaleString()} outstanding`, `$${Math.round(outstanding).toLocaleString()} sin cobrar`)}</span>}
+              {outstanding > 0
+                ? <button onClick={() => setJobTab("money")} title="Open Money" style={{ fontSize:11, fontWeight:700, color:"#B91C1C", background:"#FEE2E2", border:"none", borderRadius:20, padding:"3px 9px", cursor:"pointer" }}>{tr(`$${Math.round(outstanding).toLocaleString()} outstanding`, `$${Math.round(outstanding).toLocaleString()} sin cobrar`)}</button>
+                : grandTotal > 0 && <span style={{ fontSize:11, fontWeight:700, color:"#1A8A4E", background:"#EAF3DE", borderRadius:20, padding:"3px 9px" }}>Paid in full</span>}
+              <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}>
+                <Btn onClick={() => openEditJob(jobDetail)} style={{ padding:"6px 12px", fontSize:12.5 }}>Edit</Btn>
+                {can("bol","view") && <Btn onClick={() => { const jn = jobDetail.job_number; setJobDetailKey(null); setBolJobNumber(jn || ""); setPage("bol"); }} style={{ padding:"6px 12px", fontSize:12.5 }}>Generate BOL</Btn>}
+                <span style={{ position:"relative" }}>
+                  <Btn onClick={() => setJobMenuOpen(o => !o)} title="More actions" style={{ padding:"6px 11px", fontSize:13, fontWeight:700 }}>⋯</Btn>
+                  {jobMenuOpen && (
+                    <div style={{ position:"absolute", right:0, top:"calc(100% + 4px)", background:"#fff", border:"1px solid #e5e5e5", borderRadius:10, boxShadow:"0 8px 30px rgba(0,0,0,0.14)", padding:"4px 0", minWidth:190, zIndex:5, fontWeight:400 }}>
+                      {jobDetail.parts.some(p => !p.date_out) && <button style={menuItem} onClick={menuDo(() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id)))}>✓ Mark all delivered</button>}
+                      {jobDetail.parts.some(p => p.date_out) && <button style={menuItem} onClick={menuDo(() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id)))}>Undeliver all</button>}
+                      {!jobSplitColMissing && jobDetail.parts.some(p => p.split_group) && <button style={menuItem} disabled={tripBusy} onClick={menuDo(() => mergeSplit(jobDetail.parts.find(p => p.split_group)))}>✂️ {trAI("Merge portions", "Unir porciones")}</button>}
+                      <button style={menuItem} onClick={menuDo(() => { setJobTab("overview"); setPickupEditor({ from: pkFrom, to: pkTo }); })}>📅 {onCal ? "Edit pickup date" : "Add to calendar"}</button>
+                      {routeUrl(jobDetail) && <button style={menuItem} onClick={menuDo(() => window.open(routeUrl(jobDetail), "_blank", "noopener"))}>🗺️ Open route</button>}
+                      <button style={menuItem} onClick={menuDo(() => window.open(waLink(jobDetail, storeLabels.join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail)), "_blank", "noopener"))}>💬 WhatsApp client</button>
+                      <div style={{ borderTop:"1px solid #f0f0f0", margin:"4px 0" }} />
+                      <button style={{ ...menuItem, color:"#B91C1C" }} onClick={menuDo(() => deleteJob(jobDetail))}>🗑 Delete job</button>
+                    </div>
+                  )}
+                </span>
+              </span>
             </div>
-            <div style={{ marginTop:7, fontSize:13, color:"#666", display:"flex", alignItems:"center", gap:7, flexWrap:"wrap", fontWeight:400 }}>
-              <b style={{ color:"#111", fontSize:14.5 }}>{jobDetail.customer || "—"}</b>
-              {brokerName(jobDetail.broker_id) && <><span style={{ color:"#ddd" }}>·</span><span>🏦 {brokerName(jobDetail.broker_id)}</span></>}
-              {jobDetail.rep && <><span style={{ color:"#ddd" }}>·</span><span>Rep {jobDetail.rep}</span></>}
-              {jobDetail.client_phone && <><span style={{ color:"#ddd" }}>·</span><span>📞 {jobDetail.client_phone}</span></>}
-              {jobDetail.client_email && <><span style={{ color:"#ddd" }}>·</span><span>✉ {jobDetail.client_email}</span></>}
+            {/* Row 2: who. Client, then the broker as a chip because it matters. */}
+            <div style={{ marginTop:8, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <span style={{ fontSize:17, fontWeight:600, color:"#111" }}>{jobDetail.customer || "—"}</span>
+              {brokerName(jobDetail.broker_id) && <span title="Broker" style={{ fontSize:12.5, fontWeight:700, color:"#5B3FBF", background:"#F0EBFC", border:"1px solid #DDD3F7", padding:"3px 10px", borderRadius:20, whiteSpace:"nowrap" }}>🏢 {brokerName(jobDetail.broker_id)}</span>}
+              {jobDetail.rep && <span style={{ fontSize:12, color:"#888", fontWeight:400 }}>Rep <b style={{ color:"#444" }}>{jobDetail.rep}</b></span>}
+            </div>
+            {/* Row 3: the facts people otherwise dig out of All fields. */}
+            <div style={{ marginTop:6, display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#888", fontWeight:400 }}>
+              <span>Driver <b style={{ color: drvNames ? "#111" : "#B91C1C" }}>{drvNames || tr("unassigned", "sin asignar")}</b></span>
+              <span>Type <TypeBadge type={jobDetail.job_type} /></span>
+              <span>CF <b style={{ color:"#111" }}>{Math.round(jobCf).toLocaleString()}</b> {jobHasRealCf ? "real" : "est."}</span>
+              <span>Pickup <b style={{ color: pkFrom ? "#111" : "#B91C1C" }}>{pkFrom ? (pkTo && pkTo !== pkFrom ? `${pkFrom} → ${pkTo}` : pkFrom) : tr("no date", "sin fecha")}</b></span>
+              <span>Delivery <b style={{ color: jobDetail.delivery_date ? "#111" : "#B91C1C" }}>{jobDetail.delivery_date || tr("not scheduled", "sin agendar")}</b></span>
+              {jobDetail.client_phone && <span>Phone <b style={{ color:"#111" }}>{jobDetail.client_phone}</b></span>}
+              {jobDetail.client_email && <span>Email <b style={{ color:"#111" }}>{jobDetail.client_email}</b></span>}
             </div>
           </>}
           footer={<>
-            <Btn onClick={() => openEditJob(jobDetail)}>Edit</Btn>
-            {can("bol","view") && <Btn primary onClick={() => { const jn = jobDetail.job_number; setJobDetailKey(null); setBolJobNumber(jn || ""); setPage("bol"); }}>📄 Generate BOL</Btn>}
-            <Btn danger onClick={() => deleteJob(jobDetail)}>🗑 Delete job</Btn>
-            {jobDetail.parts.some(p => !p.date_out) && (
-              <Btn onClick={() => deliverJobs(jobDetail.parts.filter(p => !p.date_out).map(p => p.id))}>Mark all delivered</Btn>
-            )}
-            {jobDetail.parts.some(p => p.date_out) && (
-              <Btn onClick={() => undeliverJobs(jobDetail.parts.filter(p => p.date_out).map(p => p.id))}>Undeliver all</Btn>
-            )}
-            {!jobSplitColMissing && jobDetail.parts.some(p => p.split_group) && (
-              <Btn disabled={tripBusy} onClick={() => mergeSplit(jobDetail.parts.find(p => p.split_group))}>✂️ {trAI("Merge portions", "Unir porciones")}</Btn>
-            )}
+            <span style={{ marginRight:"auto", fontSize:11, color:"#bbb", alignSelf:"center" }}>
+              {(jobDetail.created_by || jobDetail.created_at) && <>Created {jobDetail.created_at ? fmtTs(jobDetail.created_at) : ""}{jobDetail.created_by ? ` by ${jobDetail.created_by}` : ""}</>}
+              {(jobDetail.updated_by || jobDetail.updated_at) && <> · Last edited {jobDetail.updated_at ? fmtTs(jobDetail.updated_at) : ""}{jobDetail.updated_by ? ` by ${jobDetail.updated_by}` : ""}</>}
+            </span>
             <Btn primary onClick={() => setJobDetailKey(null)}>Close</Btn>
           </>}>
 
-          {/* ── Status: the rail shows what the job really did, the select lets
-               the dispatch manager decide what happens next. ── */}
-          <div style={{ background:"#fafafa", borderBottom:"1px solid #f0f0f0", padding:"13px 20px", display:"flex", alignItems:"center", gap:18, flexWrap:"wrap" }}>
+          {/* ── Status rail, one line: what the job did, and the dispatch
+               manager's select to decide what happens next. ── */}
+          <div style={{ background:"#fafafa", borderBottom:"1px solid #f0f0f0", padding:"10px 20px 8px", display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}
+            onClick={() => { if (jobMenuOpen) setJobMenuOpen(false); }}>
             <StatusRail group={jobDetail} />
-            <StatusSelect current={jobDetail.status || "scheduled"} suggested={nextStatus(jobDetail)} canEdit={isMgr}
+            <StatusSelect compact current={jobDetail.status || "scheduled"} suggested={nextStatus(jobDetail)} canEdit={isMgr}
               onApply={(v) => setJobStatus(jobDetail, v)} />
           </div>
 
-          {/* ── Additional services: one chip per service, amount editable in
-               place. Adding or changing one posts a note and moves the total. ── */}
-          {!extrasMissing && (
-            <div style={{ background:"#fff", borderBottom:"1px solid #f0f0f0", padding:"12px 20px 13px" }}>
-              <div style={{ ...capS, marginBottom:10, fontSize:9.5 }}>
-                Additional services
-                <span style={{ background:"#EAF3DE", color:"#3B6D11", borderRadius:10, padding:"1px 7px", fontSize:9, letterSpacing:0, textTransform:"none" }}>Anyone can add</span>
-                <span style={{ ...rightS, color:"#999" }}>{tr(`${svcs.length} services · `, `${svcs.length} services · `)}<b style={{ color:"#3B6D11" }}>+${Math.round(svcTotal).toLocaleString()}</b>{tr(" added to the job total", " sumados al total del job")}</span>
-              </div>
-              <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
-                {svcs.map(e => {
-                  const isCf = e.extra_type === "extra_cf";
-                  return (
-                    <div key={e.id} style={{ border:"1px solid #dbe8cd", background:"#F5F9F0", borderRadius:9, padding:"6px 11px", minWidth:112 }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-                        <span style={{ fontSize:11, fontWeight:600, color:"#3B6D11" }}>{extraTypeLabel(e.extra_type)}</span>
-                        <button onClick={() => setSvcEditId(svcEditId === e.id ? null : e.id)} title="Edit service"
-                          style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", color:"#9bb182", fontSize:11, padding:0 }}>✎</button>
-                        <button onClick={() => deleteExtra(e)} title="Remove service"
-                          style={{ border:"none", background:"none", cursor:"pointer", color:"#c3d3b3", fontSize:11, padding:0 }}>✕</button>
-                      </div>
-                      {isCf ? (
-                        <>
-                          <div style={{ display:"flex", alignItems:"center", gap:4, marginTop:4, fontSize:11 }}>
-                            <span style={{ border:"1px solid #cfe0bd", background:"#fff", borderRadius:6, padding:"2px 6px", fontWeight:600 }}>
-                              <InlineField value={e.extra_cf_count ?? ""} placeholder="0" onSave={(v) => patchExtra(e, { extra_cf_count: v })} /> CF
-                            </span>
-                            <span style={{ color:"#9bb182" }}>×</span>
-                            <span style={{ border:"1px solid #cfe0bd", background:"#fff", borderRadius:6, padding:"2px 6px", fontWeight:600 }}>
-                              $<InlineField value={e.extra_cf_rate ?? ""} placeholder="0" onSave={(v) => patchExtra(e, { extra_cf_rate: v })} />
-                            </span>
-                          </div>
-                          <div style={{ fontSize:9, color:"#9bb182", marginTop:3 }}>{numv(e.fuel_surcharge_pct) ? `+${numv(e.fuel_surcharge_pct)}% fuel → ` : "→ "}<b style={{ color:"#3B6D11" }}>{money(e.amount) || "$0"}</b></div>
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ display:"flex", alignItems:"center", gap:3, border:"1px solid #cfe0bd", background:"#fff", borderRadius:6, padding:"3px 7px", marginTop:4 }}>
-                            <span style={{ fontSize:11, color:"#9bb182" }}>$</span>
-                            <span style={{ fontSize:14, fontWeight:700 }}><InlineField value={e.amount ?? ""} placeholder="0" onSave={(v) => setExtraAmount(e, v, repId)} /></span>
-                          </div>
-                          <div style={{ fontSize:9, color:"#9bb182", marginTop:3 }}>{genByLabel(e.generated_by)}</div>
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-                {EXTRA_TYPES.filter(x => !svcs.some(e => e.extra_type === x.v)).map(x => (
-                  <button key={x.v} onClick={() => addJobService(repId, x.v, (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids[0]) || "")}
-                    style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:9, padding:"6px 12px", fontSize:11.5, color:"#b4b4b4", cursor:"pointer" }}>+ {x.l}</button>
-                ))}
-              </div>
-              {(() => {
-                const e = svcs.find(x => x.id === svcEditId);
-                if (!e) return null;
-                return (
-                  <div style={{ marginTop:11, border:"1px solid #e2e2e2", borderRadius:10, padding:"12px 13px", background:"#fff", maxWidth:520 }}>
-                    <div style={{ fontSize:11.5, fontWeight:700, display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
-                      {extraTypeLabel(e.extra_type)}
-                      <button onClick={() => { deleteExtra(e); setSvcEditId(null); }} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", fontSize:10.5, color:"#B91C1C", fontWeight:600 }}>🗑 Remove service</button>
-                    </div>
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
-                      {e.extra_type === "extra_cf" ? (
-                        <>
-                          <Field label="Extra CF"><input style={inp} type="number" value={e.extra_cf_count ?? ""} onChange={ev => patchExtra(e, { extra_cf_count: ev.target.value })} /></Field>
-                          <Field label="Rate / CF ($)"><input style={inp} type="number" value={e.extra_cf_rate ?? ""} onChange={ev => patchExtra(e, { extra_cf_rate: ev.target.value })} /></Field>
-                          <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={e.fuel_surcharge_pct ?? ""} onChange={ev => patchExtra(e, { fuel_surcharge_pct: ev.target.value })} /></Field>
-                          <Field label="Total charged"><div style={{ ...inp, fontWeight:700, color:"#3B6D11" }}>{money(e.amount) || "$0"}</div></Field>
-                        </>
-                      ) : (
-                        <>
-                          <Field label="Amount ($)"><input style={inp} type="number" defaultValue={e.amount ?? ""} onBlur={ev => setExtraAmount(e, ev.target.value, repId)} /></Field>
-                          <Field label="Generated by">
-                            <select style={inp} value={e.generated_by || "driver_only"} disabled={EXTRA_LOCKED_DRIVER(e.extra_type)} onChange={ev => patchExtra(e, { generated_by: ev.target.value })}>
-                              {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
-                            </select>
-                          </Field>
-                        </>
-                      )}
-                      <Field label="Description" full><input style={inp} defaultValue={e.description || ""} onBlur={ev => patchExtra(e, { description: ev.target.value })} placeholder="Why it was charged" /></Field>
-                      <Field label="Driver commission (%)"><input style={inp} type="number" defaultValue={e.driver_commission_pct ?? ""} onBlur={ev => patchExtra(e, { driver_commission_pct: ev.target.value })} /></Field>
-                      <Field label="Rep commission (%)"><input style={inp} type="number" defaultValue={e.rep_commission_pct ?? ""} onBlur={ev => patchExtra(e, { rep_commission_pct: ev.target.value })} /></Field>
-                    </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10 }}>
-                      <Btn primary onClick={() => setSvcEditId(null)} style={{ padding:"6px 13px", fontSize:12 }}>Done</Btn>
-                      <span style={{ fontSize:9.5, color:"#c0c0c0" }}>D {money(e.driver_commission_amount) || "$0"} · R {money(e.rep_commission_amount) || "$0"}</span>
-                    </div>
-                  </div>
-                );
-              })()}
-              <div style={{ fontSize:10, color:"#c0c0c0", marginTop:9 }}>Amounts stay editable at any time — every add, edit or removal posts a note with who did it and when, and updates the job total.</div>
-            </div>
-          )}
-
           {/* ── Tabs ── */}
           <div style={{ display:"flex", padding:"0 20px", borderBottom:"1px solid #f0f0f0", background:"#fff", flexWrap:"wrap" }}>
-            {TABS.map(([id, label, count]) => (
-              <button key={id} onClick={() => setJobTab(id)}
-                style={{ fontSize:13, padding:"11px 15px", cursor:"pointer", border:"none", background:"none",
+            {TABS.map(([id, label]) => (
+              <button key={id} onClick={() => { setJobTab(id); setJobMenuOpen(false); }}
+                style={{ fontSize:13, padding:"11px 15px", cursor:"pointer", border:"none", background:"none", display:"inline-flex", alignItems:"center", gap:5,
                   color: jobTab === id ? "#111" : "#999", fontWeight: jobTab === id ? 600 : 400,
                   borderBottom: jobTab === id ? "2px solid #111" : "2px solid transparent" }}>
-                {label}{count ? <span style={{ fontSize:10, color:"#bbb", marginLeft:4 }}>{count}</span> : null}
+                {label}
+                {id === "overview" && flags.length > 0 && <span title={tr(`${flags.length} things need attention`, `${flags.length} cosas necesitan atención`)} style={{ width:6, height:6, borderRadius:"50%", background:"#E24B4A", display:"inline-block" }} />}
+                {id === "money" && outstanding > 0 && <span style={{ fontSize:10.5, fontWeight:700, color:"#B91C1C" }}>${Math.round(outstanding).toLocaleString()}</span>}
+                {id === "storage" && <span style={{ fontSize:10, color:"#bbb" }}>{P.length}</span>}
+                {id === "activity" && actCount > 0 && <span style={{ fontSize:10, color:"#bbb" }}>{actCount}</span>}
               </button>
             ))}
           </div>
 
-          <div style={{ padding:"16px 20px 20px" }}>
+          <div style={{ padding:"16px 20px 20px" }} onClick={() => { if (jobMenuOpen) setJobMenuOpen(false); }}>
 
           {jobTab === "overview" && (<>
-          {(() => {
-            const ids = jobDetail.parts.map(p => p.id);
-            const from = jobDetail.pickup_date_from || jobDetail.pickup_date || "";
-            const to = jobDetail.pickup_date_to || "";
-            const onCal = !!from;
-            return (
-              <div style={{ background: onCal ? "#EAF3DE" : "#F5F7FA", border:`1px solid ${onCal ? "#cfe3b3" : "#e3e8ef"}`, borderRadius:10, padding:"10px 12px", marginBottom:12 }}>
-                {!pickupEditor ? (
-                  <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                    <span style={{ fontSize:12.5, color: onCal ? "#3B6D11" : "#667", flex:1 }}>
-                      {onCal
-                        ? <>📅 On calendar: <b>{from}</b>{to && to !== from ? <> → <b>{to}</b></> : null}</>
-                        : <>📅 Not on the calendar yet — this job has no pickup date.</>}
-                    </span>
-                    {onCal
-                      ? <Btn style={{ padding:"5px 11px", fontSize:12 }} onClick={() => setPickupEditor({ from, to })}>Edit pickup date</Btn>
-                      : <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={() => setPickupEditor({ from:"", to:"" })}>Add to calendar</Btn>}
-                  </div>
-                ) : (
-                  <div style={{ display:"flex", alignItems:"flex-end", gap:10, flexWrap:"wrap" }}>
-                    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                      <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Pickup date from</label>
-                      <input style={inp} type="date" value={pickupEditor.from} onChange={e => setPickupEditor(p => ({ ...p, from:e.target.value }))} />
-                    </div>
-                    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                      <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Pickup date to (optional)</label>
-                      <input style={inp} type="date" value={pickupEditor.to} onChange={e => setPickupEditor(p => ({ ...p, to:e.target.value }))} />
-                    </div>
-                    <Btn primary style={{ padding:"7px 12px", fontSize:12 }} disabled={!pickupEditor.from}
-                      onClick={async () => { await setJobPickup(ids, pickupEditor.from, pickupEditor.to); setPickupEditor(null); showToast("Pickup date saved"); }}>Save</Btn>
-                    {onCal && <Btn danger style={{ padding:"7px 12px", fontSize:12 }}
-                      onClick={async () => { await setJobPickup(ids, "", ""); setPickupEditor(null); showToast("Removed from calendar"); }}>Remove from calendar</Btn>}
-                    <Btn style={{ padding:"7px 12px", fontSize:12 }} onClick={() => setPickupEditor(null)}>Cancel</Btn>
-                  </div>
-                )}
+            {/* ── Needs attention: chips that jump to the tab holding the field. ── */}
+            {flags.length > 0 && (
+              <div style={{ marginBottom:14 }}>
+                <div style={capS}>Needs attention<span style={rightS}>{flags.length}</span></div>
+                <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+                  {flags.map((f, i) => (
+                    <button key={i} onClick={() => setJobTab(f.tab)} title="Go to the field" style={chipS(f.c)}>
+                      <span>{f.ic}</span>{f.l}
+                    </button>
+                  ))}
+                </div>
               </div>
-            );
-          })()}
+            )}
+
+            {/* ── Pickup date editor: opened from the ⋯ menu, or shown as a
+                 nudge while the job is not on the calendar yet. ── */}
+            {(pickupEditor || !onCal) && (() => {
+              const ids = jobDetail.parts.map(p => p.id);
+              return (
+                <div style={{ background: onCal ? "#EAF3DE" : "#F5F7FA", border:`1px solid ${onCal ? "#cfe3b3" : "#e3e8ef"}`, borderRadius:10, padding:"10px 12px", marginBottom:12 }}>
+                  {!pickupEditor ? (
+                    <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                      <span style={{ fontSize:12.5, color:"#667", flex:1 }}>📅 Not on the calendar yet — this job has no pickup date.</span>
+                      <Btn primary style={{ padding:"5px 11px", fontSize:12 }} onClick={() => setPickupEditor({ from:"", to:"" })}>Add to calendar</Btn>
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", alignItems:"flex-end", gap:10, flexWrap:"wrap" }}>
+                      <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Pickup date from</label>
+                        <input style={inp} type="date" value={pickupEditor.from} onChange={e => setPickupEditor(p => ({ ...p, from:e.target.value }))} />
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                        <label style={{ fontSize:10.5, fontWeight:600, color:"#888", textTransform:"uppercase" }}>Pickup date to (optional)</label>
+                        <input style={inp} type="date" value={pickupEditor.to} onChange={e => setPickupEditor(p => ({ ...p, to:e.target.value }))} />
+                      </div>
+                      <Btn primary style={{ padding:"7px 12px", fontSize:12 }} disabled={!pickupEditor.from}
+                        onClick={async () => { await setJobPickup(ids, pickupEditor.from, pickupEditor.to); setPickupEditor(null); showToast("Pickup date saved"); }}>Save</Btn>
+                      {onCal && <Btn danger style={{ padding:"7px 12px", fontSize:12 }}
+                        onClick={async () => { await setJobPickup(ids, "", ""); setPickupEditor(null); showToast("Removed from calendar"); }}>Remove from calendar</Btn>}
+                      <Btn style={{ padding:"7px 12px", fontSize:12 }} onClick={() => setPickupEditor(null)}>Cancel</Btn>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* ── Route: where it came from, where it sits, where it goes. ── */}
-            <div style={{ ...cardS, marginBottom:12 }}>
-              <div style={capS}>Route<span style={rightS}>{[cityLine(jobDetail.pickup_city, jobDetail.pickup_state, ""), storeLabels[0], cityLine(jobDetail.delivery_city, jobDetail.delivery_state, "")].filter(Boolean).join(" → ")}</span></div>
+            <div style={capS}>Route<span style={rightS}>{[cityLine(jobDetail.pickup_city, jobDetail.pickup_state, ""), storeLabels[0], cityLine(jobDetail.delivery_city, jobDetail.delivery_state, "")].filter(Boolean).join(" → ")}</span></div>
+            <div style={{ ...cardS, marginBottom:14 }}>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 34px 1fr 34px 1fr", alignItems:"stretch" }}>
-                <div style={{ padding:"2px 4px" }}>
+                <div style={{ padding:"2px 4px", minWidth:0 }}>
                   <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#185FA5", marginBottom:6 }}>📍 Pickup</div>
-                  <div style={{ fontSize:17, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{cityLine(jobDetail.pickup_city, jobDetail.pickup_state, jobDetail.pickup_zip) || "—"}</div>
+                  <div style={{ fontSize:15, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{cityLine(jobDetail.pickup_city, jobDetail.pickup_state, jobDetail.pickup_zip) || "—"}</div>
                   <div style={{ fontSize:11.5, color:"#8a8a8a", marginTop:4, paddingBottom:2 }}>{jobDetail.pickup_address || "—"}</div>
-                  <div style={{ fontSize:11.5, color:"#888", marginTop:15, lineHeight:1.95 }}>
-                    <div>📅 <b style={{ color:"#333" }}>{(() => { const f = jobDetail.pickup_date_from || jobDetail.pickup_date; if (!f) return tr("No pickup date", "Sin fecha de pickup"); const to = jobDetail.pickup_date_to; return to && to !== f ? `${f} → ${to}` : f; })()}</b></div>
+                  <div style={{ fontSize:11.5, color:"#888", marginTop:12, lineHeight:1.95 }}>
+                    <div>📅 <b style={{ color: pkFrom ? "#333" : "#B91C1C" }}>{pkFrom ? (pkTo && pkTo !== pkFrom ? `${pkFrom} → ${pkTo}` : pkFrom) : tr("No pickup date", "Sin fecha de pickup")}</b>{onCal && !pickupEditor && <button onClick={() => setPickupEditor({ from: pkFrom, to: pkTo })} style={{ marginLeft:6, border:"none", background:"none", color:"#185FA5", fontSize:11, cursor:"pointer", textDecoration:"underline", padding:0 }}>Edit</button>}</div>
                     <div>{drvNames ? <>🧑‍✈️ <b style={{ color:"#333" }}>{drvNames}</b></> : <span style={{ color:"#bbb" }}>🧑‍✈️ {tr("No driver assigned", "Sin driver asignado")}</span>}</div>
                     <div>💵 Balance <b style={{ color:"#333" }}>{money(jobDetail.pickup_balance) || "$0"}</b></div>
                   </div>
                 </div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"center", color:"#c8c8c8", fontSize:20 }}>→</div>
-                <div style={{ padding:"2px 4px" }}>
+                <div style={{ padding:"2px 4px", minWidth:0 }}>
                   <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#3B6D11", marginBottom:6 }}>🏬 Storage</div>
-                  <div style={{ fontSize:17, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{storeLabels[0] || "—"}</div>
+                  <div style={{ fontSize:15, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{storeLabels[0] || "—"}</div>
                   <div style={{ fontSize:11.5, color:"#8a8a8a", marginTop:4, paddingBottom:2 }}>{storeLabels.length > 1 ? storeLabels.slice(1).join(" · ") : tr("Single location", "Una sola ubicación")}</div>
-                  <div style={{ fontSize:11.5, color:"#888", marginTop:15, lineHeight:1.95 }}>
+                  <div style={{ fontSize:11.5, color:"#888", marginTop:12, lineHeight:1.95 }}>
                     <div>📅 {jobDetail.date_in ? <>In since <b style={{ color:"#333" }}>{jobDetail.date_in}</b>{daysStored !== null ? <> · <b style={{ color:"#333" }}>{tr(`${daysStored} days`, `${daysStored} días`)}</b></> : null}</> : <span style={{ color:"#bbb" }}>{tr("Not in storage", "No está en storage")}</span>}</div>
-                    <div>🧾 {jobDetail.billing_active ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Billing active · {money(jobDetail.client_monthly_rate) || "$0"}/mo</span> : <span style={{ color:"#bbb" }}>{tr("No storage charged", "Sin storage facturado")}</span>}</div>
-                    <div>🏷️ {jobDetail.sticker_color ? <>Sticker <b style={{ color:"#333" }}>{jobDetail.sticker_color}{jobDetail.lot_number ? ` · Lot ${jobDetail.lot_number}` : ""}</b></> : <span style={{ color:"#bbb" }}>{tr("Sticker unassigned", "Sticker sin asignar")}</span>}</div>
+                    <div>🏷️ {jobDetail.sticker_color ? <><Sticker color={jobDetail.sticker_color} />{jobDetail.lot_number ? <b style={{ color:"#333" }}> · Lot {jobDetail.lot_number}</b> : null}</> : <span style={{ color:"#bbb" }}>{tr("Sticker unassigned", "Sticker sin asignar")}</span>}</div>
+                    <div><button onClick={() => setJobTab("storage")} style={{ border:"none", background:"none", color:"#185FA5", fontSize:11.5, cursor:"pointer", textDecoration:"underline", padding:0 }}>View unit</button></div>
                   </div>
                 </div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"center", color:"#c8c8c8", fontSize:20 }}>→</div>
-                <div style={{ padding:"2px 4px" }}>
+                <div style={{ padding:"2px 4px", minWidth:0 }}>
                   <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", color:"#6D28D9", marginBottom:6 }}>🎯 Delivery</div>
-                  <div style={{ fontSize:17, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{cityLine(jobDetail.delivery_city, jobDetail.delivery_state, jobDetail.delivery_zip) || "—"}</div>
+                  <div style={{ fontSize:15, fontWeight:700, lineHeight:1.25, letterSpacing:"-0.01em" }}>{cityLine(jobDetail.delivery_city, jobDetail.delivery_state, jobDetail.delivery_zip) || "—"}</div>
                   <div style={{ fontSize:11.5, color:"#8a8a8a", marginTop:4, paddingBottom:2 }}>{jobDetail.delivery_address || "—"}</div>
-                  <div style={{ fontSize:11.5, color:"#888", marginTop:15, lineHeight:1.95 }}>
+                  <div style={{ fontSize:11.5, color:"#888", marginTop:12, lineHeight:1.95 }}>
                     <div>📅 {jobDetail.delivery_date ? <b style={{ color:"#333" }}>{jobDetail.delivery_date}</b> : <b style={{ color:"#B91C1C" }}>{tr("Not scheduled yet", "Todavía sin agendar")}</b>}</div>
-                    <div>⚠ FADD {jobDetail.fadd ? <><b style={{ color:"#333" }}>{jobDetail.fadd}</b>{faddDays !== null && faddDays < 0 ? <b style={{ color:"#B91C1C" }}> · {tr(`${Math.abs(faddDays)} days overdue`, `vencido hace ${Math.abs(faddDays)} días`)}</b> : null}</> : <span style={{ color:"#bbb" }}>—</span>}</div>
+                    <div>⚠ FADD {jobDetail.fadd ? <><b style={{ color:"#333" }}>{jobDetail.fadd}</b>{faddDays !== null && faddDays < 0 ? <b style={{ color:"#B91C1C" }}> · {tr(`${Math.abs(faddDays)} days overdue`, `vencido hace ${Math.abs(faddDays)} días`)}</b> : null}</> : <b style={{ color:"#B91C1C" }}>{tr("not set", "sin definir")}</b>}</div>
                     <div>💵 Balance <b style={{ color:"#333" }}>{money(jobDetail.delivery_balance) || "$0"}</b></div>
                   </div>
                 </div>
               </div>
-              <div style={{ marginTop:14, paddingTop:13, borderTop:"1px solid #f5f5f5", display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-                {routeUrl(jobDetail) && <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"7px 13px", fontSize:12, fontWeight:600, color:"#fff", background:"#185FA5", textDecoration:"none" }}>🗺️ Open route</a>}
-                <a href={waLink(jobDetail, storeLabels.join(" · "), brokerName(jobDetail.broker_id), jobGroupLink(jobDetail))} target="_blank" rel="noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"7px 13px", fontSize:12, fontWeight:600, color:"#fff", background:"#1A8A4E", textDecoration:"none" }}>💬 WhatsApp</a>
-                {gTrip && <button onClick={() => { setJobDetailKey(null); setPage("trips"); }} style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"7px 13px", fontSize:12, fontWeight:600, color:"#fff", background:"#6D28D9", border:"none", cursor:"pointer" }}>🛣️ {gTrip.trip_number || "#" + gTrip.id}{jobDetail.trip_stop_order ? ` · stop ${jobDetail.trip_stop_order}` : ""}</button>}
-                <span style={{ marginLeft:"auto", color:"#ccc", fontSize:11 }}>Click any value in All fields to edit it inline</span>
-              </div>
+              {(routeUrl(jobDetail) || gTrip) && (
+                <div style={{ marginTop:12, paddingTop:11, borderTop:"1px solid #f5f5f5", display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                  {routeUrl(jobDetail) && <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"6px 12px", fontSize:12, fontWeight:600, color:"#185FA5", background:"#E6F1FB", textDecoration:"none" }}>🗺️ Open route</a>}
+                  {gTrip && <button onClick={() => { setJobDetailKey(null); setPage("trips"); }} style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:8, padding:"6px 12px", fontSize:12, fontWeight:600, color:"#6D28D9", background:"#EDE9FE", border:"none", cursor:"pointer" }}>🛣️ {gTrip.trip_number || "#" + gTrip.id}{jobDetail.trip_stop_order ? ` · stop ${jobDetail.trip_stop_order}` : ""}</button>}
+                </div>
+              )}
             </div>
 
-            <div style={{ display:"grid", gridTemplateColumns:"1.25fr 1fr", gap:12, alignItems:"start", marginBottom:12 }}>
-              {/* ── Job total: base + services − collected, discriminated. ── */}
-              <div style={cardS}>
+            {/* ── Money strip: the four numbers, detail lives in Money. ── */}
+            <div style={capS}>Money<button onClick={() => setJobTab("money")} style={{ ...rightS, border:"none", background:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0 }}>Open Money →</button></div>
+            <div style={{ ...cardS, padding:0, marginBottom:14, display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", overflow:"hidden" }}>
+              {[
+                ["Job total", `$${Math.round(grandTotal).toLocaleString()}`, "#111"],
+                ["Collected", `$${Math.round(collected + svcCollected).toLocaleString()}`, "#1A8A4E"],
+                ["Outstanding", `$${Math.round(outstanding).toLocaleString()}`, outstanding > 0 ? "#B91C1C" : "#1A8A4E"],
+                ["In circulation", `$${Math.round(circTotal).toLocaleString()}`, circTotal > 0 ? "#C2410C" : "#999"],
+              ].map(([l, v, c], i) => (
+                <div key={l} style={{ padding:"12px 16px", borderLeft: i ? "1px solid #f0f0f0" : "none" }}>
+                  <div style={{ fontSize:11, color:"#999", marginBottom:3 }}>{l}</div>
+                  <div style={{ fontSize:20, fontWeight:800, letterSpacing:"-0.02em", color:c, fontVariantNumeric:"tabular-nums" }}>{v}</div>
+                  {l === "In circulation" && circWith.length > 0 && <div style={{ fontSize:11, color:"#185FA5", marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tr("with", "con")} {circWith.join(" · ")}</div>}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))", gap:14, alignItems:"start" }}>
+              {/* ── Latest note + composer; the full thread is in Activity. ── */}
+              <div style={{ minWidth:0 }}>
+                <div style={capS}>Latest note<button onClick={() => setJobTab("activity")} style={{ ...rightS, border:"none", background:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0 }}>All activity →</button></div>
+                <div style={cardS}>
+                  {jobEventsMissing ? (
+                    <div style={{ fontSize:12, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"7px 10px" }}>
+                      Run the updated SQL to save dispatch notes. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:12 }}>View SQL</button>
+                    </div>
+                  ) : (<>
+                    {noteRows.length === 0
+                      ? <div style={{ fontSize:12.5, color:"#bbb" }}>No notes on this job yet.</div>
+                      : (() => { const n = noteRows[0]; return noteRow({ id:"n"+n.id, raw:n, auto: n.event_type === "service", by:n.created_by, date:n.created_at, notes:n.notes }); })()}
+                    {isMgr && (
+                      <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:10 }}>
+                        <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") saveJobNote(repId, jobDetail); }}
+                          placeholder="Add a note for this job…" style={{ ...inp, flex:1 }} />
+                        <Btn primary disabled={!noteDraft.trim()} onClick={() => saveJobNote(repId, jobDetail)} style={{ padding:"7px 13px", fontSize:12 }}>Add</Btn>
+                      </div>
+                    )}
+                  </>)}
+                </div>
+              </div>
+
+              {/* ── Volume & load ── */}
+              <div style={{ minWidth:0 }}>
+                <div style={capS}>Load</div>
+                <div style={cardS}>
+                  <div style={kvS}><span style={kS}>Volume</span><span style={{ fontWeight:600, color: jobHasRealCf ? "#3B6D11" : "#111" }}>{Math.round(jobCf).toLocaleString()} CF {jobHasRealCf ? tr("real ✓", "real ✓") : tr("est.", "est.")}</span>
+                    {jobHasRealCf && jobEstCf > 0 && (() => { const d = (jobCf - jobEstCf) / jobEstCf * 100; return <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, borderRadius:10, padding:"2px 7px", background: d >= 0 ? "#FDE3CF" : "#EAF3DE", color: d >= 0 ? "#C2410C" : "#3B6D11" }}>{d >= 0 ? "+" : ""}{d.toFixed(1)}% vs estimate</span>; })()}
+                    {!jobHasRealCf && <span style={{ marginLeft:"auto", fontSize:11, color:"#bbb" }}>{tr("no real measure", "sin medida real")}</span>}
+                  </div>
+                  <div style={kvS}><span style={kS}>Pads</span><span style={{ fontWeight:600 }}>{numv(jobDetail.pads_received)} received · {numv(jobDetail.pads_returned)} returned</span>{padsMissingCount > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#B91C1C", fontWeight:700 }}>{tr(`${padsMissingCount} missing`, `faltan ${padsMissingCount}`)}</span>}</div>
+                  <div style={kvS}><span style={kS}>Trip</span>{gTrip ? <span style={{ fontWeight:600, color:"#6D28D9" }}>{gTrip.trip_number || "#" + gTrip.id}</span> : <span style={{ color:"#B91C1C", fontWeight:600 }}>{tr("Unassigned", "Sin asignar")}</span>}</div>
+                  <div style={kvS}><span style={kS}>Extra stops</span><span style={{ fontWeight:600 }}>{jobDetail.extra_stops || "0"}</span></div>
+                  <div style={{ ...kvS, borderBottom:"none" }}><span style={kS}>Price / CF</span><span style={{ fontWeight:600 }}>{money(jobDetail.price_per_cf) || "—"}</span>{numv(jobDetail.fuel_surcharge_pct) > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#999" }}>+ {numv(jobDetail.fuel_surcharge_pct)}% fuel</span>}</div>
+                </div>
+              </div>
+            </div>
+          </>)}
+
+          {jobTab === "money" && (<>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:14, alignItems:"start", marginBottom:14 }}>
+              {/* ── Job total: base + services − collected. Services are edited
+                   right here: anyone can add one, amounts stay editable, every
+                   change posts a note. ── */}
+              <div style={{ ...cardS, minWidth:0 }}>
                 <div style={capS}>Job total<span style={rightS}>base + services − collected</span></div>
                 <div style={{ display:"flex", alignItems:"baseline", gap:8 }}>
                   <span style={{ fontSize:26, fontWeight:700, letterSpacing:"-0.02em", color: outstanding > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</span>
@@ -12543,7 +12660,7 @@ export default function App() {
                       <div style={{ display:"flex", gap:12, fontSize:10.5, color:"#999", marginBottom:11, flexWrap:"wrap" }}>
                         <span><i style={{ width:8, height:8, borderRadius:2, background:"#1A8A4E", display:"inline-block", marginRight:4 }} />Collected ${Math.round(collected + svcCollected).toLocaleString()}</span>
                         <span><i style={{ width:8, height:8, borderRadius:2, background:"#e2e2e2", display:"inline-block", marginRight:4 }} />Base pending ${Math.round(Math.max(0, baseTotal - collected)).toLocaleString()}</span>
-                        <span><i style={{ width:8, height:8, borderRadius:2, background:"#EA580C", display:"inline-block", marginRight:4 }} />Services ${Math.round(Math.max(0, svcTotal - svcCollected)).toLocaleString()}</span>
+                        <span><i style={{ width:8, height:8, borderRadius:2, background:"#EA580C", display:"inline-block", marginRight:4 }} />Services pending ${Math.round(Math.max(0, svcTotal - svcCollected)).toLocaleString()}</span>
                       </div>
                     </>
                   );
@@ -12555,29 +12672,85 @@ export default function App() {
                 {numv(jobDetail.bol_balance) > 0 && <div style={kvS}><span style={kS}>BOL balance</span><span style={{ fontWeight:600 }}>{money(jobDetail.bol_balance)}</span></div>}
                 <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Subtotal base</span><span style={{ fontWeight:700, color:"#555" }}>${Math.round(baseTotal).toLocaleString()}</span></div>
 
-                {svcs.length > 0 && (<>
-                  <div style={{ fontSize:9.5, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"12px 0 3px" }}>Additional services · {svcs.length}</div>
-                  {svcs.map(e => (
-                    <div key={e.id} style={kvS}>
-                      <span style={kS}>{extraTypeLabel(e.extra_type)}</span>
-                      <span style={{ fontWeight:600 }}>{money(e.amount) || "$0"}</span>
-                      <span style={{ marginLeft:"auto", fontSize:10.5, color:"#aaa", textAlign:"right" }}>
-                        {e.extra_type === "extra_cf" && numv(e.extra_cf_count) > 0
-                          ? `${Math.round(numv(e.extra_cf_count)).toLocaleString()} CF × ${money(e.extra_cf_rate) || "$0"}${numv(e.fuel_surcharge_pct) ? ` + fuel ${numv(e.fuel_surcharge_pct)}%` : ""}`
-                          : (e.description || genByLabel(e.generated_by))}
-                      </span>
-                    </div>
-                  ))}
-                  <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Subtotal services</span><span style={{ fontWeight:700, color:"#C2410C" }}>+${Math.round(svcTotal).toLocaleString()}</span></div>
+                {!extrasMissing && (<>
+                  <div style={{ fontSize:9.5, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"14px 0 3px", display:"flex", alignItems:"center", gap:6 }}>
+                    Additional services
+                    <span style={{ marginLeft:"auto", fontWeight:500, letterSpacing:0, textTransform:"none", fontSize:10.5, color:"#bbb" }}>Anyone can add · amounts stay editable</span>
+                  </div>
+                  {svcs.map(e => {
+                    const isCf = e.extra_type === "extra_cf";
+                    const editing = svcEditId === e.id;
+                    return (
+                      <div key={e.id} style={{ ...kvS, background: editing ? "#F5F9F0" : undefined, margin: editing ? "0 -6px" : 0, padding: editing ? "6px 6px" : "6px 0", borderRadius: editing ? 6 : 0 }}>
+                        <span style={{ ...kS, fontWeight:600, color:"#111" }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? <span style={{ fontWeight:400, color:"#888" }}> · {e.description}</span> : null}</span>
+                        {isCf ? (
+                          <span style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:11.5 }}>
+                            <span style={{ border:"1px solid #e2e2e2", background:"#fff", borderRadius:6, padding:"2px 6px", fontWeight:600 }}><InlineField value={e.extra_cf_count ?? ""} placeholder="0" onSave={(v) => patchExtra(e, { extra_cf_count: v })} /> CF</span>
+                            <span style={{ color:"#bbb" }}>×</span>
+                            <span style={{ border:"1px solid #e2e2e2", background:"#fff", borderRadius:6, padding:"2px 6px", fontWeight:600 }}>$<InlineField value={e.extra_cf_rate ?? ""} placeholder="0" onSave={(v) => patchExtra(e, { extra_cf_rate: v })} /></span>
+                            <b style={{ marginLeft:4 }}>{money(e.amount) || "$0"}</b>
+                          </span>
+                        ) : (
+                          <span style={{ border:"1px solid #e2e2e2", background:"#fff", borderRadius:6, padding:"2px 8px", fontWeight:700, display:"inline-flex", alignItems:"center", gap:2 }}>$<InlineField value={e.amount ?? ""} placeholder="0" onSave={(v) => setExtraAmount(e, v, repId)} /></span>
+                        )}
+                        <span style={{ marginLeft:"auto", fontSize:10.5, color:"#aaa", whiteSpace:"nowrap" }}>D {money(e.driver_commission_amount) || "$0"} · R {money(e.rep_commission_amount) || "$0"}</span>
+                        <button onClick={() => setSvcEditId(editing ? null : e.id)} title="Edit service" style={{ border:"none", background:"none", cursor:"pointer", color:"#9bb182", fontSize:12, padding:"0 2px" }}>✎</button>
+                        <button onClick={() => deleteExtra(e)} title="Remove service" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:12, padding:"0 2px" }}>✕</button>
+                      </div>
+                    );
+                  })}
+                  {(() => {
+                    const e = svcs.find(x => x.id === svcEditId);
+                    if (!e) return null;
+                    return (
+                      <div style={{ margin:"8px 0", border:"1px solid #dbe8cd", borderRadius:10, padding:"12px 13px", background:"#F5F9F0" }}>
+                        <div style={{ fontSize:11.5, fontWeight:700, display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                          {extraTypeLabel(e.extra_type)}
+                          <button onClick={() => { deleteExtra(e); setSvcEditId(null); }} style={{ marginLeft:"auto", border:"none", background:"none", cursor:"pointer", fontSize:10.5, color:"#B91C1C", fontWeight:600 }}>🗑 Remove service</button>
+                        </div>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
+                          {e.extra_type === "extra_cf" ? (
+                            <>
+                              <Field label="Extra CF"><input style={inp} type="number" value={e.extra_cf_count ?? ""} onChange={ev => patchExtra(e, { extra_cf_count: ev.target.value })} /></Field>
+                              <Field label="Rate / CF ($)"><input style={inp} type="number" value={e.extra_cf_rate ?? ""} onChange={ev => patchExtra(e, { extra_cf_rate: ev.target.value })} /></Field>
+                              <Field label="Fuel surcharge (%)"><input style={inp} type="number" value={e.fuel_surcharge_pct ?? ""} onChange={ev => patchExtra(e, { fuel_surcharge_pct: ev.target.value })} /></Field>
+                              <Field label="Total charged"><div style={{ ...inp, fontWeight:700, color:"#3B6D11" }}>{money(e.amount) || "$0"}</div></Field>
+                            </>
+                          ) : (
+                            <>
+                              <Field label="Amount ($)"><input style={inp} type="number" defaultValue={e.amount ?? ""} onBlur={ev => setExtraAmount(e, ev.target.value, repId)} /></Field>
+                              <Field label="Generated by">
+                                <select style={inp} value={e.generated_by || "driver_only"} disabled={EXTRA_LOCKED_DRIVER(e.extra_type)} onChange={ev => patchExtra(e, { generated_by: ev.target.value })}>
+                                  {GEN_BY.map(g => <option key={g.v} value={g.v}>{g.l}</option>)}
+                                </select>
+                              </Field>
+                            </>
+                          )}
+                          <Field label="Description" full><input style={inp} defaultValue={e.description || ""} onBlur={ev => patchExtra(e, { description: ev.target.value })} placeholder="Why it was charged" /></Field>
+                          <Field label="Driver commission (%)"><input style={inp} type="number" defaultValue={e.driver_commission_pct ?? ""} onBlur={ev => patchExtra(e, { driver_commission_pct: ev.target.value })} /></Field>
+                          <Field label="Rep commission (%)"><input style={inp} type="number" defaultValue={e.rep_commission_pct ?? ""} onBlur={ev => patchExtra(e, { rep_commission_pct: ev.target.value })} /></Field>
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10 }}>
+                          <Btn primary onClick={() => setSvcEditId(null)} style={{ padding:"6px 13px", fontSize:12 }}>Done</Btn>
+                          <span style={{ fontSize:9.5, color:"#c0c0c0" }}>D {money(e.driver_commission_amount) || "$0"} · R {money(e.rep_commission_amount) || "$0"}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap", margin:"8px 0 4px" }}>
+                    {EXTRA_TYPES.filter(x => !svcs.some(e => e.extra_type === x.v)).map(x => (
+                      <button key={x.v} onClick={() => addJobService(repId, x.v, (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids[0]) || "")}
+                        style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:20, padding:"4px 11px", fontSize:11.5, color:"#888", cursor:"pointer" }}>+ {x.l}</button>
+                    ))}
+                    <button onClick={() => setQuickExtra({ jobId: repId, extra_date: today(), extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids[0]) || "", rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })}
+                      title="Add an extra with every field (commissions, broker share)" style={{ border:"1px dashed #dcdcdc", background:"#fff", borderRadius:20, padding:"4px 11px", fontSize:11.5, color:"#888", cursor:"pointer" }}>+ Detailed…</button>
+                  </div>
+                  {svcs.length > 0 && <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Subtotal services</span><span style={{ fontWeight:700, color:"#C2410C" }}>+${Math.round(svcTotal).toLocaleString()}</span></div>}
                 </>)}
 
                 <div style={{ ...kvS, borderTop:"2px solid #111", borderBottom:"none", paddingTop:8, marginTop:5 }}><span style={{ ...kS, color:"#111", fontWeight:700 }}>Job total</span><span style={{ fontSize:15, fontWeight:700 }}>${Math.round(grandTotal).toLocaleString()}</span></div>
                 <div style={kvS}><span style={kS}>Collected</span><span style={{ fontWeight:600, color:"#1A8A4E" }}>−${Math.round(collected + svcCollected).toLocaleString()}</span></div>
                 <div style={{ ...kvS, borderTop:"1px solid #f0d0d0", borderBottom:"none", paddingTop:8, marginTop:2 }}><span style={{ ...kS, color:"#111", fontWeight:700 }}>Outstanding</span><span style={{ fontSize:15, fontWeight:700, color: outstanding > 0 ? "#B91C1C" : "#1A8A4E" }}>${Math.round(outstanding).toLocaleString()}</span></div>
-
-                {/* ── Add payment: opens the 4-step flow with this job already
-                     picked, so cash + Zelle + checks land as one grouped payment
-                     applied to the balance and each extra. ── */}
                 {!paymentsMissing && (
                   <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid #f0f0f0" }}>
                     <Btn primary onClick={() => openAddPayment({ job_id: repId, received_by: drawerDriverName, cash_with_whom: drawerDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })}
@@ -12586,64 +12759,200 @@ export default function App() {
                 )}
               </div>
 
-              {/* ── Volume & load ── */}
-              <div style={cardS}>
-                <div style={capS}>Volume &amp; load</div>
-                <div style={{ display:"flex", alignItems:"baseline", gap:8, flexWrap:"wrap" }}>
-                  <span style={{ fontSize:26, fontWeight:700, letterSpacing:"-0.02em", color: jobHasRealCf ? "#3B6D11" : "#111" }}>{Math.round(jobCf).toLocaleString()}</span>
-                  <span style={{ fontSize:12, color:"#999" }}>{jobHasRealCf ? tr("CF real ✓", "CF real ✓") : tr("CF estimated", "CF estimado")}</span>
-                  {(() => {
-                    const est = jobEstCf;
-                    if (!jobHasRealCf || est <= 0) return null;
-                    const d = (jobCf - est) / est * 100;
-                    return <span style={{ marginLeft:"auto", fontSize:10.5, fontWeight:700, borderRadius:10, padding:"2px 7px", background: d >= 0 ? "#FDE3CF" : "#EAF3DE", color: d >= 0 ? "#C2410C" : "#3B6D11" }}>{d >= 0 ? "+" : ""}{d.toFixed(1)}% vs estimate</span>;
-                  })()}
-                </div>
-                <div style={{ fontSize:11.5, color:"#999", margin:"4px 0 12px" }}>{jobEstCf > 0 ? tr(`Broker estimate ${Math.round(jobEstCf).toLocaleString()} CF`, `Estimado del broker ${Math.round(jobEstCf).toLocaleString()} CF`) : tr("No estimate recorded", "Sin estimado cargado")}</div>
-                <div style={kvS}><span style={kS}>Pads</span><span style={{ fontWeight:600 }}>{numv(jobDetail.pads_received)} received · {numv(jobDetail.pads_returned)} returned</span>{padsMissingCount > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#B91C1C", fontWeight:700 }}>{tr(`${padsMissingCount} missing`, `faltan ${padsMissingCount}`)}</span>}</div>
-                <div style={kvS}><span style={kS}>Trip</span>{gTrip ? <span style={{ fontWeight:600, color:"#6D28D9" }}>{gTrip.trip_number || "#" + gTrip.id}</span> : <span style={{ color:"#bbb" }}>{tr("Unassigned", "Sin asignar")}</span>}</div>
-                <div style={kvS}><span style={kS}>Driver</span><span style={{ fontWeight:600 }}>{drvNames || <span style={{ color:"#bbb" }}>—</span>}</span></div>
-                <div style={kvS}><span style={kS}>Extra stops</span><span style={{ fontWeight:600 }}>{jobDetail.extra_stops || "0"}</span></div>
-                <div style={{ ...kvS, borderBottom:"none" }}><span style={kS}>Price / CF</span><span style={{ fontWeight:600 }}>{money(jobDetail.price_per_cf) || "—"}</span>{numv(jobDetail.fuel_surcharge_pct) > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#999" }}>+ {numv(jobDetail.fuel_surcharge_pct)}% fuel</span>}</div>
+              <div style={{ display:"grid", gap:14, minWidth:0 }}>
+                {/* ── Carrier settlement ── */}
+                {!settlementsMissing && (
+                  <div style={cardS}>
+                    <div style={capS}>Carrier settlement{jobDetail.job_type === "broker_delivery" && <span style={{ ...rightS, background:"#FDE3CF", color:"#C2410C", borderRadius:10, padding:"1px 7px", fontWeight:600 }}>broker delivery</span>}</div>
+                    {(() => {
+                      const linkedId = jobDetail.closing_sheet_id;
+                      const linked = linkedId ? closingSheets.find(s => s.id === Number(linkedId)) : null;
+                      const openSheets = closingSheets.filter(s => s.status === "open");
+                      const selStyle = { fontSize:12, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff" };
+                      const onMove = (v) => {
+                        if (!v) return;
+                        if (v === "__unlink") updateJobBol(jobDetail.key, "closing_sheet_id", "");
+                        else if (v === "__new") addJobToNewSheet(jobDetail.key, jobDetail.broker_id);
+                        else updateJobBol(jobDetail.key, "closing_sheet_id", Number(v));
+                      };
+                      return (
+                        <div style={kvS}><span style={kS}>Closing sheet</span>
+                          {linked ? (
+                            <span style={{ display:"inline-flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                              <button onClick={() => { setJobDetailKey(null); setPage("settlements"); setCsDetailId(linked.id); }} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>#{linked.closing_sheet_number || linked.id}</button>
+                              <CSBadge status={linked.status} />
+                              <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
+                                <option value="">Move…</option>
+                                {openSheets.filter(s => s.id !== linked.id).map(s => <option key={s.id} value={String(s.id)}>→ #{s.closing_sheet_number || s.id}</option>)}
+                                <option value="__new">→ ➕ New</option>
+                                <option value="__unlink">Remove from closing sheet</option>
+                              </select>
+                            </span>
+                          ) : (
+                            <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
+                              <option value="">+ Add to closing sheet…</option>
+                              {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "no broker"}</option>)}
+                              <option value="__new">➕ Create new</option>
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    <div style={kvS}><span style={kS}>Carrier rate / CF</span><InlineField value={jobDetail.carrier_rate_per_cf} onSave={(v) => updateJobField(P, "carrier_rate_per_cf", v === "" ? null : Number(v))} display={money(jobDetail.carrier_rate_per_cf)} /></div>
+                    <div style={kvS}><span style={kS}>Carrier fee (auto)</span><span style={{ fontWeight:600 }}>{money(parseCf(jobDetail.volume) * numv(jobDetail.carrier_rate_per_cf)) || "$0"}</span></div>
+                    <div style={kvS}><span style={kS}>BOL balance to collect</span><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(P, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></div>
+                    <div style={{ ...kvS, borderBottom:"none" }}><span style={kS}>BOL collected</span>
+                      <span style={{ display:"inline-flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                        <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
+                        {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Commissions on services ── */}
+                {!extrasMissing && svcs.length > 0 && (
+                  <div style={cardS}>
+                    <div style={capS}>Commissions on services</div>
+                    {svcs.map(e => (
+                      <div key={e.id} style={kvS}>
+                        <span style={kS}>{extraTypeLabel(e.extra_type)}</span>
+                        <span style={{ fontSize:11, color:"#888" }}>{genByLabel(e.generated_by)}{driverById[e.driver_id]?.name ? ` · 🧑‍✈️ ${driverById[e.driver_id].name}` : ""}{empById[e.rep_id]?.name ? ` · 👤 ${empById[e.rep_id].name}` : ""}</span>
+                        <span style={{ marginLeft:"auto", whiteSpace:"nowrap" }}><b style={{ color:"#1A8A4E" }}>D {money(e.driver_commission_amount) || "$0"}</b> · <b style={{ color:"#185FA5" }}>R {money(e.rep_commission_amount) || "$0"}</b></span>
+                      </div>
+                    ))}
+                    <div style={{ ...kvS, borderTop:"1px solid #ececec", borderBottom:"none" }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Driver total</span><span style={{ fontWeight:700, color:"#1A8A4E" }}>{money(svcs.reduce((s, e) => s + numv(e.driver_commission_amount), 0)) || "$0"}</span></div>
+                    <div style={{ ...kvS, borderBottom:"none", paddingTop:2 }}><span style={{ ...kS, fontWeight:700, color:"#555" }}>Rep total</span><span style={{ fontWeight:700, color:"#185FA5" }}>{money(svcs.reduce((s, e) => s + numv(e.rep_commission_amount), 0)) || "$0"}</span></div>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* ── Needs attention: what is actually wrong with THIS job. ── */}
-            {(() => {
-              const flags = [];
-              if (faddDays !== null && faddDays < 0) flags.push({ ic:"⚠️", c:"#A32D2D", l: tr(`FADD ${Math.abs(faddDays)} days overdue`, `FADD vencido hace ${Math.abs(faddDays)} días`) });
-              if (!jobDetail.fadd) flags.push({ ic:"📅", c:"#C2410C", l: tr("No FADD set", "Sin FADD") });
-              if (!jobDetail.delivery_date) flags.push({ ic:"📦", c:"#C2410C", l: tr("No delivery date set", "Sin fecha de delivery") });
-              if (!jobDetail.trip_id) flags.push({ ic:"🛣️", c:"#92760B", l: tr("No trip assigned", "Sin trip asignado") });
-              if (!drvNames) flags.push({ ic:"🧑‍✈️", c:"#92760B", l: tr("No driver assigned", "Sin driver asignado") });
-              if (!jobDetail.sticker_color) flags.push({ ic:"🏷️", c:"#92760B", l: tr("Sticker unassigned", "Sticker sin asignar") });
-              if (padsMissingCount > 0) flags.push({ ic:"🧺", c:"#92760B", l: tr(`${padsMissingCount} pads missing`, `faltan ${padsMissingCount} pads`) });
-              if (jobClaimsCount > 0) flags.push({ ic:"🩹", c:"#A32D2D", l: tr(`${jobClaimsCount} open claim(s)`, `${jobClaimsCount} claim(s) abierto(s)`) });
-              if (!flags.length) return null;
+            {/* ── Payments: coverage per charge, then each payment as a card. ── */}
+            {!paymentsMissing && (() => {
+              const ps = jobPays;
+              const charges = chargeStateByJobKey(jkey);
+              const groups = groupPayments(ps);
+              const exList = (extrasByJobKey[jkey] || []);
+              const exById = Object.fromEntries(exList.map(e => [e.id, e]));
+              const recv = ps.filter(p => p.received);
+              const jobCollected = charges.jobCharge.collected;
+              const extrasCollected = recv.filter(p => p.concept === "extra").reduce((s, p) => s + paymentNet(p), 0);
+              const ccFeeTotal = recv.filter(p => p.concept === "cc_fee").reduce((s, p) => s + paymentNet(p), 0);
+              // Broker share deductions (job balance + extras) → net revenue to the company.
+              const jobBrokerSharePct = numv(jobDetail.broker_job_share_pct);
+              const jobBrokerShare = jobCollected * jobBrokerSharePct / 100;
+              const extrasBrokerShare = exList.filter(e => e.active !== false).reduce((s, e) => s + extraBrokerShare(e), 0);
+              const totalBrokerShare = jobBrokerShare + extrasBrokerShare;
+              const netRevenue = (jobCollected + extrasCollected) - totalBrokerShare;
+              const payOutstanding = charges.jobCharge.remaining + charges.extraCharges.reduce((s, c) => s + c.remaining, 0);
+              const canEdit = can("payments", "edit");
               return (
-                <div style={{ ...cardS, marginBottom:12 }}>
-                  <div style={capS}>Needs attention<span style={rightS}>{flags.length}</span></div>
-                  <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
-                    {flags.map((f, i) => (
-                      <span key={i} style={{ display:"inline-flex", alignItems:"center", gap:6, border:"1px solid #f0f0f0", borderRadius:8, padding:"6px 11px", fontSize:12.5, fontWeight:600, color:f.c }}>
-                        <span>{f.ic}</span>{f.l}
-                      </span>
+                <>
+                  <div style={capS}>Payments{groups.length ? <span style={{ ...rightS, marginLeft:0 }}>{groups.length}</span> : null}
+                    <Btn onClick={() => openAddPayment({ job_id: repId, received_by: drawerDriverName, cash_with_whom: drawerDriverName, amount: payOutstanding > 0 ? String(Math.round(payOutstanding)) : "" })} style={{ marginLeft:"auto", padding:"4px 11px", fontSize:11.5, textTransform:"none", letterSpacing:0 }}>+ Add payment</Btn>
+                  </div>
+                  <JobCoverage charges={charges} extrasById={exById} />
+                  {(ccFeeTotal > 0 || totalBrokerShare > 0 || charges.unattributedExtraCollected > 0.01) && (
+                    <div style={{ background:"#fafafa", borderRadius:9, padding:"8px 12px", marginBottom:10, fontSize:12.5, display:"grid", gap:4 }}>
+                      {ccFeeTotal > 0 && <div style={{ color:"#854F0B" }}>CC fees collected: <b>{money(ccFeeTotal)}</b></div>}
+                      {charges.unattributedExtraCollected > 0.01 && <div style={{ fontSize:11, color:"#999" }}>{money(charges.unattributedExtraCollected)} collected from extras not assigned to a specific extra (historical).</div>}
+                      {totalBrokerShare > 0 && (<>
+                        <div style={{ display:"flex", justifyContent:"space-between", color:"#C2410C" }}><span>− Broker share{jobBrokerSharePct > 0 ? ` (job ${jobBrokerSharePct}%)` : ""}</span><b>−{money(totalBrokerShare)}</b></div>
+                        <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Net revenue (post broker)</span><span style={{ color:"#1A8A4E" }}>{money(netRevenue) || "$0"}</span></div>
+                      </>)}
+                    </div>
+                  )}
+                  {groups.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments recorded.</div>
+                    : groups.map(g => (
+                      <PaymentCard key={g.key} g={g} extrasById={exById}
+                        onEdit={canEdit ? openEditPayment : undefined}
+                        onAssign={canEdit && !allocMissing ? openReallocatePayment : undefined}
+                        onPhoto={setPayPhotoView}
+                        onToggleReceived={canEdit ? togglePayReceived : undefined}
+                        onToggleBanked={canEdit ? togglePayBanked : undefined} />
                     ))}
+                </>
+              );
+            })()}
+          </>)}
+
+          {jobTab === "storage" && (<>
+          <div style={capS}>{jobDetail.parts.length === 1 ? "Where it's stored" : `Where it's stored (${jobDetail.parts.length})`}</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {jobDetail.parts.map(p => {
+              const s = p.storage || {};
+              const delivered = !!p.date_out;
+              const isWh = !!p.warehouse;
+              return (
+                <div key={p.id} style={{ ...cardS, background: delivered ? "#fafafa" : "#fff" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6, flexWrap:"wrap" }}>
+                    <span style={jobBadgeStyle(delivered)}>
+                      <span style={{ width:6, height:6, borderRadius:"50%", background: delivered ? "#bbb" : "#639922" }} />
+                      {delivered ? "Delivered" : "Active"}
+                    </span>
+                    <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : [s.unit && "U-" + s.unit, s.brand].filter(Boolean).join(" · ") || "Unit"}</strong>
+                    {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
+                    <span style={{ flex:1 }} />
+                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Split across two trucks" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split load</Btn>}
+                    {!delivered
+                      ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
+                      : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Undeliver</Btn>}
+                  </div>
+                  <div style={{ fontSize:12.5, color:"#444", display:"flex", gap:14, flexWrap:"wrap", alignItems:"center" }}>
+                    {isWh ? (
+                      <span>📍 Own warehouse — {p.warehouse}</span>
+                    ) : (
+                      <>
+                        {s.address && <span>📍 {s.address}</span>}
+                        {s.gate_code && <span style={{ display:"inline-flex", alignItems:"center" }}>Gate <span style={{ fontFamily:"monospace", marginLeft:4, fontWeight:600 }}>{s.gate_code}</span><CopyButton value={s.gate_code} /></span>}
+                        {s.monthly_cost && <span>Monthly cost <b>${s.monthly_cost}</b></span>}
+                      </>
+                    )}
+                    <span style={{ color:"#888" }}>In <b style={{ color:"#444" }}>{p.date_in || "—"}</b>{delivered ? <> · Out <b style={{ color:"#444" }}>{p.date_out}</b></> : daysStored !== null ? <> · <b style={{ color:"#444" }}>{tr(`${daysStored} days`, `${daysStored} días`)}</b></> : null}</span>
+                    {jobDetail.sticker_color && <span><Sticker color={jobDetail.sticker_color} />{jobDetail.lot_number ? ` · Lot ${jobDetail.lot_number}` : ""}</span>}
+                  </div>
+                  <div style={{ marginTop:8, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap", fontSize:12 }}>
+                    {jobDetail.billing_active
+                      ? <span style={{ color:"#3B6D11", fontWeight:600 }}>🧾 Billing active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · since ${jobDetail.billing_start_date}` : ""}</span>
+                      : <span style={{ color:"#bbb" }}>🧾 {tr("No storage charged", "Sin storage facturado")}</span>}
+                    {!isWh && <span onClick={() => { setJobDetailKey(null); setDetailId(p.storage_id); }}
+                      style={{ marginLeft:"auto", color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>View full unit →</span>}
                   </div>
                 </div>
               );
-            })()}
+            })}
+          </div>
+          </>)}
 
-            {/* ── Dispatch notes: manager writes, everyone reads. Service
-                 entries are posted by the app and cannot be edited. ── */}
-            <div style={cardS}>
-              <div style={capS}>Dispatch notes<span style={rightS}>{tr(`${noteRows.length} entries · newest first`, `${noteRows.length} entradas · más nuevas primero`)}</span></div>
+          {jobTab === "activity" && (() => {
+            const partIds = jobDetail.parts.map(p => p.id);
+            const storageTargets = [
+              ...records.filter(r => r.space_type !== "warehouse").map(r => ({ key:String(r.id), id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
+              ...WAREHOUSES.map(w => ({ key:"wh:"+w, id:null, label:`Warehouse ${w}` })),
+            ];
+            const setJE = (fields) => setJobEventForm(f => ({ ...f, ...fields }));
+            const meta = jobEventForm ? jobEventMeta(jobEventForm.event_type) : null;
+            const showClaims = actFilter === "all" || actFilter === "claims";
+            const feed = actFilter === "all" ? actItems : actFilter === "claims" ? [] : actItems.filter(it => it.kind === (actFilter === "notes" ? "note" : "event"));
+            const days = [];
+            for (const it of feed) {
+              const day = it.sort.slice(0, 10);
+              if (!days.length || days[days.length - 1].day !== day) days.push({ day, rows: [] });
+              days[days.length - 1].rows.push(it);
+            }
+            const fchip = (id, label, n) => (
+              <button key={id} onClick={() => setActFilter(id)} style={{ border:`1px solid ${actFilter === id ? "#111" : "#e5e5e5"}`, background: actFilter === id ? "#111" : "#fff", color: actFilter === id ? "#fff" : "#666", borderRadius:20, padding:"3px 10px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>{label}{n ? <span style={{ opacity:0.6, marginLeft:4 }}>{n}</span> : null}</button>
+            );
+            return (<>
+              {/* ── Dispatch notes: manager writes, everyone reads. ── */}
+              <div style={capS}>Dispatch notes<span style={rightS}>{isMgr ? "manager writes · tagged teammates get a DM" : "written by the dispatch manager"}</span></div>
               {jobEventsMissing ? (
-                <div style={{ fontSize:12, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"7px 10px" }}>
+                <div style={{ fontSize:12, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"7px 10px", marginBottom:14 }}>
                   Run the updated SQL to save dispatch notes. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:12 }}>View SQL</button>
                 </div>
-              ) : (<>
-                {isMgr && (<>
+              ) : isMgr ? (
+                <div style={{ ...cardS, marginBottom:14 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:9, marginBottom:8 }}>
                     <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter") saveJobNote(repId, jobDetail); }}
@@ -12653,13 +12962,11 @@ export default function App() {
                   {/* Tag a teammate: each one picked gets a direct message with the
                       note, so "the client is ready to receive" reaches the person
                       who has to act on it instead of sitting in a card. */}
-                  <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", marginBottom:9 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                     <span style={{ fontSize:10.5, color:"#999", fontWeight:600 }}>Alert</span>
                     {teamPeople.length === 0 && <span style={{ fontSize:11, color:"#ccc" }}>No teammates to alert</span>}
                     {teamPeople.filter(pp => pp.id !== session?.user?.id).map(pp => {
                       const on = noteMentions.includes(pp.id);
-                      // The job's own people come first: the driver or rep named on
-                      // the job is who a dispatch note usually needs to reach.
                       const assigned = [drvNames, jobDetail.rep].filter(Boolean).join(" ").toLowerCase().includes(personLabel(pp).toLowerCase());
                       return (
                         <button key={pp.id} onClick={() => setNoteMentions(m => on ? m.filter(x => x !== pp.id) : [...m, pp.id])}
@@ -12679,421 +12986,151 @@ export default function App() {
                         style={{ border:"1px solid #cfe6d6", background: jobDetail.client_phone ? "#fff" : "#fafafa", color: jobDetail.client_phone ? "#1A8A4E" : "#ccc", borderRadius:8, padding:"4px 10px", fontSize:11.5, fontWeight:600, cursor: jobDetail.client_phone ? "pointer" : "default" }}>💬 WhatsApp</button>
                     </span>
                   </div>
-                </>)}
-                <div style={{ fontSize:10.5, color:"#bbb", marginBottom:13, paddingBottom:11, borderBottom:"1px solid #f4f4f4" }}>
-                  🔒 {isMgr
-                    ? "Only the dispatch manager can write, edit or delete notes. Tagged teammates get the note as a direct message. Service entries are posted automatically by whoever adds a service — anyone can add one, and only the dispatch manager can remove the entry."
-                    : "Notes are written by the dispatch manager. You can read them here."}
                 </div>
-                {noteRows.length === 0 ? (
-                  <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>No notes on this job yet.</div>
-                ) : (() => {
-                  const groups = [];
-                  for (const n of noteRows) {
-                    const day = String(n.created_at || n.event_date || "").slice(0, 10);
-                    if (!groups.length || groups[groups.length - 1].day !== day) groups.push({ day, rows: [] });
-                    groups[groups.length - 1].rows.push(n);
-                  }
-                  return groups.map(g => (
-                    <div key={g.day}>
-                      <div style={{ fontSize:10, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"11px 0 5px" }}>{dayLabel(g.day)}</div>
-                      {g.rows.map(n => {
-                        const auto = n.event_type === "service";
-                        const who = (n.created_by || "").split("@")[0] || "—";
-                        const initials = (who.split(/[.\-_\s]+/).filter(Boolean).map(x => x[0]).join("") || who).slice(0, 2).toUpperCase();
-                        return (
-                          <div key={n.id} style={{ display:"flex", alignItems:"flex-start", gap:9, padding:"7px 0", borderBottom:"1px solid #f7f7f7" }}>
-                            <span style={{ fontSize:10.5, color:"#bbb", width:38, flexShrink:0, paddingTop:3, fontVariantNumeric:"tabular-nums" }}>{String(n.created_at || "").slice(11, 16) || "—"}</span>
-                            <span style={{ width:22, height:22, borderRadius:"50%", background: auto ? "#EAF3DE" : "#EDE9FE", color: auto ? "#3B6D11" : "#6D28D9", fontSize:9, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>{initials}</span>
-                            <div style={{ flex:1, fontSize:12.5, lineHeight:1.45, minWidth:0 }}>
-                              <b style={{ fontSize:12 }}>{who}</b>
-                              {auto && <span style={{ fontSize:9, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:9, padding:"1px 6px", marginLeft:4 }}>service</span>}
-                              <div style={{ color:"#444", marginTop:2 }}>
-                                {(() => {
-                                  if (!mentionRe) return n.notes;
-                                  return String(n.notes || "").split(mentionRe).map((part, pi) => pi % 2
-                                    ? <b key={pi} style={{ color:"#6D28D9" }}>@{part}</b>
-                                    : <span key={pi}>{part}</span>);
-                                })()}
-                              </div>
-                            </div>
-                            {isMgr && !auto && (
-                              <button onClick={() => deleteJobEvent(n)} title="Delete note" style={{ border:"none", background:"none", cursor:"pointer", color:"#d8d8d8", fontSize:13, flexShrink:0, paddingTop:2 }}>🗑</button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ));
-                })()}
-              </>)}
-            </div>
-          </>)}
+              ) : null}
 
-          {jobTab === "money" && (<>
-          {!settlementsMissing && (
-            <>
-              <SectionLabel>Carrier Settlement</SectionLabel>
-              {(() => {
-                const linkedId = jobDetail.closing_sheet_id;
-                const linked = linkedId ? closingSheets.find(s => s.id === Number(linkedId)) : null;
-                const openSheets = closingSheets.filter(s => s.status === "open");
-                const selStyle = { fontSize:12, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff" };
-                const onMove = (v) => {
-                  if (!v) return;
-                  if (v === "__unlink") updateJobBol(jobDetail.key, "closing_sheet_id", "");
-                  else if (v === "__new") addJobToNewSheet(jobDetail.key, jobDetail.broker_id);
-                  else updateJobBol(jobDetail.key, "closing_sheet_id", Number(v));
-                };
-                return (
-                  <EditRow label="Closing sheet">
-                    {linked ? (
-                      <span style={{ display:"inline-flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                        <button onClick={() => { setJobDetailKey(null); setPage("settlements"); setCsDetailId(linked.id); }} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>#{linked.closing_sheet_number || linked.id}</button>
-                        <CSBadge status={linked.status} />
-                        <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
-                          <option value="">Move…</option>
-                          {openSheets.filter(s => s.id !== linked.id).map(s => <option key={s.id} value={String(s.id)}>→ #{s.closing_sheet_number || s.id}</option>)}
-                          <option value="__new">→ ➕ New</option>
-                          <option value="__unlink">Remove from closing sheet</option>
-                        </select>
-                      </span>
-                    ) : (
-                      <select value="" onChange={e => onMove(e.target.value)} style={selStyle}>
-                        <option value="">+ Add to closing sheet…</option>
-                        {openSheets.map(s => <option key={s.id} value={String(s.id)}>#{s.closing_sheet_number || s.id} · {brokerName(s.broker_id) || "no broker"}</option>)}
-                        <option value="__new">➕ Create new</option>
+              {/* ── One feed: notes, events and claims, filterable. ── */}
+              <div style={{ ...capS, gap:6 }}>
+                Activity
+                <span style={{ marginLeft:"auto", display:"flex", gap:5, flexWrap:"wrap", letterSpacing:0, textTransform:"none" }}>
+                  {fchip("all", "All", actCount)}
+                  {fchip("notes", "Notes", actItems.filter(it => it.kind === "note").length)}
+                  {fchip("events", "Events", actItems.filter(it => it.kind === "event").length)}
+                  {(jobClaims.length > 0 || (!claimsMissing && can("claims","create"))) && fchip("claims", "Claims", jobClaims.length)}
+                  {!jobEventsMissing && !jobEventForm && <Btn onClick={() => setJobEventForm({ event_date: today(), event_type:"picked_up", notes:"", storage_id:"", storage_label:"", trip_ref:"" })} style={{ padding:"3px 10px", fontSize:11.5, fontWeight:600 }}>+ Event</Btn>}
+                  {!claimsMissing && can("claims","create") && <Btn onClick={() => openAddClaim({ job_number: jobDetail.job_number || "", client_name: jobDetail.customer || "", trip_id: jobDetail.trip_id || "" })} style={{ padding:"3px 10px", fontSize:11.5, fontWeight:600, color:"#B91C1C" }}>⚠️ Report claim</Btn>}
+                </span>
+              </div>
+              {jobEventForm && (
+                <div style={{ ...cardS, background:"#fafafa", marginBottom:12 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                    <Field label="Date *"><input style={inp} type="date" value={jobEventForm.event_date} onChange={e => setJE({ event_date:e.target.value })} /></Field>
+                    <Field label="Event type *">
+                      <select style={inp} value={jobEventForm.event_type} onChange={e => setJE({ event_type:e.target.value })}>
+                        {JOB_EVENT_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
                       </select>
-                    )}
-                  </EditRow>
-                );
-              })()}
-              {(() => { const P = jobDetail.parts; return (<>
-                <EditRow label="Carrier rate / CF"><InlineField value={jobDetail.carrier_rate_per_cf} onSave={(v) => updateJobField(P, "carrier_rate_per_cf", v === "" ? null : Number(v))} display={money(jobDetail.carrier_rate_per_cf)} /></EditRow>
-                <EditRow label="Carrier fee (auto)"><span style={{ fontWeight:600 }}>{money(parseCf(jobDetail.volume) * numv(jobDetail.carrier_rate_per_cf)) || "$0"}</span></EditRow>
-                <EditRow label="BOL balance to collect"><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(P, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></EditRow>
-                <EditRow label="BOL collected">
-                  <span style={{ display:"inline-flex", alignItems:"center", gap:10 }}>
-                    <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
-                    {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
-                    {!paymentsMissing && <Btn onClick={() => openAddPayment({ job_id: repId, received_by: drawerDriverName, cash_with_whom: drawerDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })} style={{ padding:"3px 9px", fontSize:11 }}>Record payment</Btn>}
-                  </span>
-                </EditRow>
-              </>); })()}
-            </>
-          )}
-          {!extrasMissing && (() => {
-            const exs = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false);
-            const repId = Math.min(...jobDetail.parts.map(p => p.id));
-            const firstDriver = Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? jobDetail.driver_ids[0] : "";
-            const totAmt = exs.reduce((s, e) => s + numv(e.amount), 0);
-            // Per-extra paid/pending chips (payments allocated via job_extra_id + legacy link).
-            const chargeState = paymentsMissing ? null : chargeStateByJobKey(jobDetail.key);
-            const chargeOf = (e) => chargeState?.extraCharges.find(c => Number(c.extra.id) === Number(e.id));
-            return (
-              <>
-                <SectionLabel>Extras {exs.length ? `(${exs.length})` : ""}</SectionLabel>
-                {exs.length === 0
-                  ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No extras on this job.</div>
-                  : exs.map(e => (
-                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
-                        <span style={{ fontWeight:600 }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</span>
-                        <span style={{ color:"#111", fontWeight:600 }}>{money(e.amount) || "$0"}</span>
-                        {(() => {
-                          const c = chargeOf(e);
-                          if (!c) return null;
-                          return c.remaining > 0.01
-                            ? <span style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>Pending ${Math.round(c.remaining).toLocaleString()}</span>
-                            : <span style={{ fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 8px" }}>Pagado</span>;
-                        })()}
-                        <span style={{ fontSize:11, color:"#888" }}>{genByLabel(e.generated_by)}</span>
-                        {driverById[e.driver_id]?.name && <span style={{ fontSize:11, color:"#888" }}>🧑‍✈️ {driverById[e.driver_id].name}</span>}
-                        {empById[e.rep_id]?.name && <span style={{ fontSize:11, color:"#888" }}>👤 {empById[e.rep_id].name}</span>}
-                        <span style={{ flex:1 }} />
-                        <span style={{ fontSize:12, color:"#1A8A4E", fontWeight:600 }}>D {money(e.driver_commission_amount) || "$0"}</span>
-                        <span style={{ fontSize:12, color:"#185FA5", fontWeight:600 }}>R {money(e.rep_commission_amount) || "$0"}</span>
-                        <button onClick={() => deleteExtra(e)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>
-                      </div>
-                    ))}
-                <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8 }}>
-                  {exs.length > 0 && <span style={{ fontSize:13, color:"#666" }}>Total extras: <b>${Math.round(totAmt).toLocaleString()}</b></span>}
-                  <span style={{ flex:1 }} />
-                  <Btn onClick={() => setQuickExtra({ jobId: repId, extra_date: today(), extra_type:"extra_cf", description:"", amount:"", generated_by:"driver_only", driver_id: firstDriver, rep_id:"", driver_commission_pct:10, rep_commission_pct:0, notes:"", extra_cf_count:"", extra_cf_rate:"", fuel_surcharge_pct: jobDetail.fuel_surcharge_pct ?? "", commission_base:"with_fuel", broker_share_pct:"", broker_share_enabled:false })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add extra</Btn>
-                </div>
-              </>
-            );
-          })()}
-          {!paymentsMissing && (() => {
-            const ps = paymentsByJobKey[jobDetail.key] || [];
-            const charges = chargeStateByJobKey(jobDetail.key);
-            const groups = groupPayments(ps);
-            const exList = (extrasByJobKey[jobDetail.key] || []);
-            const exById = Object.fromEntries(exList.map(e => [e.id, e]));
-            const recv = ps.filter(p => p.received);
-            const jobCollected = charges.jobCharge.collected;
-            const extrasCollected = recv.filter(p => p.concept === "extra").reduce((s, p) => s + paymentNet(p), 0);
-            const ccFeeTotal = recv.filter(p => p.concept === "cc_fee").reduce((s, p) => s + paymentNet(p), 0);
-            // Broker share deductions (job balance + extras) → net revenue to the company.
-            const jobBrokerSharePct = numv(jobDetail.broker_job_share_pct);
-            const jobBrokerShare = jobCollected * jobBrokerSharePct / 100;
-            const extrasBrokerShare = exList.filter(e => e.active !== false).reduce((s, e) => s + extraBrokerShare(e), 0);
-            const totalBrokerShare = jobBrokerShare + extrasBrokerShare;
-            const netRevenue = (jobCollected + extrasCollected) - totalBrokerShare;
-            const outstanding = charges.jobCharge.remaining + charges.extraCharges.reduce((s, c) => s + c.remaining, 0);
-            const repId = Math.min(...jobDetail.parts.map(p => p.id));
-            const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
-            const canEdit = can("payments", "edit");
-            return (
-              <>
-                <SectionLabel>Payments {groups.length ? `(${groups.length})` : ""}</SectionLabel>
-                <JobCoverage charges={charges} extrasById={exById} />
-                {(ccFeeTotal > 0 || totalBrokerShare > 0 || charges.unattributedExtraCollected > 0.01) && (
-                  <div style={{ background:"#fafafa", borderRadius:9, padding:"8px 12px", marginBottom:10, fontSize:12.5, display:"grid", gap:4 }}>
-                    {ccFeeTotal > 0 && <div style={{ color:"#854F0B" }}>CC fees collected: <b>{money(ccFeeTotal)}</b></div>}
-                    {charges.unattributedExtraCollected > 0.01 && <div style={{ fontSize:11, color:"#999" }}>{money(charges.unattributedExtraCollected)} collected from extras not assigned to a specific extra (historical).</div>}
-                    {totalBrokerShare > 0 && (<>
-                      <div style={{ display:"flex", justifyContent:"space-between", color:"#C2410C" }}><span>− Broker share{jobBrokerSharePct > 0 ? ` (job ${jobBrokerSharePct}%)` : ""}</span><b>−{money(totalBrokerShare)}</b></div>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Net revenue (post broker)</span><span style={{ color:"#1A8A4E" }}>{money(netRevenue) || "$0"}</span></div>
-                    </>)}
-                  </div>
-                )}
-                {groups.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments recorded.</div>
-                  : groups.map(g => (
-                    <PaymentCard key={g.key} g={g} extrasById={exById}
-                      onEdit={canEdit ? openEditPayment : undefined}
-                      onAssign={canEdit && !allocMissing ? openReallocatePayment : undefined}
-                      onPhoto={setPayPhotoView}
-                      onToggleReceived={canEdit ? togglePayReceived : undefined}
-                      onToggleBanked={canEdit ? togglePayBanked : undefined} />
-                  ))}
-                <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add payment</Btn>
-                </div>
-              </>
-            );
-          })()}
-          </>)}
-
-          {jobTab === "storage" && (<>
-          <SectionLabel>{jobDetail.parts.length === 1 ? "Where it's stored" : `Where it's stored (${jobDetail.parts.length})`}</SectionLabel>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {jobDetail.parts.map(p => {
-              const s = p.storage || {};
-              const delivered = !!p.date_out;
-              const isWh = !!p.warehouse;
-              return (
-                <div key={p.id} style={{ border:"1px solid #f0f0f0", borderRadius:10, padding:"10px 12px", background: delivered ? "#fafafa" : "#fff" }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                    <span style={jobBadgeStyle(delivered)}>
-                      <span style={{ width:6, height:6, borderRadius:"50%", background: delivered ? "#bbb" : "#639922" }} />
-                      {delivered ? "Delivered" : "Active"}
-                    </span>
-                    <strong style={{ fontSize:13 }}>{isWh ? `🏭 Warehouse ${p.warehouse}` : (s.brand || "Unit")}</strong>
-                    {p.split_group && <span style={{ fontSize:10.5, color:"#7C3AED", fontWeight:700 }} title="Split load — one portion of this job">✂️ {splitLabel(p)} · {Math.round(effCf(p))} CF</span>}
-                    <span style={{ flex:1 }} />
-                    {!jobSplitColMissing && !delivered && <Btn onClick={() => { setSplitJobRow(p); setSplitCf(String(Math.round(effCf(p) / 2))); setSplitDest(""); }} title="Split across two trucks" style={{ padding:"4px 10px", fontSize:12 }}>✂️ Split</Btn>}
-                    {!delivered
-                      ? <Btn onClick={() => deliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Mark delivered</Btn>
-                      : <Btn onClick={() => undeliverJobs([p.id])} style={{ padding:"4px 10px", fontSize:12 }}>Undeliver</Btn>}
-                  </div>
-                  <div style={{ fontSize:13, color:"#444", display:"flex", flexDirection:"column", gap:3 }}>
-                    {isWh ? (
-                      <div>📍 Own warehouse — {p.warehouse}</div>
-                    ) : (
-                      <>
-                        {s.address && <div>📍 {s.address}</div>}
-                        <div>Unit: <strong style={{ fontFamily:"monospace" }}>{s.unit || "—"}</strong></div>
-                        {s.gate_code && (
-                          <div style={{ display:"inline-flex", alignItems:"center" }}>Gate code: <span style={{ fontFamily:"monospace", marginLeft:4 }}>{s.gate_code}</span><CopyButton value={s.gate_code} /></div>
-                        )}
-                      </>
-                    )}
-                    <div style={{ color:"#888" }}>In: {p.date_in || "—"}{delivered ? ` · Out: ${p.date_out}` : ""}</div>
-                  </div>
-                  {!isWh && (
-                    <div style={{ marginTop:6 }}>
-                      <span onClick={() => { setJobDetailKey(null); setDetailId(p.storage_id); }}
-                        style={{ fontSize:12, color:"#185FA5", cursor:"pointer", textDecoration:"underline" }}>View full unit →</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <AuditInfo rec={jobDetail} />
-          </>)}
-
-          {jobTab === "timeline" && (<>
-          {(() => {
-            const partIds = jobDetail.parts.map(p => p.id);
-            const partSet = new Set(partIds);
-            const repId = Math.min(...partIds);
-            const storageTargets = [
-              ...records.filter(r => r.space_type !== "warehouse").map(r => ({ key:String(r.id), id:r.id, label:[r.brand, r.unit && "U"+r.unit, r.state].filter(Boolean).join(" ") || `Unit #${r.id}` })),
-              ...WAREHOUSES.map(w => ({ key:"wh:"+w, id:null, label:`Warehouse ${w}` })),
-            ];
-            // Merge automatic trip_events + manual job_events for this job, oldest → newest.
-            const items = [];
-            if (!tripEventsMissing) for (const e of tripEvents) {
-              if (!partSet.has(e.job_id)) continue;
-              const m = TRIP_EVENT_META[e.event_type] || { l:e.event_type, icon:"•" };
-              items.push({ id:"t"+e.id, source:"trip", icon:m.icon, label:m.l, date:e.created_at, sort:(e.created_at || "").slice(0,10)+"|"+(e.created_at || ""), notes:e.notes, by:e.created_by, tripBadge: e.trip_id ? (tripById[e.trip_id]?.trip_number || "#"+e.trip_id) : null, storageBadge: e.storage_id ? (storageById[e.storage_id]?.brand || "storage") : null });
-            }
-            if (!jobEventsMissing) for (const e of jobEvents) {
-              if (!partSet.has(e.job_id)) continue;
-              const m = jobEventMeta(e.event_type);
-              items.push({ id:"j"+e.id, source:"manual", raw:e, icon:m.icon, label:m.l, date:e.event_date || e.created_at, sort:(e.event_date || (e.created_at || "").slice(0,10))+"|"+(e.created_at || ""), notes:e.notes, by:e.created_by, tripBadge: e.trip_ref || null, storageBadge: e.storage_label || (e.storage_id ? (storageById[e.storage_id]?.brand || "storage") : null) });
-            }
-            items.sort((a, b) => a.sort.localeCompare(b.sort));
-            const setJE = (fields) => setJobEventForm(f => ({ ...f, ...fields }));
-            const meta = jobEventForm ? jobEventMeta(jobEventForm.event_type) : null;
-            const jobClaims = (!claimsMissing && can("claims","view") && jobDetail.job_number) ? claims.filter(cl => normJobNumber(cl.job_number) === normJobNumber(jobDetail.job_number)) : [];
-            return (
-              <>
-                {(jobClaims.length > 0 || (!claimsMissing && can("claims","create"))) && (
-                  <>
-                    <SectionLabel>Claims {jobClaims.length ? `(${jobClaims.length})` : ""}</SectionLabel>
-                    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-                      {jobClaims.map(cl => (
-                        <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel="Ver claim →" />
-                      ))}
-                      {can("claims","create") && (
-                        <div>
-                          <Btn onClick={() => openAddClaim({ job_number: jobDetail.job_number || "", client_name: jobDetail.customer || "", trip_id: jobDetail.trip_id || "" })} style={{ padding:"4px 11px", fontSize:12 }}>⚠️ Report claim</Btn>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-                <SectionLabel>Timeline {items.length ? `(${items.length})` : ""}</SectionLabel>
-                {jobEventsMissing && (
-                  <div style={{ fontSize:11.5, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"6px 10px", marginBottom:8 }}>
-                    Run the updated SQL to save manual job events. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:11.5 }}>View SQL</button>
-                  </div>
-                )}
-                {items.length === 0 && !jobEventForm ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No events yet.</div>
-                  : <div style={{ display:"flex", flexDirection:"column" }}>
-                      {items.map((it, i) => (
-                        <div key={it.id} style={{ display:"flex", gap:10, padding:"8px 0", borderBottom: i < items.length-1 ? "1px solid #f4f4f4" : "none" }}>
-                          <div style={{ fontSize:16, lineHeight:1.2 }}>{it.icon}</div>
-                          <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                              <b style={{ fontSize:13 }}>{it.label}</b>
-                              {it.source === "trip" && <span style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>auto</span>}
-                              {it.tripBadge && <span style={{ fontSize:9.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px", fontFamily:"monospace" }}>🛣️ {it.tripBadge}</span>}
-                              {it.storageBadge && <span style={{ fontSize:9.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>📦 {it.storageBadge}</span>}
-                            </div>
-                            {it.notes && <div style={{ fontSize:12, color:"#555", marginTop:2 }}>{it.notes}</div>}
-                            <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{(it.date || "").replace("T", " ").slice(0, 16)}{it.by ? ` · ${it.by}` : ""}</div>
-                          </div>
-                          {it.source === "manual" && (!JOB_EVENT_AUTO[it.raw?.event_type] || isMgr) && <button onClick={() => deleteJobEvent(it.raw)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, alignSelf:"flex-start" }}>×</button>}
-                        </div>
-                      ))}
-                    </div>}
-
-                {jobEventForm ? (
-                  <div style={{ border:"1px solid #e5e5e5", borderRadius:10, padding:"12px", marginTop:10, background:"#fafafa" }}>
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                      <Field label="Date *"><input style={inp} type="date" value={jobEventForm.event_date} onChange={e => setJE({ event_date:e.target.value })} /></Field>
-                      <Field label="Event type *">
-                        <select style={inp} value={jobEventForm.event_type} onChange={e => setJE({ event_type:e.target.value })}>
-                          {JOB_EVENT_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
+                    </Field>
+                    {meta?.storage && (
+                      <Field label="Storage / warehouse (optional)">
+                        <select style={inp} value={jobEventForm.storage_id} onChange={e => { const tgt = storageTargets.find(s => s.key === e.target.value); setJE({ storage_id: e.target.value, storage_label: tgt?.label || "" }); }}>
+                          <option value="">— None —</option>
+                          {storageTargets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
                         </select>
                       </Field>
-                      {meta?.storage && (
-                        <Field label="Storage / warehouse (opcional)">
-                          <select style={inp} value={jobEventForm.storage_id} onChange={e => { const tgt = storageTargets.find(s => s.key === e.target.value); setJE({ storage_id: e.target.value, storage_label: tgt?.label || "" }); }}>
-                            <option value="">— None —</option>
-                            {storageTargets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                          </select>
-                        </Field>
-                      )}
-                      <Field label="Trip # (opcional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Historical ref." /></Field>
-                      <Field label="Notes" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="What happened" /></Field>
-                    </div>
-                    <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10, flexWrap:"wrap" }}>
-                      <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancel</Btn>
-                      <Btn primary onClick={() => saveJobEvent(jobDetail.key, repId)} style={{ padding:"5px 12px", fontSize:12 }}>Save event</Btn>
-                    </div>
+                    )}
+                    <Field label="Trip # (optional)"><input style={inp} value={jobEventForm.trip_ref} onChange={e => setJE({ trip_ref:e.target.value })} placeholder="Historical ref." /></Field>
+                    <Field label="Notes" full><input style={inp} value={jobEventForm.notes} onChange={e => setJE({ notes:e.target.value })} placeholder="What happened" /></Field>
                   </div>
-                ) : !jobEventsMissing && (
-                  <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                    <Btn onClick={() => setJobEventForm({ event_date: today(), event_type:"picked_up", notes:"", storage_id:"", storage_label:"", trip_ref:"" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add evento</Btn>
+                  <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10, flexWrap:"wrap" }}>
+                    <Btn onClick={() => setJobEventForm(null)} style={{ padding:"5px 12px", fontSize:12 }}>Cancel</Btn>
+                    <Btn primary onClick={() => saveJobEvent(jobDetail.key, Math.min(...partIds))} style={{ padding:"5px 12px", fontSize:12 }}>Save event</Btn>
+                  </div>
+                </div>
+              )}
+              <div style={cardS}>
+                {showClaims && jobClaims.length > 0 && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:6, paddingBottom:10, marginBottom:6, borderBottom:"1px solid #f4f4f4" }}>
+                    {jobClaims.map(cl => <ClaimLine key={cl.id} claim={cl} onOpen={() => openEditClaim(cl)} linkLabel="Open claim →" />)}
                   </div>
                 )}
-              </>
-            );
+                {days.length === 0 && !(showClaims && jobClaims.length > 0) && (
+                  <div style={{ fontSize:12.5, color:"#bbb", padding:"4px 0" }}>{actFilter === "claims" ? "No claims on this job." : actFilter === "notes" ? "No notes on this job yet." : "No activity yet."}</div>
+                )}
+                {days.map(g => (
+                  <div key={g.day}>
+                    <div style={{ fontSize:10, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.06em", margin:"9px 0 3px" }}>{dayLabel(g.day)}</div>
+                    {g.rows.map(it => it.kind === "note" ? noteRow(it) : eventRow(it))}
+                  </div>
+                ))}
+              </div>
+            </>);
           })()}
-          </>)}
 
-          {jobTab === "fields" && (<>
-          <SectionLabel>Job data <span style={{ textTransform:"none", letterSpacing:0, fontWeight:400, color:"#bbb" }}>· click to edit</span></SectionLabel>
-          {(() => { const P = jobDetail.parts; const set = (f) => (v) => updateJobField(P, f, v); return (
-          <>
-          <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
-          <EditRow label="Client"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
-          <EditRow label="Broker">
-            <select value={jobDetail.broker_id || ""} onChange={e => set("broker_id")(e.target.value ? Number(e.target.value) : "")}
-              style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
-              <option value="">— No broker —</option>
-              {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </EditRow>
-          <EditRow label="Type"><TypeBadge type={jobDetail.job_type} /></EditRow>
-          <EditRow label="Status"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
-          <EditRow label="Calendar status (color)">
-            {(() => { const cur = calStatusOf(jobDetail); const cm = calStatusMeta(cur) || CALENDAR_STATUSES[0]; return (
-              <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}>
-                <span title="Calendar color" style={{ width:14, height:14, borderRadius:4, background:cm.bar, border:"1px solid rgba(0,0,0,0.1)", flexShrink:0 }} />
-                <select value={cur} disabled={calStatusMissing} onChange={e => updateJobField(P, "calendar_status", e.target.value)}
-                  style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
-                  {CALENDAR_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
-                </select>
-              </span>
-            ); })()}
-          </EditRow>
-          <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
-          <EditRow label="Volumen (CF) — estimado"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
-          {!realCfMissing && (
-            <EditRow label="Real CF (medido)">
-              <InlineField type="number" value={jobDetail.real_cf ?? ""} onSave={set("real_cf")}
-                display={hasRealCf(jobDetail)
-                  ? <span style={{ fontWeight:600, color:"#3B6D11" }}>{Math.round(Number(jobDetail.real_cf)).toLocaleString()} CF ✓{parseCf(jobDetail.volume) > 0 ? <span style={{ fontWeight:400, color:"#999" }}> · est. {Math.round(parseCf(jobDetail.volume)).toLocaleString()}</span> : null}</span>
-                  : <span style={{ color:"#bbb" }}>— (uses the estimate)</span>} />
-            </EditRow>
-          )}
-          <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
-          <EditRow label="Sticker color"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
-          <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
-          <EditRow label="Pick up from"><InlineField type="date" value={jobDetail.pickup_date_from || jobDetail.pickup_date} onSave={(v) => { updateJobField(P, "pickup_date_from", v); updateJobField(P, "pickup_date", v); }} /></EditRow>
-          <EditRow label="Pick up to (opcional)"><InlineField type="date" value={jobDetail.pickup_date_to} onSave={set("pickup_date_to")} /></EditRow>
-          <EditRow label="Pickup address"><InlineField value={jobDetail.pickup_address} onSave={set("pickup_address")} /></EditRow>
-          <EditRow label="Pickup city"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
-          <EditRow label="Pickup state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
-          <EditRow label="Pickup zip"><InlineField value={jobDetail.pickup_zip} onSave={set("pickup_zip")} /></EditRow>
-          <EditRow label="Balance pickup ($)"><InlineField value={jobDetail.pickup_balance} onSave={set("pickup_balance")} display={money(jobDetail.pickup_balance)} /></EditRow>
-          <EditRow label="Date in (a storage)"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
-          <EditRow label="Delivery date"><InlineField type="date" value={jobDetail.delivery_date} onSave={set("delivery_date")} /></EditRow>
-          <EditRow label="Delivery address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
-          <EditRow label="Delivery city"><InlineField value={jobDetail.delivery_city} onSave={set("delivery_city")} /></EditRow>
-          <EditRow label="Delivery state"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
-          <EditRow label="Delivery zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
-          <EditRow label="Balance delivery ($)"><InlineField value={jobDetail.delivery_balance} onSave={set("delivery_balance")} display={money(jobDetail.delivery_balance)} /></EditRow>
-          {routeUrl(jobDetail) && (
-            <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}>
-              <span style={{ color:"#888", minWidth:150, flexShrink:0 }}>Ruta</span>
-              <a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ View route storage → delivery en Google Maps</a>
-            </div>
-          )}
-          <EditRow label="Client billing">
-            {jobDetail.billing_active
-              ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · since ${jobDetail.billing_start_date}` : ""}</span>
-              : <span style={{ color:"#bbb" }}>No storage charged</span>}
-          </EditRow>
-          <EditRow label="Notes"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
-          </>
+          {jobTab === "details" && (() => { const set = (f) => (v) => updateJobField(P, f, v); return (
+            <>
+              <div style={{ ...capS, marginBottom:14 }}>Job data<span style={rightS}>click any value to edit</span></div>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", columnGap:28, rowGap:18, alignItems:"start" }}>
+                {dGroup("Client", <>
+                  <EditRow label="Job #"><InlineField mono value={jobDetail.job_number} onSave={set("job_number")} /></EditRow>
+                  <EditRow label="Client"><InlineField value={jobDetail.customer} onSave={set("customer")} /></EditRow>
+                  <EditRow label="Phone"><InlineField value={jobDetail.client_phone} onSave={set("client_phone")} /></EditRow>
+                  <EditRow label="Email"><InlineField value={jobDetail.client_email} onSave={set("client_email")} /></EditRow>
+                  <EditRow label="Broker">
+                    <select value={jobDetail.broker_id || ""} onChange={e => set("broker_id")(e.target.value ? Number(e.target.value) : "")}
+                      style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
+                      <option value="">— No broker —</option>
+                      {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </EditRow>
+                  <EditRow label="Rep"><InlineField value={jobDetail.rep} onSave={set("rep")} /></EditRow>
+                  <EditRow label="Type"><TypeBadge type={jobDetail.job_type} /></EditRow>
+                </>)}
+                {dGroup("Load", <>
+                  <EditRow label="Volume (CF) — estimate"><InlineField value={jobDetail.volume} onSave={set("volume")} /></EditRow>
+                  {!realCfMissing && (
+                    <EditRow label="Real CF (measured)">
+                      <InlineField type="number" value={jobDetail.real_cf ?? ""} onSave={set("real_cf")}
+                        display={hasRealCf(jobDetail)
+                          ? <span style={{ fontWeight:600, color:"#3B6D11" }}>{Math.round(Number(jobDetail.real_cf)).toLocaleString()} CF ✓{parseCf(jobDetail.volume) > 0 ? <span style={{ fontWeight:400, color:"#999" }}> · est. {Math.round(parseCf(jobDetail.volume)).toLocaleString()}</span> : null}</span>
+                          : <span style={{ color:"#bbb" }}>— (uses the estimate)</span>} />
+                    </EditRow>
+                  )}
+                  <EditRow label="Lot number (sticker)"><InlineField mono value={jobDetail.lot_number} onSave={set("lot_number")} /></EditRow>
+                  <EditRow label="Sticker color"><InlineField type="text" listId="sticker-colors-list" value={jobDetail.sticker_color} onSave={set("sticker_color")} display={jobDetail.sticker_color ? <Sticker color={jobDetail.sticker_color} /> : null} /></EditRow>
+                  <EditRow label="Pads received"><InlineField type="number" value={jobDetail.pads_received ?? ""} onSave={set("pads_received")} /></EditRow>
+                  <EditRow label="Pads returned"><InlineField type="number" value={jobDetail.pads_returned ?? ""} onSave={set("pads_returned")} /></EditRow>
+                  <EditRow label="Extra stops"><InlineField type="number" value={jobDetail.extra_stops ?? ""} onSave={set("extra_stops")} /></EditRow>
+                </>)}
+                {dGroup("Pickup", <>
+                  <EditRow label="Pick up from"><InlineField type="date" value={jobDetail.pickup_date_from || jobDetail.pickup_date} onSave={(v) => { updateJobField(P, "pickup_date_from", v); updateJobField(P, "pickup_date", v); }} /></EditRow>
+                  <EditRow label="Pick up to (optional)"><InlineField type="date" value={jobDetail.pickup_date_to} onSave={set("pickup_date_to")} /></EditRow>
+                  <EditRow label="Address"><InlineField value={jobDetail.pickup_address} onSave={set("pickup_address")} /></EditRow>
+                  <EditRow label="City"><InlineField value={jobDetail.pickup_city} onSave={set("pickup_city")} /></EditRow>
+                  <EditRow label="State"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.pickup_state} onSave={set("pickup_state")} /></EditRow>
+                  <EditRow label="Zip"><InlineField value={jobDetail.pickup_zip} onSave={set("pickup_zip")} /></EditRow>
+                  <EditRow label="Balance pickup ($)"><InlineField value={jobDetail.pickup_balance} onSave={set("pickup_balance")} display={money(jobDetail.pickup_balance)} /></EditRow>
+                  <EditRow label="Driver (who dropped it off)"><InlineField listId="drivers-list" value={jobDetail.driver} onSave={set("driver")} /></EditRow>
+                </>)}
+                {dGroup("Delivery", <>
+                  <EditRow label="Delivery date"><InlineField type="date" value={jobDetail.delivery_date} onSave={set("delivery_date")} /></EditRow>
+                  <EditRow label="FADD"><InlineField type="date" value={jobDetail.fadd} onSave={set("fadd")} display={<FaddBadge fadd={jobDetail.fadd} />} /></EditRow>
+                  <EditRow label="Address"><InlineField value={jobDetail.delivery_address} onSave={set("delivery_address")} /></EditRow>
+                  <EditRow label="City"><InlineField value={jobDetail.delivery_city} onSave={set("delivery_city")} /></EditRow>
+                  <EditRow label="State"><InlineField listId="states-list" transform={v => v.toUpperCase()} value={jobDetail.delivery_state} onSave={set("delivery_state")} /></EditRow>
+                  <EditRow label="Zip"><InlineField value={jobDetail.delivery_zip} onSave={set("delivery_zip")} /></EditRow>
+                  <EditRow label="Balance delivery ($)"><InlineField value={jobDetail.delivery_balance} onSave={set("delivery_balance")} display={money(jobDetail.delivery_balance)} /></EditRow>
+                  {routeUrl(jobDetail) && (
+                    <EditRow label="Route"><a href={routeUrl(jobDetail)} target="_blank" rel="noreferrer" style={{ fontWeight:500, color:"#185FA5", textDecoration:"none" }}>🗺️ View route storage → delivery in Google Maps</a></EditRow>
+                  )}
+                </>)}
+                {dGroup("Storage billing", <>
+                  <EditRow label="Date in (storage)"><InlineField type="date" value={jobDetail.date_in} onSave={set("date_in")} /></EditRow>
+                  <EditRow label="Client billing">
+                    {jobDetail.billing_active
+                      ? <span style={{ color:"#3B6D11", fontWeight:600 }}>Active · {money(jobDetail.client_monthly_rate) || "$0"}/mo{jobDetail.first_month_free ? " · 1st month free" : ""}{jobDetail.billing_start_date ? ` · since ${jobDetail.billing_start_date}` : ""}</span>
+                      : <span style={{ color:"#bbb" }}>No storage charged</span>}
+                  </EditRow>
+                  <EditRow label="Price / CF"><InlineField value={jobDetail.price_per_cf} onSave={set("price_per_cf")} display={money(jobDetail.price_per_cf)} /></EditRow>
+                  <EditRow label="Fuel surcharge (%)"><InlineField type="number" value={jobDetail.fuel_surcharge_pct ?? ""} onSave={set("fuel_surcharge_pct")} /></EditRow>
+                </>)}
+                {dGroup("Status", <>
+                  <EditRow label="Status"><span style={{ display:"inline-flex", alignItems:"center", gap:8 }}><StatusBadge status={jobDetail.status} />{nextStatus(jobDetail) && <button onClick={() => advanceStatus(jobDetail)} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:7, border:"1px solid #e5e5e5", background:"#fff", cursor:"pointer" }}>→ {statusMeta(nextStatus(jobDetail)).l}</button>}</span></EditRow>
+                  <EditRow label="Calendar status (color)">
+                    {(() => { const cur = calStatusOf(jobDetail); const cm = calStatusMeta(cur) || CALENDAR_STATUSES[0]; return (
+                      <span style={{ display:"inline-flex", alignItems:"center", gap:8 }}>
+                        <span title="Calendar color" style={{ width:14, height:14, borderRadius:4, background:cm.bar, border:"1px solid rgba(0,0,0,0.1)", flexShrink:0 }} />
+                        <select value={cur} disabled={calStatusMissing} onChange={e => updateJobField(P, "calendar_status", e.target.value)}
+                          style={{ fontSize:13, padding:"4px 8px", borderRadius:8, border:"1px solid #e5e5e5", outline:"none", background:"#fff" }}>
+                          {CALENDAR_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                        </select>
+                      </span>
+                    ); })()}
+                  </EditRow>
+                  <EditRow label="Notes"><InlineField value={jobDetail.notes} onSave={set("notes")} /></EditRow>
+                </>)}
+              </div>
+            </>
           ); })()}
-          </>)}
 
           </div>
         </Modal>
