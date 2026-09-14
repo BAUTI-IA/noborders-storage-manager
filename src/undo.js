@@ -13,6 +13,23 @@ const uid = () => `b${Date.now().toString(36)}${Math.random().toString(36).slice
 const isMissingDeletedAt = (error) =>
   !!error && /deleted_at|column .* does not exist|42703|PGRST204/i.test(`${error.code || ""} ${error.message || ""}`);
 
+// Missing table / column (42P01 / 42703) or PostgREST's schema-cache miss.
+const isMissingTableOrColumn = (error) =>
+  !!error && /does not exist|42P01|42703|PGRST204|PGRST205/i.test(`${error.code || ""} ${error.message || ""}`);
+
+// Children the delete flows in App.jsx soft-delete alongside a parent row
+// (deleteJob, deletePaymentRow, deleteClaim, deleteCompany). Restoring from the
+// Trash follows the same edges back. `where` narrows polymorphic links.
+export const CASCADE_CHILDREN = {
+  storage_jobs: [{ table: "job_extras", col: "job_id" }, { table: "payments", col: "job_id" }],
+  payments: [{ table: "job_extras", col: "payment_id" }],
+  claims: [{ table: "claim_notes", col: "claim_id" }],
+  companies: [{ table: "compliance_documents", col: "entity_id", where: { entity_type: "company" } }],
+};
+// Children are stamped a few hundred ms before their parent in one delete
+// flow; anything outside this window was deleted on its own.
+export const CASCADE_WINDOW_MS = 5 * 60 * 1000;
+
 export const UNDO_SETUP_HINT =
   "Run the migration first: SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-undo.mjs (adds deleted_at + action_log).";
 
@@ -88,13 +105,50 @@ export function createUndoManager(supabase) {
   async function restore(table, ids) {
     const list = (Array.isArray(ids) ? ids : [ids]).filter((v) => v != null);
     if (!list.length) return { error: null, entries: [] };
-    const { data: before } = await supabase.from(table).select("*").in("id", list);
+    const { data: before, error: selErr } = await supabase.from(table).select("*").in("id", list);
+    if (selErr) return { error: selErr, entries: [] };
     const { error } = await supabase.from(table).update({ deleted_at: null }).in("id", list);
     if (error) return { error, entries: [] };
     return {
       error: null,
       entries: (before || []).map((r) => ({ table, id: r.id, action: "restore", before: r, after: { ...r, deleted_at: null } })),
     };
+  }
+
+  // Restore a row from the Trash TOGETHER with the children that were
+  // soft-deleted with it. Deleting a job also soft-deletes its extras and
+  // payments (one undoable batch), but the Trash only lists the parent row:
+  // restoring just that row brought the job back with its money still in the
+  // trash. Children are matched by FK and by a deleted_at within a few minutes
+  // of the parent's, so an extra someone removed on its own a week earlier
+  // stays deleted. Returns { error, entries } like restore().
+  async function restoreWithChildren(table, id) {
+    const { data: parent, error: pErr } = await supabase.from(table).select("*").eq("id", id).maybeSingle();
+    if (pErr) return { error: pErr, entries: [] };
+    const res = await restore(table, id);
+    if (res.error) return res;
+    const entries = [...res.entries];
+    const at = parent?.deleted_at ? Date.parse(parent.deleted_at) : NaN;
+    if (!Number.isFinite(at)) return { error: null, entries };
+    const lo = new Date(at - CASCADE_WINDOW_MS).toISOString();
+    const hi = new Date(at + CASCADE_WINDOW_MS).toISOString();
+    const rels = [...(CASCADE_CHILDREN[table] || [])];
+    // A card payment's fee is a sibling payment linked by id, not a child by FK.
+    if (table === "payments" && parent?.cc_fee_payment_id != null) rels.push({ table: "payments", col: "id", value: parent.cc_fee_payment_id });
+    for (const rel of rels) {
+      let q = supabase.from(rel.table).select("id").eq(rel.col, rel.value ?? id).not("deleted_at", "is", null).gte("deleted_at", lo).lte("deleted_at", hi);
+      for (const [k, v] of Object.entries(rel.where || {})) q = q.eq(k, v);
+      const { data: kids, error } = await q;
+      // A child table or its deleted_at column may not exist yet (feature not
+      // set up): nothing to restore there, keep going with the rest.
+      if (error) { if (isMissingTableOrColumn(error)) continue; return { error, entries }; }
+      const ids = (kids || []).map((k) => k.id);
+      if (!ids.length) continue;
+      const r = await restore(rel.table, ids);
+      if (r.error) return { error: r.error, entries };
+      entries.push(...r.entries);
+    }
+    return { error: null, entries };
   }
 
   // Build an update entry from the previous row + the patch that was applied.
@@ -162,6 +216,7 @@ export function createUndoManager(supabase) {
     record,
     softDelete,
     restore,
+    restoreWithChildren,
     updateEntry,
     createEntry,
     undo: () => replay(undoStack, redoStack, "undo", "undo"),

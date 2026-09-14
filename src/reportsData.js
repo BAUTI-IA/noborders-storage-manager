@@ -136,6 +136,28 @@ export function reconcile({ truckDayRows, paidDayRows, trucksById, driversList }
     });
   }
 
+  // A paid day whose driver has no truck assigned cannot be cross-checked, but
+  // dropping it made payroll vanish from the report entirely — the totals read
+  // $0 while the office was keying days in every week. It is a gap in the data,
+  // not a discrepancy, so it shows as its own kind and never counts as one.
+  for (const p of paidDayRows || []) {
+    if (p.truckId != null) continue;
+    out.push({
+      kind: "paid_unlinked",
+      date: p.date,
+      truckId: null,
+      truckName: null,
+      driverName: p.driverName,
+      driverKnown: true,
+      miles: 0,
+      spanHours: 0,
+      firstMoveAt: null,
+      lastMoveAt: null,
+      paidHours: p.hours,
+      pay: p.pay,
+    });
+  }
+
   // The mirror case: somebody was paid for a day the truck never left the yard.
   for (const p of paidDayRows || []) {
     if (p.truckId == null) continue;
@@ -166,12 +188,17 @@ export function reconcile({ truckDayRows, paidDayRows, trucksById, driversList }
 
 // Headline numbers for the period.
 export function reportTotals(rows) {
-  const t = { days: rows.length, miles: 0, pay: 0, movedUnpaid: 0, paidNoMovement: 0, unknownDriver: 0 };
+  const t = { days: rows.length, miles: 0, pay: 0, movedUnpaid: 0, paidNoMovement: 0, unknownDriver: 0, paidUnlinked: 0 };
   for (const r of rows) {
     t.miles += numv(r.miles);
+    // Labor paid is a payroll fact: it counts whether or not a truck can be
+    // matched to it.
     t.pay += numv(r.pay);
     if (r.kind === "moved_unpaid") t.movedUnpaid++;
     if (r.kind === "paid_no_movement" && !r.noHistory) t.paidNoMovement++;
+    // Not a discrepancy — nobody can say these days are wrong, only that they
+    // could not be checked.
+    if (r.kind === "paid_unlinked") t.paidUnlinked++;
     if (!r.driverKnown) t.unknownDriver++;
   }
   t.miles = Math.round(t.miles * 10) / 10;

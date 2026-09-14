@@ -7,7 +7,7 @@ import { BolSection } from "./bol.jsx";
 import { MessagesSection, notifyUser } from "./messages.jsx";
 import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
-import { ReportsSection } from "./reports.jsx";
+import { ReportsSection, TRUCK_PINGS_SQL } from "./reports.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines, pourLinesOverCharges } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, computeDriverPnl } from "./analyticsData.js";
@@ -18,7 +18,7 @@ import { ApArSection } from "./apar.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
-import { selectAll } from "./db.js";
+import { selectAll, dbFailed } from "./db.js";
 import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry } from "./appData.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
@@ -769,20 +769,6 @@ do $$ begin alter publication supabase_realtime add table public.closing_sheets;
 // every sync erases the previous one and no question about a past day can be
 // answered: did this truck move on Tuesday, when did it start, how long was it
 // out. The rows accumulate from the day this ships, so it ships early.
-const TRUCK_PINGS_SQL = `create table if not exists public.truck_pings (
-  id bigint generated always as identity primary key,
-  truck_id bigint references public.trucks(id) on delete cascade,
-  lat numeric,
-  lng numeric,
-  status text,
-  at timestamptz,
-  created_at timestamptz default now(),
-  unique (truck_id, at)
-);
-create index if not exists truck_pings_truck_at on public.truck_pings (truck_id, at desc);
-alter table public.truck_pings enable row level security;
-drop policy if exists "truck_pings_all" on public.truck_pings;
-create policy "truck_pings_all" on public.truck_pings for all to anon, authenticated using (true) with check (true);`;
 
 // ELD hours. Kept apart from the payroll table on purpose — see the comment on
 // driver_hos_days in the expenses SQL below.
@@ -3071,11 +3057,15 @@ function TrashSection({ supabase, undoMgr, onRestored }) {
     setBusy(false);
   }, [supabase]);
   useEffect(() => { loadAll(); }, [loadAll]);
+  // Restores the row AND whatever was deleted with it (a job's extras and
+  // payments, a claim's notes...) — see restoreWithChildren in undo.js.
   async function restoreRow(table, label, r) {
-    const res = await undoMgr.restore(table, r.id);
+    const res = await undoMgr.restoreWithChildren(table, r.id);
     if (res.error) { window.alert(res.error.message); return; }
-    undoMgr.record(`Restaurado: ${label}`, res.entries);
-    loadAll(); onRestored?.(table);
+    const others = res.entries.filter(e => e.table !== table).length;
+    undoMgr.record(`Restaurado: ${label}` + (others ? ` (+${others} ${tr("related", "relacionados")})` : ""), res.entries);
+    loadAll();
+    for (const t of new Set([table, ...res.entries.map(e => e.table)])) onRestored?.(t);
   }
   const card = { background:"#fff", border:"1px solid #eee", borderRadius:12, padding:16, marginBottom:16 };
   const tabBtn = (id, lbl) => (
@@ -3169,9 +3159,15 @@ function Sidebar({ page, setPage, onSignOut, can = () => true, isAdmin = false }
     .filter(group => group.items.length > 0);
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
-      <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3" }}>
-        <div style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.01em", lineHeight:1.2 }}>No Borders Moving</div>
-        <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
+      <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3", display:"flex", alignItems:"center", gap:10 }}>
+        {/* Brand mark: the No Borders chain-link logo inside a small circle. */}
+        <div style={{ width:36, height:36, borderRadius:"50%", flexShrink:0, background:"#fff", border:"1px solid #e6e6e6", boxShadow:"0 1px 2px rgba(0,0,0,0.06)", display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }}>
+          <img src="/logo-mark.svg" alt="" width={16} height={28} style={{ display:"block" }} />
+        </div>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.01em", lineHeight:1.2 }}>No Borders Moving</div>
+          <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
+        </div>
       </div>
       <div style={{ flex:1, overflowY:"auto", padding:"10px" }}>
         {visibleNav.map(group => (
@@ -4426,7 +4422,7 @@ export default function App() {
       else {
         // No SQL RPC — backfill row by row through the JS client.
         const { data: rows } = await supabase.from("storage_jobs").select("id, status, job_type, pickup_state, delivery_state").is("calendar_status", null);
-        for (const r of (rows || [])) { if (cancelled) return; await supabase.from("storage_jobs").update({ calendar_status: legacyCalKey(r) }).eq("id", r.id); }
+        for (const r of (rows || [])) { if (cancelled) return; if (dbFailed(await supabase.from("storage_jobs").update({ calendar_status: legacyCalKey(r) }).eq("id", r.id), "storage_jobs", { quiet: true })) return; }
         if (!cancelled) loadJobs();
       }
     })();
@@ -4826,10 +4822,10 @@ export default function App() {
         for (const r of (rows || [])) {
           if (cancelled) return;
           const digital = isDigitalMethod(r.method);
-          await supabase.from("payments").update({
+          if (dbFailed(await supabase.from("payments").update({
             banked: digital,
             banked_date: digital ? (r.banked_date || r.received_date || r.payment_date || null) : null,
-          }).eq("id", r.id);
+          }).eq("id", r.id), "payments", { quiet: true })) return;
         }
       }
       if (!cancelled) loadPayments();
@@ -5121,8 +5117,8 @@ export default function App() {
     if (!toInsert.length && !toOverdue.length) return;
     autoGenRef.current = true;
     (async () => {
-      if (toInsert.length) await supabase.from("storage_billing").insert(toInsert);
-      if (toOverdue.length) await supabase.from("storage_billing").update({ status: "overdue" }).in("id", toOverdue);
+      if (toInsert.length) { dbFailed(await supabase.from("storage_billing").insert(toInsert), "storage_billing", { quiet: true }); }
+      if (toOverdue.length) { dbFailed(await supabase.from("storage_billing").update({ status: "overdue" }).in("id", toOverdue), "storage_billing", { quiet: true }); }
       await loadBilling();
       autoGenRef.current = false;
     })();
@@ -6228,7 +6224,7 @@ export default function App() {
     if (!extrasMissing) { const r = await undoMgr.softDelete("job_extras", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
     if (!paymentsMissing) { const r = await undoMgr.softDelete("payments", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
     for (const j of jobs) if (ids.includes(j.id) && j.closing_sheet_id != null) entries.push(undoMgr.updateEntry("storage_jobs", j, { closing_sheet_id: null }));
-    await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids), "storage_jobs")) return;
     const del = await undoMgr.softDelete("storage_jobs", ids);
     if (del.error) { window.alert(del.error.message); return; }
     entries.push(...del.entries);
@@ -6290,7 +6286,7 @@ export default function App() {
     if (editId) {
       const prev = records.find(r => r.id === editId);
       const patch = { ...payload, updated_by: userEmail, updated_at: new Date().toISOString() };
-      await supabase.from("storages").update(patch).eq("id", editId);
+      if (dbFailed(await supabase.from("storages").update(patch).eq("id", editId), "storages")) { setSaving(false); return; }
       if (prev) undoMgr.record(`Unidad ${form.unit || editId} editada`, [undoMgr.updateEntry("storages", prev, patch)]);
     } else {
       const { data } = await supabase.from("storages").insert([{ ...payload, created_by: userEmail }]).select("*").single();
@@ -6356,7 +6352,7 @@ export default function App() {
       pickup_date_to: (from && to && to >= from) ? to : null,
       updated_by: userEmail, updated_at: new Date().toISOString(),
     };
-    await supabase.from("storage_jobs").update(patch).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", ids), "storage_jobs")) return;
     loadJobs();
   }
   // Add an existing (no-pickup-date) job to the calendar on the chosen date.
@@ -6380,7 +6376,7 @@ export default function App() {
   async function setJobDelivery(ids, date) {
     if (!ids?.length) return;
     const patch = { delivery_date: date || null, updated_by: userEmail, updated_at: new Date().toISOString() };
-    await supabase.from("storage_jobs").update(patch).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", ids), "storage_jobs")) return;
     loadJobs();
   }
   // Add an existing (no-delivery-date) job to the delivery calendar on the chosen date.
@@ -6456,7 +6452,7 @@ export default function App() {
     if (!extrasMissing) { const r = await undoMgr.softDelete("job_extras", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
     if (!paymentsMissing) { const r = await undoMgr.softDelete("payments", ids, "job_id"); if (r.error) { window.alert(r.error.message); return; } entries.push(...r.entries); }
     for (const j of jobs) if (ids.includes(j.id) && j.closing_sheet_id != null) entries.push(undoMgr.updateEntry("storage_jobs", j, { closing_sheet_id: null }));
-    await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ closing_sheet_id: null }).in("id", ids), "storage_jobs")) return;
     const del = await undoMgr.softDelete("storage_jobs", ids);
     if (del.error) { window.alert(del.error.message); return; }
     entries.push(...del.entries);
@@ -6611,10 +6607,10 @@ export default function App() {
         if (!hasLoc) {
           // No storage selected: collapse the job to a single unassigned row.
           if (current.length) {
-            await supabase.from("storage_jobs").update({ storage_id: null, warehouse: null }).eq("id", current[0].id);
-            jobEntries.push(undoMgr.updateEntry("storage_jobs", current[0], { storage_id: null, warehouse: null }));
+            ({ error } = await supabase.from("storage_jobs").update({ storage_id: null, warehouse: null }).eq("id", current[0].id));
+            if (!error) jobEntries.push(undoMgr.updateEntry("storage_jobs", current[0], { storage_id: null, warehouse: null }));
             const rest = current.slice(1).map(p => p.id);
-            if (rest.length) {
+            if (!error && rest.length) {
               const del = await undoMgr.softDelete("storage_jobs", rest);
               error = del.error; jobEntries.push(...del.entries);
             }
@@ -6684,7 +6680,7 @@ export default function App() {
     // Moving a job back out of "delivered" must clear the delivery date, or the
     // job keeps counting as closed everywhere date_out is what's checked.
     if (status !== "delivered" && g.parts.some(p => p.date_out)) patch.date_out = null;
-    await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id));
+    if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id)), "storage_jobs")) return;
     await loadJobs();
     logServiceNote(Math.min(...g.parts.map(p => p.id)), `${tr("Status", "Estado")} → ${statusMeta(status).l}`);
     showToast("Status updated");
@@ -6697,7 +6693,7 @@ export default function App() {
     const patch = { status: ns, updated_by: userEmail, updated_at: new Date().toISOString() };
     if (ns === "delivered") patch.date_out = today();
     if (ns === "picked_up" && !g.pickup_date) patch.pickup_date = today();
-    await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id));
+    if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", g.parts.map(p => p.id)), "storage_jobs")) return;
     loadJobs();
   }
 
@@ -6714,7 +6710,7 @@ export default function App() {
     const payload = { name:brokerForm.name.trim(), contact_name:brokerForm.contact_name||null, contact_phone:brokerForm.contact_phone||null, contact_email:brokerForm.contact_email||null, notes:brokerForm.notes||null };
     if (editingBrokerId) {
       const prev = brokers.find(b => b.id === editingBrokerId);
-      await supabase.from("brokers").update(payload).eq("id", editingBrokerId);
+      if (dbFailed(await supabase.from("brokers").update(payload).eq("id", editingBrokerId), "brokers")) { setBrokerSaving(false); return; }
       if (prev) undoMgr.record(`Broker "${payload.name}" editado`, [undoMgr.updateEntry("brokers", prev, payload)]);
     } else {
       const { data } = await supabase.from("brokers").insert([payload]).select("*").single();
@@ -6740,8 +6736,8 @@ export default function App() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
     const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active, verizon_driver_id: driverForm.verizon_driver_id.trim() || null };
-    if (editingDriverId) await supabase.from("drivers").update(payload).eq("id", editingDriverId);
-    else await supabase.from("drivers").insert([payload]);
+    if (editingDriverId) { if (dbFailed(await supabase.from("drivers").update(payload).eq("id", editingDriverId), "drivers")) { setDriverSaving(false); return; } }
+    else { if (dbFailed(await supabase.from("drivers").insert([payload]), "drivers")) { setDriverSaving(false); return; } }
     setDriverSaving(false); setShowDriverModal(false);
     loadDrivers();
   }
@@ -6825,9 +6821,9 @@ export default function App() {
         undoMgr.record("Expense creado", [undoMgr.createEntry("expenses", data)]);
         // Persist the pairing so the merge stops guessing it: this one is known.
         if (linkingBankTxn) {
-          await supabase.from("bank_transactions")
+          dbFailed(await supabase.from("bank_transactions")
             .update({ matched_expense_id: data.id, match_status: "matched" })
-            .eq("id", linkingBankTxn.id);
+            .eq("id", linkingBankTxn.id), "bank_transactions");
         }
       }
     }
@@ -6944,8 +6940,8 @@ export default function App() {
       const wanted = new Set(csForm.job_keys);
       const toSet = jobs.filter(j => wanted.has(jobKey(j)) && j.closing_sheet_id !== sheetId).map(j => j.id);
       const toClear = jobs.filter(j => j.closing_sheet_id === sheetId && !wanted.has(jobKey(j))).map(j => j.id);
-      if (toSet.length) await supabase.from("storage_jobs").update({ closing_sheet_id: sheetId, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toSet);
-      if (toClear.length) await supabase.from("storage_jobs").update({ closing_sheet_id: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
+      if (toSet.length) { ({ error } = await supabase.from("storage_jobs").update({ closing_sheet_id: sheetId, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toSet)); }
+      if (!error && toClear.length) { ({ error } = await supabase.from("storage_jobs").update({ closing_sheet_id: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear)); }
     }
     setCsSaving(false);
     if (error) { window.alert(error.message); return; }
@@ -6954,13 +6950,13 @@ export default function App() {
     if (sheetId && !editingCsId) setCsDetailId(sheetId);
   }
   async function setCsStatus(s, status) {
-    await supabase.from("closing_sheets").update({ status }).eq("id", s.id);
+    if (dbFailed(await supabase.from("closing_sheets").update({ status }).eq("id", s.id), "closing_sheets")) return;
     loadClosingSheets();
   }
   async function deleteCs(s) {
     if (!window.confirm(tr(`Delete closing sheet #${s.closing_sheet_number || s.id}? Jobs are left unassigned.`, `¿Eliminar el closing sheet #${s.closing_sheet_number || s.id}? Los jobs quedan sin asignar.`))) return;
     const linked = jobs.filter(j => j.closing_sheet_id === s.id);
-    await supabase.from("storage_jobs").update({ closing_sheet_id: null }).eq("closing_sheet_id", s.id);
+    if (dbFailed(await supabase.from("storage_jobs").update({ closing_sheet_id: null }).eq("closing_sheet_id", s.id), "storage_jobs")) return;
     const extra = linked.map(j => undoMgr.updateEntry("storage_jobs", j, { closing_sheet_id: null }));
     if (!(await softDeleteAndRecord("closing_sheets", s.id, `Closing sheet #${s.closing_sheet_number || s.id} eliminada`, extra))) return;
     setCsDetailId(null); loadClosingSheets(); loadJobs();
@@ -6969,7 +6965,7 @@ export default function App() {
   async function updateJobBol(jobKeyStr, field, value) {
     const ids = jobs.filter(j => jobKey(j) === jobKeyStr).map(j => j.id);
     if (!ids.length) return;
-    await supabase.from("storage_jobs").update({ [field]: value === "" ? null : value, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ [field]: value === "" ? null : value, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) return;
     loadJobs();
   }
   // Create a fresh open closing sheet for a job's broker and link the job to it.
@@ -7107,6 +7103,14 @@ export default function App() {
   const vzUnlinkedTrucks = useMemo(
     () => trucksList.filter(t => !t.verizon_vehicle_id),
     [trucksList]);
+  // Linked to something Verizon's roster has never heard of — a VIN pasted in
+  // place of the vehicle number, or a vehicle since removed. Every call for these
+  // fails, and from the outside it looks the same as a broken API.
+  const vzBadlyLinked = useMemo(() => {
+    if (!vzVehicles?.length) return [];
+    const known = new Set(vzVehicles.map(v => v.number));
+    return trucksList.filter(t => t.verizon_vehicle_id && !known.has(String(t.verizon_vehicle_id)));
+  }, [trucksList, vzVehicles]);
 
   // Asks Verizon, from the server, which of its API products this account can
   // actually reach — so nobody has to go read that off the developer portal.
@@ -7215,7 +7219,7 @@ export default function App() {
       if (error) { window.alert("Upload error: " + error.message); setCompDocUploading(false); return; }
       const { data } = supabase.storage.from("compliance-docs").getPublicUrl(path);
       const url = data?.publicUrl || "";
-      if (doc?.id) { await supabase.from("compliance_documents").update({ document_url: url }).eq("id", doc.id); loadComplianceDocs(); }
+      if (doc?.id) { if (!dbFailed(await supabase.from("compliance_documents").update({ document_url: url }).eq("id", doc.id), "compliance_documents")) loadComplianceDocs(); }
       else { setDocForm(f => ({ ...f, document_url: url })); }
     } catch (e) { window.alert("Error: " + e.message); }
     setCompDocUploading(false);
@@ -7480,11 +7484,11 @@ export default function App() {
       for (let i = 0; i < wanted.length; i++) {
         const ids = jobRowIdsForUnit(wanted[i]);
         const purpose = tripPurposeColMissing ? {} : { trip_purpose: tripForm.purposes?.[wanted[i]] === "relocation" ? "relocation" : "delivery" };
-        if (ids.length) await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, ...purpose, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+        if (ids.length) { ({ error } = await supabase.from("storage_jobs").update({ trip_id: tripId, trip_stop_order: i + 1, ...purpose, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids)); if (error) break; }
       }
       const wantedSet = new Set(wanted);
       const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(tripUnitKey(j))).map(j => j.id);
-      if (toClear.length) await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear);
+      if (!error && toClear.length) { ({ error } = await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear)); }
     }
     setTripSaving(false);
     if (error) { window.alert(error.message); return; }
@@ -7494,7 +7498,7 @@ export default function App() {
   async function setTripStatus(t, status) {
     const label = (TRIP_STATUS[status]?.l) || status;
     if (!window.confirm(tr(`Change the status of trip ${t.trip_number || "#"+t.id} to "${label}"?`, `¿Cambiar el estado del trip ${t.trip_number || "#"+t.id} a "${label}"?`))) return;
-    await supabase.from("trips").update({ status }).eq("id", t.id); loadTrips();
+    if (dbFailed(await supabase.from("trips").update({ status }).eq("id", t.id), "trips")) return; loadTrips();
   }
   // Manual trip status change from the edit form — applies immediately on button
   // click (no confirm) and persists to Supabase. The ONLY automatic rule is that
@@ -7502,14 +7506,14 @@ export default function App() {
   async function setEditTripStatus(status) {
     if (!editingTripId) return;
     setTripForm(f => ({ ...f, status }));
-    await supabase.from("trips").update({ status }).eq("id", editingTripId);
+    if (dbFailed(await supabase.from("trips").update({ status }).eq("id", editingTripId), "trips")) return;
     loadTrips();
   }
   async function deleteTrip(t) {
     if (!window.confirm(tr(`Delete trip ${t.trip_number || t.id}? Jobs are left without a trip.`, `¿Eliminar el trip ${t.trip_number || t.id}? Los jobs quedan sin trip.`))) return;
     const patch = { trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }) };
     const extra = jobs.filter(j => j.trip_id === t.id).map(j => undoMgr.updateEntry("storage_jobs", j, patch));
-    await supabase.from("storage_jobs").update(patch).eq("trip_id", t.id);
+    if (dbFailed(await supabase.from("storage_jobs").update(patch).eq("trip_id", t.id), "storage_jobs")) return;
     if (!(await softDeleteAndRecord("trips", t.id, `Trip ${t.trip_number || t.id} eliminado`, extra))) return;
     loadTrips(); loadJobs();
   }
@@ -7520,9 +7524,9 @@ export default function App() {
       const it = orderedItems[i];
       if (it.kind === "job") {
         const ids = jobRowIdsForUnit(tripUnitKey(it.j));
-        if (ids.length) await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids);
+        if (ids.length) { if (dbFailed(await supabase.from("storage_jobs").update({ trip_stop_order: i + 1 }).in("id", ids), "storage_jobs")) return; }
       } else {
-        await supabase.from("trip_stops").update({ stop_order: i + 1 }).eq("id", it.s.id);
+        if (dbFailed(await supabase.from("trip_stops").update({ stop_order: i + 1 }).eq("id", it.s.id), "trip_stops")) return;
       }
     }
     loadJobs(); loadTripStops();
@@ -7564,7 +7568,7 @@ export default function App() {
     if (!wasEdit) logTripEvent(trip.id, "custom_stop_added", { notes: `${catLabel(stopForm.category)}${stopForm.address ? ` · ${stopForm.address}` : ""}` });
   }
   async function toggleCustomStop(s) {
-    await supabase.from("trip_stops").update({ done: !s.done }).eq("id", s.id);
+    if (dbFailed(await supabase.from("trip_stops").update({ done: !s.done }).eq("id", s.id), "trip_stops")) return;
     loadTripStops();
   }
   async function deleteCustomStop(s) {
@@ -7577,7 +7581,7 @@ export default function App() {
   // still stamps all its unit rows together.
   async function tripMarkDelivered(j, trip) {
     const ids = jobRowIdsForUnit(tripUnitKey(j));
-    await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ date_out: today(), status: "delivered", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) return;
     if (trip) await logTripEvent(trip.id, "delivery_completed", { job_id: Math.min(...ids), notes: j.job_number || "" });
     loadJobs();
   }
@@ -7598,7 +7602,7 @@ export default function App() {
   };
   async function logTripEvent(tripId, event_type, opts = {}) {
     if (tripEventsMissing) return;
-    await supabase.from("trip_events").insert([{ trip_id: tripId, event_type, job_id: opts.job_id ?? null, storage_id: opts.storage_id ?? null, notes: opts.notes || null, created_by: opts.created_by || "dispatcher" }]);
+    if (dbFailed(await supabase.from("trip_events").insert([{ trip_id: tripId, event_type, job_id: opts.job_id ?? null, storage_id: opts.storage_id ?? null, notes: opts.notes || null, created_by: opts.created_by || "dispatcher" }]), "trip_events")) return;
     loadTripEvents();
   }
   // ── Driver handoff ──
@@ -7616,15 +7620,15 @@ export default function App() {
     const driver_ids = [toId, ...cur.filter(id => id !== toId && id !== fromId)];
     const names = driver_ids.map(id => driverById[id]?.name).filter(Boolean);
     setTripBusy(true);
-    await supabase.from("storage_jobs").update({
+    if (dbFailed(await supabase.from("storage_jobs").update({
       driver_ids, driver: names.join(", ") || null,
       updated_by: userEmail, updated_at: new Date().toISOString(),
-    }).in("id", rows.map(j => j.id));
+    }).in("id", rows.map(j => j.id)), "storage_jobs")) { setTripBusy(false); return; }
     const fromNm = (fromId != null && driverById[fromId]?.name) || rows[0].driver || "—";
     const toNm = driverById[toId]?.name || "—";
     const notes = `${rows[0].job_number || ""} · ${fromNm} → ${toNm} · ${handoffReasonLabel(reason)}${note ? ` · ${note}` : ""}`.trim();
     if (rows[0].trip_id) await logTripEvent(rows[0].trip_id, "driver_handoff", { job_id: Math.min(...rows.map(j => j.id)), notes, created_by: userEmail });
-    else if (!jobEventsMissing) { await supabase.from("job_events").insert([{ job_id: Math.min(...rows.map(j => j.id)), event_date: today(), event_type: "driver_handoff", notes, created_by: userEmail }]); loadJobEvents(); }
+    else if (!jobEventsMissing) { dbFailed(await supabase.from("job_events").insert([{ job_id: Math.min(...rows.map(j => j.id)), event_date: today(), event_type: "driver_handoff", notes, created_by: userEmail }]), "job_events"); loadJobEvents(); }
     await loadJobs();
     setTripBusy(false);
     showToast(`Handoff registrado: ${fromNm} → ${toNm}`);
@@ -7640,7 +7644,7 @@ export default function App() {
     if (v === null) return;
     const val = v.trim() === "" ? null : Number(v.trim());
     if (val !== null && (!isFinite(val) || val < 0)) { window.alert(tr("Invalid number.", "Número inválido.")); return; }
-    await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ real_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) return;
     await loadJobs();
     showToast(val === null ? "Real CF borrado — vuelve al estimado" : `Real CF: ${Math.round(val).toLocaleString()} CF`);
   }
@@ -7747,7 +7751,7 @@ export default function App() {
     const toId = Number(toDriverId);
     if (!toId || toId === Number(trip.driver_id)) { window.alert(tr("Pick a driver other than the current one.", "Elegí un driver distinto al actual.")); return; }
     setTripBusy(true);
-    await supabase.from("trips").update({ driver_id: toId }).eq("id", trip.id);
+    if (dbFailed(await supabase.from("trips").update({ driver_id: toId }).eq("id", trip.id), "trips")) { setTripBusy(false); return; }
     const fromNm = driverById[trip.driver_id]?.name || "—";
     const toNm = driverById[toId]?.name || "—";
     await logTripEvent(trip.id, "driver_handoff", { notes: `Trip completo · ${fromNm} → ${toNm} · ${handoffReasonLabel(reason)}${note ? ` · ${note}` : ""}`, created_by: userEmail });
@@ -7766,7 +7770,7 @@ export default function App() {
     setTripBusy(true);
     const order = (jobsByTrip[trip.id] || []).length + 1;
     const status = rows[0].date_out ? rows[0].status : (reloc ? "picked_up" : "out_for_delivery");
-    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status, ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status, ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) { setTripBusy(false); return; }
     await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: (rows[0].job_number || "") + (reloc ? " · relocation" : "") });
     const newTotal = tripCalc(trip).loadedCf + effCf(rows[0]);
     await loadJobs();
@@ -7784,7 +7788,7 @@ export default function App() {
     const patch = { status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() };
     if (target.kind === "warehouse") { patch.warehouse = target.name; patch.storage_id = null; }
     else { patch.storage_id = target.id; patch.warehouse = null; }
-    await supabase.from("storage_jobs").update(patch).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", ids), "storage_jobs")) { setTripBusy(false); return; }
     const relocDrop = jobs.some(j => ids.includes(j.id) && isRelocation(j));
     await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label + (relocDrop ? " · relocation" : "") });
     await loadJobs();
@@ -7800,7 +7804,7 @@ export default function App() {
     const reloc = purpose === "relocation" && !tripPurposeColMissing;
     setTripBusy(true);
     const order = (jobsByTrip[trip.id] || []).length + 1;
-    await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: reloc ? "picked_up" : "out_for_delivery", ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status: reloc ? "picked_up" : "out_for_delivery", ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) { setTripBusy(false); return; }
     await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), notes: (jobs.find(j => ids.includes(j.id))?.job_number || "") + (reloc ? " · relocation" : "") });
     await loadJobs();
     setTripBusy(false); setTripAction(null);
@@ -7813,7 +7817,7 @@ export default function App() {
     const ids = jobRowIdsForUnit(tripUnitKey(j));
     if (!ids.length) return;
     setTripBusy(true);
-    await supabase.from("storage_jobs").update({ status: "picked_up", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ status: "picked_up", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) { setTripBusy(false); return; }
     await logTripEvent(trip.id, "storage_pickup", { job_id: Math.min(...ids), storage_id: j.storage_id || null, notes: (j.job_number || "") + " · relocation" });
     await loadJobs();
     setTripBusy(false);
@@ -7854,14 +7858,14 @@ export default function App() {
       if (!target) continue;
       const ids = jobRowIdsForUnit(key);
       const loc = target.kind === "warehouse" ? { warehouse: target.name, storage_id: null } : { storage_id: target.id, warehouse: null };
-      await supabase.from("storage_jobs").update({ ...loc, trip_id: null, trip_stop_order: null, ...purposeClear, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+      if (dbFailed(await supabase.from("storage_jobs").update({ ...loc, trip_id: null, trip_stop_order: null, ...purposeClear, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) { setTripBusy(false); return; }
       await logTripEvent(trip.id, "storage_drop", { job_id: Math.min(...ids), storage_id: target.kind === "warehouse" ? null : target.id, notes: target.label });
     }
     for (const k of storedKeys) {
       const ids = jobRowIdsForUnit(k);
-      await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...purposeClear, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+      if (dbFailed(await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...purposeClear, status: "in_storage", updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) { setTripBusy(false); return; }
     }
-    await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id);
+    if (dbFailed(await supabase.from("trips").update({ status: "completed" }).eq("id", trip.id), "trips")) { setTripBusy(false); return; }
     setTripBusy(false); setTripCompleteModal(null); setCompleteDropTarget({});
     loadTrips(); loadJobs();
     showToast(`Trip ${trip.trip_number || trip.id} completed`);
@@ -7936,7 +7940,7 @@ export default function App() {
       if (ids.length && window.confirm(tr(`Update the job status to "${statusMeta(meta.status).l}"?`, `¿Actualizar el estado del job a "${statusMeta(meta.status).l}"?`))) {
         const patch = { status: meta.status, updated_by: userEmail, updated_at: new Date().toISOString() };
         if (meta.status === "delivered") patch.date_out = f.event_date || today();
-        await supabase.from("storage_jobs").update(patch).in("id", ids);
+        dbFailed(await supabase.from("storage_jobs").update(patch).in("id", ids), "storage_jobs");
         loadJobs();
       }
     }
@@ -8000,7 +8004,7 @@ export default function App() {
   // who moved it and when — nobody edits an amount without leaving a trail.
   async function logServiceNote(repId, text) {
     if (jobEventsMissing) return;
-    await supabase.from("job_events").insert([{ job_id: repId, event_date: today(), event_type: "service", notes: text, created_by: userEmail }]);
+    if (dbFailed(await supabase.from("job_events").insert([{ job_id: repId, event_date: today(), event_type: "service", notes: text, created_by: userEmail }]), "job_events")) return;
     loadJobEvents();
   }
   // Edit a service amount straight from the rail. Anyone may — the note keeps
@@ -8129,12 +8133,12 @@ export default function App() {
       if (merged.generated_by === "driver_only") merged.rep_id = null;
     }
     const patch = extraPayload(merged);
-    await supabase.from("job_extras").update(patch).eq("id", extra.id);
+    if (dbFailed(await supabase.from("job_extras").update(patch).eq("id", extra.id), "job_extras")) return;
     undoMgr.record("Extra editado", [undoMgr.updateEntry("job_extras", extra, patch)]);
     loadExtras();
   }
   async function toggleExtraActive(extra, active) {
-    await supabase.from("job_extras").update({ active }).eq("id", extra.id);
+    if (dbFailed(await supabase.from("job_extras").update({ active }).eq("id", extra.id), "job_extras")) return;
     undoMgr.record(active ? "Extra activado" : "Extra desactivado", [undoMgr.updateEntry("job_extras", extra, { active })]);
     loadExtras();
   }
@@ -8145,8 +8149,8 @@ export default function App() {
     if (linked.length) {
       const sum = linked.reduce((s, p) => s + paymentNet(p), 0);
       if (!window.confirm(tr(`This extra has ${linked.length} payment(s) assigned for $${Math.round(sum).toLocaleString()}. It will be deactivated (no longer counts as a charge) keeping the payment history. Continue?`, `Este extra tiene ${linked.length} pago(s) asignados por $${Math.round(sum).toLocaleString()}. Se desactivará (deja de contar como cargo) conservando el historial de pagos. ¿Continuar?`))) return;
+      if (dbFailed(await supabase.from("job_extras").update({ active: false }).eq("id", extra.id), "job_extras")) return;
       undoMgr.record("Extra desactivado", [undoMgr.updateEntry("job_extras", extra, { active: false })]);
-      await supabase.from("job_extras").update({ active: false }).eq("id", extra.id);
       loadExtras();
       return;
     }
@@ -8158,7 +8162,7 @@ export default function App() {
     if (q.id) {
       const prev = jobExtras.find(x => x.id === q.id);
       const patch = extraPayload(q);
-      await supabase.from("job_extras").update(patch).eq("id", q.id);
+      if (dbFailed(await supabase.from("job_extras").update(patch).eq("id", q.id), "job_extras")) return;
       if (prev) undoMgr.record("Extra editado", [undoMgr.updateEntry("job_extras", prev, patch)]);
     } else {
       const { data } = await supabase.from("job_extras").insert([{ job_id: q.jobId, ...extraPayload(q) }]).select("*").single();
@@ -8191,7 +8195,7 @@ export default function App() {
   async function saveEmployee() {
     if (!empForm.name.trim()) return;
     setEmpSaving(true);
-    await supabase.from("employees").insert([{ name:empForm.name.trim(), role:empForm.role||null, phone:empForm.phone||null, email:empForm.email||null, active:true }]);
+    if (dbFailed(await supabase.from("employees").insert([{ name:empForm.name.trim(), role:empForm.role||null, phone:empForm.phone||null, email:empForm.email||null, active:true }]), "employees")) { setEmpSaving(false); return; }
     setEmpSaving(false); setEmpForm(EMPTY_EMPLOYEE); loadEmployees();
   }
   async function deleteEmployee(em) {
@@ -8423,13 +8427,13 @@ export default function App() {
     const dPct = ca.driver_pct === "" ? null : numv(ca.driver_pct);
     const rPct = ca.rep_pct === "" ? null : numv(ca.rep_pct);
     const dc = base * numv(dPct) / 100, rc = base * numv(rPct) / 100;
-    await supabase.from("job_extras").update({
+    if (dbFailed(await supabase.from("job_extras").update({
       generated_by: gen, driver_id: ca.driver_id || null,
       rep_id: gen === "driver_only" ? null : (ca.rep_id || null),
       driver_commission_pct: dPct, rep_commission_pct: rPct,
       driver_commission_amount: dc, rep_commission_amount: rc,
       company_amount: base - dc - rc,
-    }).eq("id", ca.extra.id);
+    }).eq("id", ca.extra.id), "job_extras")) return;
     loadExtras();
     advanceCommQueue();
   }
@@ -8474,7 +8478,7 @@ export default function App() {
     if (!err && jobLineSum > 0 && p.job_id) {
       const k = jobKeyByRowId[Number(p.job_id)];
       const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: p.method || null, bol_collected_date: p.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+      if (ids.length) { ({ error: err } = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: p.method || null, bol_collected_date: p.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids)); }
     }
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
@@ -8550,10 +8554,11 @@ export default function App() {
         driver_commission_amount: 0, rep_commission_amount: 0, company_amount: cf.sum,
         active: true, source: "payment_split", payment_id: cf.id,
       };
-      const { data: ed } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
+      const { data: ed, error: exErr } = await supabase.from("job_extras").insert([exPayload]).select("*").single();
+      if (exErr) { err = exErr; break; }
       if (ed) {
         createdExtras.push(ed);
-        if (!allocMissing) await supabase.from("payments").update({ job_extra_id: ed.id }).in("id", cf.rows);
+        if (!allocMissing) { const r = await supabase.from("payments").update({ job_extra_id: ed.id }).in("id", cf.rows); if (r.error) { err = r.error; break; } }
       }
     }
     // Credit-card fee → a SEPARATE linked cc_fee row per credit-card line.
@@ -8566,10 +8571,12 @@ export default function App() {
         const d = f.payment_date || today();
         const feePayload = { job_id: f.job_id ? Number(f.job_id) : null, payment_date: d, amount: feeAmt, concept: "cc_fee", method: "credit_card", received: true, received_date: f.received_date || d, banked: true, banked_date: d, received_by: f.received_by || null, bank_account: l.bank_account || null };
         if (group) feePayload.split_group = group;
-        const { data: fd } = await supabase.from("payments").insert([feePayload]).select("*").single();
+        const { data: fd, error: feeErr } = await supabase.from("payments").insert([feePayload]).select("*").single();
+        if (feeErr) { err = feeErr; break; }
         if (fd?.id) {
           entries.push(undoMgr.createEntry("payments", fd));
-          await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId);
+          const r = await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId);
+          if (r.error) { err = r.error; break; }
         }
       }
     }
@@ -8577,7 +8584,7 @@ export default function App() {
     if (!err && jobLineSum > 0 && f.job_id) {
       const k = jobKeyByRowId[Number(f.job_id)];
       const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+      if (ids.length) { const r = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids); if (r.error) err = r.error; }
     }
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
@@ -8610,19 +8617,19 @@ export default function App() {
         const feePayload = { job_id: payload.job_id, payment_date: d, amount: feeAmt, concept: "cc_fee", method: "credit_card", received: true, received_date: payload.received_date || d, banked: true, banked_date: payload.banked_date || d, received_by: payload.received_by || null };
         if (existingFeeId) {
           const prevFee = payments.find(p => p.id === existingFeeId);
-          await supabase.from("payments").update(feePayload).eq("id", existingFeeId);
-          if (prevFee) payEntries.push(undoMgr.updateEntry("payments", prevFee, feePayload));
+          ({ error } = await supabase.from("payments").update(feePayload).eq("id", existingFeeId));
+          if (!error && prevFee) payEntries.push(undoMgr.updateEntry("payments", prevFee, feePayload));
         } else {
           const { data: fd } = await supabase.from("payments").insert([feePayload]).select("*").single();
           if (fd?.id) {
             payEntries.push(undoMgr.createEntry("payments", fd));
-            await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", editingPayId);
+            ({ error } = await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", editingPayId));
           }
         }
       } else if (existingFeeId) {
         const r = await undoMgr.softDelete("payments", existingFeeId);
         if (!r.error) payEntries.push(...r.entries);
-        await supabase.from("payments").update({ cc_fee_payment_id: null }).eq("id", editingPayId);
+        ({ error } = await supabase.from("payments").update({ cc_fee_payment_id: null }).eq("id", editingPayId));
       }
     }
     // Two-way sync: a "job" payment mirrors bol_collected on the storage_job.
@@ -8630,7 +8637,7 @@ export default function App() {
       const k = jobKeyByRowId[Number(f.job_id)];
       const idsToSync = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
       if (idsToSync.length) {
-        await supabase.from("storage_jobs").update({ bol_collected: numv(f.amount), bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", idsToSync);
+        ({ error } = await supabase.from("storage_jobs").update({ bol_collected: numv(f.amount), bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", idsToSync));
       }
     }
     setPaySaving(false);
@@ -8670,8 +8677,8 @@ export default function App() {
     };
     const rowIds = new Set(rows.map(r => r.id));
     const existing = payments.find(p => p.concept === "job" && rowIds.has(p.job_id));
-    if (existing) await supabase.from("payments").update(payload).eq("id", existing.id);
-    else await supabase.from("payments").insert([payload]);
+    if (existing) { if (dbFailed(await supabase.from("payments").update(payload).eq("id", existing.id), "payments")) return; }
+    else { if (dbFailed(await supabase.from("payments").insert([payload]), "payments")) return; }
     loadPayments();
   }
   async function deletePaymentRow(p) {
@@ -8696,13 +8703,13 @@ export default function App() {
   }
   async function togglePayReceived(p) {
     const received = !p.received;
-    await supabase.from("payments").update({ received, received_date: received ? (p.received_date || today()) : null }).eq("id", p.id);
+    if (dbFailed(await supabase.from("payments").update({ received, received_date: received ? (p.received_date || today()) : null }).eq("id", p.id), "payments")) return;
     loadPayments();
   }
   async function togglePayBanked(p) {
     if (!p.received) return;  // can't bank what isn't received
     const banked = !p.banked;
-    await supabase.from("payments").update({ banked, banked_date: banked ? (p.banked_date || today()) : null, cash_with_whom: banked ? null : p.cash_with_whom }).eq("id", p.id);
+    if (dbFailed(await supabase.from("payments").update({ banked, banked_date: banked ? (p.banked_date || today()) : null, cash_with_whom: banked ? null : p.cash_with_whom }).eq("id", p.id), "payments")) return;
     loadPayments();
   }
   // Batch deposit from the "In circulation" tab: ticked payments become banked
@@ -8739,7 +8746,7 @@ export default function App() {
     loadPayAccounts();
   }
   async function toggleAccountActive(a) {
-    await supabase.from("payment_accounts").update({ active: a.active === false }).eq("id", a.id);
+    if (dbFailed(await supabase.from("payment_accounts").update({ active: a.active === false }).eq("id", a.id), "payment_accounts")) return;
     loadPayAccounts();
   }
   async function deletePayAccount(a) {
@@ -8760,10 +8767,10 @@ export default function App() {
     if (!payModal) return;
     const ids = jobs.filter(j => jobKey(j) === payModal.jobKey).map(j => j.id);
     if (!ids.length) { setPayModal(null); return; }
-    await supabase.from("storage_jobs").update({
+    if (dbFailed(await supabase.from("storage_jobs").update({
       bol_collected: numv(payModal.amount), bol_payment_method: payModal.method || null, bol_payment_notes: payModal.notes || null,
       bol_collected_date: payModal.date || today(), updated_by: userEmail, updated_at: new Date().toISOString(),
-    }).in("id", ids);
+    }).in("id", ids), "storage_jobs")) return;
     // Two-way sync: mirror this collection into the Payments table.
     if (!paymentsMissing) await upsertJobPayment(payModal.jobKey, { amount: payModal.amount, method: payModal.method, date: payModal.date });
     setPayModal(null);
@@ -8779,7 +8786,7 @@ export default function App() {
       if (error) { window.alert("Upload error: " + error.message); setDocUploading(false); return; }
       const { data } = supabase.storage.from("closing-sheet-docs").getPublicUrl(path);
       const url = data?.publicUrl || "";
-      if (sheet?.id) { await supabase.from("closing_sheets").update({ document_url: url }).eq("id", sheet.id); loadClosingSheets(); }
+      if (sheet?.id) { if (!dbFailed(await supabase.from("closing_sheets").update({ document_url: url }).eq("id", sheet.id), "closing_sheets")) loadClosingSheets(); }
       else { setCsForm(f => ({ ...f, document_url: url })); }
     } catch (e) { window.alert("Error: " + e.message); }
     setDocUploading(false);
@@ -8812,17 +8819,17 @@ export default function App() {
     if (!capTarget) return;
     const val = capTarget.value !== "" ? Number(capTarget.value) : null;
     if (capTarget.kind === "unit") {
-      await supabase.from("storages").update({ total_capacity_cf: val, space_type: "rented", updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", capTarget.id);
+      if (dbFailed(await supabase.from("storages").update({ total_capacity_cf: val, space_type: "rented", updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", capTarget.id), "storages")) return;
     } else if (capTarget.kind === "warehouse") {
       const existing = warehouseMeta[capTarget.name];
-      if (existing) await supabase.from("storages").update({ total_capacity_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", existing.id);
-      else await supabase.from("storages").insert([{ brand: capTarget.name, space_type: "warehouse", situation: "Open", total_capacity_cf: val, created_by: userEmail }]);
+      if (existing) { if (dbFailed(await supabase.from("storages").update({ total_capacity_cf: val, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", existing.id), "storages")) return; }
+      else { if (dbFailed(await supabase.from("storages").insert([{ brand: capTarget.name, space_type: "warehouse", situation: "Open", total_capacity_cf: val, created_by: userEmail }]), "storages")) return; }
     }
     setCapTarget(null);
   }
   async function markBillingPaid(b) {
     if (!b?.id) return;
-    await supabase.from("storage_billing").update({ status: "paid", paid_date: today() }).eq("id", b.id);
+    if (dbFailed(await supabase.from("storage_billing").update({ status: "paid", paid_date: today() }).eq("id", b.id), "storage_billing")) return;
     loadBilling();
   }
   // Default billing start: first-month-free → date_in + 30, else date_in.
@@ -8870,7 +8877,7 @@ export default function App() {
       updated_by: userEmail, updated_at: new Date().toISOString(),
     };
     if (!billingNotesMissing) fields.billing_notes = f.billing_notes || null;
-    if (ids.length) await supabase.from("storage_jobs").update(fields).in("id", ids);
+    if (ids.length) { if (dbFailed(await supabase.from("storage_jobs").update(fields).in("id", ids), "storage_jobs")) { setBillingSaving(false); return; } }
     setBillingSaving(false); setShowBillingModal(false);
     showToast(f.editing ? "Billing updated" : "Billing activated");
     loadJobs(); loadBilling();
@@ -8939,21 +8946,21 @@ export default function App() {
   // Mark every part of a job (all its units) as delivered.
   async function deliverJobs(ids) {
     if (!ids || !ids.length) return;
-    await supabase.from("storage_jobs").update({ date_out: today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ date_out: today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) return;
     loadJobs();
   }
 
   // Revert a delivery (e.g. marked by mistake): clears the delivery date.
   async function undeliverJobs(ids) {
     if (!ids || !ids.length) return;
-    await supabase.from("storage_jobs").update({ date_out: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    if (dbFailed(await supabase.from("storage_jobs").update({ date_out: null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) return;
     loadJobs();
   }
 
   // Quick-set the FADD on every part of a job (from the Dispatching table).
   async function setJobFadd(group, dateStr) {
     if (faddColMissing || !group?.parts?.length) return;
-    await supabase.from("storage_jobs").update({ fadd: dateStr || null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", group.parts.map(p => p.id));
+    if (dbFailed(await supabase.from("storage_jobs").update({ fadd: dateStr || null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", group.parts.map(p => p.id)), "storage_jobs")) return;
     loadJobs();
   }
 
@@ -8961,7 +8968,7 @@ export default function App() {
   async function updateJobField(parts, field, value) {
     if (!parts?.length) return;
     if (field === "fadd" && faddColMissing) return;
-    await supabase.from("storage_jobs").update({ [field]: value || null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", parts.map(p => p.id));
+    if (dbFailed(await supabase.from("storage_jobs").update({ [field]: value || null, updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", parts.map(p => p.id)), "storage_jobs")) return;
     loadJobs();
   }
 
@@ -8976,12 +8983,12 @@ export default function App() {
   async function renewPayment(r) {
     const base = paymentDueDate(r) || startOfToday();
     base.setDate(base.getDate() + 30);
-    await supabase.from("storages").update({ payment_due_date: fmtDateLocal(base), updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", r.id);
+    if (dbFailed(await supabase.from("storages").update({ payment_due_date: fmtDateLocal(base), updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", r.id), "storages")) return;
   }
 
   // Close a storage: mark it Closed and clear its payment due date.
   async function closeStorage(r) {
-    await supabase.from("storages").update({ situation: "Close", payment_due_date: null, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", r.id);
+    if (dbFailed(await supabase.from("storages").update({ situation: "Close", payment_due_date: null, updated_by: userEmail, updated_at: new Date().toISOString() }).eq("id", r.id), "storages")) return;
     setDetailId(null);
   }
 
@@ -9009,7 +9016,7 @@ export default function App() {
     const toAdd = pending.filter((_, i) => !excluded[i]);
     if (!toAdd.length) return;
     setSaving(true);
-    await supabase.from("storages").insert(toAdd);
+    if (dbFailed(await supabase.from("storages").insert(toAdd), "storages")) { setSaving(false); return; }
     setSaving(false); setShowImport(false);
   }
 
@@ -10522,7 +10529,7 @@ export default function App() {
                             </div>
                           );
                         })}
-                        {verizonOn && vzVehicles && (vzUnlinkedTrucks.length > 0 || vzUnlinked.length > 0) && (
+                        {verizonOn && vzVehicles && (vzUnlinkedTrucks.length > 0 || vzUnlinked.length > 0 || vzBadlyLinked.length > 0) && (
                           <div style={{ padding:"11px 14px", background:"#FAEEDA", borderTop:"1px solid #f0e0c0" }}>
                             <div style={{ fontSize:10, fontWeight:700, color:"#854F0B", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6 }}>
                               Verizon linking
@@ -10538,6 +10545,23 @@ export default function App() {
                                     <button key={t.id} onClick={() => openEditTruck(t)}
                                       style={{ fontSize:11, fontWeight:600, color:"#854F0B", background:"#fff", border:"1px solid #e8d3a8",
                                         borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>{t.name}</button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {vzBadlyLinked.length > 0 && (
+                              <div style={{ marginBottom:8 }}>
+                                <div style={{ fontSize:11.5, color:"#A32D2D", marginBottom:3 }}>
+                                  {tr(`${vzBadlyLinked.length} truck(s) point at a vehicle Verizon does not know — click to fix:`,
+                                      `${vzBadlyLinked.length} truck(s) apuntan a un vehículo que Verizon no conoce — click para corregir:`)}
+                                </div>
+                                <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                                  {vzBadlyLinked.map(t => (
+                                    <button key={t.id} onClick={() => openEditTruck(t)}
+                                      style={{ fontSize:11, fontWeight:600, color:"#A32D2D", background:"#fff", border:"1px solid #f0c9c9",
+                                        borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>
+                                      {t.name} → {String(t.verizon_vehicle_id).slice(0, 20)}
+                                    </button>
                                   ))}
                                 </div>
                               </div>

@@ -8,7 +8,7 @@
 // supabase + session and manages its own data + realtime. Pure math lives in
 // src/bankData.js so it's unit-testable with node.
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { selectAll } from "./db.js";
+import { selectAll, dbFailed } from "./db.js";
 import {
   SEED_BANK_CATEGORIES, PNL_GROUPS, GAAP_CATEGORIES, BANK_STATUS, catByName, PAYMENT_METHODS_BANK,
   EMPTY_BANK_ACCOUNT, EMPTY_BANK_CATEGORY, dedupHash, signedAmount,
@@ -109,15 +109,15 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
   const stamp = { updated_by: myName, updated_at: new Date().toISOString() };
   const setCategory = async (t, category) => {
     if (!canEdit) return;
-    await supabase.from("bank_transactions").update({ category, ...stamp }).eq("id", t.id);
+    if (dbFailed(await supabase.from("bank_transactions").update({ category, ...stamp }).eq("id", t.id), "bank_transactions")) return;
     loadTxns();
   };
   const categorize = async (t) => {
     if (!canEdit) return;
     if (!t.category) { window.alert(tr("Pick a category before confirming.", "Elegí una categoría antes de confirmar.")); return; }
-    await supabase.from("bank_transactions").update({
+    if (dbFailed(await supabase.from("bank_transactions").update({
       status: "categorized", categorized_by: myName, categorized_at: new Date().toISOString(), ...stamp,
-    }).eq("id", t.id);
+    }).eq("id", t.id), "bank_transactions")) return;
     loadTxns();
   };
   const verify = async (t) => {
@@ -127,25 +127,25 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
       window.alert(tr("Double check: the verifier has to be a different person than whoever categorized (", "Doble check: quien verifica tiene que ser una persona distinta de quien categorizó (") + t.categorized_by + ").");
       return;
     }
-    await supabase.from("bank_transactions").update({
+    if (dbFailed(await supabase.from("bank_transactions").update({
       status: "verified", verified_by: myName, verified_at: new Date().toISOString(), ...stamp,
-    }).eq("id", t.id);
+    }).eq("id", t.id), "bank_transactions")) return;
     loadTxns();
   };
   const reopen = async (t) => {
     if (!canEdit) return;
-    await supabase.from("bank_transactions").update({ status: "categorized", verified_by: null, verified_at: null, ...stamp }).eq("id", t.id);
+    if (dbFailed(await supabase.from("bank_transactions").update({ status: "categorized", verified_by: null, verified_at: null, ...stamp }).eq("id", t.id), "bank_transactions")) return;
     loadTxns();
   };
   const setIgnored = async (t, ignored) => {
     if (!canEdit) return;
-    await supabase.from("bank_transactions").update({ status: ignored ? "ignored" : "unreviewed", ...stamp }).eq("id", t.id);
+    if (dbFailed(await supabase.from("bank_transactions").update({ status: ignored ? "ignored" : "unreviewed", ...stamp }).eq("id", t.id), "bank_transactions")) return;
     loadTxns();
   };
   const removeTxn = async (t) => {
     if (!canEdit) return;
     if (!window.confirm(tr("Delete this transaction from the bank ledger?", "¿Borrar este movimiento del ledger bancario?"))) return;
-    await supabase.from("bank_transactions").delete().eq("id", t.id);
+    if (dbFailed(await supabase.from("bank_transactions").delete().eq("id", t.id), "bank_transactions")) return;
     loadTxns();
   };
 
@@ -1020,8 +1020,8 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
     const error = await write(payload);
     // Rename cascades: transactions store the category NAME.
     if (editing && !error && editing.name !== name) {
-      await supabase.from("bank_transactions").update({ category: name }).eq("category", editing.name);
-      await supabase.from("bank_transactions").update({ ai_suggested_category: name }).eq("ai_suggested_category", editing.name);
+      dbFailed(await supabase.from("bank_transactions").update({ category: name }).eq("category", editing.name), "bank_transactions");
+      dbFailed(await supabase.from("bank_transactions").update({ ai_suggested_category: name }).eq("ai_suggested_category", editing.name), "bank_transactions");
       onReloadTxns();
     }
     setSaving(false);
@@ -1029,7 +1029,7 @@ function CategoriesTab({ cats, txns, supabase, canCreate, canEdit, onReload, onR
     setShowModal(false); onReload();
   };
   const toggleActive = async (c) => {
-    await supabase.from("bank_categories").update({ active: c.active === false }).eq("id", c.id);
+    if (dbFailed(await supabase.from("bank_categories").update({ active: c.active === false }).eq("id", c.id), "bank_categories")) return;
     onReload();
   };
 

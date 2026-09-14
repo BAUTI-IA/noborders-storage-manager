@@ -15,6 +15,15 @@
 //                                           to confirm field names.
 //   GET /api/geocode?fleet=hours&from=&to= → pull ELD hours into driver_hos_days.
 //   GET /api/geocode?fleet=mapkey         → browser key for the Google basemap.
+//   GET /api/geocode?fleet=backfill&days= → pull Reveal's GPS history (up to 30
+//                                           days) into truck_pings.
+//   GET /api/geocode?fleet=activity&days= → truck_pings rolled up per truck per
+//                                           day. Aggregated here because a month
+//                                           of fixes is ~80k rows: PostgREST caps
+//                                           a response at 1000, so a browser that
+//                                           asks for them directly silently gets
+//                                           one truck's first morning and reports
+//                                           that as the month.
 //   POST /api/verizon-gps                 → Reveal's GPS webhook, pushing positions
 //                                           instead of us polling. Rewritten to
 //                                           ?fleet=webhook in vercel.json so it gets
@@ -23,12 +32,17 @@
 //
 // Every fleet=* action except `status` needs the caller's Supabase JWT, because
 // the sync writes to trucks through the service role.
+// A month of history for one truck is a real round trip to Verizon plus a bulk
+// write; the default serverless ceiling is not enough for it.
+export const maxDuration = 60;
+
 import { timingSafeEqual } from "node:crypto";
 import { admin } from "../lib/clients.mjs";
+import { truckDays } from "../src/reportsData.js";
 import {
   verizonConfigured, syncTruckLocations, fetchVehicles, fetchVehicleLocation,
   mapLocation, normalizeVehicles, resolvedPaths, applyGpsEvents, syncDriverHours,
-  diagnose, SYNC_MIN_INTERVAL_MS,
+  diagnose, backfillHistory, SYNC_MIN_INTERVAL_MS,
 } from "../lib/verizon.mjs";
 
 // Best-effort throttle: warm lambdas share it, cold ones start fresh, and the
@@ -112,6 +126,32 @@ async function fleet(req, res, action) {
     }
     if (action === "diagnose") {
       res.status(200).json({ checks: await diagnose() });
+      return;
+    }
+    if (action === "activity") {
+      const days = Math.min(90, Math.max(1, parseInt(req.query?.days, 10) || 30));
+      const from = new Date(Date.now() - days * 864e5).toISOString();
+      const PAGE = 1000;
+      const pings = [];
+      for (let offset = 0; ; offset += PAGE) {
+        const { data, error } = await admin.from("truck_pings")
+          .select("truck_id, lat, lng, status, at")
+          .gte("at", from).order("at").range(offset, offset + PAGE - 1);
+        if (error) { res.status(500).json({ error: error.message }); return; }
+        pings.push(...(data || []));
+        if (!data || data.length < PAGE) break;
+        // A runaway page loop would burn the whole function budget silently.
+        if (pings.length >= 300000) break;
+      }
+      res.status(200).json({ days: truckDays(pings), pings: pings.length });
+      return;
+    }
+    if (action === "backfill") {
+      const days = Math.min(30, Math.max(1, parseInt(req.query?.days, 10) || 30));
+      // One truck per call: the whole fleet in a single request outlives the
+      // function. The client walks the list and can show progress.
+      const truckId = req.query?.truck ? parseInt(req.query.truck, 10) : null;
+      res.status(200).json(await backfillHistory({ days, truckId }));
       return;
     }
     if (action === "hours") {

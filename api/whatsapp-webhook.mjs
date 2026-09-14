@@ -26,6 +26,9 @@ function sendTwiml(res, text) {
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).end(); return; }
   if (!admin || !process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "server not configured" }); return; }
+  // Without the auth token no request can be verified — refuse everything rather
+  // than accept unsigned posts (a missing env var must never open the webhook).
+  if (!process.env.TWILIO_AUTH_TOKEN) { res.status(503).json({ error: "server not configured: TWILIO_AUTH_TOKEN" }); return; }
 
   const raw = await new Promise((resolve, reject) => {
     const chunks = [];

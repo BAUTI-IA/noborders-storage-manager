@@ -7,7 +7,25 @@
 // does not know who was driving instead of guessing.
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { tr, t } from "./i18n.js";
-import { truckDays, paidDays, reconcile, reportTotals } from "./reportsData.js";
+import { paidDays, reconcile, reportTotals } from "./reportsData.js";
+
+// The history table, exported so App.jsx's auto-migration and the banner below
+// can never drift apart. The CRM creates it by itself where Supabase exposes an
+// exec_sql RPC; where it does not, somebody has to run this once.
+export const TRUCK_PINGS_SQL = `create table if not exists public.truck_pings (
+  id bigint generated always as identity primary key,
+  truck_id bigint references public.trucks(id) on delete cascade,
+  lat numeric,
+  lng numeric,
+  status text,
+  at timestamptz,
+  created_at timestamptz default now(),
+  unique (truck_id, at)
+);
+create index if not exists truck_pings_truck_at on public.truck_pings (truck_id, at desc);
+alter table public.truck_pings enable row level security;
+drop policy if exists "truck_pings_all" on public.truck_pings;
+create policy "truck_pings_all" on public.truck_pings for all to anon, authenticated using (true) with check (true);`;
 
 const RANGES = [
   { key: "7", days: 7, label: "Last 7 days" },
@@ -23,6 +41,7 @@ const KIND = {
   ok:               { l: "Paid and moved",   bg: "#EAF3DE", text: "#3B6D11" },
   moved_unpaid:     { l: "Moved, unpaid",    bg: "#FCEBEB", text: "#A32D2D" },
   paid_no_movement: { l: "Paid, no movement", bg: "#FAEEDA", text: "#854F0B" },
+  paid_unlinked:    { l: "Paid, no truck to check", bg: "#EEF2F6", text: "#5B6B7C" },
 };
 
 const card = { background: "#fff", borderRadius: 10, border: "1px solid #efefef", padding: "12px 14px" };
@@ -33,49 +52,88 @@ export function ReportsSection({ supabase, session }) {
   const [rangeKey, setRangeKey] = useState("7");
   const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);   // truck_pings not created yet
-  const [pings, setPings] = useState([]);
+  const [activity, setActivity] = useState([]);   // already rolled up per truck per day
+  const [pingCount, setPingCount] = useState(0);
   const [workDays, setWorkDays] = useState([]);
   const [trucks, setTrucks] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [kindFilter, setKindFilter] = useState("all");
+  const [backfill, setBackfill] = useState(null);   // null | {busy} | result | {error}
+  const [sqlCopied, setSqlCopied] = useState(false);
+  const [showErrors, setShowErrors] = useState(false);
 
   const days = RANGES.find(r => r.key === rangeKey)?.days ?? 7;
   const from = isoDaysAgo(days);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [p, w, tk, dr] = await Promise.all([
-      supabase.from("truck_pings").select("truck_id, lat, lng, status, at").gte("at", from + "T00:00:00Z").order("at"),
+    // The roll-up happens on the server. A month of fixes is tens of thousands of
+    // rows and PostgREST caps a response at 1000, so asking for them from here
+    // returns one truck's first morning and quietly calls it the month.
+    const [act, probe, w, tk, dr] = await Promise.all([
+      fetch(`/api/geocode?fleet=activity&days=${days}`, { headers: { Authorization: "Bearer " + session.access_token } })
+        .then(r => r.json()).catch(() => ({ days: [] })),
+      supabase.from("truck_pings").select("id").limit(1),
       supabase.from("driver_work_days").select("*").gte("work_date", from),
       supabase.from("trucks").select("*"),
       supabase.from("drivers").select("*"),
     ]);
-    // The history table is created on first load of the live map; until then
-    // this page has nothing to stand on and says so rather than showing zeros.
-    setMissing(Boolean(p.error));
-    setPings(p.data || []);
+    setMissing(Boolean(probe.error));
+    setActivity(act?.days || []);
+    setPingCount(act?.pings || 0);
     setWorkDays((w.data || []).filter(r => !r.deleted_at));
     setTrucks((tk.data || []).filter(r => !r.deleted_at));
     setDrivers((dr.data || []).filter(r => !r.deleted_at));
     setLoading(false);
-  }, [supabase, from]);
+  }, [supabase, session, from, days]);
 
   useEffect(() => { load(); }, [load]);
 
-  const { rows, totals, trucksById } = useMemo(() => {
+  // Reveal keeps 30 days of location history, so the reports do not have to wait
+  // weeks for truck_pings to fill up on its own.
+  //
+  // One request per truck: a month for the whole fleet in a single call outlives
+  // the serverless timeout, and a failure there would lose every truck at once.
+  // Walking them also means the page can show where it is instead of hanging.
+  const runBackfill = useCallback(async () => {
+    const linked = trucks.filter(t => t.verizon_vehicle_id);
+    if (!linked.length) { setBackfill({ error: tr("No truck is linked to a Verizon vehicle yet.", "Ningún truck está vinculado a un vehículo de Verizon todavía.") }); return; }
+    const totals = { positions: 0, trucks: 0, errors: [] };
+    for (let i = 0; i < linked.length; i++) {
+      const tk = linked[i];
+      setBackfill({ busy: true, done: i, total: linked.length, current: tk.name });
+      try {
+        const r = await fetch(`/api/geocode?fleet=backfill&days=30&truck=${tk.id}`, {
+          headers: { Authorization: "Bearer " + session.access_token },
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || "failed");
+        totals.positions += d.positions || 0;
+        totals.trucks += 1;
+        // A truck that failed on Verizon's side reports itself; keep going.
+        if (d.errors?.length) totals.errors.push(...d.errors);
+      } catch (e) {
+        totals.errors.push({ truck: tk.name, error: e?.message || "failed" });
+      }
+    }
+    setBackfill(totals);
+    await load();
+  }, [session, load, trucks]);
+
+  const { rows, totals } = useMemo(() => {
     const byId = Object.fromEntries(trucks.map(x => [x.id, x]));
     const driversById = Object.fromEntries(drivers.map(x => [x.id, x]));
-    const activity = truckDays(pings);
     const paid = paidDays(workDays, driversById);
     const rec = reconcile({ truckDayRows: activity, paidDayRows: paid, trucksById: byId, driversList: drivers });
     return { rows: rec, totals: reportTotals(rec), trucksById: byId };
-  }, [pings, workDays, trucks, drivers]);
+  }, [activity, workDays, trucks, drivers]);
 
   const visible = kindFilter === "all" ? rows : rows.filter(r => r.kind === kindFilter);
   const counts = {
     all: rows.length,
     moved_unpaid: rows.filter(r => r.kind === "moved_unpaid").length,
     paid_no_movement: rows.filter(r => r.kind === "paid_no_movement" && !r.noHistory).length,
+    paid_unlinked: rows.filter(r => r.kind === "paid_unlinked").length,
   };
 
   return (
@@ -87,14 +145,62 @@ export function ReportsSection({ supabase, session }) {
               background: rangeKey === r.key ? "#111" : "#f5f5f5", color: rangeKey === r.key ? "#fff" : "#888",
               fontWeight: rangeKey === r.key ? 600 : 400 }}>{r.label}</button>
         ))}
-        <button onClick={load} style={{ marginLeft: "auto", fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+        <button onClick={runBackfill} disabled={backfill?.busy}
+          style={{ marginLeft: "auto", fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: backfill?.busy ? "default" : "pointer", textDecoration: "underline" }}>
+          {backfill?.busy
+            ? tr(`Bringing history… ${backfill.done}/${backfill.total} · ${backfill.current}`,
+                 `Trayendo historial… ${backfill.done}/${backfill.total} · ${backfill.current}`)
+            : t("Bring 30 days from Verizon")}
+        </button>
+        <button onClick={load} style={{ fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
           {loading ? t("Loading...") : t("Refresh")}
         </button>
       </div>
 
+      {backfill && !backfill.busy && (() => {
+        // Named once: a partial result is not a success, and a green box saying
+        // so while listing six failures is how a screen stops being believed.
+        const failedTrucks = [...new Set((backfill.errors || []).map(e => e.truck))];
+        const bad = Boolean(backfill.error) || failedTrucks.length > 0;
+        return (
+        <div style={{ ...card, marginBottom: 12, fontSize: 12.5,
+          background: backfill.error ? "#FCEBEB" : bad ? "#FAEEDA" : "#EAF3DE",
+          borderColor: backfill.error ? "#f0c9c9" : bad ? "#EF9F27" : "#d5e6bd",
+          color: backfill.error ? "#A32D2D" : bad ? "#854F0B" : "#3B6D11" }}>
+          {backfill.error
+            ? tr(`Could not bring history: ${backfill.error}`, `No se pudo traer el historial: ${backfill.error}`)
+            : tr(`${backfill.positions.toLocaleString()} position(s) brought in for ${backfill.trucks} truck(s).`,
+                 `${backfill.positions.toLocaleString()} posición(es) traídas para ${backfill.trucks} truck(s).`)}
+          {failedTrucks.length > 0 && (
+            <div style={{ fontSize: 11.5, marginTop: 6, color: "#A32D2D" }}>
+              {tr(`Verizon refused some requests for: ${failedTrucks.join(", ")}. Check that the Verizon vehicle number on those trucks is the number, not the VIN.`,
+                  `Verizon rechazó pedidos de: ${failedTrucks.join(", ")}. Revisá que el número de vehículo de Verizon en esos trucks sea el número, no el VIN.`)}
+              <button onClick={() => setShowErrors(v => !v)}
+                style={{ marginLeft: 6, fontSize: 11, color: "#185FA5", background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
+                {showErrors ? t("Hide detail") : t("Show detail")}
+              </button>
+              {showErrors && (
+                <div style={{ fontSize: 10.5, color: "#999", marginTop: 4, fontFamily: "monospace", maxHeight: 160, overflowY: "auto", lineHeight: 1.5 }}>
+                  {backfill.errors.map((e, i) => <div key={i}>{e.truck}: {e.error}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>);
+      })()}
       {missing ? (
         <div style={{ ...card, background: "#FAEEDA", border: "1px solid #EF9F27", color: "#854F0B", fontSize: 13 }}>
-          GPS history has not started yet. Open Trips / Live Load once so the CRM creates the table, and positions will start accumulating from that moment.
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>The GPS history table does not exist yet.</div>
+          <div style={{ lineHeight: 1.5, marginBottom: 8 }}>
+            The CRM creates it by itself where Supabase allows it. Here it could not, so run this once in the Supabase SQL editor — nothing else is needed afterwards.
+          </div>
+          <pre style={{ background: "#fff", border: "1px solid #e8d3a8", borderRadius: 8, padding: "10px 12px",
+            fontSize: 10.5, color: "#5b4410", overflowX: "auto", margin: 0, lineHeight: 1.45 }}>{TRUCK_PINGS_SQL}</pre>
+          <button onClick={() => { navigator.clipboard?.writeText(TRUCK_PINGS_SQL); setSqlCopied(true); }}
+            style={{ marginTop: 8, background: "#854F0B", border: "none", color: "#fff", fontWeight: 600,
+              borderRadius: 7, padding: "5px 12px", cursor: "pointer", fontSize: 12 }}>
+            {sqlCopied ? t("Copied") : t("Copy SQL")}
+          </button>
         </div>
       ) : (<>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
@@ -116,10 +222,21 @@ export function ReportsSection({ supabase, session }) {
           Miles are straight-line between GPS fixes, so the real road distance is higher. Hours here are the window between a truck's first and last movement, not hours driven — driver hours need the ELD, which is not connected yet.
         </div>
 
+        {totals.paidUnlinked > 0 && (
+          <div style={{ ...card, marginBottom: 12, background: "#EEF2F6", borderColor: "#d9e2ec", fontSize: 12.5, color: "#42536B", lineHeight: 1.5 }}>
+            {tr(`${totals.paidUnlinked} paid day(s) could not be cross-checked: those drivers have no truck assigned, so there is nothing to compare their day against.`,
+                `${totals.paidUnlinked} día(s) pagados no se pudieron cruzar: esos drivers no tienen truck asignado, así que no hay contra qué comparar su día.`)}
+            {" "}
+            {tr("Assign one in Fleet → Drivers and they start being checked.",
+                "Asignáselo en Fleet → Drivers y empiezan a cruzarse.")}
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           {[["all", `${tr("All", "Todos")} (${counts.all})`],
             ["moved_unpaid", `${tr("Moved, unpaid", "Se movió, sin pagar")} (${counts.moved_unpaid})`],
-            ["paid_no_movement", `${tr("Paid, no movement", "Pagado, sin movimiento")} (${counts.paid_no_movement})`]].map(([v, l]) => (
+            ["paid_no_movement", `${tr("Paid, no movement", "Pagado, sin movimiento")} (${counts.paid_no_movement})`],
+            ["paid_unlinked", `${tr("Paid, no truck to check", "Pagado, sin truck para cruzar")} (${counts.paid_unlinked})`]].map(([v, l]) => (
             <button key={v} onClick={() => setKindFilter(v)}
               style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 20, cursor: "pointer", border: "1px solid",
                 borderColor: kindFilter === v ? "#111" : "#e5e5e5", background: kindFilter === v ? "#111" : "#fff",
@@ -142,7 +259,7 @@ export function ReportsSection({ supabase, session }) {
                 return (
                   <tr key={`${r.truckId}|${r.date}|${i}`}>
                     <td style={td}>{r.date}</td>
-                    <td style={{ ...td, fontWeight: 700 }}>{r.truckName}</td>
+                    <td style={{ ...td, fontWeight: 700, color: r.truckName ? "#111" : "#bbb" }}>{r.truckName || "—"}</td>
                     <td style={{ ...td, color: r.driverKnown ? "#111" : "#bbb" }}>
                       {r.driverName || tr("not assigned", "sin asignar")}
                     </td>

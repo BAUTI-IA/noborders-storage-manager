@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 64 118" fill="none">
+  <!-- No Borders chain-link mark: two interlocked links. -->
+  <defs>
+    <!-- Where one link passes over the other, cut a small gap out of the link underneath. -->
+    <clipPath id="x1"><rect x="31" y="36" width="19" height="22"/></clipPath>
+    <clipPath id="x2"><rect x="10" y="54" width="19" height="22"/></clipPath>
+    <mask id="mA" maskUnits="userSpaceOnUse" x="-2" y="-2" width="64" height="118">
+      <rect x="-2" y="-2" width="64" height="118" fill="#fff"/>
+      <rect x="22" y="48" width="32" height="58" rx="16" fill="none" stroke="#000" stroke-width="16" clip-path="url(#x1)"/>
+    </mask>
+    <mask id="mB" maskUnits="userSpaceOnUse" x="-2" y="-2" width="64" height="118">
+      <rect x="-2" y="-2" width="64" height="118" fill="#fff"/>
+      <rect x="6" y="6" width="32" height="58" rx="16" fill="none" stroke="#000" stroke-width="16" clip-path="url(#x2)"/>
+    </mask>
+  </defs>
+  <g stroke="#1E6BFF" stroke-width="12">
+    <rect x="6" y="6" width="32" height="58" rx="16" mask="url(#mA)"/>
+    <rect x="22" y="48" width="32" height="58" rx="16" mask="url(#mB)"/>
+  </g>
+</svg>
