@@ -19,7 +19,7 @@ import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
 import { selectAll, dbFailed } from "./db.js";
-import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry } from "./appData.js";
+import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -283,6 +283,151 @@ function PayPhotoBox({ url, onFile, uploading, label }) {
         ) : "Drag or tap to upload photo/PDF (jpg, png, heic, pdf)"}
       </div>
       <input ref={ref} type="file" accept="image/*,.heic,application/pdf" style={{ display:"none" }} onChange={e => { const f = e.target.files[0]; if (f) onFile(f); e.target.value = ""; }} />
+    </div>
+  );
+}
+// ── How a payment is shown: one card per logical payment ──
+// A payment made with several methods or applied to several charges is stored
+// as several rows (see groupPayments). The card shows it as one thing: what it
+// was paid with (and where each part of the money is), and what it covered.
+const MONEY_STATE_STYLE = {
+  pending:     { l:"Not received", bg:"#F1F1F1", text:"#999" },
+  circulation: { l:"In circulation", bg:"#FDE3CF", text:"#C2410C" },
+  deposited:   { l:"Deposited", bg:"#E6F1FB", text:"#185FA5" },
+};
+function MoneyStatePill({ status, holder, account, small }) {
+  const st = MONEY_STATE_STYLE[status] || MONEY_STATE_STYLE.pending;
+  const detail = status === "circulation" ? holder : status === "deposited" ? account : "";
+  return <span style={{ fontSize: small ? 10.5 : 11, fontWeight:700, padding:"1px 7px", borderRadius:20, background:st.bg, color:st.text, whiteSpace:"nowrap" }}>{st.l}{detail ? ` · ${detail}` : ""}</span>;
+}
+// Label of a "covers" entry: the charge the money went to.
+function coverLabel(c, extrasById) {
+  if (c.concept === "job") return "Job balance";
+  if (c.concept === "on_account") return "On account";
+  if (c.concept === "cc_fee") return "CC Fee";
+  if (c.concept === "extra") {
+    const e = c.job_extra_id != null ? extrasById?.[c.job_extra_id] : null;
+    const base = extraTypeLabel(e?.extra_type || c.extra_type || "extra");
+    return e?.description ? `${base} · ${e.description}` : base;
+  }
+  return payConceptLabel(c.concept);
+}
+const coverStyle = (concept) => concept === "job" ? { bg:"#E6F1FB", text:"#185FA5" } : concept === "on_account" ? { bg:"#FEF3C7", text:"#92760B", border:"1px dashed #92760B" } : concept === "cc_fee" ? { bg:"#FAEEDA", text:"#854F0B" } : concept === "extra" ? { bg:"#EDE9FE", text:"#6D28D9" } : { bg:"#F1F1F1", text:"#666" };
+function CoverChip({ c, extrasById }) {
+  const s = coverStyle(c.concept);
+  return <span style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:20, padding:"3px 10px", fontSize:12, fontWeight:600, background:s.bg, color:s.text, border: s.border || "none" }}>{coverLabel(c, extrasById)} · {money(c.amount) || "$0"}</span>;
+}
+function MethodLineChip({ l }) {
+  const hex = PAY_METHOD_META[l.method] || "#666";
+  const kind = l.method === "check" ? checkTypeLabel(l.check_type) : l.method === "money_order" ? moTypeLabel(l.mo_type) : "";
+  return (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:6, border:"1px solid #e5e5e5", borderRadius:20, padding:"3px 9px 3px 7px", fontSize:12, background:"#fff", flexWrap:"wrap" }}>
+      <span style={{ width:6, height:6, borderRadius:"50%", background:hex, flexShrink:0 }} />
+      <span>{payMethodLabel(l.method) || "—"}{kind ? <span style={{ color:"#999" }}> · {kind}</span> : null}</span>
+      {l.serial && <span style={{ fontFamily:"monospace", fontSize:10.5, color:"#888" }}>#{l.serial}</span>}
+      <b>{money(l.amount) || "$0"}</b>
+      <MoneyStatePill status={l.status} holder={l.holder} account={l.account} small />
+    </span>
+  );
+}
+// The card. `g` comes from groupPayments; `job` is the job group (for the header
+// in the Payments page); actions are optional and gate on the caller's permissions.
+function PaymentCard({ g, job, extrasById, showJob, onEdit, onAssign, onDelete, onPhoto, onToggleReceived, onToggleBanked, defaultOpen }) {
+  const oa = g.covers.find(c => c.concept === "on_account");
+  const where = (() => {
+    const sum = (st) => g.rows.filter(r => moneyStatus(r) === st).reduce((s, r) => s + paymentNet(r), 0);
+    const dep = sum("deposited"), circ = sum("circulation"), pend = sum("pending");
+    return [dep ? `${money(dep)} deposited` : "", circ ? `${money(circ)} in circulation` : "", pend ? `${money(pend)} not received` : ""].filter(Boolean).join(" · ");
+  })();
+  const k = { fontSize:10, fontWeight:700, letterSpacing:"0.07em", textTransform:"uppercase", color:"#aaa", paddingTop:4 };
+  return (
+    <div style={{ border:`1px solid ${oa ? "#EAB308" : "#eee"}`, borderRadius:12, background:"#fff", marginBottom:8, overflow:"hidden" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", padding:"10px 12px" }}>
+        <span style={{ fontSize:12, color:"#888" }}>{g.date || "—"}</span>
+        <span style={{ fontSize:17, fontWeight:800 }}>{money(g.total) || "$0"}</span>
+        {g.received_by && <span style={{ fontSize:12, color:"#888" }}>received by {g.received_by}</span>}
+        {showJob && job && <span style={{ fontSize:12, color:"#888" }}>· <span style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5" }}>{job.job_number || "(no #)"}</span> {job.customer || ""}</span>}
+        <span style={{ marginLeft:"auto", display:"flex", gap:6 }}>
+          {oa && onAssign && <button onClick={() => onAssign(oa.rows[0])} style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11.5, fontWeight:700, borderRadius:7, padding:"4px 10px", cursor:"pointer" }}>Assign {money(oa.amount)}</button>}
+          {onEdit && !g.isGroup && <Btn onClick={() => onEdit(g.rep)} style={{ padding:"4px 10px", fontSize:11.5 }}>Edit</Btn>}
+          {onDelete && <button onClick={() => onDelete(g)} title="Delete payment" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>}
+        </span>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"78px 1fr", gap:"8px 10px", alignItems:"start", padding:"0 12px 10px" }}>
+        <span style={k}>Paid with</span>
+        <span style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>{g.lines.map(l => <MethodLineChip key={l.key} l={l} />)}</span>
+        <span style={k}>Covers</span>
+        <span style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
+          {g.covers.map(c => <CoverChip key={c.key} c={c} extrasById={extrasById} />)}
+          {oa && <span style={{ fontSize:11.5, color:"#92760B", fontWeight:600 }}>{money(oa.amount)} not applied to any charge yet</span>}
+        </span>
+      </div>
+      <details open={defaultOpen} style={{ borderTop:"1px solid #f0f0f0", background:"#fafafa", padding:"7px 12px", fontSize:11.5, color:"#888" }}>
+        <summary style={{ cursor:"pointer", display:"flex", alignItems:"center", gap:8, listStyle:"none" }}>
+          <span>{g.rows.length} row{g.rows.length === 1 ? "" : "s"} in the ledger</span>
+          <span style={{ marginLeft:"auto" }}>{where}</span>
+        </summary>
+        <div style={{ marginTop:8, border:"1px solid #eee", borderRadius:8, overflow:"hidden", background:"#fff" }}>
+          {g.rows.map(r => {
+            const st = moneyStatus(r);
+            return (
+              <div key={r.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", borderTop:"1px solid #f3f3f3", fontSize:11.5, flexWrap:"wrap" }}>
+                <PaymentMethodBadge method={r.method} />
+                {payRef(r) && <span style={{ fontFamily:"monospace", color:"#888" }}>#{payRef(r)}</span>}
+                <span style={{ color: r.concept === "on_account" ? "#92760B" : "#444" }}>{coverLabel({ concept: r.concept, extra_type: r.extra_type, job_extra_id: r.job_extra_id }, extrasById)}</span>
+                <b style={{ marginLeft:"auto", color: numv(r.discount) ? "#E24B4A" : "#111" }}>{money(paymentNet(r)) || "$0"}</b>
+                <MoneyStatePill status={st} holder={r.cash_with_whom} account={r.bank_account} small />
+                {onToggleReceived && !r.received && <button onClick={() => onToggleReceived(r)} title="Mark as received" style={{ border:"1px solid #ddd", background:"#fff", borderRadius:6, fontSize:10.5, padding:"1px 7px", cursor:"pointer" }}>Received</button>}
+                {onToggleBanked && r.received && isPhysical(r.method) && !r.banked && <button onClick={() => onToggleBanked(r)} title="Mark as deposited" style={{ border:"1px solid #cfe0f0", background:"#fff", color:"#185FA5", borderRadius:6, fontSize:10.5, padding:"1px 7px", cursor:"pointer" }}>Deposited</button>}
+                {onPhoto && payPhotoUrl(r) && <button onClick={() => onPhoto(payPhotoUrl(r))} title="View document" style={{ border:"none", background:"none", cursor:"pointer", fontSize:13 }}>📷</button>}
+                {onEdit && <button onClick={() => onEdit(r)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>}
+              </div>
+            );
+          })}
+        </div>
+        {g.notes && <div style={{ marginTop:6, fontSize:11.5, color:"#666" }}>{g.notes}</div>}
+      </details>
+    </div>
+  );
+}
+// Coverage of a job: each charge with what was collected against it.
+function JobCoverage({ charges, extrasById }) {
+  const rows = [
+    { key:"job", kind:"job", label:"Job balance", owed: charges.jobCharge.expected, got: charges.jobCharge.collected },
+    ...charges.extraCharges.map(c => ({ key:"x" + c.extra.id, kind:"extra", label: extraTypeLabel(c.extra.extra_type) + (c.extra.description ? ` · ${c.extra.description}` : ""), owed: c.amount, got: c.collected })),
+  ].filter(r => r.owed > 0 || r.got > 0);
+  const owed = rows.reduce((s, r) => s + r.owed, 0), got = rows.reduce((s, r) => s + Math.min(r.owed, r.got), 0);
+  const outstanding = Math.max(0, owed - got);
+  const cell = { display:"grid", gridTemplateColumns:"24px minmax(0,1fr) 160px 140px", gap:10, alignItems:"center", padding:"8px 12px", borderTop:"1px solid #eee" };
+  return (
+    <div style={{ border:"1px solid #eee", borderRadius:10, overflow:"hidden", marginBottom:10 }}>
+      {rows.map((r, i) => {
+        const color = r.kind === "job" ? "#185FA5" : "#6D28D9";
+        const left = Math.max(0, r.owed - r.got), full = left <= 0.009 && r.owed > 0;
+        const pct = r.owed ? Math.min(100, r.got / r.owed * 100) : 0;
+        return (
+          <div key={r.key} style={{ ...cell, borderTop: i ? cell.borderTop : "none" }}>
+            <span style={{ width:18, height:18, borderRadius:6, display:"grid", placeItems:"center", fontSize:11, fontWeight:800, color:"#fff", background: full ? color : "#fff", border:`2px solid ${color}` }}>{full ? "✓" : ""}</span>
+            <span style={{ minWidth:0 }}><span style={{ fontWeight:600 }}>{r.label}</span><span style={{ display:"block", fontSize:10.5, color:"#888" }}>{r.kind === "job" ? "Job" : "Extra"} · owed {money(r.owed) || "$0"}</span></span>
+            <span style={{ textAlign:"right", fontVariantNumeric:"tabular-nums" }}><b>{money(r.got) || "$0"}</b> <span style={{ color:"#888" }}>/ {money(r.owed) || "$0"}</span><span style={{ display:"block", height:6, borderRadius:4, background:"#f3f3f3", border:"1px solid #eee", overflow:"hidden", marginTop:4 }}><span style={{ display:"block", height:"100%", width:`${pct}%`, background:color }} /></span></span>
+            <span style={{ textAlign:"right", fontSize:11, fontWeight:600, color: full ? "#1A8A4E" : r.got > 0 ? "#92760B" : "#bbb" }}>{full ? "Paid in full" : r.got > 0 ? `${money(left)} still owed` : "Nothing yet"}</span>
+          </div>
+        );
+      })}
+      {charges.onAccount > 0.009 && (
+        <div style={cell}>
+          <span style={{ width:18, height:18, borderRadius:6, display:"grid", placeItems:"center", fontSize:11, fontWeight:800, color:"#92760B", background:"#FEF3C7", border:"2px dashed #92760B" }}>$</span>
+          <span style={{ color:"#92760B" }}><span style={{ fontWeight:600 }}>On account</span><span style={{ display:"block", fontSize:10.5 }}>Received, not applied yet</span></span>
+          <span style={{ textAlign:"right", color:"#92760B" }}><b>{money(charges.onAccount)}</b></span>
+          <span style={{ textAlign:"right", fontSize:11, fontWeight:600, color:"#92760B" }}>Assign it to a charge</span>
+        </div>
+      )}
+      <div style={{ ...cell, background:"#fafafa", fontWeight:700 }}>
+        <span />
+        <span>Total outstanding</span>
+        <span style={{ textAlign:"right", color: outstanding > 0 ? "#B91C1C" : "#1A8A4E", fontSize:14 }}>{money(outstanding) || "$0"}</span>
+        <span style={{ textAlign:"right", fontSize:11, fontWeight:600, color: outstanding > 0 ? "#92760B" : "#1A8A4E" }}>{money(got) || "$0"} of {money(owed) || "$0"} collected</span>
+      </div>
     </div>
   );
 }
@@ -3896,7 +4041,7 @@ export default function App() {
   const [realCfMissing, setRealCfMissing] = useState(false);     // storage_jobs.real_cf (measured cubic feet)
   const [jobSplitColMissing, setJobSplitColMissing] = useState(false); // storage_jobs.split_group (job split across trips)
   const [tripPurposeColMissing, setTripPurposeColMissing] = useState(false); // storage_jobs.trip_purpose (delivery vs relocation)
-  const [expandedSplits, setExpandedSplits] = useState(() => new Set());
+  const [payDetailKey, setPayDetailKey] = useState(null);        // Payments page: payment shown in the side panel
   const [commAssign, setCommAssign] = useState(null);            // pending commission assignment for a payment-split extra
   const [payDocUploading, setPayDocUploading] = useState(false);
   const [payPhotoView, setPayPhotoView] = useState(null);        // url of photo viewed full-size
@@ -10962,60 +11107,9 @@ export default function App() {
         ];
         const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
         const td2 = { padding:"9px 10px", fontSize:12.5, verticalAlign:"middle" };
-        const Toggle = ({ on, onClick, disabled }) => (
-          <button onClick={onClick} disabled={disabled} style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, border:"none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, background: on ? "#EAF3DE" : "#F1F1F1", color: on ? "#3B6D11" : "#999" }}>{on ? "Yes" : "No"}</button>
-        );
-        // One payment row (also used for split children, slightly indented + tinted).
-        const renderPayRow = (p, child = false) => (
-          <tr key={p.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"middle", background: child ? "#FBFAFE" : undefined }}>
-            <td style={{ ...td2, paddingLeft: child ? 26 : td2.padding }}>{p._key ? <button onClick={() => setJobDetailKey(p._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{child ? "↳ " : ""}{p._g?.job_number || "(view)"}</button> : <span style={{ color:"#bbb" }}>{child ? "↳ " : ""}—</span>}</td>
-            <td style={td2}>{p._g?.customer || "—"}</td>
-            <td style={td2}>{brokerName(p._g?.broker_id) || "—"}</td>
-            <td style={td2}>{p._g ? (jobDriverNames(p._g) || "—") : "—"}</td>
-            <td style={td2}><ConceptBadge concept={p.concept} />{p.extra_type && p.concept === "extra" && <div style={{ fontSize:9.5, color:"#6D28D9", marginTop:2 }}>{extraTypeLabel(p.extra_type)}</div>}</td>
-            <td style={td2}>
-              <PaymentMethodBadge method={p.method} />
-              {p.check_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{checkTypeLabel(p.check_type)}</div>}
-              {p.mo_type && <div style={{ fontSize:9.5, color:"#999", marginTop:2 }}>{moTypeLabel(p.mo_type)}</div>}
-            </td>
-            <td style={{ ...td2, fontFamily:"monospace", fontSize:11.5, whiteSpace:"nowrap" }}>{payRef(p) || "—"}</td>
-            <td style={{ ...td2, fontSize:11.5, whiteSpace:"nowrap" }}>{payIssuer(p) || "—"}</td>
-            <td style={{ ...td2, textAlign:"center" }}>{payPhotoUrl(p) ? <button onClick={() => setPayPhotoView(payPhotoUrl(p))} title="View document" style={{ border:"none", background:"none", cursor:"pointer", fontSize:15 }}>📷</button> : <span style={{ color:"#ddd" }}>—</span>}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:600 }}>{money(p.amount) || "$0"}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap", color: numv(p.discount) ? "#E24B4A" : "#ccc" }}>{numv(p.discount) ? "-"+money(p.discount) : "—"}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700, color:"#1A8A4E" }}>${p._net.toLocaleString()}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.payment_date || "—"}</td>
-            <td style={td2}><Toggle on={!!p.received} onClick={() => togglePayReceived(p)} /></td>
-            <td style={td2}>{p.received_by || "—"}</td>
-            <td style={td2}>{!p.banked && isPhysical(p.method) ? (p.cash_with_whom || "—") : "—"}</td>
-            <td style={td2}><Toggle on={!!p.banked} disabled={!p.received} onClick={() => togglePayBanked(p)} /></td>
-            <td style={{ ...td2, whiteSpace:"nowrap" }}>{p.banked_date || "—"}</td>
-            <td style={td2}>{p.bank_account || "—"}</td>
-            <td style={{ ...td2, whiteSpace:"nowrap" }}>
-              {p.concept === "on_account" && p.job_id && !allocMissing && can("payments","edit") && (
-                <button onClick={() => openReallocatePayment(p)} title="Allocate this on-account payment against the job charges" style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"2px 8px", cursor:"pointer", marginRight:4 }}>Asignar</button>
-              )}
-              <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:13 }}>✏️</button>
-              <button onClick={() => deletePaymentRow(p)} title="Delete" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15, marginLeft:4 }}>×</button>
-            </td>
-          </tr>
-        );
-        // Group split-payment rows (share a split_group) into one expandable parent.
-        const splitMap = {};
-        for (const p of rows) { if (p.split_group) (splitMap[p.split_group] = splitMap[p.split_group] || []).push(p); }
-        const seenSplit = new Set();
-        const displayItems = [];
-        for (const p of rows) {
-          if (p.split_group && (splitMap[p.split_group] || []).length > 1) {
-            if (seenSplit.has(p.split_group)) continue;
-            seenSplit.add(p.split_group);
-            const grp = splitMap[p.split_group];
-            displayItems.push({ type:"group", key:"g"+p.split_group, group:p.split_group, rows:grp, total: grp.reduce((s, x) => s + x._net, 0), rep: grp[0] });
-          } else {
-            displayItems.push({ type:"single", p });
-          }
-        }
-        const toggleSplit = (gid) => setExpandedSplits(prev => { const n = new Set(prev); n.has(gid) ? n.delete(gid) : n.add(gid); return n; });
+        // One row per logical payment (rows sharing a split_group collapse into one).
+        const groups = groupPayments(rows);
+        const payDetail = payDetailKey ? groups.find(g => g.key === payDetailKey) || null : null;
         return (
           <>
             {paymentsMissing && (
@@ -11163,41 +11257,73 @@ export default function App() {
                 <div style={{ overflowX:"auto" }}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                     <thead><tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Client","Broker","Driver","Concept","Method","Ref #","Issuer","Photo","Amount","Desc.","Net","Date","Received","Received by","Who has it","Deposited","Dep. date","Account","Actions"].map((h, i) => <th key={i} style={th}>{h}</th>)}
+                      {["Job #","Client","Amount","Method","Money","Date"].map((h, i) => <th key={i} style={{ ...th, textAlign: h === "Amount" ? "right" : "left" }}>{h}</th>)}
                     </tr></thead>
                     <tbody>
-                      {rows.length === 0 ? (
-                        <tr><td colSpan={20} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No payments in this filter.</td></tr>
-                      ) : displayItems.flatMap(it => {
-                        if (it.type === "single") return [renderPayRow(it.p)];
-                        const rep = it.rep, open = expandedSplits.has(it.group);
-                        const parent = (
-                          <tr key={it.key} style={{ borderBottom:"1px solid #f3f0fb", verticalAlign:"middle", background:"#FBFAFE" }}>
-                            <td style={td2}>{rep._key ? <button onClick={() => setJobDetailKey(rep._key)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{rep._g?.job_number || "(view)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
-                            <td style={td2}>{rep._g?.customer || "—"}</td>
-                            <td style={td2}>{brokerName(rep._g?.broker_id) || "—"}</td>
-                            <td style={td2}>{rep._g ? (jobDriverNames(rep._g) || "—") : "—"}</td>
-                            <td style={td2}>
-                              <button onClick={() => toggleSplit(it.group)} style={{ border:"none", background:"none", cursor:"pointer", fontSize:12, color:"#6D28D9", fontWeight:700, padding:0 }}>{open ? "▾" : "▸"} <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EDE9FE", color:"#6D28D9" }}>Split ({it.rows.length})</span></button>
-                            </td>
-                            <td style={td2} colSpan={4}><span style={{ fontSize:11.5, color:"#999" }}><PaymentMethodBadge method={rep.method} /> · {it.rows.length} lines</span></td>
-                            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:700 }}>{money(it.total) || "$0"}</td>
-                            <td style={td2}><span style={{ color:"#ccc" }}>—</span></td>
-                            <td style={{ ...td2, whiteSpace:"nowrap", fontWeight:800, color:"#6D28D9" }}>${Math.round(it.total).toLocaleString()}</td>
-                            <td style={td2} colSpan={7}><span style={{ fontSize:11.5, color:"#999" }}>{rep.payment_date || "—"}</span></td>
+                      {groups.length === 0 ? (
+                        <tr><td colSpan={6} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No payments in this filter.</td></tr>
+                      ) : groups.map(g => {
+                        const sel = g.key === payDetailKey;
+                        const methods = [...new Set(g.lines.map(l => l.method))];
+                        const sum = (st) => g.rows.filter(r => moneyStatus(r) === st).reduce((s, r) => s + paymentNet(r), 0);
+                        const circ = sum("circulation"), pend = sum("pending");
+                        const moneyPill = circ <= 0 && pend <= 0 ? <MoneyStatePill status="deposited" />
+                          : pend > 0 && pend >= g.total - 0.01 ? <MoneyStatePill status="pending" />
+                          : circ >= g.total - 0.01 ? <MoneyStatePill status="circulation" />
+                          : <span style={{ fontSize:11, fontWeight:700, padding:"1px 7px", borderRadius:20, background:"#FDE3CF", color:"#C2410C", whiteSpace:"nowrap" }}>{money(circ + pend)} {pend > 0 && circ <= 0 ? tr("not received", "sin recibir") : tr("in circulation", "en circulación")}</span>;
+                        return (
+                          <tr key={g.key} onClick={() => setPayDetailKey(sel ? null : g.key)} style={{ borderBottom:"1px solid #f3f3f3", cursor:"pointer", background: sel ? "#E6F1FB" : undefined }}>
+                            <td style={{ ...td2, whiteSpace:"nowrap" }}>{g.rep._key ? <button onClick={e => { e.stopPropagation(); setJobDetailKey(g.rep._key); }} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g.rep._g?.job_number || "(view)"}</button> : <span style={{ color:"#bbb" }}>—</span>}</td>
+                            <td style={{ ...td2, maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={g.rep._g?.customer || ""}>{g.rep._g?.customer || "—"}</td>
+                            <td style={{ ...td2, textAlign:"right", whiteSpace:"nowrap", fontWeight:800 }}>{money(g.total) || "$0"}{g.onAccount > 0.009 && <div style={{ fontSize:10.5, color:"#92760B", fontWeight:600 }}>{money(g.onAccount)} on account</div>}</td>
                             <td style={{ ...td2, whiteSpace:"nowrap" }}>
-                              <button onClick={() => deleteSplitGroup(it.rows)} title="Delete split" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:15 }}>×</button>
+                              <span style={{ display:"inline-flex", gap:3, marginRight:6, verticalAlign:"middle" }}>{methods.map(m => <span key={m} style={{ width:8, height:8, borderRadius:"50%", background: PAY_METHOD_META[m] || "#999", display:"inline-block" }} />)}</span>
+                              {payMethodLabel(methods[0]) || "—"}{g.lines.length > 1 && <span style={{ color:"#999" }}> +{g.lines.length - 1}</span>}
                             </td>
+                            <td style={td2}>{moneyPill}</td>
+                            <td style={{ ...td2, whiteSpace:"nowrap", color:"#666" }}>{g.date || "—"}</td>
                           </tr>
                         );
-                        return open ? [parent, ...it.rows.map(p => renderPayRow(p, true))] : [parent];
                       })}
                     </tbody>
                   </table>
                 </div>
-                <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{rows.length} pago(s)</div>
+                <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{groups.length} payment(s) · {rows.length} row(s) · Click a row to see what it covered and where the money is.</div>
               </div>
             )}
+
+            {/* Detail of the selected payment: a panel beside the table, like the job drawer. */}
+            {payDetail && (() => {
+              const g = payDetail, jg = g.rep._g;
+              const exById = Object.fromEntries(((g.rep._key && extrasByJobKey[g.rep._key]) || []).map(e => [e.id, e]));
+              const canEdit = can("payments", "edit");
+              return (
+                <div style={{ position:"fixed", top:70, right:16, width:400, maxWidth:"calc(100vw - 32px)", maxHeight:"calc(100vh - 90px)", overflowY:"auto", background:"#fff", border:"1px solid #e5e5e5", borderRadius:14, boxShadow:"0 8px 40px rgba(0,0,0,0.15)", zIndex:40 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 14px", borderBottom:"1px solid #f0f0f0" }}>
+                    <span style={{ fontSize:20, fontWeight:800 }}>{money(g.total) || "$0"}</span>
+                    {g.rep._key ? <button onClick={() => setJobDetailKey(g.rep._key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{jg?.job_number || "(view)"}</button> : null}
+                    <span style={{ fontSize:12, color:"#666", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{jg?.customer || "—"}</span>
+                    <button onClick={() => setPayDetailKey(null)} aria-label="Close" style={{ marginLeft:"auto", border:"none", background:"none", color:"#999", fontSize:16, cursor:"pointer" }}>✕</button>
+                  </div>
+                  {jg && (
+                    <div style={{ display:"flex", gap:14, flexWrap:"wrap", padding:"8px 14px", fontSize:11.5, color:"#888", borderBottom:"1px solid #f6f6f6" }}>
+                      {brokerName(jg.broker_id) && <span>Broker: <b style={{ color:"#444" }}>{brokerName(jg.broker_id)}</b></span>}
+                      {jobDriverNames(jg) && <span>Driver: <b style={{ color:"#444" }}>{jobDriverNames(jg)}</b></span>}
+                      {g.received_date && <span>Received: <b style={{ color:"#444" }}>{g.received_date}</b></span>}
+                    </div>
+                  )}
+                  <div style={{ padding:"10px 14px 4px" }}>
+                    <PaymentCard g={g} extrasById={exById} defaultOpen
+                      onEdit={canEdit ? openEditPayment : undefined}
+                      onAssign={canEdit && !allocMissing ? openReallocatePayment : undefined}
+                      onDelete={canEdit ? (grp) => (grp.isGroup ? deleteSplitGroup(grp.rows) : deletePaymentRow(grp.rep)) : undefined}
+                      onPhoto={setPayPhotoView}
+                      onToggleReceived={canEdit ? togglePayReceived : undefined}
+                      onToggleBanked={canEdit ? togglePayBanked : undefined} />
+                  </div>
+                </div>
+              );
+            })()}
 
             {!paymentsMissing && (
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px", marginTop:18 }}>
@@ -12698,107 +12824,50 @@ export default function App() {
             );
           })()}
           {!paymentsMissing && (() => {
-            const ps = (paymentsByJobKey[jobDetail.key] || []).slice().sort((a, b) => (b.payment_date || "").localeCompare(a.payment_date || ""));
+            const ps = paymentsByJobKey[jobDetail.key] || [];
+            const charges = chargeStateByJobKey(jobDetail.key);
+            const groups = groupPayments(ps);
+            const exList = (extrasByJobKey[jobDetail.key] || []);
+            const exById = Object.fromEntries(exList.map(e => [e.id, e]));
             const recv = ps.filter(p => p.received);
-            // Job balance and extras are tracked independently — never mixed.
-            const expected = numv(jobDetail.pickup_balance) + numv(jobDetail.delivery_balance) + numv(jobDetail.bol_balance);
-            const jobCollected = recv.filter(p => p.concept === "job").reduce((s, p) => s + paymentNet(p), 0);
-            const jobOutstanding = Math.max(0, expected - jobCollected);
-            const extraPays = recv.filter(p => p.concept === "extra");
-            const extrasCollected = extraPays.reduce((s, p) => s + paymentNet(p), 0);
+            const jobCollected = charges.jobCharge.collected;
+            const extrasCollected = recv.filter(p => p.concept === "extra").reduce((s, p) => s + paymentNet(p), 0);
             const ccFeeTotal = recv.filter(p => p.concept === "cc_fee").reduce((s, p) => s + paymentNet(p), 0);
-            // Extras owed (from job_extras) vs collected (extra-concept payments).
-            const exsOwed = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false).reduce((s, e) => s + numv(e.amount), 0);
-            const extrasOutstanding = Math.max(0, exsOwed - extrasCollected);
-            const totalOutstanding = jobOutstanding + extrasOutstanding;
-            // Per-extra-type breakdown of what was collected via payments.
-            const byType = {};
-            for (const p of extraPays) { const t = p.extra_type || "extra"; byType[t] = (byType[t] || 0) + paymentNet(p); }
-            const typeEntries = Object.entries(byType);
             // Broker share deductions (job balance + extras) → net revenue to the company.
             const jobBrokerSharePct = numv(jobDetail.broker_job_share_pct);
             const jobBrokerShare = jobCollected * jobBrokerSharePct / 100;
-            const extrasBrokerShare = (extrasByJobKey[jobDetail.key] || []).filter(e => e.active !== false).reduce((s, e) => s + extraBrokerShare(e), 0);
+            const extrasBrokerShare = exList.filter(e => e.active !== false).reduce((s, e) => s + extraBrokerShare(e), 0);
             const totalBrokerShare = jobBrokerShare + extrasBrokerShare;
             const netRevenue = (jobCollected + extrasCollected) - totalBrokerShare;
+            const outstanding = charges.jobCharge.remaining + charges.extraCharges.reduce((s, c) => s + c.remaining, 0);
             const repId = Math.min(...jobDetail.parts.map(p => p.id));
             const firstDriverName = (Array.isArray(jobDetail.driver_ids) && jobDetail.driver_ids.length ? driverById[jobDetail.driver_ids[0]]?.name : "") || "";
+            const canEdit = can("payments", "edit");
             return (
               <>
-                <SectionLabel>Payments {ps.length ? `(${ps.length})` : ""}</SectionLabel>
-                <div style={{ background:"#fafafa", borderRadius:9, padding:"10px 12px", marginBottom:8 }}>
-                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:13 }}>
-                    <span>Job balance: <b>${Math.round(expected).toLocaleString()}</b></span>
-                    <span>Collected (job): <b style={{ color:"#1A8A4E" }}>${Math.round(jobCollected).toLocaleString()}</b></span>
-                    <span>Job balance: <b style={{ color: jobOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(jobOutstanding).toLocaleString()}</b></span>
+                <SectionLabel>Payments {groups.length ? `(${groups.length})` : ""}</SectionLabel>
+                <JobCoverage charges={charges} extrasById={exById} />
+                {(ccFeeTotal > 0 || totalBrokerShare > 0 || charges.unattributedExtraCollected > 0.01) && (
+                  <div style={{ background:"#fafafa", borderRadius:9, padding:"8px 12px", marginBottom:10, fontSize:12.5, display:"grid", gap:4 }}>
+                    {ccFeeTotal > 0 && <div style={{ color:"#854F0B" }}>CC fees collected: <b>{money(ccFeeTotal)}</b></div>}
+                    {charges.unattributedExtraCollected > 0.01 && <div style={{ fontSize:11, color:"#999" }}>{money(charges.unattributedExtraCollected)} collected from extras not assigned to a specific extra (historical).</div>}
+                    {totalBrokerShare > 0 && (<>
+                      <div style={{ display:"flex", justifyContent:"space-between", color:"#C2410C" }}><span>− Broker share{jobBrokerSharePct > 0 ? ` (job ${jobBrokerSharePct}%)` : ""}</span><b>−{money(totalBrokerShare)}</b></div>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Net revenue (post broker)</span><span style={{ color:"#1A8A4E" }}>{money(netRevenue) || "$0"}</span></div>
+                    </>)}
                   </div>
-                  {(exsOwed > 0 || extrasCollected > 0) && (
-                    <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12.5, marginTop:6, paddingTop:6, borderTop:"1px solid #eee", color:"#555" }}>
-                      <span>Extras collected: <b style={{ color:"#6D28D9" }}>${Math.round(extrasCollected).toLocaleString()}</b></span>
-                      {exsOwed > 0 && <span>Extras invoiced: <b>${Math.round(exsOwed).toLocaleString()}</b></span>}
-                      {extrasOutstanding > 0 && <span>Extras pending: <b style={{ color:"#EF9F27" }}>${Math.round(extrasOutstanding).toLocaleString()}</b></span>}
-                    </div>
-                  )}
-                  {typeEntries.length > 0 && (
-                    <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
-                      {typeEntries.map(([t, amt]) => <span key={t} style={{ fontSize:10.5, fontWeight:600, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"2px 9px" }}>{extraTypeLabel(t)} ${Math.round(amt).toLocaleString()}</span>)}
-                    </div>
-                  )}
-                  {ccFeeTotal > 0 && <div style={{ fontSize:12, marginTop:6, color:"#854F0B" }}>CC fees collected: <b>${Math.round(ccFeeTotal).toLocaleString()}</b></div>}
-                  {(() => {
-                    // Money received but not yet applied to a charge ("a cuenta").
-                    const onAcc = recv.filter(p => p.concept === "on_account");
-                    const onAccSum = onAcc.reduce((s, p) => s + paymentNet(p), 0);
-                    if (onAccSum <= 0) return null;
-                    const first = onAcc.find(p => p.job_id && !allocMissing);
-                    return (
-                      <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, marginTop:6, color:"#854F0B" }}>
-                        <span>On account (unallocated): <b>${Math.round(onAccSum).toLocaleString()}</b></span>
-                        {first && can("payments","edit") && <button onClick={() => openReallocatePayment(first)} style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11, fontWeight:700, borderRadius:6, padding:"1px 8px", cursor:"pointer" }}>Asignar</button>}
-                      </div>
-                    );
-                  })()}
-                  {(() => {
-                    const un = paymentsMissing ? 0 : chargeStateByJobKey(jobDetail.key).unattributedExtraCollected;
-                    return un > 0.01 ? <div style={{ fontSize:11, marginTop:4, color:"#999" }}>${Math.round(un).toLocaleString()} collected from extras not assigned to a specific extra (historical).</div> : null;
-                  })()}
-                  {totalBrokerShare > 0 && (
-                    <div style={{ marginTop:6, paddingTop:6, borderTop:"1px solid #eee", fontSize:12.5 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", color:"#C2410C" }}>
-                        <span>− Broker share{jobBrokerSharePct > 0 ? ` (job ${jobBrokerSharePct}%)` : ""}</span>
-                        <span><b>−${Math.round(totalBrokerShare).toLocaleString()}</b></span>
-                      </div>
-                      <div style={{ display:"flex", justifyContent:"space-between", marginTop:3, fontWeight:700 }}>
-                        <span>Net revenue (post broker)</span>
-                        <span style={{ color:"#1A8A4E" }}>${Math.round(netRevenue).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, paddingTop:8, borderTop:"1px solid #eee", fontSize:13.5, fontWeight:800 }}>
-                    <span>Total outstanding balance</span>
-                    <span style={{ color: totalOutstanding > 0 ? "#E24B4A" : "#1A8A4E" }}>${Math.round(totalOutstanding).toLocaleString()}</span>
-                  </div>
-                </div>
-                {ps.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments recorded.</div>
-                  : ps.map(p => (
-                      <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13, flexWrap:"wrap" }}>
-                        <ConceptBadge concept={p.concept} />
-                        {p.concept === "extra" && p.extra_type && <span style={{ fontSize:10.5, color:"#6D28D9", fontWeight:600 }}>{extraTypeLabel(p.extra_type)}</span>}
-                        {p.split_group && <span title="Part of a split payment" style={{ fontSize:9, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 6px" }}>split</span>}
-                        <PaymentMethodBadge method={p.method} />
-                        <b>{money(paymentNet(p)) || "$0"}</b>
-                        <span style={{ fontSize:11, color:"#888" }}>{p.payment_date || "—"}</span>
-                        {p.received
-                          ? (p.banked
-                              ? <span style={{ fontSize:10.5, fontWeight:700, color:"#185FA5", background:"#E6F1FB", borderRadius:20, padding:"1px 7px" }}>Deposited</span>
-                              : <span style={{ fontSize:10.5, fontWeight:700, color:"#C2410C", background:"#FDE3CF", borderRadius:20, padding:"1px 7px" }}>In circulation{p.cash_with_whom ? ` · ${p.cash_with_whom}` : ""}</span>)
-                          : <span style={{ fontSize:10.5, fontWeight:700, color:"#999", background:"#F1F1F1", borderRadius:20, padding:"1px 7px" }}>Pending</span>}
-                        <span style={{ flex:1 }} />
-                        <button onClick={() => openEditPayment(p)} title="Edit" style={{ border:"none", background:"none", cursor:"pointer", color:"#185FA5", fontSize:12 }}>✏️</button>
-                      </div>
-                    ))}
+                )}
+                {groups.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments recorded.</div>
+                  : groups.map(g => (
+                    <PaymentCard key={g.key} g={g} extrasById={exById}
+                      onEdit={canEdit ? openEditPayment : undefined}
+                      onAssign={canEdit && !allocMissing ? openReallocatePayment : undefined}
+                      onPhoto={setPayPhotoView}
+                      onToggleReceived={canEdit ? togglePayReceived : undefined}
+                      onToggleBanked={canEdit ? togglePayBanked : undefined} />
+                  ))}
                 <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
-                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: jobOutstanding > 0 ? String(Math.round(jobOutstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add payment</Btn>
+                  <Btn onClick={() => openAddPayment({ job_id: repId, received_by: firstDriverName, cash_with_whom: firstDriverName, amount: outstanding > 0 ? String(Math.round(outstanding)) : "" })} style={{ padding:"5px 12px", fontSize:12 }}>+ Add payment</Btn>
                 </div>
               </>
             );

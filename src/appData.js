@@ -75,6 +75,55 @@ export function sheetCalc(sheet, jobsIn) {
 // copies. Re-exported so the main app reads them from one place.
 export { effectiveBanked, bankedDateOf } from "./bankShared.js";
 export { paymentNet } from "./paymentAlloc.js";
+import { effectiveBanked as _effBanked } from "./bankShared.js";
+import { paymentNet as _payNet } from "./paymentAlloc.js";
+
+// ── How a payment is SHOWN ───────────────────────────────────────────────────
+// A payment that the client made with several methods, or that was applied to
+// several charges, is stored as several rows sharing a split_group (one method
+// and one charge per row). The UI shows it as ONE payment: this groups the rows
+// back, and splits each group two ways — by how it was paid (`lines`) and by
+// what it covered (`covers`).
+//   moneyStatus(row) → "pending" | "circulation" | "deposited"
+//   groupPayments(rows) → [{ key, rows, total, date, received_by, lines, covers, onAccount }]
+//     lines:  [{ key, method, serial, check_type, mo_type, amount, status, holder, account, rows }]
+//     covers: [{ key, concept, extra_type, job_extra_id, amount, rows }]
+export function moneyStatus(p) {
+  if (!p.received) return "pending";
+  return _effBanked(p) ? "deposited" : "circulation";
+}
+export function groupPayments(rows) {
+  const byKey = new Map();
+  for (const p of rows || []) {
+    const key = p.split_group ? "g:" + p.split_group : "p:" + p.id;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(p);
+  }
+  const out = [];
+  for (const [key, grp] of byKey) {
+    const sorted = grp.slice().sort((a, b) => numv(a.id) - numv(b.id));
+    const rep = sorted[0];
+    const lines = new Map(), covers = new Map();
+    for (const p of sorted) {
+      const serial = p.check_serial || p.mo_serial || "";
+      const lk = [p.method || "", serial, p.check_type || "", p.mo_type || ""].join("|");
+      if (!lines.has(lk)) lines.set(lk, { key: lk, method: p.method || null, serial, check_type: p.check_type || null, mo_type: p.mo_type || null, amount: 0, status: moneyStatus(p), holder: p.cash_with_whom || null, account: p.bank_account || null, photo: p.check_photo_url || p.mo_photo_url || null, rows: [] });
+      const l = lines.get(lk); l.amount += _payNet(p); l.rows.push(p);
+      // A line is only as far along as its least-advanced row.
+      const rank = { pending: 0, circulation: 1, deposited: 2 };
+      if (rank[moneyStatus(p)] < rank[l.status]) l.status = moneyStatus(p);
+      if (!l.holder && p.cash_with_whom) l.holder = p.cash_with_whom;
+      if (!l.account && p.bank_account) l.account = p.bank_account;
+      const ck = p.concept === "extra" ? "extra:" + (p.job_extra_id ?? ("t:" + (p.extra_type || ""))) : p.concept || "job";
+      if (!covers.has(ck)) covers.set(ck, { key: ck, concept: p.concept || "job", extra_type: p.extra_type || null, job_extra_id: p.job_extra_id ?? null, amount: 0, rows: [] });
+      const c = covers.get(ck); c.amount += _payNet(p); c.rows.push(p);
+    }
+    const total = sorted.reduce((s, p) => s + _payNet(p), 0);
+    const onAccount = sorted.filter(p => p.concept === "on_account").reduce((s, p) => s + _payNet(p), 0);
+    out.push({ key, rows: sorted, rep, total, date: rep.payment_date || null, received_by: rep.received_by || null, received_date: rep.received_date || null, notes: rep.notes || null, lines: [...lines.values()], covers: [...covers.values()], onAccount, isGroup: sorted.length > 1 });
+  }
+  return out.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || numv(b.rep.id) - numv(a.rep.id));
+}
 
 // ── Compliance documents ─────────────────────────────────────────────────────
 // Auto status from expiry date: expired / expiring_soon (≤30d) / active / none.

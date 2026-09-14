@@ -7,6 +7,7 @@ import {
   collectionStatus, jobPadsMissing, sheetCalc,
   paymentNet, effectiveBanked, bankedDateOf,
   docStatus, docDaysToExpiry,
+  groupPayments, moneyStatus,
 } from "../src/appData.js";
 import { selectAll, PAGE_SIZE } from "../src/db.js";
 
@@ -242,3 +243,50 @@ await ta("selectAll: an error on any page surfaces as { data: null, error }", as
 });
 
 console.log(process.exitCode ? "\nSome tests FAILED." : "\nAll app-data tests passed.");
+
+
+// ── Payment grouping for display ─────────────────────────────────────────────
+
+t("moneyStatus: pending / circulation / deposited, digital always deposited", () => {
+  assert.equal(moneyStatus({ received: false, method: "cash" }), "pending");
+  assert.equal(moneyStatus({ received: true, banked: false, method: "cash" }), "circulation");
+  assert.equal(moneyStatus({ received: true, banked: true, method: "cash" }), "deposited");
+  assert.equal(moneyStatus({ received: true, banked: false, method: "zelle" }), "deposited");
+});
+
+t("groupPayments: rows sharing a split_group become one payment, split by method line and by charge", () => {
+  const g = "abc";
+  const rows = [
+    { id: 1, split_group: g, payment_date: "2026-09-14", received_by: "Juan", method: "cash", amount: 2500, concept: "job", received: true, banked: false, cash_with_whom: "Juan" },
+    { id: 2, split_group: g, payment_date: "2026-09-14", method: "zelle", amount: 785, concept: "job", received: true, banked: true, bank_account: "Chase" },
+    { id: 3, split_group: g, payment_date: "2026-09-14", method: "money_order", mo_serial: "331", amount: 500, concept: "job", received: true, banked: false, cash_with_whom: "Juan" },
+    { id: 4, split_group: g, payment_date: "2026-09-14", method: "money_order", mo_serial: "332", amount: 415, concept: "job", received: true, banked: false, cash_with_whom: "Juan" },
+    { id: 5, split_group: g, payment_date: "2026-09-14", method: "money_order", mo_serial: "332", amount: 85, concept: "extra", extra_type: "packing", job_extra_id: 71, received: true, banked: false, cash_with_whom: "Juan" },
+    { id: 6, split_group: g, payment_date: "2026-09-14", method: "check", check_serial: "10457", check_type: "cashiers_check", amount: 415, concept: "extra", extra_type: "packing", job_extra_id: 71, received: true, banked: false, cash_with_whom: "Office" },
+    { id: 7, split_group: g, payment_date: "2026-09-14", method: "check", check_serial: "10457", check_type: "cashiers_check", amount: 300, concept: "extra", extra_type: "shuttle", job_extra_id: 72, received: true, banked: false, cash_with_whom: "Office" },
+    { id: 8, payment_date: "2026-09-10", method: "venmo", amount: 1400, concept: "on_account", received: true, banked: true },
+  ];
+  const gp = groupPayments(rows);
+  assert.equal(gp.length, 2);
+  const big = gp.find(x => x.isGroup), single = gp.find(x => !x.isGroup);
+  assert.equal(big.total, 5000);
+  assert.equal(big.lines.length, 5);                                  // cash, zelle, MO 331, MO 332, check 10457
+  assert.deepEqual(big.lines.map(l => l.amount), [2500, 785, 500, 500, 715]);
+  assert.equal(big.lines[1].status, "deposited");
+  assert.equal(big.lines[4].holder, "Office");
+  assert.deepEqual(big.covers.map(c => [c.concept, c.amount]), [["job", 4200], ["extra", 500], ["extra", 300]]);
+  assert.equal(big.covers[1].job_extra_id, 71);
+  assert.equal(single.onAccount, 1400);
+  assert.equal(gp[0], big);                                           // newest first
+});
+
+t("groupPayments: a line's status is its least-advanced row", () => {
+  const rows = [
+    { id: 1, split_group: "x", method: "cash", amount: 100, concept: "job", received: true, banked: true },
+    { id: 2, split_group: "x", method: "cash", amount: 50, concept: "extra", received: true, banked: false, cash_with_whom: "Ana" },
+  ];
+  const [g] = groupPayments(rows);
+  assert.equal(g.lines.length, 1);
+  assert.equal(g.lines[0].status, "circulation");
+  assert.equal(g.lines[0].holder, "Ana");
+});
