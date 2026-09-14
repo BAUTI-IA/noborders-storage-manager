@@ -262,6 +262,21 @@ check("without a fallback, rows naming no driver are still dropped",
 check("a Statuses wrapper is read",
   v.normalizeDutyEvents({ Statuses: [{ DutyStatus: "D", StartUTC: "2026-09-08T12:00:00Z" }] }, "DRV7").length === 1);
 
+console.log("\nDriver roster");
+const roster2 = v.normalizeDrivers([
+  { Number: "D1", FirstName: "Pedro", LastName: "Gómez" },
+  { Number: "D2", Name: "Ana Ruiz" },
+  { Number: "D3" },
+  { Number: "D1", Name: "duplicate" },
+  null,
+]);
+check("builds a name from first and last", roster2.find(d => d.number === "D1").name === "Pedro Gómez");
+check("takes a full name when it is given", roster2.find(d => d.number === "D2").name === "Ana Ruiz");
+check("a driver with no name is still usable", roster2.find(d => d.number === "D3").label === "D3");
+check("duplicates and junk rows are dropped", roster2.length === 3);
+check("garbage in → empty, not a crash",
+  v.normalizeDrivers(null).length === 0 && v.normalizeDrivers("nope").length === 0);
+
 // ── GPS history ──────────────────────────────────────────────────────────────
 console.log("\nGPS history");
 const hist = v.normalizeHistory([
