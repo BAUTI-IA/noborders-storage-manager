@@ -14,10 +14,35 @@ Verizon siguen andando y los que no tienen ELD se cargan a mano con
 
 | Credencial | De dónde sale |
 |---|---|
-| **API key** (recomendado) | Motive → **Admin → Settings → Developer / API Keys** → crear una key. Hace falta ser admin de la cuenta. Viaja en cada llamada como `X-Api-Key`. |
+| **API key** (recomendado) | Motive → **Admin → Developers → API access** (`app.gomotive.com/en-US/#/admin/developers/api`). Hace falta ser admin de la cuenta. Viaja en cada llamada como `X-Api-Key`. |
 | **OAuth access token** | Solo si la cuenta se integró por OAuth 2.0. Viaja como `Authorization: Bearer`. |
 
 Si están las dos, **gana la API key**, porque no vence.
+
+### La key no se crea sola: se pide por mail
+
+El botón **Request API key** no genera nada. Abre un cartel que dice que hay que
+escribirle a **apisupport@gomotive.com** explicando cómo la flota va a usar la
+key, y que un representante lo revisa antes de habilitarla. Motive lo plantea
+como protección contra accesos no autorizados a los datos de la flota.
+
+O sea: **entre que se pide la key y que llega hay una espera que no depende de
+nosotros.** Conviene pedirla apenas se decide la integración, no el día que se
+quiere prender.
+
+Lo que el mail tiene que decir, que es lo que el representante evalúa:
+
+- Qué es lo que se está construyendo y para qué (acá: un CRM interno de la
+  operación, no un producto que se revende).
+- Qué datos se leen — vehicles, vehicle locations, users/drivers, HOS logs — y
+  que es **solo lectura**: el CRM nunca escribe nada en Motive.
+- Cada cuánto se consulta: el mapa sincroniza solo mientras alguien lo tiene
+  abierto, una vez cada 5 minutos, y es **una sola llamada para toda la flota**.
+- Dónde vive la key: como variable de entorno del lado del servidor, nunca en el
+  browser.
+
+Cuando llega, se carga en Vercel y listo. **No hay que pegarla en ningún lado del
+código ni del repo.**
 
 ## Variables de entorno (Vercel)
 
