@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Workflow del CRM — No Borders Moving</title>
+<style>
+  @page { size: A4; margin: 14mm 13mm 15mm 13mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html,body { margin:0; padding:0; }
+  body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; color:#1a1a1a; font-size:11.2px; line-height:1.55; }
+  h1,h2,h3 { margin:0; letter-spacing:-0.02em; }
+  p { margin:0 0 8px; }
+  .muted { color:#888; }
+  .break { page-break-before: always; }
+  h1.sec, h3 { break-after: avoid; }
+  tr { break-inside: avoid; }
+  .avoid { break-inside: avoid; }
+  ul { margin:4px 0 10px; padding-left:18px; }
+  li { margin-bottom:4px; }
+  ol { margin:4px 0 10px; padding-left:19px; }
+
+  /* ---------- Cover ---------- */
+  .cover { page-break-after: always; height: 261mm; border-radius:20px; overflow:hidden;
+           background: linear-gradient(160deg,#0f172a 0%, #122a44 55%, #0c1f33 100%); color:#fff; position:relative; padding:34mm 24mm; }
+  .cover .kicker { font-size:12px; font-weight:700; letter-spacing:0.22em; text-transform:uppercase; color:#7Fb2e6; }
+  .cover h1 { font-size:54px; font-weight:800; margin:14px 0 6px; line-height:1.02; }
+  .cover .sub { font-size:19px; color:#c9d6e5; font-weight:500; }
+  .cover .pill { display:inline-block; margin-top:30px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18);
+                 border-radius:30px; padding:9px 18px; font-size:13px; color:#e7eef7; }
+  .cover .foot { position:absolute; left:24mm; right:24mm; bottom:26mm; display:flex; justify-content:space-between; align-items:flex-end;
+                 border-top:1px solid rgba(255,255,255,0.14); padding-top:16px; font-size:12px; color:#9fb3c8; }
+  .cover .mock { position:absolute; right:20mm; top:118mm; display:flex; flex-direction:column; gap:9px; width:74mm; }
+  .cover .chip { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:12px 15px; }
+  .cover .chip .n { font-size:13px; font-weight:800; color:#e7eef7; }
+  .cover .chip .l { font-size:10.5px; color:#9fb3c8; margin-top:3px; line-height:1.4; }
+
+  /* ---------- Section headers ---------- */
+  .sec { font-size:21px; font-weight:800; margin:24px 0 4px; }
+  .sec .num { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:9px;
+              background:#111; color:#fff; font-size:15px; margin-right:10px; vertical-align:middle; }
+  .lead { color:#666; margin:0 0 14px; font-size:12px; }
+  .divider { height:1px; background:#eee; margin:20px 0; }
+  h3 { font-size:13px; margin:14px 0 5px; }
+
+  /* ---------- Tables ---------- */
+  table.g { width:100%; border-collapse:collapse; font-size:10.5px; margin:6px 0 12px; }
+  table.g th { text-align:left; background:#111; color:#fff; padding:8px 11px; font-size:9.5px; text-transform:uppercase; letter-spacing:0.04em; }
+  table.g td { padding:8px 11px; border-bottom:1px solid #eee; vertical-align:top; }
+  table.g tr:nth-child(even) td { background:#fafafa; }
+  table.g td:first-child { font-weight:700; }
+  table.g.nw td:first-child { white-space:nowrap; }
+
+  /* ---------- Callouts ---------- */
+  .note { background:#F1F7FD; border:1px solid #D6E6F5; border-left:4px solid #378ADD; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .note b { color:#185FA5; }
+  .warn { background:#FFF6E8; border:1px solid #F4DDB0; border-left:4px solid #EF9F27; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .bad  { background:#FCEBEB; border:1px solid #F3C9C9; border-left:4px solid #E24B4A; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+  .good { background:#EAF3DE; border:1px solid #CFE3B4; border-left:4px solid #639922; border-radius:8px; padding:10px 13px; font-size:11px; margin:10px 0; }
+
+  /* ---------- Rules ---------- */
+  .rules { display:grid; grid-template-columns:repeat(3,1fr); gap:11px; margin:12px 0 4px; }
+  .rule { border:1px solid #ececec; border-radius:11px; padding:13px 15px; break-inside:avoid; }
+  .rule .n { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:7px; background:#111; color:#fff; font-size:12px; font-weight:800; }
+  .rule h3 { font-size:12.5px; margin:8px 0 5px; }
+  .rule p { font-size:10.5px; color:#555; margin:0; }
+
+  /* ---------- Flow ---------- */
+  .flow { display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin:10px 0 14px; }
+  .fbox { border:1.5px solid #d8d8d8; border-radius:9px; padding:7px 10px; font-size:10px; font-weight:700; text-align:center; background:#fff; }
+  .farrow { color:#bbb; font-weight:800; }
+
+  /* ---------- Stages ---------- */
+  .stage { border:1px solid #ececec; border-radius:11px; padding:11px 14px; margin-bottom:9px; break-inside:avoid; }
+  .stage .hd { display:flex; align-items:center; gap:9px; margin-bottom:5px; }
+  .stage .st { display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px; padding:0 6px; border-radius:7px; background:#185FA5; color:#fff; font-size:11px; font-weight:800; }
+  .stage h3 { font-size:12.5px; margin:0; }
+  .stage .who { font-size:9.5px; color:#999; margin-left:auto; text-align:right; }
+  .stage p { font-size:10.5px; margin:0 0 5px; }
+  .stage .miss { font-size:10px; color:#A32D2D; background:#FCEBEB; border-radius:6px; padding:5px 9px; margin-top:6px; }
+
+  /* ---------- Routines ---------- */
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+  .card { border:1px solid #ececec; border-radius:11px; padding:12px 15px; break-inside:avoid; margin-bottom:11px; }
+  .card h3 { font-size:12.5px; margin:0 0 2px; }
+  .card .when { font-size:9.5px; color:#999; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:7px; }
+  .card ol, .card ul { font-size:10.5px; margin:0; padding-left:17px; }
+  .card li { margin-bottom:4px; }
+
+  /* ---------- Sidebar mock ---------- */
+  .navmock { border:1px solid #e6e6e6; border-radius:12px; overflow:hidden; background:#fff; break-inside:avoid; }
+  .navmock .cap { font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; padding:8px 12px; border-bottom:1px solid #f0f0f0; }
+  .navmock .cap.a { background:#FCEBEB; color:#A32D2D; }
+  .navmock .cap.b { background:#EAF3DE; color:#3B6D11; }
+  .navmock .body { padding:8px 9px; }
+  .glabel { font-size:8px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#bbb; padding:6px 8px 3px; }
+  .item { display:flex; align-items:center; gap:7px; padding:4px 8px; border-radius:7px; font-size:10px; color:#444; font-weight:500; }
+  .item.on { background:#111; color:#fff; font-weight:700; }
+  .item.dim { color:#c4c4c4; text-decoration:line-through; }
+  .item.new { background:#EAF3DE; color:#3B6D11; font-weight:700; }
+  .item .tail { margin-left:auto; font-size:8.5px; color:#bbb; font-weight:600; }
+
+  .kpi { display:flex; gap:9px; margin:10px 0 2px; }
+  .kpi > div { flex:1; border:1px solid #ececec; border-radius:10px; padding:10px 12px; text-align:center; }
+  .kpi .n { font-size:21px; font-weight:800; letter-spacing:-0.02em; }
+  .kpi .l { font-size:9.5px; color:#999; margin-top:2px; }
+
+  .wall { background:#0f172a; color:#fff; border-radius:14px; padding:18px 22px; }
+  .wall h3 { color:#7FB2E6; font-size:11px; text-transform:uppercase; letter-spacing:0.14em; margin-bottom:10px; }
+  .wall ul { padding-left:17px; margin:0; }
+  .wall li { margin-bottom:7px; font-size:12px; color:#dbe5f0; }
+  .wall b { color:#fff; }
+  code { font-family: ui-monospace, monospace; font-size:10px; background:#f4f4f4; border-radius:4px; padding:1px 5px; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="cover">
+  <div class="kicker">No Borders Moving &amp; Storage</div>
+  <h1>Workflow<br>del CRM</h1>
+  <div class="sub">Quién toca qué, cuándo y en qué orden</div>
+  <div class="pill">🔄 La rutina del día · por rol · por momento</div>
+
+  <div class="mock">
+    <div class="chip"><div class="n">📘 La guía</div><div class="l">explica <b>qué hace cada pantalla</b></div></div>
+    <div class="chip"><div class="n">🔄 Este documento</div><div class="l">explica <b>la rutina</b>: quién la usa, cuándo, y en qué orden</div></div>
+  </div>
+
+  <div class="foot">
+    <div>Versión 1.0 · Uso interno</div>
+    <div>Tres reglas y seis rutinas 🚚</div>
+  </div>
+</div>
+
+<!-- ============ 1 ============ -->
+<h1 class="sec"><span class="num">1</span>Las tres reglas que ordenan todo</h1>
+<p class="lead">Si el equipo cumple sólo estas tres, el 80% del desorden desaparece.</p>
+
+<div class="rules">
+  <div class="rule">
+    <div class="n">1</div>
+    <h3>Un dato, un dueño</h3>
+    <p>Cada número se carga <b>una sola vez</b>, en la pantalla que lo posee. Todo lo demás lo deriva el sistema. Si cargás la misma plata en dos lados no tenés dos registros: tenés dos versiones de la verdad y ninguna sirve.</p>
+  </div>
+  <div class="rule">
+    <div class="n">2</div>
+    <h3>El estado se avanza el mismo día</h3>
+    <p>Un pickup que se hizo el martes y se marcó el viernes hace que el tablero mienta tres días. El botón <b>→ Avanzar</b> se toca cuando el chofer avisa, no cuando hay tiempo.</p>
+  </div>
+  <div class="rule">
+    <div class="n">3</div>
+    <h3>La plata se carga donde se cobra</h3>
+    <p>El pago se registra cuando entra, con <b>quién lo tiene físicamente</b>. No "después lo cargo". Ese "después" es el agujero por donde se pierde el cash.</p>
+  </div>
+</div>
+
+<!-- ============ 2 ============ -->
+<h1 class="sec"><span class="num">2</span>Mapa de dueños</h1>
+<p class="lead">Qué pantalla manda sobre cada dato. Esta tabla corta la discusión de "¿dónde se carga esto?".</p>
+
+<table class="g">
+  <tr><th style="width:31%">Dato</th><th style="width:31%">Se carga SOLO en</th><th>Se refleja automáticamente en</th></tr>
+  <tr><td>Alta y datos del job</td><td>+ Nuevo job / detalle del job</td><td>Dispatching, Jobs, Calendar, Analytics</td></tr>
+  <tr><td>Estado del job</td><td>Dispatching → Avanzar</td><td>Todo el tablero, Trips, brief diario</td></tr>
+  <tr><td>FADD, driver, sticker, CF</td><td>Detalle del job (clic sobre el campo)</td><td>Dispatching, alertas, Trips</td></tr>
+  <tr><td>Asignación a un viaje</td><td>Trips (o el campo Trip del job)</td><td>Dispatching, manifest de WhatsApp</td></tr>
+  <tr><td>Cobro de un cliente</td><td>Payments (o desde el job)</td><td>AP/AR, Analytics, brief, Drivers</td></tr>
+  <tr><td>Cobro de un BOL</td><td>Settlements</td><td>Se sincroniza solo con Payments</td></tr>
+  <tr><td>Extras y comisiones</td><td>Extras (o desde el job)</td><td>Payments, AP/AR, perfil del driver y del rep</td></tr>
+  <tr><td>Cobro mensual de storage</td><td>Se genera solo (billing activo en el job)</td><td>Storage Billing, AP/AR</td></tr>
+  <tr><td>Gastos de campo (cash del driver)</td><td>Field Expenses</td><td>Banks → Conciliación, P&amp;L</td></tr>
+  <tr><td>Facturas fijas (alquiler, seguro, software)</td><td>AP/AR → bills</td><td>AP/AR, P&amp;L</td></tr>
+  <tr><td>Movimientos del banco</td><td>Banks (screenshot o CSV)</td><td>Conciliación, P&amp;L</td></tr>
+  <tr><td>Documentos que vencen</td><td>Legal &amp; Compliance</td><td>Alerta roja + badge del menú</td></tr>
+  <tr><td>Daños e incidentes</td><td>Claims</td><td>⚠ en el job y en el trip, brief</td></tr>
+</table>
+
+<div class="note">
+  <b>Las dos únicas cosas que se cargan dos veces por diseño</b> — el sistema las cruza a propósito, para detectar diferencias:
+  <ul style="margin:6px 0 0">
+    <li>Lo que cobró el chofer (<b>Payments</b>) vs. lo que entró al banco (<b>Banks → Conciliación</b>).</li>
+    <li>Lo que dice el GPS que hizo el camión (<b>Reports</b>) vs. lo que se le pagó al chofer.</li>
+  </ul>
+  <p style="margin:7px 0 0">Si esas dos no cierran, hay algo para mirar. Todo lo demás que aparezca cargado dos veces es un error.</p>
+</div>
+
+<!-- ============ 3 ============ -->
+<h1 class="sec"><span class="num">3</span>Los cinco roles y su pantalla casa</h1>
+<p class="lead">Nadie tiene que ver las 29 secciones. Cada persona vive en <b>una</b> pantalla y visita las otras cuando la rutina se lo pide.</p>
+
+<table class="g nw">
+  <tr><th style="width:22%">Rol</th><th style="width:26%">Pantalla casa</th><th>Entra al CRM para…</th></tr>
+  <tr><td>Dispatcher</td><td>🚚 Dispatching</td><td style="white-space:normal">que ningún job de hoy quede sin chofer y ningún FADD se venza</td></tr>
+  <tr><td>Back office / Cobranzas</td><td>💰 Payments + 📒 AP/AR</td><td style="white-space:normal">que la plata cobrada llegue al banco y la deuda baje</td></tr>
+  <tr><td>Fleet manager</td><td>🛣️ Trips + 🪪 Drivers</td><td style="white-space:normal">que los camiones estén cargados, legales y en ruta</td></tr>
+  <tr><td>Contabilidad</td><td>🏛️ Banks</td><td style="white-space:normal">que cada movimiento esté categorizado y verificado</td></tr>
+  <tr><td>Dueño / Manager</td><td>📊 Analytics + brief diario</td><td style="white-space:normal">decidir: qué jobs tomar, qué broker conviene, dónde se pierde plata</td></tr>
+</table>
+
+<div class="note">
+  <b>Esto ya se configura en el CRM.</b> En <b>Users</b>, cada persona tiene permisos por sección (view / edit / create). Hoy están casi todos con todo prendido — por eso el menú se ve gigante para todos. Ver sección 7.
+</div>
+
+<!-- ============ 4 ============ -->
+<h1 class="sec break"><span class="num">4</span>El ciclo de vida de un job</h1>
+<p class="lead">De la llamada del broker al cobro conciliado. Ocho etapas, cada una con dueño y con qué se rompe si te la saltás.</p>
+
+<div class="flow">
+  <div class="fbox">Scheduled</div><span class="farrow">→</span>
+  <div class="fbox">Picked up</div><span class="farrow">→</span>
+  <div class="fbox">In storage<br><span style="font-weight:500;color:#999;font-size:9px">sólo Full</span></div><span class="farrow">→</span>
+  <div class="fbox">Out for delivery</div><span class="farrow">→</span>
+  <div class="fbox">Delivered</div>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">0</span><h3>Decidir si el job se toma</h3><span class="who">Quien atiende al broker<br>🧮 Job Calculator</span></div>
+  <p>El broker llama con el precio ya puesto: la única pregunta es tomarlo o no. Cargás origen, destino, CF, precio y condiciones de acceso, y sale el semáforo con el margen real. <b>Con el broker todavía en el teléfono.</b></p>
+  <div class="miss">Si te la saltás: tomás jobs que no dejan plata y te enterás tres meses después en Analytics.</div>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">1</span><h3>Dar de alta el job</h3><span class="who">Quien lo vendió / back office<br>+ Nuevo job</span></div>
+  <p>Tipo (<b>Full</b> / <b>Direct</b> / <b>Broker delivery</b>), cliente, broker, CF, direcciones, <b>balances de pickup y delivery</b>. Si el cliente paga storage mensual → tildar <b>billing activo</b> ahí mismo.</p>
+  <div class="miss">Si te la saltás: el job vive en storage sin facturarse. El brief mide esa fuga todos los días y la muestra en dólares por mes.</div>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">2</span><h3>Poner fecha y asignar</h3><span class="who">Dispatcher<br>Calendar + 🛣️ Trips</span></div>
+  <p>Cargar <b>FADD</b>, fecha de delivery, driver y meterlo en un <b>trip</b>. La barra de capacidad del trip te dice si el camión aguanta.</p>
+  <div class="miss">Si te la saltás: el job aparece en "No FADD" / "No trip" y nunca se agenda solo.</div>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">3</span><h3>Pickup</h3><span class="who">Dispatcher + chofer<br>Dispatching</span></div>
+  <p>Mandar el 💬 <b>WhatsApp</b> al chofer (sale con todos los datos, o el manifest del trip entero), y al confirmar: <b>Avanzar → Picked up</b>. Si cobró en el pickup, se carga el pago <b>en el momento</b> (etapa 6).</p>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">4</span><h3>En storage <span class="muted" style="font-weight:500">(sólo jobs Full)</span></h3><span class="who">Dispatcher<br>🏬 Storage</span></div>
+  <p><b>Avanzar → In storage</b>, con <b>unidad o warehouse</b> y <b>sticker (color + lote)</b>. El billing mensual se genera solo cada 30 días y se marca <b>overdue</b> al vencer.</p>
+  <div class="miss">Si te la saltás: mercadería sin ubicación física registrada. Cuando haya que sacarla, alguien la va a buscar a mano.</div>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">5</span><h3>Delivery</h3><span class="who">Dispatcher + chofer<br>🛣️ Trips</span></div>
+  <p><b>Avanzar → Out for delivery</b>, manifest al chofer, y <b>Mark delivered</b> por stop. Cuando se entregan todos los stops, el trip se cierra solo.</p>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">6</span><h3>Cobrar</h3><span class="who">Quien cobra + back office<br>💰 Payments</span></div>
+  <p>Monto, concepto, método y — lo importante — <b>quién tiene la plata físicamente</b>. Cash, cheque o money order quedan "en circulación" hasta que se marque el depósito. Lo digital se marca depositado solo.</p>
+  <div class="miss">Si te la saltás: la plata existe en el bolsillo de alguien y no en ningún sistema. Es el agujero más caro de todos.</div>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">7</span><h3>Depositar y cerrar</h3><span class="who">Back office<br>Payments · Settlements · Extras</span></div>
+  <p>Depositar lo que está en circulación (el botón 💬 <b>Pedir depósito</b> ya arma el WhatsApp), cerrar la <b>closing sheet</b> del broker y cargar los <b>extras</b> con sus comisiones.</p>
+</div>
+
+<div class="stage">
+  <div class="hd"><span class="st">8</span><h3>Conciliar</h3><span class="who">Contabilidad<br>🏛️ Banks · 📒 AP/AR</span></div>
+  <p>Subir el movimiento del banco, categorizar, <b>verificar</b> (lo verifica una persona distinta de la que categorizó) y cruzar contra Payments y Expenses. AP/AR muestra el neto: cuánto te deben y cuánto debés, envejecido 0-30 / 31-60 / 61-90 / 90+.</p>
+</div>
+
+<!-- ============ 5 ============ -->
+<h1 class="sec break"><span class="num">5</span>Las rutinas</h1>
+<p class="lead">El corazón del workflow. Cada una con dueño, horario y duración.</p>
+
+<div class="two">
+  <div class="card">
+    <h3>☀️ Apertura del día</h3>
+    <div class="when">Dispatcher · 08:00 · 15 minutos</div>
+    <ol>
+      <li><b>Leer el brief</b> que llegó al grupo de Telegram (sale automático todos los días): agenda de hoy, deuda cobrable, fugas de storage, FADD vencidos, claims.</li>
+      <li>Abrir <b>Dispatching → Today</b>. Los cinco números de arriba, en este orden:
+        <ul style="padding-left:15px;margin:4px 0">
+          <li><b>FADD overdue</b> (rojo) → lo primero, siempre.</li>
+          <li><b>Unmanned today</b> → jobs de hoy sin chofer ni trip. <b>Esto no puede quedar en más de 0 al final de la apertura.</b></li>
+          <li><b>Pickups</b> y <b>Deliveries</b> de hoy → confirmar con cada chofer.</li>
+          <li><b>To schedule</b> → deliveries con FADD ≤ 7 días sin fecha.</li>
+        </ul>
+      </li>
+      <li>Vaciar el panel <b>Needs attention</b> de arriba hacia abajo: No driver today → No trip → No FADD → No delivery date → Sticker.</li>
+      <li>Si aparece el cartel amarillo de 🔍 <b>duplicados</b>, resolverlo ahí mismo: son 30 segundos y evitan cobrar dos veces.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>🌙 Cierre del día</h3>
+    <div class="when">Dispatcher · 17:30 · 10 minutos</div>
+    <ol>
+      <li><b>Dispatching → Today</b>: que todo lo de hoy esté en su estado real.</li>
+      <li>Lo que no se hizo → reprogramar o <b>On hold</b>, con la razón escrita en el job.</li>
+      <li>Mañana ya cubierto: pickups y deliveries de mañana con chofer y trip asignados.</li>
+    </ol>
+    <h3 style="margin-top:12px">🔄 Durante el día</h3>
+    <div class="when">Dispatcher · continuo</div>
+    <ul>
+      <li>Chofer avisa → <b>Avanzar</b> el estado. En el momento.</li>
+      <li>Entra un cobro → cargarlo en <b>Payments</b> con quién tiene la plata.</li>
+      <li>Todo lo operativo por 💬 <b>Chats</b> (queda registrado y lo ve el resto), no por WhatsApp personal.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="two">
+  <div class="card">
+    <h3>💵 Cierre de plata</h3>
+    <div class="when">Back office · todos los días · 20 minutos</div>
+    <ol>
+      <li><b>Payments → alerta roja</b>: cash recibido hace <b>más de 7 días sin depositar</b>. Botón 💬 Pedir depósito.</li>
+      <li><b>Payments → En circulación</b>: cuánto tiene cada persona en mano, desglosado.</li>
+      <li><b>AP/AR</b>: que la deuda real del día baje respecto de ayer (el brief lo muestra como delta).</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>📅 Lunes</h3>
+    <div class="when">Fleet manager · 30 minutos</div>
+    <ul>
+      <li><b>Legal &amp; Compliance</b>: documentos vencidos o que vencen en ≤ 7 días (badge del menú).</li>
+      <li><b>Trucks / Drivers</b>: capacidades y vínculos al día.</li>
+      <li><b>Reports</b>: cruce GPS vs. lo que se pagó de sueldo. Donde no coincide, hay algo que mirar.</li>
+      <li><b>Claims</b>: que ninguno quede en <code>open</code> más de una semana sin pasar a <code>investigating</code>.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="two">
+  <div class="card">
+    <h3>📆 Viernes</h3>
+    <div class="when">Cobranzas · 45 minutos</div>
+    <ul>
+      <li><b>AP/AR → Receivables</b>: atacar la columna <b>90+</b> primero, después 61-90.</li>
+      <li><b>Storage Billing → Overdue</b>: recordatorio por WhatsApp (el botón ya lo arma).</li>
+      <li><b>Settlements → Open</b>: cerrar las closing sheets de la semana.</li>
+      <li><b>Extras</b>: cargar los de la semana y mandar el resumen a cada driver y rep (📋 Copiar / 🖨️ PDF).</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🗓️ Cierre de mes</h3>
+    <div class="when">Contabilidad + Dueño · medio día</div>
+    <ol>
+      <li><b>Banks</b>: bandeja en cero — todo categorizado <b>y verificado</b>.</li>
+      <li><b>Banks → Conciliación</b>: ¿cuadra contra Payments y Expenses?</li>
+      <li><b>Banks → P&amp;L</b> y <b>Analytics</b>: margen por broker, por estado, por driver.</li>
+      <li><b>AP/AR</b>: foto del neto del mes.</li>
+      <li><b>Suggestions</b>: leer lo que propuso el equipo y responder. Si nadie responde, nadie vuelve a escribir.</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ============ 6 ============ -->
+<h1 class="sec"><span class="num">6</span>Las alertas y quién las apaga</h1>
+<p class="lead">Cada alerta tiene un dueño y un plazo. Sin esto, las alertas se vuelven paisaje.</p>
+
+<table class="g nw">
+  <tr><th style="width:32%">Alerta</th><th style="width:26%">Dónde aparece</th><th style="width:20%">Dueño</th><th>Plazo</th></tr>
+  <tr><td>FADD vencido</td><td>Dispatching (rojo)</td><td>Dispatcher</td><td><b>Mismo día</b></td></tr>
+  <tr><td>Job de hoy sin chofer / sin trip</td><td>Dispatching → Unmanned</td><td>Dispatcher</td><td>Antes de las 09:00</td></tr>
+  <tr><td>Sin FADD / sin fecha de delivery</td><td>Needs attention</td><td>Dispatcher</td><td>48 h</td></tr>
+  <tr><td>Sticker sin asignar</td><td>Needs attention</td><td>Dispatcher</td><td>Al entrar a storage</td></tr>
+  <tr><td>Cash sin depositar +7 días</td><td>Payments (rojo)</td><td>Back office</td><td>48 h</td></tr>
+  <tr><td>Storage billing overdue</td><td>Storage Billing</td><td>Cobranzas</td><td>Semanal</td></tr>
+  <tr><td>Job en storage sin billing activo</td><td>Brief diario</td><td>Back office</td><td>Semanal</td></tr>
+  <tr><td>Documento vencido / por vencer</td><td>Compliance + badge</td><td>Fleet manager</td><td><b>Antes del vencimiento</b></td></tr>
+  <tr><td>Claim abierto</td><td>⚠ en job y trip</td><td>Fleet manager</td><td>7 días → <code>investigating</code></td></tr>
+  <tr><td>Posibles duplicados</td><td>Cartel amarillo</td><td>Quien lo ve</td><td>En el momento</td></tr>
+</table>
+
+<!-- ============ 7 ============ -->
+<h1 class="sec break"><span class="num">7</span>Lo que hoy está desordenado</h1>
+<p class="lead">Diagnóstico sobre el CRM real, no teoría. Cuatro cosas concretas.</p>
+
+<h3>7.1 · El menú tiene 29 secciones y todos ven las 29</h3>
+<p>Es la causa número uno de la sensación de desorden. El CRM <b>ya tiene</b> permisos por sección y rol de app (Driver / Back office / Master), pero están casi todos en "todo prendido".</p>
+
+<div class="kpi">
+  <div><div class="n" style="color:#B91C1C">29</div><div class="l">secciones que ve todo el mundo hoy</div></div>
+  <div><div class="n" style="color:#3B6D11">6</div><div class="l">las que necesita un dispatcher</div></div>
+  <div><div class="n" style="color:#185FA5">0</div><div class="l">líneas de código para arreglarlo</div></div>
+</div>
+
+<table class="g nw">
+  <tr><th style="width:24%">Rol</th><th>Debería ver en el menú</th></tr>
+  <tr><td>Dispatcher</td><td style="white-space:normal">Dispatching · Trips · Storage · Chats · Clients · Claims</td></tr>
+  <tr><td>Back office</td><td style="white-space:normal">Dispatching · Payments · AP/AR · Billing · Settlements · Extras · Clients</td></tr>
+  <tr><td>Fleet</td><td style="white-space:normal">Trips · Trucks · Drivers · Compliance · Reports · Equipment</td></tr>
+  <tr><td>Contabilidad</td><td style="white-space:normal">Banks · AP/AR · Expenses · Payments</td></tr>
+  <tr><td>Dueño</td><td style="white-space:normal">Todo</td></tr>
+</table>
+<div class="good"><b>Costo: cero código.</b> Es configuración en la sección Users.</div>
+
+<h3>7.2 · Hay cuatro entradas de menú para una sola pantalla</h3>
+<p>Desde el rediseño, Dispatching ya tiene adentro <b>Today · Jobs · Calendar</b>. Pero el menú sigue mostrando además:</p>
+<ul>
+  <li><b>Jobs</b> — se superpone con Dispatching → Jobs. Lo único propio es el archivo de entregados.</li>
+  <li><b>Pickup Calendar</b> y <b>Delivery Calendar</b> — no son pantallas: son atajos que redirigen a Dispatching → Calendar con un filtro puesto.</li>
+</ul>
+<div class="warn">Sacando los tres del menú: <b>29 → 26 ítems sin perder nada.</b> El calendario ya es una pestaña, y el archivo de entregados puede ser una pestaña más dentro de Dispatching → Jobs.</div>
+
+<h3>7.3 · El brief diario es la mejor pantalla del sistema, y no está en el sistema</h3>
+<p>Todos los días se arma un brief con la agenda, la deuda cobrable, las fugas de storage, los FADD vencidos, los claims <b>y hasta los mensajes de cobranza listos para mandar</b> — con comparación contra ayer. Y se publica en Telegram, donde se pierde entre mensajes.</p>
+<div class="note"><b>Propuesta:</b> una pantalla <b>🏠 Hoy</b> como primera del menú, que muestre ese mismo brief adentro del CRM con los chips clickeables. Es la rutina de apertura hecha producto. La lógica ya está escrita y probada — falta mostrarla.</div>
+
+<h3>7.4 · "Finanzas" son 10 secciones para una sola pregunta</h3>
+<p>Brokers · Billing · Settlements · Extras · Payments · AP/AR · Expenses · Banks · Claims · Clients. Nadie sabe por cuál empezar. Pero <b>AP/AR ya es la suma de las otras</b> — se construyó justamente para eso.</p>
+<div class="note"><b>Propuesta:</b> AP/AR primero, como portada del dinero, y el resto debajo como el detalle al que se baja. <b>Clients</b> y <b>Brokers</b> salen de Finanzas: son directorio, no plata.</div>
+
+<h1 class="sec break"><span class="num">7.5</span>El menú propuesto</h1>
+<p class="lead">Antes y después. Con los permisos de 7.1 encima, un dispatcher ve seis líneas.</p>
+
+<div class="two">
+  <div class="navmock">
+    <div class="cap a">Hoy · 29 ítems, todos para todos</div>
+    <div class="body">
+      <div class="glabel">Operations</div>
+      <div class="item on"><span>🚚</span> Dispatching</div>
+      <div class="item dim"><span>📅</span> Pickup Calendar</div>
+      <div class="item dim"><span>📦</span> Delivery Calendar</div>
+      <div class="item"><span>🏬</span> Storage</div>
+      <div class="item dim"><span>💼</span> Jobs</div>
+      <div class="item"><span>🧮</span> Job Calculator</div>
+      <div class="item"><span>💬</span> Chats</div>
+      <div class="glabel">Finance</div>
+      <div class="item"><span>🏦</span> Brokers</div>
+      <div class="item"><span>🧾</span> Storage Billing</div>
+      <div class="item"><span>📑</span> Settlements</div>
+      <div class="item"><span>➕</span> Extras</div>
+      <div class="item"><span>💰</span> Payments</div>
+      <div class="item"><span>📒</span> AP / AR</div>
+      <div class="item"><span>💸</span> Field Expenses</div>
+      <div class="item"><span>🏛️</span> Banks</div>
+      <div class="item"><span>⚠️</span> Claims</div>
+      <div class="item"><span>👥</span> Clients</div>
+      <div class="glabel">Fleet</div>
+      <div class="item"><span>🪪</span> Drivers</div>
+      <div class="item"><span>🚛</span> Trucks</div>
+      <div class="item"><span>🛣️</span> Trips / Live Load</div>
+      <div class="item"><span>🧰</span> Equipment</div>
+      <div class="glabel">Business</div>
+      <div class="item"><span>📋</span> Legal &amp; Compliance</div>
+      <div class="item"><span>📊</span> Analytics</div>
+      <div class="item"><span>📈</span> Reports</div>
+      <div class="item"><span>💡</span> Suggestions</div>
+      <div class="item"><span>📄</span> BOL</div>
+      <div class="item"><span>🗑️</span> Trash / History</div>
+      <div class="item"><span>👤</span> Users</div>
+      <div class="item"><span>⚙️</span> Settings</div>
+    </div>
+  </div>
+
+  <div class="navmock">
+    <div class="cap b">Propuesto · agrupado por pregunta</div>
+    <div class="body">
+      <div class="glabel">Hoy</div>
+      <div class="item new"><span>🏠</span> Hoy <span class="tail" style="color:#3B6D11">nuevo</span></div>
+      <div class="item on"><span>🚚</span> Dispatching <span class="tail" style="color:#ccc">Today · Jobs · Calendar · Archivo</span></div>
+      <div class="item"><span>🛣️</span> Trips / Live Load</div>
+      <div class="item"><span>💬</span> Chats</div>
+      <div class="glabel">Operación</div>
+      <div class="item"><span>🏬</span> Storage</div>
+      <div class="item"><span>🧮</span> Job Calculator</div>
+      <div class="item"><span>🧰</span> Equipment</div>
+      <div class="glabel">Dinero</div>
+      <div class="item"><span>📒</span> AP / AR <span class="tail">portada</span></div>
+      <div class="item"><span>💰</span> Payments</div>
+      <div class="item"><span>🧾</span> Storage Billing</div>
+      <div class="item"><span>📑</span> Settlements</div>
+      <div class="item"><span>➕</span> Extras</div>
+      <div class="item"><span>💸</span> Field Expenses</div>
+      <div class="item"><span>🏛️</span> Banks</div>
+      <div class="glabel">Flota &amp; Legal</div>
+      <div class="item"><span>🪪</span> Drivers</div>
+      <div class="item"><span>🚛</span> Trucks</div>
+      <div class="item"><span>📋</span> Compliance</div>
+      <div class="item"><span>📈</span> Reports</div>
+      <div class="item"><span>⚠️</span> Claims</div>
+      <div class="glabel">Dirección</div>
+      <div class="item"><span>📊</span> Analytics</div>
+      <div class="item"><span>🏦</span> Brokers</div>
+      <div class="item"><span>👥</span> Clients</div>
+      <div class="glabel">⚙️ Admin · al pie, colapsado</div>
+      <div class="item" style="color:#aaa">📄 BOL · 💡 Suggestions · 🗑️ Trash · 👤 Users · ⚙️ Settings</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 8 ============ -->
+<h1 class="sec"><span class="num">8</span>Cómo implementarlo</h1>
+<p class="lead">Las dos fases que más ordenan no tocan una línea de código.</p>
+
+<table class="g nw">
+  <tr><th style="width:8%">Fase</th><th style="width:44%">Qué</th><th style="width:22%">Esfuerzo</th><th>Efecto</th></tr>
+  <tr><td>1</td><td style="white-space:normal">Configurar permisos por rol en <b>Users</b></td><td>1 hora, cero código</td><td>El más grande de todos</td></tr>
+  <tr><td>2</td><td style="white-space:normal">Adoptar las rutinas de la sección 5 (una semana de insistir)</td><td>Cero código</td><td>El que hace que el resto sirva</td></tr>
+  <tr><td>3</td><td style="white-space:normal">Sacar Jobs / Pickup Calendar / Delivery Calendar del menú</td><td>Chico</td><td>Menú más limpio</td></tr>
+  <tr><td>4</td><td style="white-space:normal">Reagrupar el menú como 7.5 + grupo Admin colapsable</td><td>Chico</td><td>Menú más limpio</td></tr>
+  <tr><td>5</td><td style="white-space:normal">Pantalla <b>🏠 Hoy</b> con el brief adentro del CRM</td><td>Mediano</td><td>Apertura del día en una pantalla</td></tr>
+</table>
+
+<div class="good">Empezá por la <b>1</b> y la <b>2</b>. Son las que más ordenan y no requieren tocar el sistema. Las fases 3 a 5 son cambios de producto que se pueden hacer después, sin apuro.</div>
+
+<!-- ============ 9 ============ -->
+<h1 class="sec"><span class="num">9</span>La versión corta</h1>
+<p class="lead">Para imprimir y pegar en la pared de la oficina.</p>
+
+<div class="wall">
+  <h3>El workflow en siete líneas</h3>
+  <ul>
+    <li><b>Un dato, un dueño.</b> Se carga una vez, en su pantalla.</li>
+    <li><b>El estado se avanza el mismo día.</b></li>
+    <li><b>La plata se carga cuando entra</b>, con quién la tiene.</li>
+    <li><b>Dispatcher:</b> abrí en Dispatching → Today. FADD rojo primero. Cero jobs sin chofer.</li>
+    <li><b>Back office:</b> cero cash de más de 7 días sin depositar.</li>
+    <li><b>Fleet:</b> cero documentos vencidos.</li>
+    <li><b>Todos:</b> si una alerta lleva más de una semana prendida, o la apagás o no era una alerta.</li>
+  </ul>
+</div>
+
+</body>
+</html>

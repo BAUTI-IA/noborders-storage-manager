@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Renderiza las dos guías HTML (docs/guia-crm.html y docs/crm-guide-en.html)
-// a los PDFs de la raíz del repo usando Chromium headless (Playwright).
+// Renderiza las guías HTML de docs/ a los PDFs de la raíz del repo usando
+// Chromium headless (Playwright).
 //
 // Uso:
 //   npx playwright install chromium   (una sola vez, baja el browser)
 //   node scripts/render-guide-pdf.mjs
 //
-// Escribe primero a *.tmp y renombra los DOS juntos solo si ambos renders
-// salieron bien: nunca queda un par de PDFs a medias. Cualquier error → exit 1.
+// Escribe primero a *.tmp y renombra todos juntos solo si todos los renders
+// salieron bien: nunca queda un juego de PDFs a medias. Cualquier error → exit 1.
 import { renameSync, unlinkSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
@@ -16,6 +16,7 @@ import { chromium } from "playwright";
 const TARGETS = [
   ["docs/guia-crm.html", "Guia-CRM-NoBorders.pdf"],
   ["docs/crm-guide-en.html", "CRM-Guide-NoBorders-EN.pdf"],
+  ["docs/workflow.html", "Workflow-CRM-NoBorders.pdf"],
 ];
 
 // GUIDE_CHROMIUM: ruta a un Chromium ya instalado (para entornos donde no se
@@ -37,7 +38,7 @@ try {
     });
     console.log(`render OK: ${html} → ${pdf}.tmp`);
   }
-  // Ambos renders OK: recién ahora pisamos los PDFs finales.
+  // Todos los renders OK: recién ahora pisamos los PDFs finales.
   for (const [, pdf] of TARGETS) renameSync(pdf + ".tmp", pdf);
   console.log("PDFs actualizados:", TARGETS.map(([, p]) => p).join(", "));
 } catch (e) {
