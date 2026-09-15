@@ -18,6 +18,7 @@ import { ApArSection } from "./apar.jsx";
 import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
+import { ELD, ELD_KEYS, eldOfTruck, eldOfDriver } from "./eldData.js";
 import { selectAll, dbFailed } from "./db.js";
 import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
 
@@ -67,8 +68,79 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
 const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
-const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true, verizon_driver_id:"" };
-const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"" };
+const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true, verizon_driver_id:"", motive_driver_id:"", eld:"" };
+const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"", motive_vehicle_id:"", eld:"" };
+
+// The gaps between one ELD's roster and the trucks table, shown under the live
+// map. Every line here is a truck somebody is paying to track and cannot see.
+function EldLinkPanel({ provider, on, gaps, unlinkedTrucks, onEditTruck }) {
+  const e = ELD[provider];
+  if (!on || !gaps?.roster) return null;
+  const { unlinked, badlyLinked } = gaps;
+  if (!unlinkedTrucks.length && !unlinked.length && !badlyLinked.length) return null;
+  const chip = { fontSize:11, fontWeight:600, background:"#fff", borderRadius:20, padding:"2px 9px", cursor:"pointer" };
+  return (
+    <div style={{ padding:"11px 14px", background:"#FAEEDA", borderTop:"1px solid #f0e0c0" }}>
+      <div style={{ fontSize:10, fontWeight:700, color:"#854F0B", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6, display:"flex", alignItems:"center", gap:6 }}>
+        <EldBadge provider={provider} /> {tr(`${e.name} linking`, `Vinculación con ${e.name}`)}
+      </div>
+      {unlinkedTrucks.length > 0 && (
+        <div style={{ marginBottom: unlinked.length || badlyLinked.length ? 8 : 0 }}>
+          <div style={{ fontSize:11.5, color:"#854F0B", marginBottom:3 }}>
+            {tr(`${unlinkedTrucks.length} truck(s) here on no ELD — click to link:`,
+                `${unlinkedTrucks.length} truck(s) de acá sin ELD — click para vincular:`)}
+          </div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+            {unlinkedTrucks.map(t => (
+              <button key={t.id} onClick={() => onEditTruck(t)}
+                style={{ ...chip, color:"#854F0B", border:"1px solid #e8d3a8" }}>{t.name}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {badlyLinked.length > 0 && (
+        <div style={{ marginBottom: unlinked.length ? 8 : 0 }}>
+          <div style={{ fontSize:11.5, color:"#A32D2D", marginBottom:3 }}>
+            {tr(`${badlyLinked.length} truck(s) point at a vehicle ${e.name} does not know — click to fix:`,
+                `${badlyLinked.length} truck(s) apuntan a un vehículo que ${e.name} no conoce — click para corregir:`)}
+          </div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+            {badlyLinked.map(t => (
+              <button key={t.id} onClick={() => onEditTruck(t)}
+                style={{ ...chip, color:"#A32D2D", border:"1px solid #f0c9c9" }}>
+                {t.name} → {String(t[e.truckField]).slice(0, 20)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {unlinked.length > 0 && (
+        <div>
+          <div style={{ fontSize:11.5, color:"#854F0B", marginBottom:3 }}>
+            {tr(`${unlinked.length} vehicle(s) in ${e.name} with no truck here — add them in Trucks:`,
+                `${unlinked.length} vehículo(s) en ${e.name} sin truck acá — agregalos en Trucks:`)}
+          </div>
+          {unlinked.map(v => (
+            <div key={v.number} style={{ fontSize:11, color:"#7a5a1e", lineHeight:1.5 }}>
+              <strong>{v.number}</strong>{v.name ? ` · ${v.name}` : ""}{v.plate ? ` · ${v.plate}` : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The V / M chip. Small on purpose: it labels a row, it is not a control.
+function EldBadge({ provider, size = 14 }) {
+  const e = ELD[provider];
+  if (!e) return null;
+  return (
+    <span title={e.name} style={{ display:"inline-flex", alignItems:"center", justifyContent:"center",
+      width:size, height:size, borderRadius:4, background:e.bg, color:e.text,
+      fontSize: size * 0.64, fontWeight:800, flexShrink:0, lineHeight:1 }}>{e.letter}</span>
+  );
+}
 // "2019 Freightliner Cascadia" subtitle from a truck row.
 const truckSubtitle = (t) => [t.year, t.make, t.model].filter(Boolean).join(" ");
 const EMPTY_TRIP = { trip_number:"", truck_id:"", driver_id:"", departure_date:"", status:"loading", notes:"", job_keys:[], purposes:{} };
@@ -936,6 +1008,7 @@ do $$ begin alter publication supabase_realtime add table public.closing_sheets;
 // ELD hours. Kept apart from the payroll table on purpose — see the comment on
 // driver_hos_days in the expenses SQL below.
 const HOS_SQL = `alter table public.drivers add column if not exists verizon_driver_id text;
+alter table public.drivers add column if not exists motive_driver_id text;
 create table if not exists public.driver_hos_days (
   id bigint generated always as identity primary key,
   driver_id bigint references public.drivers(id) on delete cascade,
@@ -968,13 +1041,16 @@ alter table public.trucks add column if not exists model text;
 alter table public.trucks add column if not exists year integer;
 alter table public.trucks add column if not exists license_plate text;
 alter table public.trucks add column if not exists license_state text;
--- Live load / GPS: last known position per truck (manual now, Verizon API later).
+-- Live load / GPS: last known position per truck. A truck is on one ELD or the
+-- other, so it carries the link field of whichever provider tracks it — both
+-- columns are never filled at once.
 alter table public.trucks add column if not exists last_lat numeric;
 alter table public.trucks add column if not exists last_lng numeric;
 alter table public.trucks add column if not exists last_location text;
 alter table public.trucks add column if not exists last_location_at timestamptz;
 alter table public.trucks add column if not exists last_status text;
 alter table public.trucks add column if not exists verizon_vehicle_id text;
+alter table public.trucks add column if not exists motive_vehicle_id text;
 alter table public.trucks enable row level security;
 drop policy if exists "trucks_all" on public.trucks;
 create policy "trucks_all" on public.trucks for all to anon, authenticated using (true) with check (true);
@@ -1151,11 +1227,13 @@ alter table public.driver_work_days enable row level security;
 drop policy if exists "driver_work_days_all" on public.driver_work_days;
 create policy "driver_work_days_all" on public.driver_work_days for all to anon, authenticated using (true) with check (true);
 
--- Horas reales del ELD de Verizon. Tabla aparte a propósito: driver_work_days es
--- la nómina que carga la oficina y workDayPay() paga como día completo cualquier
--- fila sin day_type, así que escribir acá adentro inflaría el costo laboral. Con
--- las dos separadas se pueden comparar horas pagadas contra horas reales.
+-- Horas reales del ELD (Verizon o Motive). Tabla aparte a propósito:
+-- driver_work_days es la nómina que carga la oficina y workDayPay() paga como
+-- día completo cualquier fila sin day_type, así que escribir acá adentro
+-- inflaría el costo laboral. Con las dos separadas se pueden comparar horas
+-- pagadas contra horas reales.
 alter table public.drivers add column if not exists verizon_driver_id text;
+alter table public.drivers add column if not exists motive_driver_id text;
 create table if not exists public.driver_hos_days (
   id bigint generated always as identity primary key,
   driver_id bigint references public.drivers(id) on delete cascade,
@@ -1596,6 +1674,7 @@ const VZ_CHECK_LABELS = {
   config: "Credentials configured",
   auth: "Authentication",
   vehicles: "Vehicle list",
+  drivers: "Driver list",
   location: "Live GPS",
   logbook: "Driver hours (ELD)",
 };
@@ -1628,7 +1707,8 @@ const TRUCK_MAP_CSS = `
 .tlm-pin{position:relative;width:0;height:0}
 .tlm-halo{position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;opacity:.22}
 .tlm-pin.moving .tlm-halo{animation:tlmhalo 2.4s ease-in-out infinite}
-.tlm-dot{position:absolute;left:-8px;top:-8px;width:16px;height:16px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 1px 5px rgba(16,49,79,.45);transition:transform .15s}
+.tlm-dot{position:absolute;left:-8px;top:-8px;width:16px;height:16px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 1px 5px rgba(16,49,79,.45);transition:transform .15s;display:grid;place-items:center}
+.tlm-eld{font:800 9px/1 system-ui,sans-serif;font-style:normal;color:#fff;letter-spacing:0}
 .tlm-pin.sel .tlm-dot{transform:scale(1.3)}
 .tlm-pin:hover .tlm-dot{transform:scale(1.18)}
 @keyframes tlmhalo{0%,100%{transform:scale(1);opacity:.22}50%{transform:scale(1.75);opacity:.04}}
@@ -1700,16 +1780,20 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
       const c = liveStatusMeta(st);
       const isSel = selected === t.id;
       const pos = [Number(t.last_lat), Number(t.last_lng)];
+      // V or M inside the dot: on a fleet split across two ELDs, which one a
+      // truck reports through is the first thing to know when it stops moving.
+      const eld = eldOfTruck(t);
       const icon = L.divIcon({
         className: "",
         iconSize: [0, 0],
         html: `<div class="tlm-pin ${st} ${isSel ? "sel" : ""}">
                  <span class="tlm-halo" style="background:${c.dot}"></span>
-                 <span class="tlm-dot" style="background:${c.dot}"></span>
+                 <span class="tlm-dot" style="background:${c.dot}">${eld ? `<i class="tlm-eld">${ELD[eld].letter}</i>` : ""}</span>
                </div>`,
       });
       const tip = `<div class="tlm-tip">🚛 ${esc(t.name)}<small>${esc(c.l)} · ${esc(timeAgo(t.last_location_at))}</small>${
-        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}</div>`;
+        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}<small>${
+        eld ? esc(ELD[eld].name) : esc(tr("Manual location", "Ubicación manual"))}</small></div>`;
 
       let m = markersRef.current.get(t.id);
       if (!m) {
@@ -1850,24 +1934,29 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
       const c = liveStatusMeta(st);
       const isSel = selected === t.id;
       const pos = { lat: Number(t.last_lat), lng: Number(t.last_lng) };
+      const eld = eldOfTruck(t);
       const icon = {
         path: maps.SymbolPath.CIRCLE,
-        scale: isSel ? 9.5 : 7.5,
+        // A shade larger than the unlabelled dot used to be, so the V / M fits
+        // inside it instead of spilling over the white ring.
+        scale: isSel ? 10.5 : 8.5,
         fillColor: c.dot, fillOpacity: 1,
         strokeColor: "#fff", strokeWeight: 2.5,
       };
+      const label = eld ? { text: ELD[eld].letter, color: "#fff", fontSize: "9px", fontWeight: "800" } : null;
       let m = marksRef.current.get(t.id);
       if (!m) {
-        m = new maps.Marker({ map, position: pos, icon, title: t.name, zIndex: 1 });
+        m = new maps.Marker({ map, position: pos, icon, label, title: t.name, zIndex: 1 });
         marksRef.current.set(t.id, m);
       } else {
-        m.setPosition(pos); m.setIcon(icon);
+        m.setPosition(pos); m.setIcon(icon); m.setLabel(label);
       }
       m.setZIndex(isSel ? 10 : 1);
       for (const ev of ["click", "mouseover", "mouseout"]) maps.event.clearListeners(m, ev);
       m.addListener("click", () => onSelectRef.current(isSel ? null : t.id));
       const html = `<div class="tlm-tip">🚛 ${esc(t.name)}<small>${esc(c.l)} · ${esc(timeAgo(t.last_location_at))}</small>${
-        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}</div>`;
+        t.last_location ? `<small>${esc(t.last_location)}</small>` : ""}<small>${
+        eld ? esc(ELD[eld].name) : esc(tr("Manual location", "Ubicación manual"))}</small></div>`;
       m.addListener("mouseover", () => { infoRef.current.setContent(html); infoRef.current.open({ anchor: m, map }); });
       m.addListener("mouseout", () => infoRef.current.close());
     }
@@ -3965,11 +4054,17 @@ export default function App() {
   const [liveStatusFilter, setLiveStatusFilter] = useState("all"); // all | moving | stopped
   const [liveSelTruck, setLiveSelTruck] = useState(null);
   const [verizonOn, setVerizonOn] = useState(null);   // null until the server answers
+  const [motiveOn, setMotiveOn] = useState(null);     // idem, for Motive
+  const [motiveColsMissing, setMotiveColsMissing] = useState(false);  // motive_* link columns not yet in DB
   const [fleetSync, setFleetSync] = useState({ busy:false, at:null, error:null });
   const [vzVehicles, setVzVehicles] = useState(null);      // Reveal roster | null
   const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
   const [vzDrivers, setVzDrivers] = useState(null);       // Reveal driver roster | null
   const [vzDriversErr, setVzDriversErr] = useState(null);
+  const [mtVehicles, setMtVehicles] = useState(null);      // Motive vehicle roster | null
+  const [mtVehiclesErr, setMtVehiclesErr] = useState(null);
+  const [mtDrivers, setMtDrivers] = useState(null);        // Motive driver roster | null
+  const [mtDriversErr, setMtDriversErr] = useState(null);
   const [vzAutoLink, setVzAutoLink] = useState(null);   // null | "busy" | summary
   const [hosMissing, setHosMissing] = useState(false);
   const [vzDiag, setVzDiag] = useState(null);       // null | "loading" | checks[]
@@ -4858,10 +4953,31 @@ export default function App() {
       if (!error) { setTruckLocMissing(false); return; }
       let created = false;
       for (const fn of ["exec_sql", "exec", "execute_sql"]) {
-        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.trucks add column if not exists last_lat numeric, add column if not exists last_lng numeric, add column if not exists last_location text, add column if not exists last_location_at timestamptz, add column if not exists last_status text, add column if not exists verizon_vehicle_id text;" });
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.trucks add column if not exists last_lat numeric, add column if not exists last_lng numeric, add column if not exists last_location text, add column if not exists last_location_at timestamptz, add column if not exists last_status text, add column if not exists verizon_vehicle_id text, add column if not exists motive_vehicle_id text;" });
         if (!rpcErr) { created = true; break; }
       }
       if (!cancelled) setTruckLocMissing(!created);
+    })();
+    return () => { cancelled = true; };
+  }, [session, tripsMissing]);
+
+  // Probe / auto-migrate the Motive link columns. They need their own probe: a
+  // deployment that already ran the Verizon migration has last_lat and so the
+  // check above passes, while motive_vehicle_id is still missing and every save
+  // that touched it would fail.
+  useEffect(() => {
+    if (!session || tripsMissing) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("trucks").select("motive_vehicle_id").limit(1);
+      if (cancelled) return;
+      if (!error) { setMotiveColsMissing(false); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: "alter table public.trucks add column if not exists motive_vehicle_id text; alter table public.drivers add column if not exists motive_driver_id text;" });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled) setMotiveColsMissing(!created);
     })();
     return () => { cancelled = true; };
   }, [session, tripsMissing]);
@@ -6916,13 +7032,22 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false, verizon_driver_id: d.verizon_driver_id || "" });
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false, verizon_driver_id: d.verizon_driver_id || "", motive_driver_id: d.motive_driver_id || "", eld: eldOfDriver(d) || "" });
     setShowDriverModal(true);
   }
   async function saveDriver() {
     if (!driverForm.name.trim()) return;
     setDriverSaving(true);
-    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active, verizon_driver_id: driverForm.verizon_driver_id.trim() || null };
+    const payload = { name:driverForm.name.trim(), phone:driverForm.phone||null, whatsapp_group_link:driverForm.whatsapp_group_link||null, truck_id:driverForm.truck_id||null, daily_rate: driverForm.daily_rate === "" ? null : Number(driverForm.daily_rate), hourly_rate: driverForm.hourly_rate === "" ? null : Number(driverForm.hourly_rate), notes:driverForm.notes||null, active: !!driverForm.active,
+      // One logbook per driver — the unselected provider is cleared so the hours
+      // sync never reads the same person from two places.
+      verizon_driver_id: driverForm.eld === "verizon" ? (driverForm.verizon_driver_id.trim() || null) : null };
+    if (!motiveColsMissing) payload.motive_driver_id = driverForm.eld === "motive" ? (driverForm.motive_driver_id.trim() || null) : null;
+    else if (driverForm.eld === "motive" && driverForm.motive_driver_id.trim()) {
+      setDriverSaving(false);
+      window.alert(t("The Motive columns are not in the database yet. Run the setup SQL once and save again."));
+      return;
+    }
     if (editingDriverId) { if (dbFailed(await supabase.from("drivers").update(payload).eq("id", editingDriverId), "drivers")) { setDriverSaving(false); return; } }
     else { if (dbFailed(await supabase.from("drivers").insert([payload]), "drivers")) { setDriverSaving(false); return; } }
     setDriverSaving(false); setShowDriverModal(false);
@@ -7167,7 +7292,8 @@ export default function App() {
     setEditingTruckId(t.id);
     setTruckForm({ name:t.name||"", plate:t.plate||"", capacity_cf:t.capacity_cf ?? "", notes:t.notes||"", active: t.active !== false,
       year: t.year ?? "", make: t.make || "", model: t.model || "", vin: t.vin || "", license_plate: t.license_plate || "", license_state: t.license_state || "",
-      verizon_vehicle_id: t.verizon_vehicle_id || "" });
+      verizon_vehicle_id: t.verizon_vehicle_id || "", motive_vehicle_id: t.motive_vehicle_id || "",
+      eld: eldOfTruck(t) || "" });
     setShowTruckModal(true);
   }
   async function saveTruck() {
@@ -7182,7 +7308,16 @@ export default function App() {
       payload.license_plate = truckForm.license_plate || null;
       payload.license_state = truckForm.license_state || null;
     }
-    if (!truckLocMissing) payload.verizon_vehicle_id = truckForm.verizon_vehicle_id.trim() || null;
+    // One provider per truck: whichever is selected keeps its id and the other
+    // is cleared, so eldOfTruck() never has to guess and no truck gets polled
+    // twice for the same position.
+    if (!truckLocMissing) payload.verizon_vehicle_id = truckForm.eld === "verizon" ? (truckForm.verizon_vehicle_id.trim() || null) : null;
+    if (!motiveColsMissing) payload.motive_vehicle_id = truckForm.eld === "motive" ? (truckForm.motive_vehicle_id.trim() || null) : null;
+    else if (truckForm.eld === "motive" && truckForm.motive_vehicle_id.trim()) {
+      setTruckSaving(false);
+      window.alert(t("The Motive columns are not in the database yet. Run the setup SQL once and save again."));
+      return;
+    }
     let error = null;
     if (editingTruckId) ({ error } = await supabase.from("trucks").update(payload).eq("id", editingTruckId));
     else ({ error } = await supabase.from("trucks").insert([payload]));
@@ -7228,10 +7363,11 @@ export default function App() {
     loadTrucks();
   }
 
-  // ── Live-load: real GPS from Verizon Connect Reveal ──
-  // The credentials never reach the browser: the serverless side authenticates,
-  // reads each mapped vehicle's position and writes it onto the trucks row the
-  // map already draws. All the client does is ask for a sync and reload.
+  // ── Live-load: real GPS from the ELDs ──
+  // The credentials never reach the browser: the serverless side authenticates
+  // against every configured provider, reads each mapped vehicle's position and
+  // writes it onto the trucks row the map already draws. All the client does is
+  // ask for a sync and reload — one call covers both providers.
   const syncFleet = useCallback(async (silent = false) => {
     if (!session?.access_token) return;
     setFleetSync(s => ({ ...s, busy:true, error:null }));
@@ -7239,16 +7375,29 @@ export default function App() {
       const r = await fetch("/api/geocode?fleet=sync", { headers: { Authorization: "Bearer " + session.access_token } });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error || "Sync failed");
-      // A throttled call is not a failure — Verizon just asked us to wait.
+      // A throttled call is not a failure — the server asked us to wait.
       if (data.throttled) { setFleetSync(s => ({ ...s, busy:false })); return; }
+      // One call runs every configured provider, so a provider that is down
+      // comes back as its own entry rather than as a failed request. If every
+      // one of them fell over there is nothing to celebrate: say so instead of
+      // reporting a sync of undefined trucks.
+      const names = Object.keys(data.providers || {});
+      const down = names.filter(k => data.providers[k]?.failed);
+      if (names.length && down.length === names.length) {
+        throw new Error(data.providers[down[0]].failed || "Sync failed");
+      }
+      const updated = data.updated ?? 0;
       setFleetSync({ busy:false, at:new Date().toISOString(), error:null });
       await loadTrucks();
-      if (!silent) showToast(tr(`Fleet synced · ${data.updated} truck(s) updated`,
-                                `Flota sincronizada · ${data.updated} camión(es) actualizado(s)`));
+      if (!silent) showToast(down.length
+        ? tr(`Fleet synced · ${updated} truck(s) updated · ${ELD[down[0]]?.name || down[0]} did not answer`,
+             `Flota sincronizada · ${updated} camión(es) actualizado(s) · ${ELD[down[0]]?.name || down[0]} no contestó`)
+        : tr(`Fleet synced · ${updated} truck(s) updated`,
+             `Flota sincronizada · ${updated} camión(es) actualizado(s)`));
     } catch (e) {
       const msg = e?.message || "Sync failed";
       setFleetSync(s => ({ ...s, busy:false, error:msg }));
-      if (!silent) showToast(tr("Could not sync with Verizon Connect.", "No se pudo sincronizar con Verizon Connect."));
+      if (!silent) showToast(tr("Could not sync with the ELD.", "No se pudo sincronizar con el ELD."));
     }
   }, [session, loadTrucks]);
 
@@ -7264,40 +7413,60 @@ export default function App() {
     return () => { alive = false; };
   }, [session]);
 
-  // Whether the server holds Verizon credentials at all. Until it does, the live
-  // map stays exactly as it was: manual positions only, no sync button.
+  // Which ELDs the server holds credentials for. Until one of them answers yes
+  // the live map stays exactly as it was: manual positions only, no sync button.
   useEffect(() => {
     let alive = true;
     fetch("/api/geocode?fleet=status")
       .then(r => r.json())
-      .then(d => { if (alive) setVerizonOn(!!d?.configured); })
-      .catch(() => { if (alive) setVerizonOn(false); });
+      .then(d => {
+        if (!alive) return;
+        // `verizon` is newer than `configured`; fall back so a server that has
+        // not been redeployed yet still lights up the Verizon half.
+        setVerizonOn(d?.verizon ?? !!d?.configured);
+        setMotiveOn(!!d?.motive);
+      })
+      .catch(() => { if (alive) { setVerizonOn(false); setMotiveOn(false); } });
     return () => { alive = false; };
   }, []);
 
-  const vzTakenBy = useMemo(() => {
-    const m = {};
-    for (const t of trucksList) if (t.verizon_vehicle_id) m[String(t.verizon_vehicle_id)] = t.name;
-    return m;
-  }, [trucksList]);
+  // Either ELD being up is enough for the map to run live.
+  const eldOn = Boolean(verizonOn || motiveOn);
+  // Named for the status line and the toasts, so a one-provider fleet never
+  // reads "Verizon Connect" when it is on Motive.
+  const eldNames = useMemo(
+    () => ELD_KEYS.filter(k => (k === "verizon" ? verizonOn : motiveOn)).map(k => ELD[k].name).join(" + "),
+    [verizonOn, motiveOn]);
 
-  // Vehicles Verizon reports that no truck in the CRM is linked to. These are
-  // trucks the operation is paying to track and cannot see on this map.
-  const vzUnlinked = useMemo(
-    () => (vzVehicles || []).filter(v => !vzTakenBy[v.number]),
-    [vzVehicles, vzTakenBy]);
-  // The other half of the same question: trucks here that nobody linked yet.
-  const vzUnlinkedTrucks = useMemo(
-    () => trucksList.filter(t => !t.verizon_vehicle_id),
+  // Trucks on no ELD at all. Deliberately not per provider: a truck tracked by
+  // Motive is not "missing from Verizon", it is simply on the other one, and
+  // listing it under both would make a correct setup look half broken.
+  const eldUnlinkedTrucks = useMemo(
+    () => trucksList.filter(t => !eldOfTruck(t)),
     [trucksList]);
-  // Linked to something Verizon's roster has never heard of — a VIN pasted in
-  // place of the vehicle number, or a vehicle since removed. Every call for these
+
+  // Per provider: vehicles in its roster that no truck here claims, and trucks
+  // pointing at something its roster has never heard of — a VIN pasted in place
+  // of the vehicle number, or a vehicle since removed. Every call for the latter
   // fails, and from the outside it looks the same as a broken API.
-  const vzBadlyLinked = useMemo(() => {
-    if (!vzVehicles?.length) return [];
-    const known = new Set(vzVehicles.map(v => v.number));
-    return trucksList.filter(t => t.verizon_vehicle_id && !known.has(String(t.verizon_vehicle_id)));
-  }, [trucksList, vzVehicles]);
+  const eldGaps = useMemo(() => {
+    const rosters = { verizon: vzVehicles, motive: mtVehicles };
+    const out = {};
+    for (const key of ELD_KEYS) {
+      const field = ELD[key].truckField;
+      const roster = rosters[key];
+      const taken = new Set(trucksList.filter(t => t[field]).map(t => String(t[field])));
+      const known = new Set((roster || []).map(v => String(v.number)));
+      const takenBy = {};
+      for (const t of trucksList) if (t[field]) takenBy[String(t[field])] = t.name;
+      out[key] = {
+        roster, takenBy,
+        unlinked: (roster || []).filter(v => !taken.has(String(v.number))),
+        badlyLinked: roster?.length ? trucksList.filter(t => t[field] && !known.has(String(t[field]))) : [],
+      };
+    }
+    return out;
+  }, [trucksList, vzVehicles, mtVehicles]);
 
   // Asks Verizon, from the server, which of its API products this account can
   // actually reach — so nobody has to go read that off the developer portal.
@@ -7319,7 +7488,7 @@ export default function App() {
     const wants = showDriverModal || page === "drivers";
     if (!wants || !verizonOn || vzDrivers || !session?.access_token) return;
     let alive = true;
-    fetch("/api/geocode?fleet=drivers", { headers: { Authorization: "Bearer " + session.access_token } })
+    fetch("/api/geocode?fleet=drivers&provider=verizon", { headers: { Authorization: "Bearer " + session.access_token } })
       .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
       .then((d) => { if (alive) { setVzDrivers(d.drivers || []); setVzDriversErr(null); } })
       .catch((e) => { if (alive) setVzDriversErr(e?.message || "failed"); });
@@ -7333,40 +7502,50 @@ export default function App() {
   const vzNameKey = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-  const vzDriverMatches = useMemo(() => {
-    if (!vzDrivers?.length) return [];
-    const byName = new Map();
-    for (const v of vzDrivers) {
-      if (!v.name) continue;
-      const k = vzNameKey(v.name);
-      // A name Verizon lists twice cannot identify anybody.
-      byName.set(k, byName.has(k) ? null : v);
-    }
-    const taken = new Set(driversList.map(d => d.verizon_driver_id).filter(Boolean).map(String));
-    const out = [];
-    for (const d of driversList) {
-      if (d.verizon_driver_id) continue;
-      const hit = byName.get(vzNameKey(d.name));
-      if (!hit || taken.has(hit.number)) continue;
-      out.push({ driver: d, vz: hit });
+  const eldDriverMatches = useMemo(() => {
+    const rosters = { verizon: vzDrivers, motive: mtDrivers };
+    const out = {};
+    for (const key of ELD_KEYS) {
+      const roster = rosters[key];
+      const field = ELD[key].driverField;
+      if (!roster?.length) { out[key] = []; continue; }
+      const byName = new Map();
+      for (const v of roster) {
+        if (!v.name) continue;
+        const k = vzNameKey(v.name);
+        // A name the provider lists twice cannot identify anybody.
+        byName.set(k, byName.has(k) ? null : v);
+      }
+      const taken = new Set(driversList.map(d => d[field]).filter(Boolean).map(String));
+      const rows = [];
+      for (const d of driversList) {
+        // Already on an ELD — this one or the other. Never move a driver between
+        // providers on a name match.
+        if (eldOfDriver(d)) continue;
+        const hit = byName.get(vzNameKey(d.name));
+        if (!hit || taken.has(hit.number)) continue;
+        rows.push({ driver: d, vz: hit });
+      }
+      out[key] = rows;
     }
     return out;
-  }, [driversList, vzDrivers]);
+  }, [driversList, vzDrivers, mtDrivers]);
 
-  const runVzAutoLink = useCallback(async () => {
-    if (!vzDriverMatches.length) return;
+  const runEldAutoLink = useCallback(async (provider) => {
+    const matches = eldDriverMatches[provider] || [];
+    if (!matches.length) return;
     setVzAutoLink("busy");
     let linked = 0;
-    for (const m of vzDriverMatches) {
-      if (dbFailed(await supabase.from("drivers").update({ verizon_driver_id: m.vz.number }).eq("id", m.driver.id), "drivers")) {
+    for (const m of matches) {
+      if (dbFailed(await supabase.from("drivers").update({ [ELD[provider].driverField]: m.vz.number }).eq("id", m.driver.id), "drivers")) {
         setVzAutoLink(null);
         return;
       }
       linked++;
     }
-    setVzAutoLink({ linked });
+    setVzAutoLink({ linked, provider });
     loadDrivers();
-  }, [vzDriverMatches, loadDrivers]);
+  }, [eldDriverMatches, loadDrivers]);
 
   // Reveal's vehicle roster, pulled the first time a truck form is opened so the
   // Verizon field can offer the real list instead of asking somebody to copy
@@ -7375,21 +7554,47 @@ export default function App() {
     const wantsRoster = showTruckModal || (page === "trips" && tripsView === "live");
     if (!wantsRoster || !verizonOn || vzVehicles || !session?.access_token) return;
     let alive = true;
-    fetch("/api/geocode?fleet=vehicles", { headers: { Authorization: "Bearer " + session.access_token } })
+    fetch("/api/geocode?fleet=vehicles&provider=verizon", { headers: { Authorization: "Bearer " + session.access_token } })
       .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
       .then((d) => { if (alive) { setVzVehicles(d.vehicles || []); setVzVehiclesErr(null); } })
       .catch((e) => { if (alive) setVzVehiclesErr(e?.message || "failed"); });
     return () => { alive = false; };
   }, [showTruckModal, page, tripsView, verizonOn, vzVehicles, session]);
 
-  // Poll only while somebody is actually looking at the map. Verizon asks for no
-  // more than one location poll every 3–5 minutes, so 5 stays well inside it.
+  // Motive's rosters, on the same triggers as Reveal's. Kept as their own state
+  // rather than merged: the two catalogues number their vehicles differently, so
+  // one combined list would let somebody link a truck to the wrong fleet.
   useEffect(() => {
-    if (!verizonOn || page !== "trips" || tripsView !== "live") return;
+    const wants = showDriverModal || page === "drivers";
+    if (!wants || !motiveOn || mtDrivers || !session?.access_token) return;
+    let alive = true;
+    fetch("/api/geocode?fleet=drivers&provider=motive", { headers: { Authorization: "Bearer " + session.access_token } })
+      .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
+      .then((d) => { if (alive) { setMtDrivers(d.drivers || []); setMtDriversErr(null); } })
+      .catch((e) => { if (alive) setMtDriversErr(e?.message || "failed"); });
+    return () => { alive = false; };
+  }, [showDriverModal, page, motiveOn, mtDrivers, session]);
+
+  useEffect(() => {
+    const wantsRoster = showTruckModal || (page === "trips" && tripsView === "live");
+    if (!wantsRoster || !motiveOn || mtVehicles || !session?.access_token) return;
+    let alive = true;
+    fetch("/api/geocode?fleet=vehicles&provider=motive", { headers: { Authorization: "Bearer " + session.access_token } })
+      .then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d?.error || "failed"); return d; })
+      .then((d) => { if (alive) { setMtVehicles(d.vehicles || []); setMtVehiclesErr(null); } })
+      .catch((e) => { if (alive) setMtVehiclesErr(e?.message || "failed"); });
+    return () => { alive = false; };
+  }, [showTruckModal, page, tripsView, motiveOn, mtVehicles, session]);
+
+  // Poll only while somebody is actually looking at the map. Verizon asks for no
+  // more than one location poll every 3–5 minutes, so 5 stays well inside it;
+  // Motive publishes no floor and answers for the whole fleet in one call.
+  useEffect(() => {
+    if (!eldOn || page !== "trips" || tripsView !== "live") return;
     syncFleet(true);
     const id = setInterval(() => syncFleet(true), FLEET_SYNC_MS);
     return () => clearInterval(id);
-  }, [verizonOn, page, tripsView, syncFleet]);
+  }, [eldOn, page, tripsView, syncFleet]);
 
   // ── Legal & Compliance handlers ──
   function openAddCompany() { setEditingCompanyId(null); setCompanyForm(EMPTY_COMPANY); setShowCompanyModal(true); }
@@ -10038,24 +10243,31 @@ export default function App() {
       )}
 
       {/* ───────────────────────── DRIVERS ───────────────────────── */}
-      {page === "drivers" && verizonOn && vzDriverMatches.length > 0 && (
-        <div style={{ background:"#EAF3DE", border:"1px solid #d5e6bd", borderRadius:12, padding:"11px 14px", marginBottom:12,
-          display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", fontSize:12.5, color:"#3B6D11" }}>
-          <span>
-            {tr(`${vzDriverMatches.length} driver(s) match a Verizon driver by name and can be linked in one go: `,
-                `${vzDriverMatches.length} driver(s) coinciden por nombre con un driver de Verizon y se pueden vincular de una: `)}
-            <strong>{vzDriverMatches.map(m => m.driver.name).join(", ")}</strong>
-          </span>
-          <button onClick={runVzAutoLink} disabled={vzAutoLink === "busy"}
-            style={{ marginLeft:"auto", background:"#3B6D11", border:"none", color:"#fff", fontWeight:600,
-              borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>
-            {vzAutoLink === "busy" ? t("Linking...") : t("Link them")}
-          </button>
-        </div>
-      )}
+      {page === "drivers" && ELD_KEYS.map(key => {
+        const matches = eldDriverMatches[key] || [];
+        if (!(key === "verizon" ? verizonOn : motiveOn) || !matches.length) return null;
+        const e = ELD[key];
+        return (
+          <div key={key} style={{ background:"#EAF3DE", border:"1px solid #d5e6bd", borderRadius:12, padding:"11px 14px", marginBottom:12,
+            display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", fontSize:12.5, color:"#3B6D11" }}>
+            <EldBadge provider={key} size={16} />
+            <span>
+              {tr(`${matches.length} driver(s) match a ${e.name} driver by name and can be linked in one go: `,
+                  `${matches.length} driver(s) coinciden por nombre con un driver de ${e.name} y se pueden vincular de una: `)}
+              <strong>{matches.map(m => m.driver.name).join(", ")}</strong>
+            </span>
+            <button onClick={() => runEldAutoLink(key)} disabled={vzAutoLink === "busy"}
+              style={{ marginLeft:"auto", background:"#3B6D11", border:"none", color:"#fff", fontWeight:600,
+                borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>
+              {vzAutoLink === "busy" ? t("Linking...") : t("Link them")}
+            </button>
+          </div>
+        );
+      })}
       {page === "drivers" && vzAutoLink && vzAutoLink !== "busy" && (
         <div style={{ background:"#EAF3DE", border:"1px solid #d5e6bd", borderRadius:12, padding:"10px 14px", marginBottom:12, fontSize:12.5, color:"#3B6D11" }}>
-          {tr(`${vzAutoLink.linked} driver(s) linked to Verizon.`, `${vzAutoLink.linked} driver(s) vinculados a Verizon.`)}
+          {tr(`${vzAutoLink.linked} driver(s) linked to ${ELD[vzAutoLink.provider]?.name || "the ELD"}.`,
+              `${vzAutoLink.linked} driver(s) vinculados a ${ELD[vzAutoLink.provider]?.name || "el ELD"}.`)}
         </div>
       )}
       {page === "drivers" && (
@@ -10064,14 +10276,14 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Driver","Phone","WhatsApp group","Active jobs","Status",""].map((h,i) => (
+                  {["Driver","Phone","WhatsApp group","Active jobs","ELD","Status",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {driversList.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV3Missing ? "Run the setup SQL to enable drivers." : "No drivers. Add one with “+ Driver”."}</td></tr>
+                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV3Missing ? "Run the setup SQL to enable drivers." : "No drivers. Add one with “+ Driver”."}</td></tr>
                 ) : driversList.map(d => {
                   const act = new Set(jobs.filter(j => !j.date_out && j.status !== "cancelled" && ((Array.isArray(j.driver_ids) && j.driver_ids.includes(d.id)) || (j.driver && d.name && j.driver.includes(d.name)))).map(jobKey)).size;
                   return (
@@ -10082,6 +10294,16 @@ export default function App() {
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{d.phone ? <a href={`tel:${d.phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{d.phone}</a> : "—"}</td>
                       <td style={{ padding:"12px" }}>{d.whatsapp_group_link ? <a href={d.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Open group ↗</a> : "—"}</td>
                       <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: act>0?"#EAF3DE":"#f5f5f5", color: act>0?"#3B6D11":"#bbb" }}>{act}</span></td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{(() => {
+                        const key = eldOfDriver(d);
+                        if (!key) return <span style={{ color:"#bbb" }}>—</span>;
+                        return (
+                          <span style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
+                            <EldBadge provider={key} />
+                            <span style={{ fontSize:12 }}>{ELD[key].name}</span>
+                          </span>
+                        );
+                      })()}</td>
                       <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: d.active!==false?"#EAF3DE":"#f1f1f1", color: d.active!==false?"#3B6D11":"#888" }}>{d.active!==false?"Active":"Inactivo"}</span></td>
                       <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                         <Btn onClick={() => openEditDriver(d)} style={{ padding:"4px 10px", fontSize:12 }}>Edit</Btn>
@@ -10384,14 +10606,14 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Truck","Plate / VIN","CF capacity","Current load","Occupancy","Status",""].map((h,i) => (
+                  {["Truck","Plate / VIN","CF capacity","Current load","Occupancy","ELD","Status",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {trucksList.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tripsMissing ? "Run the setup SQL to enable trucks." : "No trucks. Add one with “+ Truck”."}</td></tr>
+                  <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{tripsMissing ? "Run the setup SQL to enable trucks." : "No trucks. Add one with “+ Truck”."}</td></tr>
                 ) : trucksList.map(tk => {
                   const activeTrip = trips.find(tp => tp.truck_id === tk.id && TRIP_ACTIVE(tp.status));
                   const load = activeTrip ? tripCalc(activeTrip).loadedCf : 0;
@@ -10410,6 +10632,17 @@ export default function App() {
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{cap > 0 ? `${cap.toLocaleString()} CF` : "—"}</td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{activeTrip ? `${Math.round(load).toLocaleString()} CF` : "—"}</td>
                       <td style={{ padding:"12px", minWidth:120 }}>{cap > 0 && activeTrip ? <OccupancyBar used={load} total={cap} /> : <span style={{ color:"#bbb" }}>—</span>}</td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{(() => {
+                        const key = eldOfTruck(tk);
+                        if (!key) return <span style={{ color:"#bbb" }}>—</span>;
+                        return (
+                          <span style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
+                            <EldBadge provider={key} />
+                            <span style={{ fontSize:12 }}>{ELD[key].name}</span>
+                            <span style={{ fontSize:11, color:"#aaa", fontFamily:"monospace" }}>{String(tk[ELD[key].truckField]).slice(0, 14)}</span>
+                          </span>
+                        );
+                      })()}</td>
                       <td style={{ padding:"12px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: tk.active!==false?"#EAF3DE":"#f1f1f1", color: tk.active!==false?"#3B6D11":"#888" }}>{tk.active!==false?"Active":"Inactivo"}</span></td>
                       <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
                         <Btn onClick={() => openEditTruck(tk)} style={{ padding:"4px 10px", fontSize:12 }}>Edit</Btn>
@@ -10647,6 +10880,12 @@ export default function App() {
                       <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
                     </div>
                   )}
+                  {!truckLocMissing && motiveColsMissing && (
+                    <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                      <span>To link trucks and drivers to Motive, run the updated setup SQL once in Supabase.</span>
+                      <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+                    </div>
+                  )}
                   <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 360px) 1fr", gap:14, alignItems:"start" }}>
                     {/* Verizon-style side list */}
                     <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", maxHeight:560, display:"flex", flexDirection:"column" }}>
@@ -10670,6 +10909,7 @@ export default function App() {
                               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                                 <span style={{ width:8, height:8, borderRadius:"50%", background:c.dot, flexShrink:0 }} />
                                 <span style={{ fontWeight:700, fontSize:13 }}>🚛 {t.name}</span>
+                                <EldBadge provider={eldOfTruck(t)} />
                                 {t.plate && <span style={{ fontSize:11, color:"#aaa", fontFamily:"monospace" }}>{t.plate}</span>}
                               </div>
                               <div style={{ display:"flex", alignItems:"center", gap:6, margin:"4px 0 2px" }}>
@@ -10684,58 +10924,13 @@ export default function App() {
                             </div>
                           );
                         })}
-                        {verizonOn && vzVehicles && (vzUnlinkedTrucks.length > 0 || vzUnlinked.length > 0 || vzBadlyLinked.length > 0) && (
-                          <div style={{ padding:"11px 14px", background:"#FAEEDA", borderTop:"1px solid #f0e0c0" }}>
-                            <div style={{ fontSize:10, fontWeight:700, color:"#854F0B", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6 }}>
-                              Verizon linking
-                            </div>
-                            {vzUnlinkedTrucks.length > 0 && (
-                              <div style={{ marginBottom: vzUnlinked.length ? 8 : 0 }}>
-                                <div style={{ fontSize:11.5, color:"#854F0B", marginBottom:3 }}>
-                                  {tr(`${vzUnlinkedTrucks.length} truck(s) here with no Verizon vehicle — click to link:`,
-                                      `${vzUnlinkedTrucks.length} truck(s) de acá sin vehículo de Verizon — click para vincular:`)}
-                                </div>
-                                <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
-                                  {vzUnlinkedTrucks.map(t => (
-                                    <button key={t.id} onClick={() => openEditTruck(t)}
-                                      style={{ fontSize:11, fontWeight:600, color:"#854F0B", background:"#fff", border:"1px solid #e8d3a8",
-                                        borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>{t.name}</button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {vzBadlyLinked.length > 0 && (
-                              <div style={{ marginBottom:8 }}>
-                                <div style={{ fontSize:11.5, color:"#A32D2D", marginBottom:3 }}>
-                                  {tr(`${vzBadlyLinked.length} truck(s) point at a vehicle Verizon does not know — click to fix:`,
-                                      `${vzBadlyLinked.length} truck(s) apuntan a un vehículo que Verizon no conoce — click para corregir:`)}
-                                </div>
-                                <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
-                                  {vzBadlyLinked.map(t => (
-                                    <button key={t.id} onClick={() => openEditTruck(t)}
-                                      style={{ fontSize:11, fontWeight:600, color:"#A32D2D", background:"#fff", border:"1px solid #f0c9c9",
-                                        borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>
-                                      {t.name} → {String(t.verizon_vehicle_id).slice(0, 20)}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {vzUnlinked.length > 0 && (
-                              <div>
-                                <div style={{ fontSize:11.5, color:"#854F0B", marginBottom:3 }}>
-                                  {tr(`${vzUnlinked.length} vehicle(s) in Verizon with no truck here — add them in Trucks:`,
-                                      `${vzUnlinked.length} vehículo(s) en Verizon sin truck acá — agregalos en Trucks:`)}
-                                </div>
-                                {vzUnlinked.map(v => (
-                                  <div key={v.number} style={{ fontSize:11, color:"#7a5a1e", lineHeight:1.5 }}>
-                                    <strong>{v.number}</strong>{v.name ? ` · ${v.name}` : ""}{v.plate ? ` · ${v.plate}` : ""}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        {ELD_KEYS.map(key => (
+                          <EldLinkPanel key={key} provider={key}
+                            on={key === "verizon" ? verizonOn : motiveOn}
+                            gaps={eldGaps[key]}
+                            unlinkedTrucks={eldUnlinkedTrucks}
+                            onEditTruck={openEditTruck} />
+                        ))}
                         {noLoc.length > 0 && (
                           <div style={{ padding:"10px 14px", fontSize:11.5, color:"#bbb", borderTop:"1px solid #f4f4f4" }}>
                             {noLoc.length} truck(s) with no location set{noLoc.length ? ": " : ""}
@@ -10754,7 +10949,7 @@ export default function App() {
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexShrink:0 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexShrink:0 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#9aa3ad" }} />No data</span>
                         <span style={{ marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:8, minWidth:0, whiteSpace:"nowrap" }}>
-                          {verizonOn ? (<>
+                          {eldOn ? (<>
                             {/* A live map should look alive: the dot breathes while the
                                 map is polling on its own, and goes solid red on error. */}
                             <span style={{ width:8, height:8, borderRadius:"50%", flexShrink:0,
@@ -10762,10 +10957,10 @@ export default function App() {
                               animation: fleetSync.error ? "none" : "vzpulse 2s ease-in-out infinite" }} />
                             <style>{`@keyframes vzpulse{0%,100%{opacity:1}50%{opacity:.25}}`}</style>
                             <span style={{ color: fleetSync.error ? "#b91c1c" : "#aaa", minWidth:0, overflow:"hidden", textOverflow:"ellipsis" }}>
-                              {fleetSync.error ? t("Verizon Connect: sync error")
-                                : !fleetSync.at ? t("Live from Verizon Connect")
-                                : tr(`Live from Verizon Connect · updated ${timeAgo(fleetSync.at)} · refreshes every ${FLEET_SYNC_MIN} min`,
-                                     `En vivo desde Verizon Connect · actualizado ${timeAgo(fleetSync.at)} · se actualiza sola cada ${FLEET_SYNC_MIN} min`)}
+                              {fleetSync.error ? tr(`${eldNames}: sync error`, `${eldNames}: error de sincronización`)
+                                : !fleetSync.at ? tr(`Live from ${eldNames}`, `En vivo desde ${eldNames}`)
+                                : tr(`Live from ${eldNames} · updated ${timeAgo(fleetSync.at)} · refreshes every ${FLEET_SYNC_MIN} min`,
+                                     `En vivo desde ${eldNames} · actualizado ${timeAgo(fleetSync.at)} · se actualiza sola cada ${FLEET_SYNC_MIN} min`)}
                             </span>
                             <button onClick={() => syncFleet(false)} disabled={fleetSync.busy}
                               style={{ fontSize:11, color:"#185FA5", background:"none", border:"none", padding:0, cursor: fleetSync.busy ? "default" : "pointer", textDecoration:"underline", flexShrink:0 }}>
@@ -10776,7 +10971,7 @@ export default function App() {
                               {vzDiag === "loading" ? t("Checking...") : t("Check connection")}
                             </button>
                           </>) : (
-                            <span style={{ color:"#aaa" }}>Manual / last-known location · ready for Verizon API</span>
+                            <span style={{ color:"#aaa" }}>Manual / last-known location · no ELD connected</span>
                           )}
                         </span>
                       </div>
@@ -13973,20 +14168,50 @@ export default function App() {
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="e.g. T-12" /></Field>
             <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="e.g. 250" /></Field>
-            <Field label="Verizon driver number" full>
-              <VehiclePicker value={driverForm.verizon_driver_id} options={vzDrivers}
-                onChange={val => setDriverForm(f => ({...f, verizon_driver_id:val}))}
-                placeholder="As it appears in the Reveal logbook" />
-            </Field>
-            <div style={{ gridColumn:"1/-1", fontSize:11.5, color: vzDriversErr ? "#b91c1c" : "#999", marginTop:2, lineHeight:1.5 }}>
-              {!verizonOn
-                ? "Links this driver to Verizon's logbook so their real hours can be read."
-                : vzDriversErr ? t("Could not read the driver list from Verizon Connect.")
-                : !vzDrivers ? t("Reading the driver list from Verizon Connect...")
-                : vzDrivers.length === 0 ? t("Verizon Connect returned no drivers.")
-                : tr(`${vzDrivers.length} driver(s) in Verizon Connect — click the field to pick one.`,
-                     `${vzDrivers.length} driver(s) en Verizon Connect — hacé click en el campo para elegir.`)}
-            </div>
+            {(() => {
+              const rosters = { verizon: vzDrivers, motive: mtDrivers };
+              const errs = { verizon: vzDriversErr, motive: mtDriversErr };
+              const on = { verizon: verizonOn, motive: motiveOn };
+              const sel = driverForm.eld;
+              const e = ELD[sel];
+              const roster = rosters[sel];
+              const err = errs[sel];
+              return (<>
+                <Field label="ELD provider" full>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                    {[["", t("None")], ...ELD_KEYS.map(k => [k, ELD[k].name])].map(([k, label]) => (
+                      <button key={k || "none"} type="button"
+                        onClick={() => setDriverForm(f => ({...f, eld:k}))}
+                        style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12, padding:"5px 11px",
+                          borderRadius:20, cursor:"pointer", border:"1px solid",
+                          borderColor: sel === k ? "#111" : "#e5e5e5",
+                          background: sel === k ? "#111" : "#fff",
+                          color: sel === k ? "#fff" : "#666", fontWeight: sel === k ? 600 : 500 }}>
+                        {k && <EldBadge provider={k} />}{label}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+                {sel && (
+                  <Field label={`${e.name} driver number`} full>
+                    <VehiclePicker value={driverForm[e.driverField]} options={roster}
+                      onChange={val => setDriverForm(f => ({...f, [e.driverField]:val}))}
+                      placeholder={sel === "verizon" ? "As it appears in the Reveal logbook" : "As it appears in Motive"} />
+                  </Field>
+                )}
+                <div style={{ gridColumn:"1/-1", fontSize:11.5, color: err ? "#b91c1c" : "#999", marginTop:2, lineHeight:1.5 }}>
+                  {!sel
+                    ? "Pick the ELD that holds this driver's logbook so their real hours can be read."
+                    : !on[sel] ? tr(`${e.name} is not configured on the server yet — the number can be filled in now and will start working once it is.`,
+                                    `${e.name} todavía no está configurado en el servidor — el número se puede cargar igual y va a empezar a andar cuando lo esté.`)
+                    : err ? tr(`Could not read the driver list from ${e.name}.`, `No se pudo leer la lista de drivers de ${e.name}.`)
+                    : !roster ? tr(`Reading the driver list from ${e.name}...`, `Leyendo la lista de drivers de ${e.name}...`)
+                    : roster.length === 0 ? tr(`${e.name} returned no drivers.`, `${e.name} no devolvió ningún driver.`)
+                    : tr(`${roster.length} driver(s) in ${e.name} — click the field to pick one.`,
+                         `${roster.length} driver(s) en ${e.name} — hacé click en el campo para elegir.`)}
+                </div>
+              </>);
+            })()}
             <Field label="Hourly rate ($/hora)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.hourly_rate} onChange={e => setDriverForm(f => ({...f, hourly_rate:e.target.value}))} placeholder="e.g. 25 (optional)" /></Field>
             <Field label="WhatsApp group link" full><input style={inp} value={driverForm.whatsapp_group_link} onChange={e => setDriverForm(f => ({...f, whatsapp_group_link:e.target.value}))} placeholder="https://chat.whatsapp.com/..." /></Field>
             <Field label="Notes" full><input style={inp} value={driverForm.notes} onChange={e => setDriverForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
@@ -14085,29 +14310,59 @@ export default function App() {
           </div>
 
           <SectionLabel>Live tracking</SectionLabel>
-          <Field label="Verizon vehicle number" full>
-            <VehiclePicker value={truckForm.verizon_vehicle_id} options={vzVehicles}
-              takenBy={vzTakenBy} selfName={truckForm.name}
-              onChange={val => setTruckForm(f => ({...f, verizon_vehicle_id:val}))}
-              placeholder="As it appears in Reveal" />
-          </Field>
-          <div style={{ fontSize:11.5, color: vzVehiclesErr ? "#b91c1c" : "#999", marginTop:6 }}>
-            {!verizonOn
-              ? "Links this truck to Verizon Connect so its position updates on the live map by itself. Leave it empty to keep setting the location by hand."
-              : vzVehiclesErr ? t("Could not read the vehicle list from Verizon Connect.")
-              : !vzVehicles ? t("Reading the vehicle list from Verizon Connect...")
-              : vzVehicles.length === 0 ? t("Verizon Connect returned no vehicles.")
-              : tr(`${vzVehicles.length} vehicle(s) in Verizon Connect — click the field to pick one.`,
-                   `${vzVehicles.length} vehículo(s) en Verizon Connect — hacé click en el campo para elegir.`)}
-          </div>
+          {(() => {
+            const rosters = { verizon: vzVehicles, motive: mtVehicles };
+            const errs = { verizon: vzVehiclesErr, motive: mtVehiclesErr };
+            const on = { verizon: verizonOn, motive: motiveOn };
+            const sel = truckForm.eld;
+            const e = ELD[sel];
+            const roster = rosters[sel];
+            const err = errs[sel];
+            return (<>
+              <Field label="ELD provider" full>
+                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                  {[["", t("None")], ...ELD_KEYS.map(k => [k, ELD[k].name])].map(([k, label]) => (
+                    <button key={k || "none"} type="button"
+                      onClick={() => setTruckForm(f => ({...f, eld:k}))}
+                      style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12, padding:"5px 11px",
+                        borderRadius:20, cursor:"pointer", border:"1px solid",
+                        borderColor: sel === k ? "#111" : "#e5e5e5",
+                        background: sel === k ? "#111" : "#fff",
+                        color: sel === k ? "#fff" : "#666", fontWeight: sel === k ? 600 : 500 }}>
+                      {k && <EldBadge provider={k} />}{label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              {sel && (
+                <Field label={`${e.name} vehicle number`} full>
+                  <VehiclePicker value={truckForm[e.truckField]} options={roster}
+                    takenBy={eldGaps[sel].takenBy} selfName={truckForm.name}
+                    onChange={val => setTruckForm(f => ({...f, [e.truckField]:val}))}
+                    placeholder={sel === "verizon" ? "As it appears in Reveal" : "As it appears in Motive"} />
+                </Field>
+              )}
+              <div style={{ fontSize:11.5, color: err ? "#b91c1c" : "#999", marginTop:6 }}>
+                {!sel
+                  ? "Pick the ELD that tracks this truck and its position updates on the live map by itself. Leave it on None to keep setting the location by hand."
+                  : !on[sel] ? tr(`${e.name} is not configured on the server yet — the number can be filled in now and will start working once it is.`,
+                                  `${e.name} todavía no está configurado en el servidor — el número se puede cargar igual y va a empezar a andar cuando lo esté.`)
+                  : err ? tr(`Could not read the vehicle list from ${e.name}.`, `No se pudo leer la lista de vehículos de ${e.name}.`)
+                  : !roster ? tr(`Reading the vehicle list from ${e.name}...`, `Leyendo la lista de vehículos de ${e.name}...`)
+                  : roster.length === 0 ? tr(`${e.name} returned no vehicles.`, `${e.name} no devolvió ningún vehículo.`)
+                  : tr(`${roster.length} vehicle(s) in ${e.name} — click the field to pick one.`,
+                       `${roster.length} vehículo(s) en ${e.name} — hacé click en el campo para elegir.`)}
+              </div>
+            </>);
+          })()}
         </Modal>
       )}
 
       {Array.isArray(vzDiag) && (
-        <Modal title="Verizon Connect" onClose={() => setVzDiag(null)}
+        <Modal title="ELD connection" onClose={() => setVzDiag(null)}
           footer={<><Btn onClick={() => setVzDiag(null)}>Close</Btn><Btn primary onClick={runVzDiag}>Check again</Btn></>}>
           <div style={{ fontSize:12.5, color:"#666", marginBottom:12 }}>
-            What this account can actually reach right now. The server asks Verizon directly.
+            What this account can actually reach right now. The server asks each ELD directly.
           </div>
           <div style={{ display:"flex", gap:10, padding:"9px 0", borderBottom:"1px solid #f4f4f4" }}>
             <span style={{ fontSize:14, lineHeight:1.3 }}>{googleKey ? "✅" : "•"}</span>
@@ -14121,13 +14376,14 @@ export default function App() {
               </div>
             </div>
           </div>
-          {vzDiag.map(c => {
+          {vzDiag.map((c, i) => {
             const label = VZ_CHECK_LABELS[c.key] || c.key;
             return (
-              <div key={c.key} style={{ display:"flex", gap:10, padding:"9px 0", borderBottom:"1px solid #f4f4f4" }}>
+              <div key={`${c.provider || "?"}:${c.key}:${i}`} style={{ display:"flex", gap:10, padding:"9px 0", borderBottom:"1px solid #f4f4f4" }}>
                 <span style={{ fontSize:14, lineHeight:1.3 }}>{c.ok ? "✅" : "❌"}</span>
                 <div style={{ minWidth:0, flex:1 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:"#111" }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#111", display:"flex", alignItems:"center", gap:6 }}>
+                    <EldBadge provider={c.provider} />
                     {t(label)}
                     {c.count != null && c.ok ? <span style={{ fontWeight:400, color:"#888" }}> · {c.count}</span> : null}
                   </div>

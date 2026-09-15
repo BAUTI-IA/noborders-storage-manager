@@ -9,6 +9,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { tr, t } from "./i18n.js";
 import { dbFailed } from "./db.js";
 import { paidDays, reconcile, reportTotals } from "./reportsData.js";
+import { ELD, ELD_KEYS, eldOfTruck } from "./eldData.js";
 
 // The history table, exported so App.jsx's auto-migration and the banner below
 // can never drift apart. The CRM creates it by itself where Supabase exposes an
@@ -63,6 +64,20 @@ export function ReportsSection({ supabase, session }) {
   const [sqlCopied, setSqlCopied] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [chain, setChain] = useState(null);   // null | { step, detail } | summary
+  const [eldOn, setEldOn] = useState([]);    // provider keys the server has credentials for
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/geocode?fleet=status").then(r => r.json())
+      // `providers` is newer than `configured`; fall back so a server that has
+      // not been redeployed yet still runs the Verizon half of the setup.
+      .then(d => { if (alive) setEldOn(d?.providers || (d?.configured ? ["verizon"] : [])); })
+      .catch(() => { if (alive) setEldOn([]); });
+    return () => { alive = false; };
+  }, []);
+
+  // Named for the buttons, so a fleet on one ELD never reads the other's name.
+  const eldLabel = eldOn.length ? eldOn.map(k => ELD[k]?.name || k).join(" + ") : t("the ELD");
 
   const days = RANGES.find(r => r.key === rangeKey)?.days ?? 7;
   const from = isoDaysAgo(days);
@@ -133,36 +148,47 @@ export function ReportsSection({ supabase, session }) {
     const step = (s, detail) => setChain({ step: s, detail });
     const summary = { trucksLinked: 0, trucksFixed: 0, driversLinked: 0, positions: 0, hourDays: 0, errors: [] };
     try {
-      step(tr("Reading Verizon's rosters", "Leyendo los listados de Verizon"));
-      const [vRes, dRes] = await Promise.all([
-        fetch("/api/geocode?fleet=vehicles", { headers: auth() }).then(r => r.json()).catch(() => ({})),
-        fetch("/api/geocode?fleet=drivers", { headers: auth() }).then(r => r.json()).catch(() => ({})),
-      ]);
-      const vehicles = vRes?.vehicles || [];
-      const roster = dRes?.drivers || [];
-      if (!vehicles.length) summary.errors.push({ truck: "Verizon", error: tr("no vehicles came back", "no volvió ningún vehículo") });
+      // Each provider gets its own pass. A truck already linked to one is left
+      // alone by the next: matchByName only touches rows whose own link field is
+      // empty or points at something that provider's roster does not have.
+      for (const key of (eldOn.length ? eldOn : ["verizon"])) {
+        const e = ELD[key];
+        step(tr(`Reading ${e.name}'s rosters`, `Leyendo los listados de ${e.name}`));
+        const [vRes, dRes] = await Promise.all([
+          fetch(`/api/geocode?fleet=vehicles&provider=${key}`, { headers: auth() }).then(r => r.json()).catch(() => ({})),
+          fetch(`/api/geocode?fleet=drivers&provider=${key}`, { headers: auth() }).then(r => r.json()).catch(() => ({})),
+        ]);
+        const vehicles = vRes?.vehicles || [];
+        const roster = dRes?.drivers || [];
+        if (!vehicles.length) summary.errors.push({ truck: e.name, error: tr("no vehicles came back", "no volvió ningún vehículo") });
 
-      step(tr("Linking trucks", "Vinculando trucks"));
-      for (const m of matchByName(trucks, vehicles, "verizon_vehicle_id")) {
-        if (dbFailed(await supabase.from("trucks").update({ verizon_vehicle_id: m.number }).eq("id", m.row.id), "trucks", { quiet: true })) {
-          summary.errors.push({ truck: m.row.name, error: tr("could not save the link", "no se pudo guardar la vinculación") });
-          continue;
+        step(tr(`Linking trucks to ${e.name}`, `Vinculando trucks a ${e.name}`));
+        // Re-read each pass: the previous provider may have just claimed a truck.
+        const { data: tkNow } = await supabase.from("trucks").select("*");
+        const freeTrucks = (tkNow || []).filter(tk => !tk.deleted_at && (!eldOfTruck(tk) || tk[e.truckField]));
+        for (const m of matchByName(freeTrucks, vehicles, e.truckField)) {
+          if (dbFailed(await supabase.from("trucks").update({ [e.truckField]: m.number }).eq("id", m.row.id), "trucks", { quiet: true })) {
+            summary.errors.push({ truck: m.row.name, error: tr("could not save the link", "no se pudo guardar la vinculación") });
+            continue;
+          }
+          if (m.wasWrong) summary.trucksFixed++; else summary.trucksLinked++;
         }
-        if (m.wasWrong) summary.trucksFixed++; else summary.trucksLinked++;
-      }
 
-      step(tr("Linking drivers", "Vinculando drivers"));
-      for (const m of matchByName(drivers, roster, "verizon_driver_id")) {
-        if (dbFailed(await supabase.from("drivers").update({ verizon_driver_id: m.number }).eq("id", m.row.id), "drivers", { quiet: true })) {
-          summary.errors.push({ truck: m.row.name, error: tr("could not save the link", "no se pudo guardar la vinculación") });
-          continue;
+        step(tr(`Linking drivers to ${e.name}`, `Vinculando drivers a ${e.name}`));
+        const { data: drNow } = await supabase.from("drivers").select("*");
+        const freeDrivers = (drNow || []).filter(d => !d.deleted_at && ((!d.verizon_driver_id && !d.motive_driver_id) || d[e.driverField]));
+        for (const m of matchByName(freeDrivers, roster, e.driverField)) {
+          if (dbFailed(await supabase.from("drivers").update({ [e.driverField]: m.number }).eq("id", m.row.id), "drivers", { quiet: true })) {
+            summary.errors.push({ truck: m.row.name, error: tr("could not save the link", "no se pudo guardar la vinculación") });
+            continue;
+          }
+          summary.driversLinked++;
         }
-        summary.driversLinked++;
       }
 
       // Re-read: the backfill runs per truck and needs the links just written.
       const { data: fresh } = await supabase.from("trucks").select("*");
-      const linked = (fresh || []).filter(tk => !tk.deleted_at && tk.verizon_vehicle_id);
+      const linked = (fresh || []).filter(tk => !tk.deleted_at && eldOfTruck(tk));
       for (let i = 0; i < linked.length; i++) {
         step(tr("Bringing 30 days of history", "Trayendo 30 días de historial"), `${i + 1}/${linked.length} · ${linked[i].name}`);
         try {
@@ -192,17 +218,17 @@ export function ReportsSection({ supabase, session }) {
     } catch (e) {
       setChain({ ...summary, fatal: e?.message || "failed" });
     }
-  }, [auth, trucks, drivers, supabase, load]);
+  }, [auth, trucks, drivers, supabase, load, eldOn]);
 
-  // Reveal keeps 30 days of location history, so the reports do not have to wait
-  // weeks for truck_pings to fill up on its own.
+  // Both providers keep about 30 days of location history, so the reports do not
+  // have to wait weeks for truck_pings to fill up on its own.
   //
   // One request per truck: a month for the whole fleet in a single call outlives
   // the serverless timeout, and a failure there would lose every truck at once.
   // Walking them also means the page can show where it is instead of hanging.
   const runBackfill = useCallback(async () => {
-    const linked = trucks.filter(t => t.verizon_vehicle_id);
-    if (!linked.length) { setBackfill({ error: tr("No truck is linked to a Verizon vehicle yet.", "Ningún truck está vinculado a un vehículo de Verizon todavía.") }); return; }
+    const linked = trucks.filter(t => eldOfTruck(t));
+    if (!linked.length) { setBackfill({ error: tr("No truck is linked to an ELD vehicle yet.", "Ningún truck está vinculado a un vehículo de ningún ELD todavía.") }); return; }
     const totals = { positions: 0, trucks: 0, errors: [] };
     for (let i = 0; i < linked.length; i++) {
       const tk = linked[i];
@@ -215,7 +241,7 @@ export function ReportsSection({ supabase, session }) {
         if (!r.ok) throw new Error(d?.error || "failed");
         totals.positions += d.positions || 0;
         totals.trucks += 1;
-        // A truck that failed on Verizon's side reports itself; keep going.
+        // A truck that failed on the provider's side reports itself; keep going.
         if (d.errors?.length) totals.errors.push(...d.errors);
       } catch (e) {
         totals.errors.push({ truck: tk.name, error: e?.message || "failed" });
@@ -253,14 +279,14 @@ export function ReportsSection({ supabase, session }) {
         <button onClick={runChain} disabled={Boolean(chain?.step) || backfill?.busy}
           style={{ marginLeft: "auto", background: "#111", border: "none", color: "#fff", fontWeight: 600,
             borderRadius: 7, padding: "6px 14px", cursor: chain?.step ? "default" : "pointer", fontSize: 12 }}>
-          {chain?.step ? t("Setting up...") : t("Connect everything with Verizon")}
+          {chain?.step ? t("Setting up...") : tr(`Connect everything with ${eldLabel}`, `Conectar todo con ${eldLabel}`)}
         </button>
         <button onClick={runBackfill} disabled={backfill?.busy}
           style={{ fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: backfill?.busy ? "default" : "pointer", textDecoration: "underline" }}>
           {backfill?.busy
             ? tr(`Bringing history… ${backfill.done}/${backfill.total} · ${backfill.current}`,
                  `Trayendo historial… ${backfill.done}/${backfill.total} · ${backfill.current}`)
-            : t("Bring 30 days from Verizon")}
+            : tr(`Bring 30 days from ${eldLabel}`, `Traer 30 días de ${eldLabel}`)}
         </button>
         <button onClick={load} style={{ fontSize: 12, color: "#185FA5", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
           {loading ? t("Loading...") : t("Refresh")}
@@ -283,7 +309,7 @@ export function ReportsSection({ supabase, session }) {
                  `Vinculé ${chain.trucksLinked} truck(s), corregí ${chain.trucksFixed} mal vinculados, vinculé ${chain.driversLinked} driver(s). Traje ${chain.positions.toLocaleString()} posición(es) y ${chain.hourDays} día(s) de horas del ELD.`)}
           {chain.errors?.length > 0 && (
             <div style={{ fontSize: 11.5, marginTop: 6 }}>
-              {tr(`${chain.errors.length} thing(s) Verizon would not answer for.`, `${chain.errors.length} cosa(s) que Verizon no contestó.`)}
+              {tr(`${chain.errors.length} thing(s) the ELD would not answer for.`, `${chain.errors.length} cosa(s) que el ELD no contestó.`)}
               <button onClick={() => setShowErrors(v => !v)}
                 style={{ marginLeft: 6, fontSize: 11, color: "#185FA5", background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
                 {showErrors ? t("Hide detail") : t("Show detail")}
@@ -313,8 +339,8 @@ export function ReportsSection({ supabase, session }) {
                  `${backfill.positions.toLocaleString()} posición(es) traídas para ${backfill.trucks} truck(s).`)}
           {failedTrucks.length > 0 && (
             <div style={{ fontSize: 11.5, marginTop: 6, color: "#A32D2D" }}>
-              {tr(`Verizon refused some requests for: ${failedTrucks.join(", ")}. Check that the Verizon vehicle number on those trucks is the number, not the VIN.`,
-                  `Verizon rechazó pedidos de: ${failedTrucks.join(", ")}. Revisá que el número de vehículo de Verizon en esos trucks sea el número, no el VIN.`)}
+              {tr(`The ELD refused some requests for: ${failedTrucks.join(", ")}. Check that the vehicle number on those trucks is the number, not the VIN.`,
+                  `El ELD rechazó pedidos de: ${failedTrucks.join(", ")}. Revisá que el número de vehículo en esos trucks sea el número, no el VIN.`)}
               <button onClick={() => setShowErrors(v => !v)}
                 style={{ marginLeft: 6, fontSize: 11, color: "#185FA5", background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
                 {showErrors ? t("Hide detail") : t("Show detail")}
@@ -363,7 +389,7 @@ export function ReportsSection({ supabase, session }) {
         </div>
 
         <div style={{ ...card, marginBottom: 12, background: "#FAEEDA", borderColor: "#f0e0c0", fontSize: 12.5, color: "#854F0B", lineHeight: 1.5 }}>
-          <strong>Driver hours from the ELD are not connected.</strong> Everything on this page comes from the trucks' GPS, so the hours are a truck's working window and the driver column is whoever the CRM has assigned. Real per-driver hours need Verizon's Logbook API.
+          <strong>Driver hours from the ELD are not connected.</strong> Everything on this page comes from the trucks' GPS, so the hours are a truck's working window and the driver column is whoever the CRM has assigned. Real per-driver hours need the provider's logbook: Verizon's Logbook API, or Motive's HOS logs.
         </div>
 
         {totals.paidUnlinked > 0 && (

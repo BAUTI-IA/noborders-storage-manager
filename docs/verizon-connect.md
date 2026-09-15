@@ -42,7 +42,9 @@ En **Fleet → Trucks**, editá el camión y completá **Verizon vehicle number*
 sin ese número siguen andando a mano — útil para los que no tienen tracker.
 
 Para ver la lista de vehículos que devuelve Reveal:
-`GET /api/geocode?fleet=vehicles` con el JWT de Supabase en `Authorization`.
+`GET /api/geocode?fleet=vehicles&provider=verizon` con el JWT de Supabase en
+`Authorization`. El `provider` es obligatorio cuando hay más de un ELD
+configurado — ver `docs/motive.md`.
 
 ## Cómo actualiza
 
@@ -95,6 +97,12 @@ que llega un evento de verdad.
 
 Un evento cuyo vehículo no está vinculado a ningún camión cuenta como `unmatched`
 y se descarta, no rompe la entrega.
+
+## Convive con Motive
+
+Verizon ya no es el único ELD: el CRM también lee Motive, y cada truck está en
+uno o en el otro (en el live map se distinguen por una **V** o una **M**). Nada
+de lo de acá cambia si Motive no está configurado. Ver `docs/motive.md`.
 
 ## El mapa
 
@@ -152,7 +160,7 @@ así que `mapLocation()` lee la primera clave que encuentra en vez de asumir una
 Para ver el payload crudo de un vehículo, el mapeo y qué endpoint quedó elegido:
 
 ```
-GET /api/geocode?fleet=probe&vehicle=<vehicle number>
+GET /api/geocode?fleet=probe&provider=verizon&vehicle=<vehicle number>
 ```
 
 Devuelve `{ raw, mapped, endpoints }`: `raw` es lo que mandó Verizon, `mapped` es
