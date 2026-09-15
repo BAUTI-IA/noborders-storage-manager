@@ -4024,6 +4024,7 @@ export default function App() {
   const [closingSheets, setClosingSheets] = useState([]);
   const [csTab, setCsTab] = useState("open");          // open | settled | disputed | all
   const [csDetailId, setCsDetailId] = useState(null);  // open closing-sheet detail page
+  const [csOpenLines, setCsOpenLines] = useState(() => new Set()); // statement lines expanded to their per-job detail
   const [showCsModal, setShowCsModal] = useState(false);
   const [csForm, setCsForm] = useState(EMPTY_CS);
   const [editingCsId, setEditingCsId] = useState(null);
@@ -4165,7 +4166,8 @@ export default function App() {
   const [exMonth, setExMonth] = useState(today().slice(0, 7)); // "YYYY-MM"
   const [exType, setExType] = useState("");               // filter: extra type
   const [exSearch, setExSearch] = useState("");           // filter: job # search
-  const [extrasTab, setExtrasTab] = useState("drivers");  // drivers | reps
+  const [extrasTab, setExtrasTab] = useState("drivers");  // drivers | reps | all
+  const [exPendingOnly, setExPendingOnly] = useState(false); // only extras whose commission is unassigned
   const [showEmpModal, setShowEmpModal] = useState(false);
   const [empForm, setEmpForm] = useState(EMPTY_EMPLOYEE);
   const [empSaving, setEmpSaving] = useState(false);
@@ -10527,7 +10529,14 @@ export default function App() {
       )}
 
       {/* ───────────────────────── SETTLEMENTS (list) ───────────────────────── */}
-      {page === "settlements" && !csDetailId && (
+      {page === "settlements" && !csDetailId && (() => {
+        // Pads outstanding across the open sheets, in units and in money.
+        let padsMiss = 0;
+        for (const s of closingSheets) if (s.status === "open") padsMiss += (sheetCalcById[s.id]?.padsMissing || 0);
+        const staleOpen = closingSheets.filter(s => s.status === "open" && s.created_at && Math.round((startOfToday() - new Date(s.created_at)) / ONE_DAY) >= 30).length;
+        const rows = closingSheets.filter(s => csTab === "all" || s.status === csTab);
+        const strip = { border:"1px solid #efefef", borderRadius:11, overflow:"hidden", background:"#fff", display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", marginBottom:16 };
+        return (
         <>
           {settlementsMissing && (
             <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
@@ -10535,63 +10544,83 @@ export default function App() {
               <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
             </div>
           )}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
+
+          <div style={strip}>
             {[
-              { label:"Open closing sheets", value:settlementMetrics.openCount, color:"#185FA5" },
-              { label:"Broker owes us", value:"$"+Math.round(settlementMetrics.owesUs).toLocaleString(), color:"#1A8A4E" },
-              { label:"We owe brokers", value:"$"+Math.round(settlementMetrics.weOwe).toLocaleString(), color:"#A32D2D" },
-              { label:"Outstanding BOL collections", value:"$"+Math.round(settlementMetrics.pendingBol).toLocaleString(), color:"#C2410C" },
-              { label:"Pads outstanding ($)", value:"$"+Math.round(settlementMetrics.padsValue).toLocaleString(), color:"#92760B" },
-            ].map(m => (
-              <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
-                <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{m.label}</div>
-                <div style={{ fontSize:20, fontWeight:800, color:m.color, marginTop:3 }}>{m.value}</div>
+              { l:"Open sheets", v:settlementMetrics.openCount, c:"#185FA5", sub: staleOpen ? tr(`${staleOpen} over 30 days`, `${staleOpen} hace más de 30 días`) : "" },
+              { l:"Brokers owe us", v:`$${Math.round(settlementMetrics.owesUs).toLocaleString()}`, c:"#1A8A4E" },
+              { l:"We owe brokers", v:`$${Math.round(settlementMetrics.weOwe).toLocaleString()}`, c:"#B91C1C" },
+              { l:"Still to collect (BOL)", v:`$${Math.round(settlementMetrics.pendingBol).toLocaleString()}`, c:"#C2410C" },
+              { l:"Pads missing", v:padsMiss, c:"#92760B", sub: tr(`$${Math.round(settlementMetrics.padsValue).toLocaleString()} charged`, `$${Math.round(settlementMetrics.padsValue).toLocaleString()} cobrados`) },
+            ].map((mt, i) => (
+              <div key={mt.l} style={{ padding:"11px 15px", borderLeft: i ? "1px solid #f0f0f0" : "none" }}>
+                <div style={{ fontSize:11, color:"#999", marginBottom:3 }}>{mt.l}</div>
+                <div style={{ display:"flex", alignItems:"baseline", gap:7, flexWrap:"wrap" }}>
+                  <span style={{ fontSize:21, fontWeight:800, letterSpacing:"-0.02em", color:mt.c, fontVariantNumeric:"tabular-nums" }}>{mt.v}</span>
+                  {mt.sub && <span style={{ fontSize:11, color:"#bbb" }}>{mt.sub}</span>}
+                </div>
               </div>
             ))}
           </div>
 
-          <div style={{ display:"flex", borderBottom:"1px solid #efefef", marginBottom:14, flexWrap:"wrap" }}>
-            {[["open","Open"],["settled","Settled"],["disputed","Disputed"],["all","All"]].map(([t,l]) => (
-              <button key={t} onClick={() => setCsTab(t)} style={{ fontSize:13, fontWeight: csTab===t?600:400, padding:"8px 16px", cursor:"pointer", border:"none", background:"none", color: csTab===t?"#111":"#999", borderBottom: csTab===t?"2px solid #111":"2px solid transparent" }}>{l}</button>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:12 }}>
+            {[["open", "Open"], ["settled", "Settled"], ["disputed", "Disputed"], ["all", "All"]].map(([k, l]) => (
+              <button key={k} onClick={() => setCsTab(k)}
+                style={{ border:`1px solid ${csTab === k ? "#111" : "#e5e5e5"}`, background: csTab === k ? "#111" : "#fff", color: csTab === k ? "#fff" : "#888",
+                  borderRadius:20, padding:"4px 11px", fontSize:12, cursor:"pointer", display:"inline-flex", gap:5, alignItems:"center" }}>
+                {l}<span style={{ fontWeight:700, opacity:0.65 }}>{k === "all" ? closingSheets.length : closingSheets.filter(s => s.status === k).length}</span>
+              </button>
             ))}
           </div>
 
           <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
             <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5, minWidth:900 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["CS #","Broker","Driver","Load date","Jobs","Total CF","Carrier fee","BOL collected","Net settlement","Status","Actions"].map((h,i) => (
-                      <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                    {["Sheet", "Broker · Driver", "Load date", "Jobs · CF", "Carrier fee", "Collected", "Net", "Status", ""].map((h, i) => (
+                      <th key={i} style={{ padding:"9px 12px", textAlign: ["Jobs · CF", "Carrier fee", "Collected", "Net"].includes(h) ? "right" : "left", fontWeight:700, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {closingSheets.filter(s => csTab==="all" || s.status===csTab).length === 0 ? (
-                    <tr><td colSpan={11} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{settlementsMissing ? "Run the SQL to enable settlements." : "No closing sheets. Create one with “+ Closing sheet”."}</td></tr>
-                  ) : closingSheets.filter(s => csTab==="all" || s.status===csTab).map(s => {
+                  {rows.length === 0 ? (
+                    <tr><td colSpan={9} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{settlementsMissing ? "Run the SQL to enable settlements." : "No closing sheets. Create one with “+ Closing sheet”."}</td></tr>
+                  ) : rows.map(s => {
                     const c = sheetCalcById[s.id] || {};
                     const ageDays = s.created_at ? Math.round((startOfToday() - new Date(s.created_at)) / ONE_DAY) : 0;
                     const stale = s.status === "open" && ageDays >= 30;
+                    const net = c.net || 0;
                     return (
-                      <tr key={s.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                          <button onClick={() => setCsDetailId(s.id)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{s.closing_sheet_number || `#${s.id}`}</button>
-                          {stale && <span title={`Open for ${ageDays} days`} style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:10, padding:"1px 6px" }}>⚠ {ageDays}d</span>}
+                      <tr key={s.id} onClick={() => setCsDetailId(s.id)} style={{ borderBottom:"1px solid #fafafa", cursor:"pointer", verticalAlign:"top" }}>
+                        <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                          <span style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5" }}>{s.closing_sheet_number || `#${s.id}`}</span>
+                          {stale && <div style={{ fontSize:10.5, fontWeight:700, color:"#92760B", marginTop:2 }}>⚠ {tr(`open ${ageDays}d`, `abierta ${ageDays}d`)}</div>}
                         </td>
-                        <td style={{ padding:"12px" }}>{brokerName(s.broker_id) || "—"}</td>
-                        <td style={{ padding:"12px" }}>{driverById[s.driver_id]?.name || "—"}</td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{s.load_date || "—"}</td>
-                        <td style={{ padding:"12px" }}>{c.jobCount || 0}</td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{Math.round(c.totalCf || 0).toLocaleString()} CF</td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>${Math.round(c.carrierFee || 0).toLocaleString()}</td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>${Math.round(c.bolCollected || 0).toLocaleString()}</td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:700, color: (c.net||0) >= 0 ? "#1A8A4E" : "#A32D2D" }}>{(c.net||0) >= 0 ? `+$${Math.round(c.net||0).toLocaleString()}` : `−$${Math.round(-(c.net||0)).toLocaleString()}`}</td>
-                        <td style={{ padding:"12px" }}><CSBadge status={s.status} /></td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap" }}>
-                          <Btn onClick={() => setCsDetailId(s.id)} style={{ padding:"4px 10px", fontSize:12 }}>Ver</Btn>
-                          {s.status !== "settled" && <Btn onClick={() => setCsStatus(s, "settled")} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Settled</Btn>}
-                          {s.status !== "disputed" && <Btn danger onClick={() => setCsStatus(s, "disputed")} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Dispute</Btn>}
+                        <td style={{ padding:"10px 12px" }}>
+                          {brokerName(s.broker_id) || "—"}
+                          <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{driverById[s.driver_id]?.name ? `🧑‍✈️ ${driverById[s.driver_id].name}` : "—"}</div>
+                        </td>
+                        <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>{s.load_date || "—"}</td>
+                        <td style={{ padding:"10px 12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                          {c.jobCount || 0}
+                          <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{tr(`${Math.round(c.totalCf || 0).toLocaleString()} CF`, `${Math.round(c.totalCf || 0).toLocaleString()} CF`)}</div>
+                        </td>
+                        <td style={{ padding:"10px 12px", textAlign:"right", whiteSpace:"nowrap", fontVariantNumeric:"tabular-nums" }}>
+                          ${Math.round(c.carrierFee || 0).toLocaleString()}
+                          <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>− ${Math.round(c.deductions || 0).toLocaleString()} {tr("deductions", "deducciones")}</div>
+                        </td>
+                        <td style={{ padding:"10px 12px", textAlign:"right", whiteSpace:"nowrap", fontVariantNumeric:"tabular-nums" }}>
+                          ${Math.round(c.bolCollected || 0).toLocaleString()}
+                          {(c.pending || 0) > 0 && <div style={{ fontSize:11, color:"#C2410C", fontWeight:700, marginTop:2 }}>${Math.round(c.pending).toLocaleString()} {tr("pending", "pendiente")}</div>}
+                        </td>
+                        <td style={{ padding:"10px 12px", textAlign:"right", whiteSpace:"nowrap", fontWeight:800, color: net >= 0 ? "#1A8A4E" : "#B91C1C", fontVariantNumeric:"tabular-nums" }}>
+                          {net >= 0 ? `+$${Math.round(net).toLocaleString()}` : `−$${Math.round(-net).toLocaleString()}`}
+                          <div style={{ fontSize:10.5, color:"#aaa", fontWeight:500, marginTop:2 }}>{net >= 0 ? tr("they owe us", "nos deben") : tr("we owe them", "les debemos")}</div>
+                        </td>
+                        <td style={{ padding:"10px 12px" }}><CSBadge status={s.status} /></td>
+                        <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }} onClick={e => e.stopPropagation()}>
+                          <Btn onClick={() => setCsDetailId(s.id)} style={{ padding:"4px 10px", fontSize:11.5 }}>Open</Btn>
                         </td>
                       </tr>
                     );
@@ -10599,12 +10628,14 @@ export default function App() {
                 </tbody>
               </table>
             </div>
-            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{closingSheets.filter(s => csTab==="all" || s.status===csTab).length} closing sheet(s)</div>
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{tr(`${rows.length} closing sheet(s) · click one to open its statement`, `${rows.length} closing sheet(s) · hacé clic en una para abrir su cuenta`)}</div>
           </div>
         </>
-      )}
+        );
+      })()}
 
-      {/* ───────────────────────── SETTLEMENTS (detail) ───────────────────────── */}
+      {/* ── SETTLEMENT DETAIL: the sheet reads as one statement, top to bottom.
+           Every line that comes from the jobs opens to show where it comes from. ── */}
       {page === "settlements" && csDetailId && (() => {
         const s = sheetById[csDetailId];
         if (!s) return <div style={{ color:"#bbb" }}>Closing sheet not found. <button onClick={() => setCsDetailId(null)} style={{ color:"#185FA5", background:"none", border:"none", cursor:"pointer" }}>Back</button></div>;
@@ -10613,160 +10644,208 @@ export default function App() {
         const brokerNm = brokerName(s.broker_id);
         const driverNm = driverById[s.driver_id]?.name || "";
         const isImg = s.document_url && /\.(jpe?g|png|gif|webp|heic)$/i.test(s.document_url);
-        const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
+        const m = (n) => `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
         const ageDays = s.created_at ? Math.round((startOfToday() - new Date(s.created_at)) / ONE_DAY) : 0;
+        const padRate = s.charge_per_pad != null ? numv(s.charge_per_pad) : 7;
+        const toggleLine = (k) => setCsOpenLines(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+        const cap = { fontSize:10.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", display:"flex", alignItems:"center", gap:8, marginBottom:8 };
+        const right = { marginLeft:"auto", fontWeight:500, letterSpacing:0, textTransform:"none", fontSize:11, color:"#bbb" };
+        const card = { background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"13px 15px" };
+        const dth = { padding:"4px 6px", textAlign:"left", fontSize:10, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.04em" };
+        const dtd = { padding:"4px 6px", fontSize:11.5 };
+        // One line of the statement: sign, what it is, how much, and (optionally)
+        // the per-job detail that produced it.
+        const Line = ({ k, sign, title, sub, value, tone, detail }) => {
+          const open = csOpenLines.has(k);
+          const bg = tone === "total" ? (c.net >= 0 ? "#EAF3DE" : "#FCEBEB") : tone === "sum" ? "#fafafa" : "#fff";
+          const color = tone === "total" ? (c.net >= 0 ? "#1A8A4E" : "#B91C1C") : sign === "−" ? "#B91C1C" : "#111";
+          return (
+            <>
+              <div style={{ display:"grid", gridTemplateColumns:"22px 1fr auto", gap:10, alignItems:"center", padding:"9px 15px", borderTop:"1px solid #f0f0f0", background:bg }}>
+                <span style={{ fontSize:13, fontWeight:700, color: sign === "−" ? "#B91C1C" : "#bbb", textAlign:"center" }}>{sign}</span>
+                <span style={{ fontSize: tone === "total" ? 14 : 13, fontWeight: tone ? 700 : 400 }}>
+                  {title}
+                  {sub && <span style={{ display:"block", fontSize:11, color: tone === "total" ? color : "#aaa", marginTop:1, fontWeight:400 }}>{sub}</span>}
+                </span>
+                <span style={{ fontSize: tone === "total" ? 20 : tone === "sum" ? 15 : 14, fontWeight:700, color, whiteSpace:"nowrap", fontVariantNumeric:"tabular-nums" }}>
+                  {value}
+                  {detail && <button onClick={() => toggleLine(k)} style={{ marginLeft:8, fontSize:11, fontWeight:500, color:"#185FA5", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>{open ? "hide" : "per job"}</button>}
+                </span>
+              </div>
+              {detail && open && <div style={{ padding:"2px 15px 10px 47px", borderTop:"1px dashed #f0f0f0", background:"#fcfcfc" }}>{detail}</div>}
+            </>
+          );
+        };
         return (
           <>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
-              <Btn onClick={() => setCsDetailId(null)}>← Back</Btn>
-              <span style={{ flex:1 }} />
-              <Btn onClick={() => exportCsPdf(s, c, brokerNm, driverNm, jobsIn)}>📄 Export PDF</Btn>
-              <a href={settlementWaLink(s, c, brokerNm, driverNm)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn>💬 WhatsApp broker</Btn></a>
-              <Btn onClick={() => openEditCs(s)}>Edit</Btn>
-              {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark settled</Btn>}
+              <Btn onClick={() => setCsDetailId(null)} style={{ padding:"5px 11px", fontSize:12 }}>← All sheets</Btn>
+              <span style={{ fontFamily:"monospace", fontSize:17, fontWeight:700 }}>{s.closing_sheet_number || `#${s.id}`}</span>
+              <CSBadge status={s.status} />
+              {s.status === "open" && ageDays >= 30 && <span style={{ fontSize:11, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"3px 9px" }}>⚠ {tr(`open ${ageDays} days`, `abierta hace ${ageDays} días`)}</span>}
+              <span style={{ marginLeft:"auto", display:"flex", gap:6, flexWrap:"wrap" }}>
+                <Btn onClick={() => exportCsPdf(s, c, brokerNm, driverNm, jobsIn)} style={{ padding:"5px 11px", fontSize:12 }}>📄 PDF</Btn>
+                <a href={settlementWaLink(s, c, brokerNm, driverNm)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn style={{ padding:"5px 11px", fontSize:12 }}>💬 WhatsApp broker</Btn></a>
+                <Btn onClick={() => openEditCs(s)} style={{ padding:"5px 11px", fontSize:12 }}>Edit</Btn>
+                {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")} style={{ padding:"5px 11px", fontSize:12 }}>Mark settled</Btn>}
+              </span>
             </div>
 
-            {s.status === "open" && ageDays >= 30 && (
-              <div style={{ background:"#FEF3C7", border:"1px solid #EAB308", borderRadius:10, padding:"9px 13px", marginBottom:14, fontSize:13, color:"#92760B" }}>⚠️ This closing sheet has been open for {ageDays} days.</div>
-            )}
-
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 280px", gap:14, marginBottom:14 }}>
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"18px 20px" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                  <span style={{ fontSize:20, fontWeight:800, fontFamily:"monospace" }}>#{s.closing_sheet_number || s.id}</span>
-                  <CSBadge status={s.status} />
+            <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) 300px", gap:16, alignItems:"start" }}>
+              <div style={{ minWidth:0 }}>
+                <div style={cap}>The settlement<span style={right}>{tr("every line opens to show where it comes from", "cada línea se abre para ver de dónde sale")}</span></div>
+                <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden", marginBottom:16 }}>
+                  <div style={{ padding:"10px 15px", background:"#fafafa", fontSize:10.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                    {[brokerNm || tr("No broker", "Sin broker"), driverNm && `🧑‍✈️ ${driverNm}`, s.load_date && tr(`loaded ${s.load_date}`, `cargado ${s.load_date}`)].filter(Boolean).join(" · ")}
+                  </div>
+                  <Line k="fee" sign="1" title="Carrier fee" sub={tr(`${c.jobCount} jobs · ${Math.round(c.totalCf).toLocaleString()} CF`, `${c.jobCount} jobs · ${Math.round(c.totalCf).toLocaleString()} CF`)} value={m(c.carrierFee)}
+                    detail={
+                      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                        <tbody>{jobsIn.map(j => (
+                          <tr key={j.id}>
+                            <td style={{ ...dtd, fontFamily:"monospace", fontWeight:700 }}>{j.job_number || "—"}</td>
+                            <td style={dtd}>{[j.pickup_state, j.delivery_state].filter(Boolean).join(" → ")}</td>
+                            <td style={{ ...dtd, textAlign:"right", color:"#888" }}>{Math.round(parseCf(j.volume)).toLocaleString()} CF × {money(j.carrier_rate_per_cf) || "$0"}</td>
+                            <td style={{ ...dtd, textAlign:"right", fontWeight:700 }}>{m(parseCf(j.volume) * numv(j.carrier_rate_per_cf))}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    } />
+                  <Line k="trip" sign="−" title="Trip cost" value={m(s.trip_cost)} />
+                  <Line k="labor" sign="−" title="Labor" value={m(s.labor_charges)} />
+                  <Line k="other" sign="−" title="Other fees" sub={s.other_fees_description || ""} value={m(s.other_fees)} />
+                  <Line k="pads" sign="−" title="Pads not returned" sub={tr(`${c.padsMissing} pads × ${m(padRate)}`, `${c.padsMissing} pads × ${m(padRate)}`)} value={m(c.padsCharge)}
+                    detail={
+                      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                        <thead><tr><th style={dth}>Job</th><th style={{ ...dth, textAlign:"right" }}>Sent</th><th style={{ ...dth, textAlign:"right" }}>Back</th><th style={{ ...dth, textAlign:"right" }}>Missing</th><th style={{ ...dth, textAlign:"right" }}>Charge</th></tr></thead>
+                        <tbody>{jobsIn.map(j => { const miss = jobPadsMissing(j); return (
+                          <tr key={j.id}>
+                            <td style={{ ...dtd, fontFamily:"monospace", fontWeight:700 }}>{j.job_number || "—"}</td>
+                            <td style={{ ...dtd, textAlign:"right" }}>{numv(j.pads_received)}</td>
+                            <td style={{ ...dtd, textAlign:"right" }}>{numv(j.pads_returned)}</td>
+                            <td style={{ ...dtd, textAlign:"right", color: miss > 0 ? "#C2410C" : "#111", fontWeight: miss > 0 ? 700 : 400 }}>{miss}</td>
+                            <td style={{ ...dtd, textAlign:"right" }}>{m(miss * padRate)}</td>
+                          </tr>
+                        ); })}</tbody>
+                      </table>
+                    } />
+                  <Line k="owed" sign="=" title="The broker owes us" sub={tr("carrier fee minus deductions", "carrier fee menos deducciones")} value={m(c.netCarrier)} tone="sum" />
+                  <Line k="col" sign="−" title="Already collected from clients" sub={tr("the driver took this money at delivery", "el driver se llevó esta plata en la entrega")} value={m(c.bolCollected)}
+                    detail={
+                      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                        <tbody>{jobsIn.map(j => {
+                          const pend = Math.max(0, numv(j.bol_balance) - numv(j.bol_collected));
+                          return (
+                            <tr key={j.id}>
+                              <td style={{ ...dtd, fontFamily:"monospace", fontWeight:700 }}>{j.job_number || "—"}</td>
+                              <td style={dtd}>{j.customer || "—"}</td>
+                              <td style={{ ...dtd, textAlign:"right", color:"#888" }}>{money(j.bol_collected) || "$0"} / {money(j.bol_balance) || "$0"}</td>
+                              <td style={{ ...dtd, textAlign:"right", fontWeight:700, color: pend > 0 ? "#C2410C" : "#1A8A4E" }}>
+                                {pend > 0 ? tr(`${money(pend)} pending`, `${money(pend)} pendiente`) : (j.bol_payment_method ? (PAY_METHODS.find(p => p.v === j.bol_payment_method)?.l || j.bol_payment_method) : tr("collected", "cobrado"))}
+                              </td>
+                            </tr>
+                          );
+                        })}</tbody>
+                      </table>
+                    } />
+                  <Line k="net" sign="=" tone="total"
+                    title={c.net >= 0 ? tr("The broker still owes you", "El broker todavía te debe") : tr("You owe the broker", "Le debés al broker")}
+                    sub={c.pending > 0 ? tr(`${m(c.pending)} of BOL balance is still uncollected`, `${m(c.pending)} del BOL balance sigue sin cobrar`) : tr("every BOL balance was collected", "todos los BOL balance fueron cobrados")}
+                    value={m(Math.abs(c.net))} />
                 </div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:12 }}>
-                  <DetailRow label="Broker" value={brokerNm} />
-                  <DetailRow label="Driver" value={driverNm} />
-                  <DetailRow label="Load date" value={s.load_date} />
-                  <DetailRow label="Jobs · CF" value={`${c.jobCount} · ${Math.round(c.totalCf)} CF`} />
-                </div>
-                <div style={{ marginTop:12 }}>
-                  <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:5 }}>Notas</div>
-                  <textarea defaultValue={s.notes || ""} onBlur={e => { if ((e.target.value||"") !== (s.notes||"")) supabase.from("closing_sheets").update({ notes: e.target.value || null }).eq("id", s.id).then(loadClosingSheets); }}
-                    placeholder="Closing sheet notes..." style={{ ...inp, minHeight:60, resize:"vertical", fontFamily:"inherit" }} />
-                </div>
-              </div>
 
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:8 }}>Original document</div>
-                <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:10, padding:"14px", textAlign:"center", cursor:"pointer", background:"#fafafa" }}
-                  onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, s); }}>
-                  <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], s)} />
-                  {docUploading ? <div style={{ fontSize:12, color:"#888" }}>Uploading…</div>
-                    : s.document_url ? (
-                      isImg ? <img src={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
-                        : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>View document (PDF)</a></div>
-                    ) : <div style={{ fontSize:12, color:"#999" }}>Drag or click to upload closing-sheet photo/PDF</div>}
-                </label>
-                {s.document_url && <div style={{ fontSize:11, color:"#aaa", marginTop:6, textAlign:"center" }}>Click the area to replace</div>}
-              </div>
-            </div>
-
-            {/* Jobs table */}
-            <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", marginBottom:14 }}>
-              <div style={{ overflowX:"auto" }}>
-                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-                  <thead>
-                    <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                      {["Job #","Client","From → To","CF","Pads","Rate/CF","Carrier fee","BOL balance","Collected","Method","Collection","Actions"].map((h,i) => (
-                        <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {jobsIn.length === 0 ? (
-                      <tr><td colSpan={12} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No jobs assigned. Use “Edit” to add jobs.</td></tr>
-                    ) : jobsIn.map(j => {
-                      const k = jobKey(j);
-                      const cs = collectionStatus(j);
-                      const fee = parseCf(j.volume) * numv(j.carrier_rate_per_cf);
-                      const route = [[j.pickup_city, j.pickup_state].filter(Boolean).join(" "), [j.delivery_city, j.delivery_state].filter(Boolean).join(" ")].filter(Boolean).join(" → ");
-                      return (
-                        <tr key={j.id} style={{ borderBottom:"1px solid #fafafa" }}>
-                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><button onClick={() => setJobDetailKey(k)} style={{ fontFamily:"monospace", fontWeight:600, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.job_number || "(view)"}</button></td>
-                          <td style={{ padding:"10px 12px" }}>{j.customer || "—"}</td>
-                          <td style={{ padding:"10px 12px", fontSize:12, color:"#555" }}>{route || "—"}</td>
-                          <td style={{ padding:"10px 12px" }}><input defaultValue={parseCf(j.volume) || ""} onBlur={e => { if (e.target.value !== String(parseCf(j.volume))) updateJobBol(k, "volume", e.target.value); }} style={{ ...inp, width:64, padding:"5px 7px" }} /></td>
-                          <td style={{ padding:"10px 12px", fontSize:12, whiteSpace:"nowrap" }}>{numv(j.pads_received)} rec{jobPadsMissing(j) > 0 && <span style={{ color:"#A32D2D", fontWeight:700 }}> · {jobPadsMissing(j)} falt</span>}</td>
-                          <td style={{ padding:"10px 12px" }}><input defaultValue={j.carrier_rate_per_cf ?? ""} onBlur={e => { if ((e.target.value||"") !== String(j.carrier_rate_per_cf ?? "")) updateJobBol(k, "carrier_rate_per_cf", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={{ ...inp, width:64, padding:"5px 7px" }} /></td>
-                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600 }}>${Math.round(fee).toLocaleString()}</td>
-                          <td style={{ padding:"10px 12px" }}><input defaultValue={j.bol_balance ?? ""} onBlur={e => { if ((e.target.value||"") !== String(j.bol_balance ?? "")) updateJobBol(k, "bol_balance", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={{ ...inp, width:72, padding:"5px 7px" }} /></td>
-                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap", fontWeight:600, color:"#1A8A4E" }}>{money(j.bol_collected) || "$0"}</td>
-                          <td style={{ padding:"10px 12px", fontSize:12 }}>{j.bol_payment_method ? (PAY_METHODS.find(p=>p.v===j.bol_payment_method)?.l || j.bol_payment_method) : "—"}</td>
-                          <td style={{ padding:"10px 12px" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span></td>
-                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}><Btn disabled={paymentsMissing} onClick={() => { const drv = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || ""; const owed = jobOutstanding(j, k); openAddPayment({ job_id: j.id, received_by: drv, cash_with_whom: drv, amount: owed > 0 ? String(Math.round(owed)) : "" }); }} style={{ padding:"4px 9px", fontSize:11 }}>Record payment</Btn></td>
+                <div style={cap}>Jobs on this sheet<span style={right}>{tr("CF, rate and BOL balance are editable against the broker's paper", "CF, rate y BOL balance se editan contra el papel del broker")}</span></div>
+                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                  <div style={{ overflowX:"auto" }}>
+                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5, minWidth:760 }}>
+                      <thead>
+                        <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
+                          {["Job", "CF", "Rate", "Carrier fee", "BOL balance", "Collected", "Pads"].map((h, i) => (
+                            <th key={i} style={{ padding:"9px 12px", textAlign: i >= 1 && i <= 5 ? "right" : "left", fontWeight:700, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
+                          ))}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Pads + Deductions + Settlement */}
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Pads (per job)</div>
-                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-                  <thead><tr style={{ color:"#aaa", fontSize:10, textTransform:"uppercase" }}>
-                    <th style={{ textAlign:"left", padding:"3px 4px" }}>Job</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Recv.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Ret.</th><th style={{ textAlign:"right", padding:"3px 4px" }}>Miss.</th>
-                  </tr></thead>
-                  <tbody>
-                    {jobsIn.map(j => { const miss = jobPadsMissing(j); return (
-                      <tr key={j.id} style={{ borderTop:"1px solid #f4f4f4" }}>
-                        <td style={{ padding:"3px 4px", fontFamily:"monospace" }}>{j.job_number || "-"}</td>
-                        <td style={{ padding:"3px 4px", textAlign:"right" }}>{numv(j.pads_received)}</td>
-                        <td style={{ padding:"3px 4px", textAlign:"right" }}>{numv(j.pads_returned)}</td>
-                        <td style={{ padding:"3px 4px", textAlign:"right", color: miss>0?"#C2410C":"#111", fontWeight: miss>0?700:400 }}>{miss}</td>
-                      </tr>
-                    ); })}
-                  </tbody>
-                </table>
-                <div style={{ borderTop:"1px solid #eee", marginTop:8, paddingTop:8 }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total sent</span><b>{c.padsSent}</b></div>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total returned</span><b>{c.padsReturned}</b></div>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Total missing</span><b style={{ color: c.padsMissing>0?"#C2410C":"#111" }}>{c.padsMissing}</b></div>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"3px 0" }}><span>Charge per pad</span><b>{m(s.charge_per_pad != null ? s.charge_per_pad : 7)}</b></div>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total pads charge</span><b>{m(c.padsCharge)}</b></div>
+                      </thead>
+                      <tbody>
+                        {jobsIn.length === 0 ? (
+                          <tr><td colSpan={7} style={{ padding:"40px", textAlign:"center", color:"#bbb" }}>No jobs assigned. Use “Edit” to add jobs.</td></tr>
+                        ) : jobsIn.map(j => {
+                          const k = jobKey(j);
+                          const miss = jobPadsMissing(j);
+                          const pend = Math.max(0, numv(j.bol_balance) - numv(j.bol_collected));
+                          const numIn = { ...inp, width:72, padding:"4px 7px", textAlign:"right", fontVariantNumeric:"tabular-nums" };
+                          return (
+                            <tr key={j.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
+                              <td style={{ padding:"10px 12px", minWidth:170 }}>
+                                <button onClick={() => setJobDetailKey(k)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", display:"block", textAlign:"left" }}>
+                                  <span style={{ fontSize:13.5, fontWeight:800, letterSpacing:"0.02em", whiteSpace:"nowrap" }}>{(j.pickup_state || "?").toUpperCase()} → {(j.delivery_state || "?").toUpperCase()}</span>
+                                  <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:"#185FA5", marginLeft:6 }}>{j.job_number || "(view)"}</span>
+                                </button>
+                                <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{j.customer || "—"}</div>
+                              </td>
+                              <td style={{ padding:"10px 12px", textAlign:"right" }}>
+                                <input defaultValue={parseCf(j.volume) || ""} onBlur={e => { if (e.target.value !== String(parseCf(j.volume))) updateJobBol(k, "volume", e.target.value); }} style={numIn} aria-label="CF" />
+                              </td>
+                              <td style={{ padding:"10px 12px", textAlign:"right" }}>
+                                <input defaultValue={j.carrier_rate_per_cf ?? ""} onBlur={e => { if ((e.target.value || "") !== String(j.carrier_rate_per_cf ?? "")) updateJobBol(k, "carrier_rate_per_cf", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={{ ...numIn, width:58 }} aria-label="Rate per CF" />
+                              </td>
+                              <td style={{ padding:"10px 12px", textAlign:"right", fontWeight:700, whiteSpace:"nowrap", fontVariantNumeric:"tabular-nums" }}>{m(parseCf(j.volume) * numv(j.carrier_rate_per_cf))}</td>
+                              <td style={{ padding:"10px 12px", textAlign:"right" }}>
+                                <input defaultValue={j.bol_balance ?? ""} onBlur={e => { if ((e.target.value || "") !== String(j.bol_balance ?? "")) updateJobBol(k, "bol_balance", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={numIn} aria-label="BOL balance" />
+                              </td>
+                              <td style={{ padding:"10px 12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                                <div style={{ fontWeight:700, color: pend > 0 ? "#C2410C" : "#1A8A4E", fontVariantNumeric:"tabular-nums" }}>{money(j.bol_collected) || "$0"}</div>
+                                {pend > 0
+                                  ? <Btn disabled={paymentsMissing} onClick={() => { const drv = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || ""; const owed = jobOutstanding(j, k); openAddPayment({ job_id: j.id, received_by: drv, cash_with_whom: drv, amount: owed > 0 ? String(Math.round(owed)) : "" }); }} style={{ padding:"3px 8px", fontSize:11, marginTop:3 }}>Record payment</Btn>
+                                  : <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{j.bol_payment_method ? (PAY_METHODS.find(p => p.v === j.bol_payment_method)?.l || j.bol_payment_method) : "—"}</div>}
+                              </td>
+                              <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                                {tr(`${numv(j.pads_received)} sent`, `${numv(j.pads_received)} enviados`)}
+                                {miss > 0
+                                  ? <span style={{ marginLeft:6, fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 7px" }}>{tr(`${miss} missing`, `faltan ${miss}`)}</span>
+                                  : <span style={{ marginLeft:6, fontSize:10.5, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 7px" }}>{tr("all back", "todos volvieron")}</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding:"10px 14px", borderTop:"1px solid #fafafa", fontSize:12, color:"#bbb" }}>{tr(`${c.jobCount} job(s) · ${Math.round(c.totalCf).toLocaleString()} CF · ${m(c.carrierFee)} carrier fee`, `${c.jobCount} job(s) · ${Math.round(c.totalCf).toLocaleString()} CF · ${m(c.carrierFee)} de carrier fee`)}</div>
                 </div>
               </div>
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Broker deductions</div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Trip cost</span><b>{m(s.trip_cost)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Labor</span><b>{m(s.labor_charges)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Other fees{s.other_fees_description ? ` (${s.other_fees_description})` : ""}</span><b>{m(s.other_fees)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"6px 0 0", borderTop:"1px solid #f0f0f0", paddingTop:6 }}><span>Total deductions</span><b>{m(c.deductions)}</b></div>
-              </div>
-            </div>
 
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Broker owes us</div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0" }}><span>Carrier fee subtotal</span><b>{m(c.carrierFee)}</b></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Trip cost</span><span>{m(s.trip_cost)}</span></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Labor</span><span>{m(s.labor_charges)}</span></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Other fees</span><span>{m(s.other_fees)}</span></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, margin:"4px 0", color:"#A32D2D" }}><span>− Pads charge</span><span>{m(c.padsCharge)}</span></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total broker owes us</span><span>{m(c.netCarrier)}</span></div>
-              </div>
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:10 }}>Collected from clients (BOL)</div>
-                {jobsIn.map(j => (
-                  <div key={j.id} style={{ display:"flex", justifyContent:"space-between", fontSize:12, margin:"4px 0", color:"#555" }}><span style={{ fontFamily:"monospace" }}>{j.job_number || "-"}</span><span>{money(j.bol_collected) || "$0"} / {money(j.bol_balance) || "$0"}</span></div>
-                ))}
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, margin:"8px 0 0", borderTop:"1px solid #eee", paddingTop:8, fontWeight:800 }}><span>Total collected</span><span>{m(c.bolCollected)}</span></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:4, color:"#C2410C" }}><span>Pending</span><span>{m(c.pending)}</span></div>
-              </div>
-            </div>
+              <div style={{ display:"grid", gap:14, minWidth:0 }}>
+                <div style={card}>
+                  <div style={cap}>Sheet</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"auto 1fr", gap:"5px 12px", fontSize:12.5 }}>
+                    <span style={{ color:"#aaa" }}>Broker</span><b>{brokerNm || "—"}</b>
+                    <span style={{ color:"#aaa" }}>Driver</span><b>{driverNm || "—"}</b>
+                    <span style={{ color:"#aaa" }}>Load date</span><b>{s.load_date || "—"}</b>
+                    <span style={{ color:"#aaa" }}>Jobs · CF</span><b>{c.jobCount} · {Math.round(c.totalCf).toLocaleString()}</b>
+                    <span style={{ color:"#aaa" }}>Charge per pad</span><b>{m(padRate)}</b>
+                  </div>
+                </div>
 
-            <div style={{ background: c.net >= 0 ? "#EAF3DE" : "#FCEBEB", border:`1px solid ${c.net >= 0 ? "#639922" : "#E24B4A"}`, borderRadius:12, padding:"18px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
-              <div>
-                <div style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.05em", color: c.net >= 0 ? "#3B6D11" : "#A32D2D" }}>Net result</div>
-                <div style={{ fontSize:22, fontWeight:800, color: c.net >= 0 ? "#3B6D11" : "#A32D2D", marginTop:3 }}>{c.net >= 0 ? `Broker owes you ${m(c.net)}` : `You owe the broker ${m(-c.net)}`}</div>
+                <div style={card}>
+                  <div style={cap}>Broker's paper</div>
+                  <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:10, padding:"14px", textAlign:"center", cursor:"pointer", background:"#fafafa" }}
+                    onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) uploadCsDoc(f, s); }}>
+                    <input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadCsDoc(e.target.files?.[0], s)} />
+                    {docUploading ? <div style={{ fontSize:12, color:"#888" }}>Uploading…</div>
+                      : s.document_url ? (
+                        isImg ? <img src={s.document_url} alt="doc" style={{ maxWidth:"100%", maxHeight:160, borderRadius:6 }} />
+                          : <div style={{ fontSize:13 }}>📄 <a href={s.document_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>View document (PDF)</a></div>
+                      ) : <div style={{ fontSize:12, color:"#999" }}>Drag or click to upload the closing-sheet photo or PDF</div>}
+                  </label>
+                  <div style={{ fontSize:10.5, color:"#c0c0c0", marginTop:6 }}>Kept next to the numbers so you can check them against the original.</div>
+                </div>
+
+                <div style={card}>
+                  <div style={cap}>Notes</div>
+                  <textarea defaultValue={s.notes || ""} onBlur={e => { if ((e.target.value || "") !== (s.notes || "")) supabase.from("closing_sheets").update({ notes: e.target.value || null }).eq("id", s.id).then(loadClosingSheets); }}
+                    placeholder="Closing sheet notes..." style={{ ...inp, minHeight:70, resize:"vertical", fontFamily:"inherit" }} />
+                </div>
               </div>
-              {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")}>Mark as settled</Btn>}
             </div>
           </>
         );
@@ -11244,281 +11323,187 @@ export default function App() {
       })()}
 
       {/* ───────────────────────── EXTRAS & COMMISSIONS ───────────────────────── */}
+      {/* ── EXTRAS: one list of people (drivers and reps), each with the months
+           inside. What the company keeps is a number, not a guess. ── */}
       {page === "extras" && (() => {
-        const monthLabel = (() => { if (!exMonth) return "All months"; const [y, m] = exMonth.split("-"); return m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : exMonth; })();
-        const pendingComm = jobExtras.filter(e => e.active !== false && extraPending(e));
-        const driverIds = exDriver ? [Number(exDriver)] : driversList.map(d => d.id);
-        const allGroups = [...extraJobGroups.values()];
+        const monthLabel = (mo) => { if (!mo) return tr("All months", "Todos los meses"); const [y, mm] = mo.split("-"); return mm ? `${t(MONTHS_EN[parseInt(mm) - 1])} ${y}` : mo; };
         const searchQ = exSearch.trim().toLowerCase();
-        const curMonth = today().slice(0, 7);
-        const toggleExp = (key) => setExtrasTabExpanded(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+        const allGroups = [...extraJobGroups.values()];
         const initials = (name) => (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?";
-        // Driver sections → grouped by month → one entry per job (with that driver's active extras).
-        const sections = driverIds.map(did => {
-          const driver = driverById[did];
-          if (!driver) return null;
-          const byMonth = {};
-          let totalAmt = 0, totalComm = 0;
-          for (const g of allGroups) {
-            if (searchQ && !((g.job_number || "").toLowerCase().includes(searchQ) || (g.customer || "").toLowerCase().includes(searchQ))) continue;
-            const exs = (extrasByJobKey[g.key] || []).filter(e => e.driver_id === did && e.active !== false
-              && (!exRep || String(e.rep_id) === String(exRep)) && (!exType || e.extra_type === exType));
-            if (!exs.length) continue;
-            // Extras of the same job can land in different months, so bucket by
-            // extra and let the job appear under each month it was charged in.
-            const perMonth = {};
-            for (const e of exs) (perMonth[extraMonth(e, g)] = perMonth[extraMonth(e, g)] || []).push(e);
-            for (const [mo, list] of Object.entries(perMonth)) {
-              if (exMonth && mo !== exMonth) continue;
-              const amt = list.reduce((s, e) => s + numv(e.amount), 0);
-              const comm = list.reduce((s, e) => s + numv(e.driver_commission_amount), 0);
-              const pending = list.some(e => extraPending(e));
-              totalAmt += amt; totalComm += comm;
-              (byMonth[mo] = byMonth[mo] || []).push({ g, exs: list, amt, comm, pending });
-            }
+        // Every active extra, flattened once: who charged it, on which job, when.
+        const rows = [];
+        for (const e of jobExtras) {
+          if (e.active === false) continue;
+          const k = jobKeyByRowId[e.job_id];
+          const g = k ? extraJobGroups.get(k) : null;
+          rows.push({ e, g, key: k, mo: extraMonth(e, g), pending: extraPending(e) });
+        }
+        const matches = (r) => {
+          if (exType && r.e.extra_type !== exType) return false;
+          if (exMonth && r.mo !== exMonth) return false;
+          if (searchQ && !`${r.g?.job_number || ""} ${r.g?.customer || ""}`.toLowerCase().includes(searchQ)) return false;
+          if (exPendingOnly && !r.pending) return false;
+          return true;
+        };
+        const pendingCount = rows.filter(r => r.pending).length;
+        // One card per person: drivers earn driver_commission, reps rep_commission.
+        const people = [];
+        if (extrasTab !== "reps") {
+          for (const d of driversList) {
+            if (exDriver && String(d.id) !== String(exDriver)) continue;
+            const mine = rows.filter(r => matches(r) && String(r.e.driver_id) === String(d.id) && (!exRep || String(r.e.rep_id) === String(exRep)));
+            if (mine.length) people.push({ id: "d:" + d.id, kind: "driver", name: d.name, role: "Driver", rows: mine, comm: (e) => numv(e.driver_commission_amount), pct: (e) => numv(e.driver_commission_pct) });
           }
-          const months = Object.keys(byMonth).sort().reverse().map(mo => {
-            const mjobs = byMonth[mo].sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
-            const [y, m] = mo.split("-");
-            return { mo, label: m ? `${MONTHS_ES[parseInt(m) - 1]} ${y}` : mo, jobs: mjobs, totalAmt: mjobs.reduce((s, j) => s + j.amt, 0), totalComm: mjobs.reduce((s, j) => s + j.comm, 0) };
-          });
-          return { driver, did, months, totalAmt, totalComm };
-        }).filter(Boolean).filter(s => s.months.length);
-        // Rep / back-office view: group by rep employee → jobs they were involved in.
-        const repIds = exRep ? [Number(exRep)] : employees.map(em => em.id);
-        const repSections = repIds.map(rid => {
-          const emp = empById[rid];
-          if (!emp) return null;
-          const jobsForRep = [];
-          for (const g of allGroups) {
-            if (searchQ && !((g.job_number || "").toLowerCase().includes(searchQ) || (g.customer || "").toLowerCase().includes(searchQ))) continue;
-            const exs = (extrasByJobKey[g.key] || []).filter(e => e.active !== false && String(e.rep_id) === String(rid)
-              && (!exType || e.extra_type === exType) && (!exDriver || String(e.driver_id) === String(exDriver))
-              && (!exMonth || extraMonth(e, g) === exMonth));
-            if (exs.length) jobsForRep.push({ g, extras: exs });
+        }
+        if (extrasTab !== "drivers") {
+          for (const em of employees) {
+            if (exRep && String(em.id) !== String(exRep)) continue;
+            const mine = rows.filter(r => matches(r) && String(r.e.rep_id) === String(em.id) && (!exDriver || String(r.e.driver_id) === String(exDriver)));
+            if (mine.length) people.push({ id: "r:" + em.id, kind: "rep", name: em.name, role: em.role || "Rep · back office", rows: mine, comm: (e) => numv(e.rep_commission_amount), pct: (e) => numv(e.rep_commission_pct) });
           }
-          jobsForRep.sort((a, b) => (a.g.job_number || "").localeCompare(b.g.job_number || ""));
-          let totalAmt = 0, totalComm = 0;
-          for (const jf of jobsForRep) for (const e of jf.extras) { totalAmt += numv(e.amount); totalComm += numv(e.rep_commission_amount); }
-          return { emp, rid, jobsForRep, totalAmt, totalComm };
-        }).filter(Boolean).filter(s => s.jobsForRep.length);
-        const mhead = { padding:"6px 6px", textAlign:"left", fontWeight:600, fontSize:10, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
+        }
+        // Extras that belong to nobody yet (charged through a payment, commission
+        // never assigned) get their own card — otherwise they'd be invisible here.
+        const orphans = rows.filter(r => matches(r) && !r.e.driver_id && !r.e.rep_id);
+        if (orphans.length) people.unshift({ id:"x:none", kind:"none", name: tr("Not assigned yet", "Sin asignar todavía"), role: tr("nobody earns a commission on these", "nadie cobra comisión por estos"), rows: orphans, comm: () => 0, pct: () => 0 });
+        // Totals over what is on screen, so the strip always matches the list.
+        const shown = rows.filter(matches);
+        const totAmt = shown.reduce((sm, r) => sm + numv(r.e.amount), 0);
+        const totDriver = shown.reduce((sm, r) => sm + numv(r.e.driver_commission_amount), 0);
+        const totRep = shown.reduce((sm, r) => sm + numv(r.e.rep_commission_amount), 0);
+        const monthsAvailable = [...new Set(rows.map(r => r.mo).filter(Boolean))].sort().reverse().slice(0, 6);
+        const cap = { fontSize:10.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em", display:"flex", alignItems:"center", gap:8, marginBottom:8 };
+        const chip = (on, color) => ({ border:`1px solid ${on ? (color || "#111") : "#e5e5e5"}`, background: on ? (color || "#111") : "#fff", color: on ? "#fff" : (color || "#888"), borderRadius:20, padding:"4px 11px", fontSize:12, cursor:"pointer", display:"inline-flex", gap:5, alignItems:"center" });
+        // Cards are collapsed by default; the "not assigned yet" card is not —
+        // it is a to-do list, so it opens unless the user closes it.
+        const toggleP = (id, isNone) => setExtrasTabExpanded(prev => { const n = new Set(prev); const key = isNone ? "c:" + id : id; n.has(key) ? n.delete(key) : n.add(key); return n; });
         return (
           <>
             {extrasMissing && (
               <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <span>For Extras & Commissions (job_extras + employees/reps), run the setup SQL once in Supabase.</span>
+                <span>For Extras &amp; Commissions (job_extras + employees/reps), run the setup SQL once in Supabase.</span>
                 <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
               </div>
             )}
-            {pendingComm.length > 0 && (
-              <div style={{ background:"#FFF8EC", border:"1px solid #F4DDB0", borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
-                <div style={{ fontSize:13, fontWeight:700, color:"#854F0B", marginBottom:8 }}>⚠️ Extras collected via payment with no commission assigned ({pendingComm.length})</div>
-                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                  {pendingComm.map(e => {
-                    const g = extraJobGroups.get(jobKeyByRowId[e.job_id]);
-                    return (
-                      <div key={e.id} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:"#7A5512", flexWrap:"wrap" }}>
-                        <button onClick={() => g && setJobDetailKey(g.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#854F0B", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{g?.job_number || ("#"+(e.job_id||"—"))}</button>
-                        <span>{g?.customer || ""}</span>
-                        <span style={{ fontWeight:700 }}>{extraTypeLabel(e.extra_type)}</span>
-                        <span style={{ fontWeight:700 }}>{money(e.amount) || "$0"}</span>
-                        <span style={{ fontSize:9.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>Collected via payment</span>
-                        <span style={{ marginLeft:"auto" }}><Btn primary style={{ padding:"4px 11px", fontSize:12 }} onClick={() => openCommAssign(e)}>Assign commission</Btn></span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:10, marginBottom:16 }}>
+
+            <div style={{ border:"1px solid #efefef", borderRadius:11, overflow:"hidden", background:"#fff", display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", marginBottom:16 }}>
               {[
-                { label:`Extras (${monthLabel})`, value:"$"+Math.round(extraMetrics.total).toLocaleString(), color:"#111" },
-                { label:"Driver commissions", value:"$"+Math.round(extraMetrics.driverComm).toLocaleString(), color:"#1A8A4E" },
-                { label:"Rep commissions", value:"$"+Math.round(extraMetrics.repComm).toLocaleString(), color:"#185FA5" },
-                { label:"For the company", value:"$"+Math.round(extraMetrics.company).toLocaleString(), color:"#EF9F27" },
-              ].map(mt => (
-                <div key={mt.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
-                  <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{mt.label}</div>
-                  <div style={{ fontSize:20, fontWeight:800, color:mt.color, marginTop:3 }}>{mt.value}</div>
+                { l: tr(`Extras charged · ${monthLabel(exMonth)}`, `Extras cargados · ${monthLabel(exMonth)}`), v: money(totAmt) || "$0", c:"#111", sub: tr(`${shown.length} extras`, `${shown.length} extras`) },
+                { l:"Driver commissions", v: money(totDriver) || "$0", c:"#1A8A4E" },
+                { l:"Rep commissions", v: money(totRep) || "$0", c:"#185FA5" },
+                { l:"Left for the company", v: money(totAmt - totDriver - totRep) || "$0", c:"#EF9F27" },
+              ].map((mt, i) => (
+                <div key={mt.l} style={{ padding:"11px 15px", borderLeft: i ? "1px solid #f0f0f0" : "none" }}>
+                  <div style={{ fontSize:11, color:"#999", marginBottom:3 }}>{mt.l}</div>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:7, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:21, fontWeight:800, letterSpacing:"-0.02em", color:mt.c, fontVariantNumeric:"tabular-nums" }}>{mt.v}</span>
+                    {mt.sub && <span style={{ fontSize:11, color:"#bbb" }}>{mt.sub}</span>}
+                  </div>
                 </div>
               ))}
             </div>
 
-            <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
-              <select value={exDriver} onChange={e => setExDriver(e.target.value)} style={{ ...inp, width:"auto", minWidth:150 }}>
+            {pendingCount > 0 && (
+              <div style={{ background:"#FFF8EC", border:"1px solid #F4DDB0", borderRadius:10, padding:"9px 13px", marginBottom:14, fontSize:12.5, color:"#854F0B", display:"flex", alignItems:"center", gap:9, flexWrap:"wrap" }}>
+                <span>⚠️ {tr(`${pendingCount} extra(s) collected through a payment with no commission assigned`, `${pendingCount} extra(s) cobrados en un pago y sin comisión asignada`)}</span>
+                <Btn onClick={() => setExPendingOnly(o => !o)} style={{ marginLeft:"auto", padding:"3px 10px", fontSize:11.5 }}>{exPendingOnly ? tr("Show all", "Ver todos") : tr("Show only those", "Ver solo esos")}</Btn>
+              </div>
+            )}
+
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", marginBottom:12 }}>
+              {[["drivers", "🧑‍✈️ Drivers"], ["reps", "👤 Reps"], ["all", "Everyone"]].map(([k, l]) => (
+                <button key={k} onClick={() => setExtrasTab(k)} style={chip(extrasTab === k)}>{l}</button>
+              ))}
+              <span style={{ width:1, height:18, background:"#eee", margin:"0 4px" }} />
+              <button onClick={() => setExMonth("")} style={chip(!exMonth)}>All months</button>
+              {monthsAvailable.map(mo => (
+                <button key={mo} onClick={() => setExMonth(mo)} style={chip(exMonth === mo)}>{monthLabel(mo)}</button>
+              ))}
+              <input type="month" value={exMonth} onChange={e => setExMonth(e.target.value)} style={{ ...inp, width:"auto", padding:"4px 8px", fontSize:12 }} aria-label="Month" />
+            </div>
+
+            <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap" }}>
+              <input value={exSearch} onChange={e => setExSearch(e.target.value)} placeholder="Search job # or client…" style={{ ...inp, flex:1, minWidth:170 }} />
+              <select value={exType} onChange={e => setExType(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
+                <option value="">All types</option>
+                {EXTRA_TYPES.map(x => <option key={x.v} value={x.v}>{x.l}</option>)}
+              </select>
+              <select value={exDriver} onChange={e => setExDriver(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
                 <option value="">All drivers</option>
                 {driversList.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
-              <select value={exRep} onChange={e => setExRep(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
+              <select value={exRep} onChange={e => setExRep(e.target.value)} style={{ ...inp, width:"auto", minWidth:130 }}>
                 <option value="">All reps</option>
                 {employees.map(em => <option key={em.id} value={em.id}>{em.name}</option>)}
               </select>
-              <input type="month" value={exMonth} onChange={e => setExMonth(e.target.value)} style={{ ...inp, width:"auto" }} />
-              {exMonth ? <button onClick={() => setExMonth("")} style={{ ...inp, width:"auto", cursor:"pointer", background:"#fff", color:"#888" }}>All months ✕</button> : <span style={{ fontSize:12, color:"#888", alignSelf:"center" }}>All months</span>}
-              <select value={exType} onChange={e => setExType(e.target.value)} style={{ ...inp, width:"auto", minWidth:140 }}>
-                <option value="">All types</option>
-                {EXTRA_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
-              </select>
-              <input value={exSearch} onChange={e => setExSearch(e.target.value)} placeholder="Search job # or client…" style={{ ...inp, width:"auto", minWidth:170 }} />
             </div>
 
-            <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
-              {[["drivers","🧑‍✈️ Drivers"],["reps","👤 Reps / Back office"]].map(([v,l]) => (
-                <button key={v} onClick={() => setExtrasTab(v)} style={{ fontSize:13, padding:"6px 14px", borderRadius:7, cursor:"pointer", border:"none", background: extrasTab===v?"#fff":"none", color: extrasTab===v?"#111":"#888", fontWeight: extrasTab===v?600:400, boxShadow: extrasTab===v?"0 1px 4px rgba(0,0,0,0.08)":"none" }}>{l}</button>
-              ))}
-            </div>
-
-            {extrasMissing ? null : extrasTab === "reps" ? (
-              employees.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No reps added. Add them with “Reps / Employees”.</div>
-              ) : repSections.length === 0 ? (
-                <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No rep has extras for {monthLabel} with these filters.</div>
-              ) : (
-                <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
-                  {repSections.map(sec => {
-                    const jobsData = sec.jobsForRep.map(jf => ({ job_number: jf.g.job_number, customer: jf.g.customer, driverName: driverById[jf.extras[0]?.driver_id]?.name || "", extras: jf.extras }));
-                    return (
-                      <div key={sec.rid} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
-                        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:"1px solid #f0f0f0", flexWrap:"wrap", background:"#fafafa" }}>
-                          <span style={{ fontSize:15, fontWeight:700 }}>👤 {sec.emp.name}</span>
-                          {sec.emp.role && <span style={{ fontSize:11, color:"#888" }}>{sec.emp.role}</span>}
-                          <span style={{ flex:1 }} />
-                          <span style={{ fontSize:12, color:"#666" }}>Extras: <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
-                          <span style={{ fontSize:12, color:"#185FA5" }}>Commission: <b>${Math.round(sec.totalComm).toLocaleString()}</b></span>
-                          <Btn onClick={() => copyRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>📋 Copy</Btn>
-                          <Btn onClick={() => printRepExtras(sec.emp.name, monthLabel, jobsData)} style={{ padding:"4px 10px", fontSize:12 }}>🖨️ PDF</Btn>
-                        </div>
-                        <div style={{ padding:"6px 12px 12px" }}>
-                          {sec.jobsForRep.map(jf => (
-                            <div key={jf.g.key} style={{ marginTop:12 }}>
-                              <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4, paddingLeft:2 }}>
-                                <button onClick={() => setJobDetailKey(jf.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{jf.g.job_number || "(view)"}</button>
-                                <span style={{ fontSize:13 }}>{jf.g.customer || "—"}</span>
-                                {brokerName(jf.g.broker_id) && <span style={{ fontSize:11, color:"#888" }}>· {brokerName(jf.g.broker_id)}</span>}
-                                {jf.g.date_in && <span style={{ fontSize:11, color:"#aaa" }}>· {jf.g.date_in}</span>}
-                                {driverById[jf.extras[0]?.driver_id]?.name && <span style={{ fontSize:11, color:"#888" }}>· 🧑‍✈️ {driverById[jf.extras[0].driver_id].name}</span>}
-                              </div>
-                              <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
-                                <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                                  <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                    {["Date", "Type", "Amount", "Generated by", "Driver", "Rep %", "Rep comm."].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
-                                  </tr></thead>
-                                  <tbody>
-                                    {jf.extras.map(e => (
-                                      <tr key={e.id} style={{ borderBottom:"1px solid #f6f6f6" }}>
-                                        <td style={{ padding:"6px 6px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{e.extra_date || (e.created_at || "").slice(0, 10) || "—"}</td>
-                                        <td style={{ padding:"6px 6px", fontSize:12, fontWeight:600, whiteSpace:"nowrap" }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</td>
-                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{money(e.amount) || "$0"}</td>
-                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{genByLabel(e.generated_by)}</td>
-                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{driverById[e.driver_id]?.name || "—"}</td>
-                                        <td style={{ padding:"6px 6px", fontSize:12 }}>{numv(e.rep_commission_pct)}%</td>
-                                        <td style={{ padding:"6px 6px", fontSize:12, color:"#185FA5", fontWeight:700, whiteSpace:"nowrap" }}>{money(e.rep_commission_amount) || "$0"}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          ))}
-                          <div style={{ marginTop:14, borderTop:"2px solid #eee" }}>
-                            <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:600, color:"#444" }}>
-                              <span>TOTAL EXTRAS</span><span>${Math.round(sec.totalAmt).toLocaleString()}</span>
-                            </div>
-                            <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 10px", fontSize:13, fontWeight:700, background:"#FEF9C3", borderRadius:8 }}>
-                              <span>COMMISSION {sec.emp.name}</span><span style={{ color:"#185FA5" }}>${Math.round(sec.totalComm).toLocaleString()}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )
-            ) : extrasMissing ? null : driversList.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No drivers yet. Add drivers and assign them to jobs.</div>
-            ) : sections.length === 0 ? (
-              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>No extras for {exMonth ? monthLabel : "no month"} with these filters.</div>
+            {extrasMissing ? null : people.length === 0 ? (
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", padding:"40px", textAlign:"center", color:"#bbb" }}>
+                {tr("Nothing with these filters.", "Nada con estos filtros.")}
+              </div>
             ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-                {sections.map(sec => {
-                  const dExpanded = extrasTabExpanded.has("d:" + sec.did);
-                  const allJobsData = sec.months.flatMap(mn => mn.jobs.map(j => ({ job_number: j.g.job_number, customer: j.g.customer, extras: j.exs })));
-                  const periodLabel = exMonth ? monthLabel : "All months";
-                  const toggleMonth = (mKey, isOpen) => setExtrasTabExpanded(prev => { const n = new Set(prev); if (isOpen) { n.delete(mKey); n.add("c:" + mKey); } else { n.delete("c:" + mKey); n.add(mKey); } return n; });
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {people.map(p => {
+                  const open = p.kind === "none" ? !extrasTabExpanded.has("c:" + p.id) : extrasTabExpanded.has(p.id);
+                  const amt = p.rows.reduce((sm, r) => sm + numv(r.e.amount), 0);
+                  const comm = p.rows.reduce((sm, r) => sm + p.comm(r.e), 0);
+                  const pend = p.rows.filter(r => r.pending).length;
+                  const byMonth = {};
+                  for (const r of p.rows) (byMonth[r.mo] = byMonth[r.mo] || []).push(r);
+                  const months = Object.keys(byMonth).sort().reverse();
+                  const jobsData = p.rows.map(r => ({ job_number: r.g?.job_number, customer: r.g?.customer, driverName: driverById[r.e.driver_id]?.name || "", extras: [r.e] }));
+                  const commColor = p.kind === "rep" ? "#185FA5" : "#1A8A4E";
                   return (
-                    <div key={sec.did} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
-                      {/* Driver header — collapsible */}
-                      <div onClick={() => toggleExp("d:" + sec.did)} style={{ display:"flex", alignItems:"center", gap:11, padding:"12px 16px", cursor:"pointer", background:"#fafafa", borderBottom: dExpanded ? "1px solid #f0f0f0" : "none", flexWrap:"wrap" }}>
-                        <span style={{ width:34, height:34, borderRadius:"50%", background:"#111", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700, flexShrink:0 }}>{initials(sec.driver.name)}</span>
-                        <span style={{ fontSize:15, fontWeight:700 }}>{sec.driver.name}</span>
-                        <span style={{ fontSize:11, color:"#aaa" }}>{dExpanded ? "▾" : "▸"}</span>
-                        <span style={{ flex:1 }} />
-                        <span style={{ fontSize:12, color:"#666" }}>Extras <b>${Math.round(sec.totalAmt).toLocaleString()}</b></span>
-                        <span style={{ fontSize:11.5, fontWeight:700, color:"#1A8A4E", background:"#EAF3DE", borderRadius:20, padding:"3px 11px" }}>Commission ${Math.round(sec.totalComm).toLocaleString()}</span>
+                    <div key={p.id} style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
+                      <div onClick={() => toggleP(p.id, p.kind === "none")} style={{ display:"flex", alignItems:"center", gap:10, padding:"11px 15px", cursor:"pointer", background: p.kind === "none" ? "#FFF8EC" : "#fafafa", flexWrap:"wrap" }}>
+                        <span style={{ width:28, height:28, borderRadius:"50%", background: p.kind === "rep" ? "#E6F1FB" : "#EAF3DE", color: commColor, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0 }}>{initials(p.name)}</span>
+                        <span style={{ fontSize:14.5, fontWeight:700 }}>{p.name}</span>
+                        <span style={{ fontSize:11, color:"#aaa" }}>{p.role}</span>
+                        {pend > 0 && <span style={{ fontSize:10.5, fontWeight:700, color:"#92760B", background:"#FEF3C7", borderRadius:20, padding:"1px 8px" }}>{tr(`${pend} to assign`, `${pend} por asignar`)}</span>}
+                        <span style={{ marginLeft:"auto", display:"flex", alignItems:"baseline", gap:14, flexWrap:"wrap" }}>
+                          <span style={{ fontSize:12, color:"#888" }}>Extras <b style={{ color:"#111", fontSize:14, fontVariantNumeric:"tabular-nums" }}>{money(amt) || "$0"}</b></span>
+                          {p.kind !== "none" && <span style={{ fontSize:12, color:"#888" }}>{p.kind === "rep" ? "Rep commission" : "Driver commission"} <b style={{ color:commColor, fontSize:14, fontVariantNumeric:"tabular-nums" }}>{money(comm) || "$0"}</b></span>}
+                          {p.kind !== "none" && (
+                            <span onClick={e => e.stopPropagation()} style={{ display:"flex", gap:6 }}>
+                              <Btn onClick={() => (p.kind === "rep" ? copyRepExtras : copyDriverExtras)(p.name, monthLabel(exMonth), jobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>📋 Copy</Btn>
+                              <Btn onClick={() => (p.kind === "rep" ? printRepExtras : printDriverExtras)(p.name, monthLabel(exMonth), jobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>🖨️ PDF</Btn>
+                            </span>
+                          )}
+                          <span style={{ fontSize:11, color:"#bbb" }}>{open ? "▾" : "▸"}</span>
+                        </span>
                       </div>
-                      {dExpanded && (
-                        <div style={{ padding:"8px 12px 12px" }}>
-                          <div style={{ display:"flex", justifyContent:"flex-end", gap:6, marginBottom:6 }}>
-                            <Btn onClick={() => copyDriverExtras(sec.driver.name, periodLabel, allJobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>📋 Copy</Btn>
-                            <Btn onClick={() => printDriverExtras(sec.driver.name, periodLabel, allJobsData)} style={{ padding:"3px 9px", fontSize:11.5 }}>🖨️ PDF</Btn>
-                          </div>
-                          {sec.months.map(mn => {
-                            const mKey = "m:" + sec.did + ":" + mn.mo;
-                            const open = extrasTabExpanded.has(mKey) ? true : extrasTabExpanded.has("c:" + mKey) ? false : (mn.mo === curMonth);
+                      {open && (
+                        <div style={{ padding:"2px 15px 12px" }}>
+                          {months.map(mo => {
+                            const list = byMonth[mo];
+                            const mAmt = list.reduce((sm, r) => sm + numv(r.e.amount), 0);
+                            const mComm = list.reduce((sm, r) => sm + p.comm(r.e), 0);
                             return (
-                              <div key={mn.mo} style={{ border:"1px solid #f0f0f0", borderRadius:9, marginBottom:8, overflow:"hidden" }}>
-                                <div onClick={() => toggleMonth(mKey, open)} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 11px", cursor:"pointer", background:"#fbfbfb" }}>
-                                  <span style={{ fontSize:11, color:"#aaa" }}>{open ? "▾" : "▸"}</span>
-                                  <span style={{ fontSize:12.5, fontWeight:700 }}>{mn.label}</span>
-                                  <span style={{ flex:1 }} />
-                                  <span style={{ fontSize:11.5, color:"#666" }}>Extras <b>${Math.round(mn.totalAmt).toLocaleString()}</b></span>
-                                  <span style={{ fontSize:11.5, color:"#1A8A4E" }}>Commission <b>${Math.round(mn.totalComm).toLocaleString()}</b></span>
+                              <div key={mo}>
+                                <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:10.5, fontWeight:700, color:"#bbb", textTransform:"uppercase", letterSpacing:"0.05em", margin:"12px 0 2px" }}>
+                                  {monthLabel(mo)}
+                                  <span style={{ marginLeft:"auto", color:"#111" }}>{money(mAmt) || "$0"}</span>
+                                  <span style={{ color:commColor }}>{money(mComm) || "$0"}</span>
                                 </div>
-                                {open && (
-                                  <div>
-                                    {mn.jobs.map(j => (
-                                      <div key={j.g.key} style={{ padding:"10px 11px", borderTop:"1px solid #f6f6f6" }}>
-                                        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4, paddingLeft:2 }}>
-                                          <button onClick={() => setJobDetailKey(j.g.key)} style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{j.g.job_number || "(view)"}</button>
-                                          <span style={{ fontSize:13 }}>{j.g.customer || "—"}</span>
-                                          {brokerName(j.g.broker_id) && <span style={{ fontSize:11, color:"#888" }}>· {brokerName(j.g.broker_id)}</span>}
-                                          {j.g.date_in && <span style={{ fontSize:11, color:"#aaa" }}>· {j.g.date_in}</span>}
-                                          <span style={{ flex:1 }} />
-                                          <span style={{ fontSize:12, color:"#666" }}>Extras <b>${Math.round(j.amt).toLocaleString()}</b></span>
-                                          <span style={{ fontSize:12, color:"#1A8A4E" }}>Commission <b>${Math.round(j.comm).toLocaleString()}</b></span>
-                                          <span title={j.pending ? "Commission pending" : "Commission assigned"}>{j.pending ? "⚠️" : "✅"}</span>
-                                        </div>
-                                        <div style={{ overflowX:"auto", border:"1px solid #f0f0f0", borderRadius:8 }}>
-                                          <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                                            <thead><tr style={{ background:"#fbfbfb", borderBottom:"1px solid #f0f0f0" }}>
-                                              {["Date", "Type", "Amount", "Generated by", "Rep", "Driver %", "Driver comm."].map((h, i) => <th key={i} style={mhead}>{h}</th>)}
-                                            </tr></thead>
-                                            <tbody>
-                                              {j.exs.map(e => (
-                                                <tr key={e.id} style={{ borderBottom:"1px solid #f6f6f6" }}>
-                                                  <td style={{ padding:"6px 6px", fontSize:12, color:"#888", whiteSpace:"nowrap" }}>{e.extra_date || (e.created_at || "").slice(0, 10) || "—"}</td>
-                                                  <td style={{ padding:"6px 6px", fontSize:12, whiteSpace:"nowrap" }}>
-                                                    <button onClick={() => openEditExtra(e)} title="Edit extra" style={{ background:"none", border:"none", padding:0, cursor:"pointer", font:"inherit", fontWeight:600, color:"#185FA5", textDecoration:"underline" }}>{extraTypeLabel(e.extra_type)}{e.extra_type === "other" && e.description ? ` · ${e.description}` : ""}</button>
-                                                  </td>
-                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{money(e.amount) || "$0"}</td>
-                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{genByLabel(e.generated_by)}</td>
-                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{empById[e.rep_id]?.name || "—"}</td>
-                                                  <td style={{ padding:"6px 6px", fontSize:12 }}>{numv(e.driver_commission_pct)}%</td>
-                                                  <td style={{ padding:"6px 6px", fontSize:12, color:"#1A8A4E", fontWeight:700, whiteSpace:"nowrap" }}>{money(e.driver_commission_amount) || "$0"}</td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      </div>
-                                    ))}
-                                    <div style={{ display:"flex", justifyContent:"space-between", padding:"8px 11px", borderTop:"2px solid #eee", fontSize:12.5, fontWeight:700, background:"#FEF9C3" }}>
-                                      <span>Total {mn.label}</span>
-                                      <span>Extras ${Math.round(mn.totalAmt).toLocaleString()} · Commission <span style={{ color:"#1A8A4E" }}>${Math.round(mn.totalComm).toLocaleString()}</span></span>
-                                    </div>
+                                {list.map(r => (
+                                  <div key={r.e.id} style={{ display:"grid", gridTemplateColumns:"1fr auto auto", gap:10, alignItems:"center", padding:"7px 0", borderTop:"1px solid #f4f4f4", fontSize:12.5 }}>
+                                    <span style={{ display:"flex", gap:7, alignItems:"center", flexWrap:"wrap", minWidth:0 }}>
+                                      <button onClick={() => r.key && setJobDetailKey(r.key)} style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>{r.g?.job_number || "(view)"}</button>
+                                      <span style={{ color:"#888", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:200 }}>{r.g?.customer || "—"}</span>
+                                      <button onClick={() => openEditExtra(r.e)} title="Edit extra" style={{ fontSize:10.5, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", border:"none", borderRadius:20, padding:"2px 9px", cursor:"pointer" }}>
+                                        {extraTypeLabel(r.e.extra_type)}{r.e.extra_type === "other" && r.e.description ? ` · ${r.e.description}` : ""}
+                                      </button>
+                                      <span style={{ fontSize:11, color:"#bbb" }}>{genByLabel(r.e.generated_by)}</span>
+                                      {r.pending && <Btn primary onClick={() => openCommAssign(r.e)} style={{ padding:"2px 9px", fontSize:11 }}>Assign commission</Btn>}
+                                    </span>
+                                    <span style={{ fontWeight:600, fontVariantNumeric:"tabular-nums", whiteSpace:"nowrap" }}>{money(r.e.amount) || "$0"}</span>
+                                    <span style={{ fontWeight:700, color:commColor, fontVariantNumeric:"tabular-nums", whiteSpace:"nowrap", minWidth:74, textAlign:"right" }}>
+                                      {money(p.comm(r.e)) || "$0"}
+                                      <span style={{ fontSize:10, color:"#c0c0c0", fontWeight:500 }}> {p.pct(r.e) ? `${p.pct(r.e)}%` : ""}</span>
+                                    </span>
                                   </div>
-                                )}
+                                ))}
                               </div>
                             );
                           })}
