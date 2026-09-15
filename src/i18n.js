@@ -2169,6 +2169,7 @@ export const I18N_ES = {
   "Delivery": "Delivery",
   "Broker": "Broker",
   // Dispatching: Today / Jobs / Calendar
+  "Edit the whole payment": "Editar el pago completo",
   "Broker delivery": "Broker delivery",
   "📍 Pickups today": "📍 Pickups de hoy",
   "No pickups today.": "No hay pickups hoy.",
