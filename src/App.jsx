@@ -421,7 +421,7 @@ function PaymentCard({ g, job, extrasById, showJob, onEdit, onAssign, onDelete, 
         {showJob && job && <span style={{ fontSize:12, color:"#888" }}>· <span style={{ fontFamily:"monospace", fontWeight:700, color:"#185FA5" }}>{job.job_number || "(no #)"}</span> {job.customer || ""}</span>}
         <span style={{ marginLeft:"auto", display:"flex", gap:6 }}>
           {oa && onAssign && <button onClick={() => onAssign(oa.rows[0])} style={{ border:"1px solid #F4DDB0", background:"#FFF6E8", color:"#854F0B", fontSize:11.5, fontWeight:700, borderRadius:7, padding:"4px 10px", cursor:"pointer" }}>Assign {money(oa.amount)}</button>}
-          {onEdit && !g.isGroup && <Btn onClick={() => onEdit(g.rep)} style={{ padding:"4px 10px", fontSize:11.5 }}>Edit</Btn>}
+          {onEdit && <Btn onClick={() => onEdit(g.isGroup ? g : g.rep)} style={{ padding:"4px 10px", fontSize:11.5 }} title={g.isGroup ? "Edit the whole payment" : "Edit payment"}>Edit</Btn>}
           {onDelete && <button onClick={() => onDelete(g)} title="Delete payment" style={{ border:"none", background:"none", cursor:"pointer", color:"#ccc", fontSize:16, lineHeight:1 }}>×</button>}
         </span>
       </div>
@@ -4199,6 +4199,9 @@ export default function App() {
   const [payForm, setPayForm] = useState(EMPTY_PAYMENT);
   const [payStep, setPayStep] = useState(1);                // New payment modal: 1 job · 2 payment · 3 applies to · 4 money
   const [editingPayId, setEditingPayId] = useState(null);
+  // A whole multi-method payment being edited: every row of one split group at
+  // once, instead of one ledger row at a time.
+  const [editingPayGroup, setEditingPayGroup] = useState(null);
   const [paySaving, setPaySaving] = useState(false);
   const [payJobSearch, setPayJobSearch] = useState("");   // job search inside the payment form
   const [extraJobSearch, setExtraJobSearch] = useState(""); // job search inside the quick-extra modal (Payments page flow)
@@ -8710,8 +8713,64 @@ export default function App() {
       extra_type: l.kind === "extra" ? (charges.extraCharges.find(c => Number(c.extra.id) === Number(l.job_extra_id))?.extra.extra_type || null) : null,
     }));
   }
+  // Allocation lines for a payment that is being edited: the charges as they
+  // would stand WITHOUT this payment (its own contribution added back), each
+  // pre-filled with what this payment currently covers.
+  function allocLinesForGroup(g) {
+    const k = jobKeyByRowId[Number(g.rep.job_id)];
+    if (!k) return null;
+    const charges = chargeStateByJobKey(k);
+    const r2 = (n) => Math.round(n * 100) / 100;
+    let mineJob = 0, coverJob = 0;
+    const mineExtra = new Map(), coverExtra = new Map();
+    for (const r of g.rows) {
+      if (r.concept === "cc_fee") continue;
+      const net = paymentNet(r);
+      if (r.concept === "job") { coverJob += net; if (r.received) mineJob += net; }
+      else if (r.concept === "extra" && r.job_extra_id != null) {
+        const id = Number(r.job_extra_id);
+        coverExtra.set(id, (coverExtra.get(id) || 0) + net);
+        if (r.received) mineExtra.set(id, (mineExtra.get(id) || 0) + net);
+      }
+    }
+    const lines = [{
+      kind: "job", job_extra_id: null, label: "Job balance", extra_type: null, notes: "", touched: true,
+      remaining: charges.jobCharge.remaining + mineJob,
+      amount: coverJob > 0.009 ? String(r2(coverJob)) : "",
+    }];
+    for (const c of charges.extraCharges) {
+      const id = Number(c.extra.id), covered = coverExtra.get(id) || 0;
+      lines.push({
+        kind: "extra", job_extra_id: c.extra.id, extra_type: c.extra.extra_type, notes: "", touched: true,
+        label: extraTypeLabel(c.extra.extra_type) + (c.extra.description ? ` · ${c.extra.description}` : ""),
+        remaining: c.remaining + (mineExtra.get(id) || 0),
+        amount: covered > 0.009 ? String(r2(covered)) : "",
+      });
+    }
+    return lines;
+  }
+  // Edit a whole payment (every method line and every charge it covers) in the
+  // same 4-step flow that created it. Single-row payments keep the old path.
+  function openEditGroup(g) {
+    if (!g?.isGroup) { openEditPayment(g.rep || g); return; }
+    const p = g.rep;
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const discountRow = g.rows.find(r => numv(r.discount) > 0);
+    setEditingPayId(null); setReallocPay(null); setEditingPayGroup(g);
+    setPayForm({
+      ...EMPTY_PAYMENT,
+      pay_lines: g.lines.map(l => ({ ...payLineFromRow(l.rows[0]), amount: String(r2(l.amount)) })),
+      alloc_lines: allocLinesForGroup(g),
+      no_job: !p.job_id, job_id: p.job_id || "", payment_date: g.date || p.payment_date || "",
+      concept: p.concept || "job",
+      discount: discountRow?.discount ?? "", discount_reason: discountRow?.discount_reason || "",
+      received: !!p.received, received_date: g.received_date || "", received_by: g.received_by || "",
+      payment_stage: p.payment_stage || "", notes: g.notes || "",
+    });
+    setPayStep(1); setPayJobSearch(""); setShowPayModal(true);
+  }
   function openAddPayment(prefill = {}) {
-    setEditingPayId(null); setReallocPay(null);
+    setEditingPayId(null); setReallocPay(null); setEditingPayGroup(null);
     const base = { ...EMPTY_PAYMENT, alloc_lines: null, no_job: false, payment_date: today(), received: true, received_date: today(), ...prefill };
     // The prefill (job drawer, "+ Payment" on a job) describes one line: method, amount, who holds it.
     base.pay_lines = [newPayLine(base.method || "cash", base.amount, { cash_with_whom: base.cash_with_whom || "", money: isDigitalMethod(base.method) ? "deposited" : (base.received === false ? "pending" : "received") })];
@@ -8721,6 +8780,7 @@ export default function App() {
   }
   function openEditPayment(p) {
     setEditingPayId(p.id);
+    setEditingPayGroup(null);
     setPayStep(1);
     setPayForm({
       pay_lines: [payLineFromRow(p)], alloc_lines: null, no_job: !p.job_id,
@@ -9017,6 +9077,118 @@ export default function App() {
       if (toAssign.length) setCommAssign(commAssignInit(toAssign[0], toAssign.slice(1)));
     }
   }
+  // Edit a WHOLE payment: re-pour its method lines over the charges it covers,
+  // then match the result against the rows already saved — update what lines up,
+  // insert what is new, soft-delete what the edit no longer needs. The rows keep
+  // their ids (and their split group), so the ledger, the extras and the bank
+  // keep pointing at the same records.
+  async function saveEditedGroup(f, lines) {
+    const g = editingPayGroup;
+    if (!g) return;
+    const total = payLinesTotal(lines);
+    const allocated = !!f.job_id && !allocMissing && !splitMissing && Array.isArray(f.alloc_lines);
+    let chargeRows, unassigned = 0;
+    if (allocated) {
+      const ser = serializeAllocLines(f.alloc_lines, total);
+      if (ser.error) { window.alert(ser.error); return; }
+      chargeRows = ser.rows; unassigned = ser.unassigned;
+      if (!chargeRows.length && unassigned <= 0) { window.alert(tr("Cover at least one charge.", "Cubrí al menos un cargo.")); return; }
+    } else {
+      chargeRows = [{ kind: "plain", concept: f.concept || "job", amount: total }];
+    }
+    const pieces = pourLinesOverCharges(lines, chargeRows, unassigned);
+    if (!pieces.length) return;
+    setPaySaving(true);
+    // cc_fee rows are children of a credit-card line, not pieces of the payment.
+    const oldRows = g.rows.filter(r => r.concept !== "cc_fee");
+    const oldFees = g.rows.filter(r => r.concept === "cc_fee");
+    const group = g.rows.find(r => r.split_group)?.split_group
+      || (pieces.length > 1 && !splitMissing ? ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("split-" + Date.now())) : null);
+    const entries = [];
+    const firstRowOfLine = new Map();
+    let err = null, jobLineSum = 0, discountLeft = numv(f.discount);
+    for (let i = 0; i < pieces.length && !err; i++) {
+      const piece = pieces[i];
+      const payload = payPayload({ ...f, ...payLineFields(piece.line), amount: piece.amount, discount: "", discount_reason: "" });
+      Object.assign(payload, chargeRowFields(piece.charge));
+      if (allocMissing) delete payload.job_extra_id;
+      if (splitMissing) delete payload.extra_type;
+      if (group) payload.split_group = group;
+      if (payload.concept === "on_account") payload.notes = payload.notes || "A cuenta — sin imputar";
+      if (piece.charge?.notes) payload.notes = piece.charge.notes;
+      // The discount rides on the first job row (paymentNet = amount − discount), else on the last row.
+      if (discountLeft > 0 && (payload.concept === "job" || i === pieces.length - 1)) { payload.discount = discountLeft; payload.discount_reason = f.discount_reason || null; discountLeft = 0; }
+      if (payload.concept === "job") jobLineSum += piece.amount;
+      const existing = oldRows[i];
+      if (existing) {
+        if (!payColsMissing) payload.cc_fee_payment_id = existing.cc_fee_payment_id || null;
+        const r = await supabase.from("payments").update(payload).eq("id", existing.id);
+        if (r.error) { err = r.error; break; }
+        entries.push(undoMgr.updateEntry("payments", existing, payload));
+        if (!firstRowOfLine.has(piece.line.id)) firstRowOfLine.set(piece.line.id, existing.id);
+      } else {
+        const { data, error: insErr } = await supabase.from("payments").insert([payload]).select("*").single();
+        if (insErr) { err = insErr; break; }
+        entries.push(undoMgr.createEntry("payments", data));
+        if (!firstRowOfLine.has(piece.line.id)) firstRowOfLine.set(piece.line.id, data.id);
+      }
+    }
+    // Rows the edit left over: they go to the Trash with whatever hangs off them.
+    const gone = oldRows.slice(pieces.length);
+    if (!err && gone.length) {
+      const goneIds = gone.map(r => r.id);
+      const goneFees = gone.map(r => r.cc_fee_payment_id).filter(Boolean);
+      if (!extrasMissing && !splitMissing) { const r = await undoMgr.softDelete("job_extras", goneIds, "payment_id"); if (r.error) err = r.error; else entries.push(...r.entries); }
+      if (!err && goneFees.length) { const r = await undoMgr.softDelete("payments", goneFees); if (r.error) err = r.error; else entries.push(...r.entries); }
+      if (!err) { const r = await undoMgr.softDelete("payments", goneIds); if (r.error) err = r.error; else entries.push(...r.entries); }
+    }
+    // Credit-card fees: one linked cc_fee row per credit-card line, kept in sync.
+    if (!err && !payColsMissing) {
+      const feePool = [...oldFees];
+      for (const l of lines) {
+        if (err) break;
+        const feeAmt = (l.method === "credit_card" && l.cc_fee_enabled) ? numv(l.amount) * numv(l.cc_fee_pct) / 100 : 0;
+        const mainId = firstRowOfLine.get(l.id);
+        if (feeAmt <= 0 || !mainId) continue;
+        const d = f.payment_date || today();
+        const feePayload = { job_id: f.job_id ? Number(f.job_id) : null, payment_date: d, amount: feeAmt, concept: "cc_fee", method: "credit_card", received: true, received_date: f.received_date || d, banked: true, banked_date: d, received_by: f.received_by || null, bank_account: l.bank_account || null };
+        if (group) feePayload.split_group = group;
+        const reuse = feePool.shift();
+        if (reuse) {
+          const r = await supabase.from("payments").update(feePayload).eq("id", reuse.id);
+          if (r.error) { err = r.error; break; }
+          entries.push(undoMgr.updateEntry("payments", reuse, feePayload));
+          const link = await supabase.from("payments").update({ cc_fee_payment_id: reuse.id }).eq("id", mainId);
+          if (link.error) { err = link.error; break; }
+        } else {
+          const { data: fd, error: feeErr } = await supabase.from("payments").insert([feePayload]).select("*").single();
+          if (feeErr) { err = feeErr; break; }
+          entries.push(undoMgr.createEntry("payments", fd));
+          const link = await supabase.from("payments").update({ cc_fee_payment_id: fd.id }).eq("id", mainId);
+          if (link.error) { err = link.error; break; }
+        }
+      }
+      // Fees whose credit-card line is gone (or no longer charges a fee).
+      if (!err && feePool.length) {
+        const r = await undoMgr.softDelete("payments", feePool.map(x => x.id));
+        if (r.error) err = r.error; else entries.push(...r.entries);
+      }
+    }
+    // Two-way sync: job rows mirror bol_collected on the storage_job rows.
+    if (!err && f.job_id) {
+      const k = jobKeyByRowId[Number(f.job_id)];
+      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+      if (ids.length) {
+        const r = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+        if (r.error) err = r.error;
+      }
+    }
+    setPaySaving(false);
+    if (err) { window.alert(err.message); return; }
+    undoMgr.record("Pago editado", entries);
+    setEditingPayGroup(null); setShowPayModal(false);
+    loadPayments(); loadJobs(); loadExtras();
+  }
   // Edit an EXISTING row: one line, one row, same fields as always.
   async function saveEditedPayment(f) {
     setPaySaving(true);
@@ -9073,6 +9245,7 @@ export default function App() {
       const serialDup = l.method === "check" ? findCheckSerialDup(l.check_serial) : l.method === "money_order" ? findMoSerialDup(l.mo_serial) : null;
       if (serialDup && !window.confirm(tr(`Number ${serialDup.serial} was already recorded ($${Math.round(serialDup.amount).toLocaleString()} on ${serialDup.date}, job ${serialDup.job_number}).\n\nThis serial number is already in the system. Are you sure you want to save a duplicate?`, `El número ${serialDup.serial} ya fue registrado ($${Math.round(serialDup.amount).toLocaleString()} el ${serialDup.date}, job ${serialDup.job_number}).\n\nEste número de serie ya está en el sistema. ¿Seguro que querés guardar un duplicado?`))) return;
     }
+    if (editingPayGroup) { await saveEditedGroup(f, lines); return; }
     if (editingPayId) { await saveEditedPayment({ ...f, ...payLineFields(lines[0]) }); return; }
     await saveNewPayment(f, lines);
   }
@@ -11599,7 +11772,7 @@ export default function App() {
                   )}
                   <div style={{ padding:"10px 14px 4px" }}>
                     <PaymentCard g={g} extrasById={exById} defaultOpen
-                      onEdit={canEdit ? openEditPayment : undefined}
+                      onEdit={canEdit ? openEditGroup : undefined}
                       onAssign={canEdit && !allocMissing ? openReallocatePayment : undefined}
                       onDelete={canEdit ? (grp) => (grp.isGroup ? deleteSplitGroup(grp.rows) : deletePaymentRow(grp.rep)) : undefined}
                       onPhoto={setPayPhotoView}
@@ -13137,7 +13310,7 @@ export default function App() {
                   {groups.length === 0 ? <div style={{ fontSize:13, color:"#bbb", padding:"4px 0" }}>No payments recorded.</div>
                     : groups.map(g => (
                       <PaymentCard key={g.key} g={g} extrasById={exById}
-                        onEdit={canEdit ? openEditPayment : undefined}
+                        onEdit={canEdit ? openEditGroup : undefined}
                         onAssign={canEdit && !allocMissing ? openReallocatePayment : undefined}
                         onPhoto={setPayPhotoView}
                         onToggleReceived={canEdit ? togglePayReceived : undefined}
@@ -14790,7 +14963,10 @@ export default function App() {
         // ── New payment: 1 job · 2 payment (one line per method) · 3 applies to · 4 money ──
         const f = payForm;
         const setF = (fields) => setPayForm(x => ({ ...x, ...fields }));
+        // "editing" = one saved row, which stays single-line and un-allocatable.
+        // A whole payment (`editingGroup`) is edited with every step available.
         const editing = !!editingPayId && !reallocPay;
+        const editingGroup = !!editingPayGroup && !reallocPay;
         const groups = [...extraJobGroups.values()];
         const q = payJobSearch.trim().toLowerCase();
         const matches = (q ? groups.filter(g => (g.job_number || "").toLowerCase().includes(q) || (g.customer || "").toLowerCase().includes(q)) : groups).slice(0, 8);
@@ -15204,15 +15380,15 @@ export default function App() {
         };
 
         return (
-          <Modal title={reallocPay ? "Assign on-account payment" : editing ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); }}
+          <Modal title={reallocPay ? "Assign on-account payment" : (editing || editingGroup) ? "Edit payment" : "New payment"} onClose={() => { setShowPayModal(false); setReallocPay(null); setEditingPayGroup(null); }}
             footer={<>
               <span style={{ marginRight:"auto", fontSize:13, color:"#666" }}>Total: <b style={{ color:"#1A8A4E", fontSize:16 }}>{fmt(total)}</b></span>
               {reallocPay || step === 1
-                ? <Btn onClick={() => { setShowPayModal(false); setReallocPay(null); }}>Cancel</Btn>
+                ? <Btn onClick={() => { setShowPayModal(false); setReallocPay(null); setEditingPayGroup(null); }}>Cancel</Btn>
                 : <Btn onClick={back}>Back</Btn>}
               {!reallocPay && step < 4
                 ? <Btn primary disabled={!canGo(step + 1 === 3 && skip3 ? 4 : step + 1)} onClick={next}>Next</Btn>
-                : <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : reallocPay ? "Assign" : editing ? "Save changes" : "Create payment"}</Btn>}
+                : <Btn primary disabled={saveDisabled} onClick={savePaymentRow}>{paySaving ? "Saving..." : reallocPay ? "Assign" : (editing || editingGroup) ? "Save changes" : "Create payment"}</Btn>}
             </>}>
             {!reallocPay && (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(120px, 1fr))", gap:6, marginBottom:14 }}>
