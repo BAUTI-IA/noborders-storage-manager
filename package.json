@@ -19,6 +19,7 @@
     "test:agent-auth": "node scripts/test-agent-auth.mjs",
     "test:voice": "node scripts/test-voice.mjs",
     "test:verizon": "node scripts/test-verizon.mjs",
+    "test:motive": "node scripts/test-motive.mjs",
     "test:reports": "node scripts/test-reports.mjs",
     "test:voice-layout": "node scripts/test-voice-layout.mjs"
   },

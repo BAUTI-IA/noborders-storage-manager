@@ -8,7 +8,11 @@
   "rewrites": [
     {
       "source": "/api/verizon-gps",
-      "destination": "/api/geocode?fleet=webhook"
+      "destination": "/api/geocode?fleet=webhook&provider=verizon"
+    },
+    {
+      "source": "/api/motive-gps",
+      "destination": "/api/geocode?fleet=webhook&provider=motive"
     }
   ]
 }
