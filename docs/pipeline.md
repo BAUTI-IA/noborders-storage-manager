@@ -47,14 +47,25 @@ Telegram. El plan Hobby de Vercel no permite otro cron, y tampoco hace falta.
 
 ## Instalación
 
+Crea `job_leads` y `pipeline_settings` con RLS por `public.has_perm('pipeline', …)`,
+igual que el resto de las secciones. Es idempotente: correrla dos veces no rompe nada.
+
+**Opción A — sin instalar nada (la más rápida).** Supabase → SQL Editor → pegar
+`scripts/setup-pipeline.sql` → Run.
+
+**Opción B — desde el repo.**
+
 ```
 SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs
 ```
 
-Crea `job_leads` y `pipeline_settings` con RLS por `public.has_perm('pipeline', …)`,
-igual que el resto de las secciones. Es idempotente.
+El token sale de https://supabase.com/dashboard/account/tokens (es de cuenta, no
+la key del proyecto) y empieza con `sbp_`.
 
-Después, en **Users**, dale permiso `pipeline` a quien corresponda.
+**Permisos.** `has_perm()` arranca con `is_admin()`, así que un admin ve la sección
+apenas corre la migración, sin configurar nada. Para el resto del equipo, en
+**Users** hay que tildar `pipeline` (view / create / edit) como con cualquier otra
+sección.
 
 ### Parámetros (`pipeline_settings.settings`)
 
