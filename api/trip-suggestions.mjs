@@ -3,8 +3,17 @@
 // snapshot of candidate jobs + free trucks + loading trips; Claude returns strict
 // JSON suggestions which are validated and re-computed server-side before being
 // shown to the dispatcher. Nothing is written to the database here.
+//
+// It also hosts the Pipeline's three read/price actions (lead_extract,
+// lead_evaluate, lead_rank), because api/ sits at the Hobby plan's 12-function
+// cap — same reason api/geocode.mjs multiplexes. A request with no `action`
+// behaves exactly as before, so the existing dispatcher caller is untouched.
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
+import {
+  createLeadFromText, evaluateLead, rankLeadBatch, pipelineSettings, jobCalcSettings,
+} from "../lib/leads.mjs";
+import { evaluateJob, crewCostPerDay } from "../src/jobCalcData.js";
 
 export const maxDuration = 300; // planning calls can run 1-2 min; Hobby + Fluid Compute allows up to 300s
 
@@ -29,9 +38,11 @@ const SUGGESTIONS_SCHEMA = {
         properties: {
           truck_id: { type: "integer" },
           job_keys: { type: "array", items: { type: "string" }, description: "Job keys in delivery stop order" },
+          driver_id: { type: "integer", description: "Driver to send, from the provided list. 0 when none fits." },
+          helpers: { type: "integer", description: "Helpers to send besides the driver, 1 or 2" },
           reasoning: { type: "string", description: "1-2 sentences for the dispatcher, in the requested output language" },
         },
-        required: ["truck_id", "job_keys", "reasoning"],
+        required: ["truck_id", "job_keys", "driver_id", "helpers", "reasoning"],
         additionalProperties: false,
       },
     },
@@ -66,7 +77,7 @@ const SUGGESTIONS_SCHEMA = {
   additionalProperties: false,
 };
 
-function buildPrompt({ today, jobs, trucks, loadingTrips, truncated, lang }) {
+function buildPrompt({ today, jobs, trucks, loadingTrips, drivers, truncated, lang }) {
   return [
     "You are a dispatch planner for a US interstate moving company. Group the candidate jobs below into truck trips.",
     "",
@@ -86,6 +97,8 @@ function buildPrompt({ today, jobs, trucks, loadingTrips, truncated, lang }) {
     "7. Prefer fewer, fuller trips over many half-empty ones, but never exceed capacity.",
     "8. Jobs that don't fit any good trip (no delivery address, oversized for every truck, geographic outlier by delivery OR by load point) go in \"unassigned\" with a short reason.",
     "9. A job with split:true is ONE portion of a larger job already divided across trucks (same job_number, its own volume_cf). Treat each portion as an independent load, but never put two portions that share a job_number on the SAME truck — the point of the split is to spread them across different trucks.",
+    "10. WHERE THE TRUCK IS NOW matters. Each free truck carries `location` and `miles_to_first_pickup` when its GPS has reported. Prefer the truck already near the trip's load points; say so in the reasoning. A truck with no position is still usable — just do not claim it is close.",
+    "11. Pick the CREW for each new trip: `driver_id` from the drivers list (0 if none is suitable) and `helpers` (1 normally, 2 for a big or stair-heavy load — a bigger crew costs more per day but finishes in fewer). Prefer a driver who is not already out and whose day rate suits the job's size. Never invent a driver id.",
     "",
     lang === "es"
       ? "Write \"reasoning\", \"reason\" and \"notes\" in Spanish, addressed to the dispatcher."
@@ -95,8 +108,118 @@ function buildPrompt({ today, jobs, trucks, loadingTrips, truncated, lang }) {
     `TODAY: ${today}`,
     `FREE TRUCKS (available for new trips): ${JSON.stringify(trucks)}`,
     `LOADING TRIPS (accepting additions): ${JSON.stringify(loadingTrips)}`,
+    drivers?.length ? `AVAILABLE DRIVERS: ${JSON.stringify(drivers)}` : "",
     `CANDIDATE JOBS: ${JSON.stringify(jobs)}`,
   ].filter(Boolean).join("\n");
+}
+
+// ── Trip economics, computed here and never asked of the model ───────────────
+//
+// The dispatcher's four missing questions — where is the truck, who goes, how
+// many days, what does the trip leave — are arithmetic, so they are arithmetic
+// here. Distances chain the stops through the zip_geo cache (straight line with
+// a road factor); they are an estimate and the UI says so, but they come off
+// real coordinates rather than the model's imagination.
+const ROAD_FACTOR = 1.25;
+const milesBetween = (a, b) => {
+  const R = 3958.8, rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+};
+
+async function zipPoints(zips) {
+  const want = [...new Set((zips || []).filter((z) => /^\d{5}$/.test(z)))];
+  if (!want.length || !admin) return new Map();
+  const { data } = await admin.from("zip_geo").select("zip, lat, lng").in("zip", want);
+  return new Map((data || []).map((r) => [r.zip, { lat: Number(r.lat), lng: Number(r.lng) }]));
+}
+
+/** Chain a truck's position through its delivery stops. null when unmeasurable. */
+function routeMiles(start, stopZips, pts) {
+  const chain = [];
+  if (start && Number.isFinite(start.lat) && Number.isFinite(start.lng)) chain.push(start);
+  for (const z of stopZips) { const p = pts.get(z); if (p) chain.push(p); }
+  if (chain.length < 2) return null;
+  let m = 0;
+  for (let i = 1; i < chain.length; i++) m += milesBetween(chain[i - 1], chain[i]);
+  return Math.round(m * ROAD_FACTOR);
+}
+
+/**
+ * Days out and the trip's contribution, from the same cost model the Job
+ * Calculator uses. Returns nulls rather than guesses when miles are unknown.
+ */
+function tripEconomics({ totalCf, miles, revenue, helpers, driverRate, settings }) {
+  if (!Number.isFinite(miles) || miles <= 0 || !(totalCf > 0)) return null;
+  const job = {
+    brokerPrice: revenue, cuFt: totalCf, originAccess: "direct", destAccess: "direct",
+    longCarry: false, shuttle: false, trucks: 1, drivers: 1,
+    helpers: Math.max(0, Math.round(helpers || 1)), extras: [],
+  };
+  const s = { ...settings };
+  if (driverRate > 0) s.driverDayRate = driverRate;
+  const r = evaluateJob(job, s, { loadedMiles: miles, deadheadMiles: 0 });
+  return {
+    truck_days: r.truckDays,
+    hotel_nights: r.hotelNights,
+    est_miles: Math.round(miles),
+    revenue: Math.round(revenue),
+    cost: Math.round(r.variableCost + r.absorbedFixed),
+    contribution: Math.round(r.contributionMargin),
+    per_truck_day: Math.round(r.contributionPerTruckDay),
+    crew_day_rate: Math.round(crewCostPerDay(job, s)),
+  };
+}
+
+// ── Pipeline actions ─────────────────────────────────────────────────────────
+// All three only read and price; none of them creates a job. The heavy lifting
+// (the closed extraction schema, the cost model, the containment rules) lives in
+// lib/leads.mjs so the email webhook in api/agent-hub.mjs runs the same code.
+async function pipelineAction(action, body, { res, lang, token, userId }) {
+  const tr = (en, es) => (lang === "es" ? es : en);
+  try {
+    if (action === "lead_extract") {
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      if (!text) { res.status(400).json({ error: tr("Paste the broker's message first.", "Pegá primero el mensaje del broker.") }); return; }
+      const lead = await createLeadFromText({ text, source: "manual", createdBy: userId || null });
+      // Best effort: a lead with no cached route still lands on the board.
+      let evaluation = null;
+      try { const r = await evaluateLead(lead, { token }); evaluation = r.evaluation || null; } catch { /* saved anyway */ }
+      res.status(200).json({ lead, evaluation });
+      return;
+    }
+
+    if (action === "lead_evaluate") {
+      const id = Number(body.lead_id);
+      if (!Number.isFinite(id)) { res.status(400).json({ error: tr("Missing lead.", "Falta el lead.") }); return; }
+      const { data: lead, error } = await admin.from("job_leads").select("*").eq("id", id).is("deleted_at", null).maybeSingle();
+      if (error || !lead) { res.status(404).json({ error: tr("Lead not found.", "No se encontró el lead.") }); return; }
+      const r = await evaluateLead(lead, { token });
+      if (r.skipped === "incomplete") { res.status(400).json({ error: tr("Fill in both ZIPs, the volume and the price first.", "Completá primero los dos ZIPs, el volumen y el precio.") }); return; }
+      if (r.skipped === "no_miles") { res.status(400).json({ error: tr("Could not measure the route between those ZIPs.", "No se pudo medir la ruta entre esos ZIPs.") }); return; }
+      if (r.skipped) { res.status(500).json({ error: r.error?.message || tr("Could not price this lead.", "No se pudo evaluar este lead.") }); return; }
+      res.status(200).json({ evaluation: r.evaluation, nearest: r.nearest || null });
+      return;
+    }
+
+    if (action === "lead_rank") {
+      const leads = Array.isArray(body.leads) ? body.leads : [];
+      if (!leads.length) { res.status(200).json({ ranked: [], notes: tr("No priced leads to rank.", "No hay leads evaluados para ordenar.") }); return; }
+      const out = await rankLeadBatch({ leads, trucksFree: Number(body.trucks_free) || 0, lang });
+      res.status(200).json(out);
+      return;
+    }
+
+    if (action === "pipeline_settings") {
+      res.status(200).json({ settings: await pipelineSettings() });
+      return;
+    }
+
+    res.status(400).json({ error: tr("Unknown action.", "Acción desconocida.") });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || tr("Pipeline error.", "Error del pipeline.") });
+  }
 }
 
 export default async function handler(req, res) {
@@ -114,6 +237,10 @@ export default async function handler(req, res) {
   const body = req.body || {};
   const lang = body.lang === "es" ? "es" : "en"; // AI output + error language follows the user's display language
   const tr = (en, es) => (lang === "es" ? es : en);
+
+  // Pipeline actions ride this function (12-function cap). No action = the
+  // original trip-suggestion behaviour.
+  if (body.action) { await pipelineAction(String(body.action), body, { res, lang, token, userId: user.id }); return; }
   const today = typeof body.today === "string" && body.today ? body.today : new Date().toISOString().slice(0, 10);
   const rawJobs = Array.isArray(body.jobs) ? body.jobs : [];
   const rawTrucks = Array.isArray(body.trucks) ? body.trucks : [];
@@ -134,12 +261,30 @@ export default async function handler(req, res) {
       origin: String(j.origin || ""),
       delivery: String(j.delivery || ""),
       delivery_state: String(j.delivery_state || ""),
+      delivery_zip: String(j.delivery_zip || "").trim().slice(0, 5),
+      revenue: Number(j.revenue) || 0,
     }));
   const trucks = rawTrucks
     .filter((t) => t && Number.isFinite(Number(t.id)))
     .slice(0, MAX_TRUCKS)
-    .map((t) => ({ id: Number(t.id), name: String(t.name || ""), capacity_cf: Number(t.capacity_cf) || 0 }))
+    .map((t) => ({
+      id: Number(t.id), name: String(t.name || ""), capacity_cf: Number(t.capacity_cf) || 0,
+      // Where the truck is right now, straight off the ELD feed.
+      location: String(t.location || ""),
+      last_seen: String(t.last_seen || ""),
+      lat: Number.isFinite(Number(t.lat)) ? Number(t.lat) : null,
+      lng: Number.isFinite(Number(t.lng)) ? Number(t.lng) : null,
+    }))
     .filter((t) => t.capacity_cf > 0);
+  const drivers = (Array.isArray(body.drivers) ? body.drivers : [])
+    .filter((d) => d && Number.isFinite(Number(d.id)))
+    .slice(0, MAX_TRUCKS)
+    .map((d) => ({
+      id: Number(d.id), name: String(d.name || ""),
+      day_rate: Number(d.day_rate) || 0,
+      busy: !!d.busy,
+      days_worked_30: Number(d.days_worked_30) || 0,
+    }));
   const loadingTrips = rawLoading
     .filter((t) => t && Number.isFinite(Number(t.trip_id)))
     .slice(0, MAX_LOADING_TRIPS)
@@ -168,7 +313,7 @@ export default async function handler(req, res) {
       // effort "medium" keeps latency reasonable; the dispatcher reviews every
       // suggestion before anything is created, so top-tier planning depth isn't critical.
       output_config: { effort: "medium", format: { type: "json_schema", schema: SUGGESTIONS_SCHEMA } },
-      messages: [{ role: "user", content: buildPrompt({ today, jobs, trucks, loadingTrips, truncated: rawJobs.length > MAX_JOBS, lang }) }],
+      messages: [{ role: "user", content: buildPrompt({ today, jobs, trucks, loadingTrips, drivers, truncated: rawJobs.length > MAX_JOBS, lang }) }],
     });
     const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
     let parsed;
@@ -192,15 +337,38 @@ export default async function handler(req, res) {
     };
     const sumCf = (keys) => keys.reduce((acc, k) => acc + (jobByKey.get(k)?.volume_cf || 0), 0);
 
+    // Days out, crew cost and the trip's P&L are computed here from the cost
+    // model — never taken from the model's own arithmetic.
+    const driverById = new Map(drivers.map((d) => [d.id, d]));
+    const calcSettings = await jobCalcSettings().catch(() => null);
+    const pts = await zipPoints(jobs.map((j) => j.delivery_zip)).catch(() => new Map());
+    const sumRevenue = (keys) => keys.reduce((a, k) => a + (jobByKey.get(k)?.revenue || 0), 0);
+
     const newTrips = (Array.isArray(parsed.new_trips) ? parsed.new_trips : [])
       .filter((s) => s && truckById.has(Number(s.truck_id)))
       .map((s) => {
         const truck = truckById.get(Number(s.truck_id));
         const job_keys = takeKeys(s.job_keys);
         const total_cf = Math.round(sumCf(job_keys));
+        const driver = driverById.get(Number(s.driver_id)) || null;
+        const helpers = Math.min(2, Math.max(1, Math.round(Number(s.helpers) || 1)));
+        const start = truck.lat != null && truck.lng != null ? { lat: truck.lat, lng: truck.lng } : null;
+        const miles = routeMiles(start, job_keys.map((k) => jobByKey.get(k)?.delivery_zip || ""), pts);
+        const econ = calcSettings
+          ? tripEconomics({
+              totalCf: total_cf, miles, revenue: sumRevenue(job_keys), helpers,
+              driverRate: driver?.day_rate || 0, settings: calcSettings,
+            })
+          : null;
         return {
           truck_id: truck.id,
+          truck_location: truck.location || "",
+          truck_last_seen: truck.last_seen || "",
           job_keys,
+          driver_id: driver ? driver.id : null,
+          driver_name: driver ? driver.name : "",
+          helpers,
+          economics: econ,
           reasoning: String(s.reasoning || ""),
           total_cf,
           occ_pct: truck.capacity_cf > 0 ? Math.round((total_cf / truck.capacity_cf) * 100) : null,
