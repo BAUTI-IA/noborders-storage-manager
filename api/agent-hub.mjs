@@ -4,16 +4,20 @@
 //   GET  → daily ops brief (Vercel Cron / manual). Auth: Bearer CRON_SECRET or
 //          ?secret=; ?dry=1 returns JSON without sending. Posts to the team's
 //          Telegram group (TELEGRAM_BRIEF_CHAT_ID).
+//          The same run sweeps the Pipeline's hold clock (see lib/leads.mjs).
 //   POST → in-app chat for the CRM widget (src/agentChat.jsx) and the real-time
 //          voice agent (src/voiceAgent.jsx), which uses the `voice_token` and
 //          `voice_tool` actions. Auth: the caller's Supabase JWT, verified
 //          server-side (admin-users pattern) — or, for the ElevenLabs agent,
 //          the `x-agent-secret` shared secret (see serverToServerAuth).
+//          `action: "inbound_email"` is the Pipeline's broker-email webhook and
+//          authenticates with its own `x-pipeline-secret` (docs/pipeline.md).
 import { createHash, timingSafeEqual } from "node:crypto";
 import { admin, handleIncoming, warmCaches } from "../lib/agent.mjs";
 import { writesEnabled } from "../lib/agentWrite.mjs";
 import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from "../lib/brief.mjs";
 import { mintVoiceSession, runVoiceTool, vt, VOICE_TOOL_NAMES } from "../lib/voice.mjs";
+import { ingestEmail } from "../lib/leads.mjs";
 
 export const maxDuration = 300;
 
@@ -139,7 +143,49 @@ export async function runToolWithBudget(name, run, lang, ms = TOOL_TIMEOUT_MS) {
 const ATTACH_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]);
 const MAX_ATTACH_B64 = 4_200_000; // ~3MB binary; Vercel caps request bodies at 4.5MB
 
+// ── Inbound broker email ─────────────────────────────────────────────────────
+//
+// A Cloudflare Email Routing Worker POSTs the raw message here (see
+// docs/pipeline.md). It rides this function because api/ is at the Hobby plan's
+// 12-function cap.
+//
+// This is the CRM's only ingress from the open internet, so every gate fails
+// closed: no secret configured means the endpoint refuses outright, the sender
+// must be on the allowlist, and whatever arrives can only ever become a lead in
+// 'new'. Nothing here can create a job, and the message body is parsed as data —
+// lib/leads.mjs tells the model in as many words to ignore instructions in it.
+const INBOUND_HEADER = "x-pipeline-secret";
+
+async function inboundEmail(req, res) {
+  const expected = process.env.PIPELINE_INBOUND_SECRET;
+  if (!expected) { res.status(503).json({ error: "server not configured: PIPELINE_INBOUND_SECRET" }); return; }
+  const given = req.headers?.[INBOUND_HEADER];
+  if (!given || !secretMatches(given, expected)) { res.status(401).json({ error: "unauthorized" }); return; }
+
+  const b = req.body || {};
+  const from = String(b.from || "").slice(0, 320);
+  if (!from) { res.status(400).json({ error: "missing from" }); return; }
+  try {
+    const out = await ingestEmail({
+      from,
+      subject: String(b.subject || "").slice(0, 500),
+      text: String(b.text || b.body || ""),
+      messageId: String(b.message_id || b.messageId || "").slice(0, 400) || null,
+    });
+    // A rejected sender gets a flat 202: the endpoint must not become an oracle
+    // that tells the internet which domains we accept.
+    if (!out.ok) { console.warn("[pipeline] email dropped:", out.reason, from); res.status(202).json({ ok: true }); return; }
+    res.status(200).json({ ok: true, lead_id: out.lead_id, duplicate: !!out.duplicate });
+  } catch (e) {
+    console.error("inbound-email:", e);
+    res.status(500).json({ error: e?.message || "ingest error" });
+  }
+}
+
 async function appChat(req, res) {
+  // A broker email is not a chat turn: route it before any agent auth runs.
+  if (String(req.query?.action || req.body?.action || "") === "inbound_email") return inboundEmail(req, res);
+
   // ElevenLabs first: a request carrying x-agent-secret is never also a browser
   // session, so a bad secret must 401 rather than fall through to the JWT path.
   const s2s = await serverToServerAuth(req);

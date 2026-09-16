@@ -9,6 +9,7 @@ import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { ReportsSection, TRUCK_PINGS_SQL } from "./reports.jsx";
 import { JobCalcSection } from "./jobcalc.jsx";
+import { PipelineSection } from "./pipeline.jsx";
 import { buildJobCharges, proposeAllocation, serializeAllocLines, pourLinesOverCharges } from "./paymentAlloc.js";
 import { numv, money, jobKey, parseCf, effCf, hasRealCf, STATUSES, statusMeta, isPhysical, isDigitalMethod, monthOf, dedupeJobs, computeDriverPnl } from "./analyticsData.js";
 import { ExpensesPage, EMPTY_EXPENSE, EMPTY_ADJUSTMENT, FIELD_CAT_BY_BANK, ExpenseCatChip, ExpenseStatusBadge } from "./expenses.jsx";
@@ -3688,6 +3689,7 @@ function TrashSection({ supabase, undoMgr, onRestored }) {
 const NAV = [
   { section:"Operations", items:[
     { id:"dispatching", label:"Dispatching", icon:"🚚" },
+    { id:"pipeline", label:"Pipeline", icon:"📥" },
     { id:"calendario", label:"Pickup Calendar", icon:"📅" },
     { id:"calendario_entregas", label:"Delivery Calendar", icon:"📦" },
     { id:"storage", label:"Storage", icon:"🏬" },
@@ -3770,6 +3772,7 @@ function Sidebar({ page, setPage, onSignOut, can = () => true, isAdmin = false }
 
 const PAGE_META = {
   dispatching: { title:"Dispatching", sub:"Pickup & delivery dispatch" },
+  pipeline:    { title:"Pipeline", sub:"Incoming jobs · decide, hold or dispatch" },
   calendario:  { title:"Pickup Calendar", sub:"Scheduled pickups" },
   calendario_entregas: { title:"Delivery Calendar", sub:"Scheduled deliveries" },
   storage:     { title:"Storage", sub:"Physical units and occupancy" },
@@ -4326,6 +4329,8 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  // The lead whose Accept opened the job modal; stamped back on save.
+  const [pendingLeadId, setPendingLeadId] = useState(null);
   const [showAddJob, setShowAddJob] = useState(false);
   const [jobForm, setJobForm] = useState(EMPTY_JOB);
   const [jobSaving, setJobSaving] = useState(false);
@@ -7073,7 +7078,17 @@ export default function App() {
     setSaving(false); setShowAdd(false);
   }
 
-  function openAddJob(storageId) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
+  function openAddJob(storageId) { setEditingJobKey(null); setPendingLeadId(null); setJobForm({ ...EMPTY_JOB, storage_ids: storageId ? [storageId] : [] }); setJobErr(null); setShowAddJob(true); }
+  // Accepting a lead never writes a job by itself: it opens THIS modal, pre-filled,
+  // so saveJob() does its per-location fan-out exactly as for a hand-typed job and
+  // a person confirms. The lead id is held so the save can stamp it converted.
+  function convertLeadToJob(lead, form) {
+    setEditingJobKey(null);
+    setJobForm({ ...EMPTY_JOB, ...form });
+    setJobErr(null);
+    setPendingLeadId(lead?.id ?? null);
+    setShowAddJob(true);
+  }
   function openAddJobWarehouse(name) { setEditingJobKey(null); setJobForm({ ...EMPTY_JOB, warehouses: [name] }); setJobErr(null); setShowAddJob(true); }
   // Warehouse "+ Job": open a small picker first — add an existing job or create a new one.
   function openWarehouseJobPicker(name) { setWhPickerKey(""); setWhPicker({ name }); }
@@ -7425,6 +7440,15 @@ export default function App() {
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
       undoMgr.record(`Job ${jobForm.job_number || ""} creado`.replace(/\s+/g, " ").trim(), (data || []).map(r => undoMgr.createEntry("storage_jobs", r)));
+      // Close the Pipeline loop: the lead now points at the job it became, so
+      // the estimate can later be compared against what really happened.
+      if (pendingLeadId && data && data.length) {
+        if (dbFailed(await supabase.from("job_leads").update({
+          status: "converted", job_id: data[0].id,
+          decided_by: session?.user?.id || null, decided_at: new Date().toISOString(),
+        }).eq("id", pendingLeadId), "job_leads", { quiet: true })) { /* the job is saved either way */ }
+        setPendingLeadId(null);
+      }
     }
     setShowAddJob(false);
     loadJobs();
@@ -8309,8 +8333,23 @@ export default function App() {
         })(),
         delivery: [j.delivery_city, j.delivery_state, j.delivery_zip].filter(Boolean).join(", "),
         delivery_state: j.delivery_state || "",
+        // For the server-side route estimate and the trip's P&L.
+        delivery_zip: j.delivery_zip || "",
+        revenue: numv(j.pickup_balance) + numv(j.delivery_balance) + numv(j.bol_balance),
       })),
-      trucks: freeTrucks.map(tk => ({ id: tk.id, name: tk.name || "", capacity_cf: numv(tk.capacity_cf) })),
+      // Where each free truck is RIGHT NOW, so the planner can prefer the one
+      // already near the load points instead of only reasoning about capacity.
+      trucks: freeTrucks.map(tk => ({
+        id: tk.id, name: tk.name || "", capacity_cf: numv(tk.capacity_cf),
+        location: tk.last_location || "", last_seen: tk.last_location_at || "",
+        lat: tk.last_lat == null ? null : Number(tk.last_lat),
+        lng: tk.last_lng == null ? null : Number(tk.last_lng),
+      })),
+      // Who can actually go, and what a day of theirs costs.
+      drivers: (driversList || []).filter(d => d.active !== false && !d.deleted_at).slice(0, 30).map(d => ({
+        id: d.id, name: d.name || "", day_rate: numv(d.daily_rate),
+        busy: trips.some(t => TRIP_ACTIVE.includes(t.status) && String(t.driver_id) === String(d.id)),
+      })),
       loading_trips: loadingTripsWithRoom,
     };
     setShowTripAI(true); setTripAILoading(true); setTripAIError(null);
@@ -10214,6 +10253,9 @@ export default function App() {
 
       {/* ───────────────────────── JOB CALCULATOR (take it or leave it) ───────────────────────── */}
       {page === "jobcalc" && can("jobcalc","view") && <JobCalcSection supabase={supabase} session={session} profile={profile} can={can} isAdmin={isAdmin} Btn={Btn} Modal={Modal} />}
+
+      {/* ───────────────────────── PIPELINE (job reception → decision) ───────────────────────── */}
+      {page === "pipeline" && can("pipeline","view") && <PipelineSection supabase={supabase} session={session} profile={profile} can={can} isAdmin={isAdmin} Btn={Btn} Modal={Modal} onConvertLead={convertLeadToJob} />}
 
       {page === "bol" && can("bol","view") && <BolSection supabase={supabase} session={session} jobs={jobs} brokers={brokers} can={can} isAdmin={isAdmin} initialJobNumber={bolJobNumber} onConsumed={() => setBolJobNumber(null)} />}
 
@@ -17013,6 +17055,30 @@ export default function App() {
                   );
                 })}
               </div>
+              {/* Where the truck is, who goes, how long it takes and what it leaves.
+                  All four are computed server-side from the cost model — the
+                  model is never asked to do arithmetic. */}
+              {(s.truck_location || s.driver_name || s.economics) && (
+                <div style={{ border:"1px solid #f0f0f0", borderRadius:8, padding:"8px 10px", marginTop:8, fontSize:12, color:"#444", display:"flex", flexDirection:"column", gap:4 }}>
+                  {s.truck_location && (
+                    <div>🚛 {trAI(`Now in ${s.truck_location}`, `Ahora en ${s.truck_location}`)}
+                      {s.truck_last_seen ? <span style={{ color:"#aaa" }}> · {timeAgo(s.truck_last_seen)}</span> : null}</div>
+                  )}
+                  {s.driver_name && (
+                    <div>👤 {trAI(`Crew: ${s.driver_name} + ${s.helpers} helper(s)`, `Crew: ${s.driver_name} + ${s.helpers} helper(s)`)}
+                      {s.economics?.crew_day_rate ? <span style={{ color:"#aaa" }}> · ${s.economics.crew_day_rate.toLocaleString()}/{trAI("day", "día")}</span> : null}</div>
+                  )}
+                  {s.economics && (
+                    <>
+                      <div>📅 {trAI(`${s.economics.truck_days} days out · ${s.economics.hotel_nights} hotel night(s) · ~${s.economics.est_miles.toLocaleString()} mi`,
+                                    `${s.economics.truck_days} días afuera · ${s.economics.hotel_nights} noche(s) de hotel · ~${s.economics.est_miles.toLocaleString()} mi`)}</div>
+                      <div>💵 ${s.economics.revenue.toLocaleString()} − ${s.economics.cost.toLocaleString()} = <b style={{ color: s.economics.contribution >= 0 ? "#3B6D11" : "#A32D2D" }}>${s.economics.contribution.toLocaleString()}</b>
+                        <span style={{ color:"#aaa" }}> · ${s.economics.per_truck_day.toLocaleString()}/{trAI("truck-day", "día-camión")}</span></div>
+                      <div style={{ fontSize:10.5, color:"#bbb" }}>{trAI("Miles are a straight-line estimate between stops.", "Las millas son un estimado en línea recta entre paradas.")}</div>
+                    </>
+                  )}
+                </div>
+              )}
               {s.reasoning && (
                 <div style={{ display:"flex", gap:8, alignItems:"flex-start", background:"#FFFBEB", border:"1px solid #FDE9C8", borderRadius:8, padding:"8px 10px", marginTop:8, fontSize:12, color:"#854F0B", lineHeight:1.5 }}>
                   <span style={{ flexShrink:0 }}>💡</span>

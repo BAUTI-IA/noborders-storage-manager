@@ -13,6 +13,10 @@
     {
       "source": "/api/motive-gps",
       "destination": "/api/geocode?fleet=webhook&provider=motive"
+    },
+    {
+      "source": "/api/inbound-email",
+      "destination": "/api/agent-hub?action=inbound_email"
     }
   ]
 }

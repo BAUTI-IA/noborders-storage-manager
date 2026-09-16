@@ -41,6 +41,9 @@ lives in `src/i18n.js`:
   pure/testable math split into sibling `*Data.js` files.
 - One-time DB migrations live as SQL strings shown in setup banners and as
   scripts under `scripts/setup-*.mjs`.
+- `api/` is at the Vercel Hobby plan's **12-function cap**. A new endpoint is an
+  action inside an existing file (plus a `vercel.json` rewrite if it needs a
+  clean URL), never a 13th file — see `api/geocode.mjs` and `docs/pipeline.md`.
 
 ## Commands
 
