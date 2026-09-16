@@ -347,6 +347,7 @@ export const I18N_ES = {
   // Settings → Driver app · calculator
   "Driver app · calculator": "App del driver · calculadora",
   "These values feed the job calculator in the mobile app. Change them once here and every phone picks them up.": "Estos valores alimentan la calculadora de jobs de la app mobile. Cambialos una vez acá y todos los teléfonos los toman.",
+  "Run the database setup SQL once in Supabase (Settings → Database setup) to split last login by device.": "Corré una vez el SQL de configuración en Supabase (Settings → Database setup) para separar el último acceso por dispositivo.",
   "Run the setup SQL once in Supabase to enable this.": "Corré el SQL de setup una vez en Supabase para habilitarlo.",
   // Settings → Accounts receivable · cutoff
   "Accounts receivable · cutoff": "Cuentas a cobrar · fecha de corte",
@@ -1577,6 +1578,8 @@ export const I18N_ES = {
   "Last 4": "Últimos 4",
   "Last edited by": "Última edición por",
   "Last login": "Último acceso",
+  "Last login · App": "Último acceso · App",
+  "Last login · CRM": "Último acceso · CRM",
   "Latest movements": "Últimos movimientos",
   "Load a job from storage": "Cargar un job desde storage",
   "Load date": "Fecha de carga",

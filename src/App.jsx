@@ -1203,6 +1203,79 @@ create policy "crm_settings_select" on public.crm_settings for select to authent
 drop policy if exists "crm_settings_update" on public.crm_settings;
 create policy "crm_settings_update" on public.crm_settings for update to authenticated using (public.is_admin()) with check (public.is_admin());`;
 
+// Último acceso separado por dispositivo: CRM (navegador) y app mobile.
+// auth.users.last_sign_in_at es uno solo para los dos, así que no alcanza.
+// El CRM sella el suyo al entrar (touch_login) y el de la app sale del user
+// agent que Supabase guarda con cada sesión, que login_activity() clasifica.
+const LOGIN_TRACKING_SQL = `alter table public.profiles add column if not exists last_login_crm timestamptz;
+alter table public.profiles add column if not exists last_login_app timestamptz;
+
+-- Which device a sign-in came from, read off the user agent GoTrue stored with
+-- the session. The NBM Driver App is React Native: okhttp on Android,
+-- CFNetwork/Darwin on iOS. Neither ever sends a browser user agent.
+create or replace function public.login_platform(ua text) returns text
+language sql immutable as $$
+  select case
+    when ua is null or btrim(ua) = '' then null
+    when ua ~* '(okhttp|cfnetwork|darwin|expo|react[ _-]?native|dart/|flutter|nbm)' then 'app'
+    when ua ~* 'mozilla' then 'crm'
+    else null
+  end;
+$$;
+
+-- A member cannot write their own profiles row (profiles_write is admin-only),
+-- so the CRM stamps its sign-in through this: the caller's own row, and only
+-- the two last_login columns. The mobile app can call it with 'app' too.
+create or replace function public.touch_login(platform text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return; end if;
+  if platform is null or platform not in ('crm','app') then
+    raise exception 'Unknown platform: %', platform using errcode = '22023';
+  end if;
+  update public.profiles
+     set last_login_crm = case when platform = 'crm' then now() else last_login_crm end,
+         last_login_app = case when platform = 'app' then now() else last_login_app end
+   where id = auth.uid();
+end; $$;
+
+-- Per-user last sign-in split by device. auth.sessions is not exposed through
+-- PostgREST and is only readable with the service role, hence SECURITY DEFINER
+-- gated on is_admin(). It also folds what it finds into profiles, so the
+-- history survives the session row (GoTrue deletes it on sign-out).
+create or replace function public.login_activity()
+returns table (id uuid, crm_login timestamptz, app_login timestamptz)
+language plpgsql security definer set search_path = public, auth as $$
+begin
+  if not (public.is_admin()
+          or coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '') = 'service_role') then
+    raise exception 'Only administrators.' using errcode = '42501';
+  end if;
+
+  with live as (
+    select s.user_id,
+           max(s.created_at) filter (where public.login_platform(s.user_agent) = 'crm') as seen_crm,
+           max(s.created_at) filter (where public.login_platform(s.user_agent) = 'app') as seen_app
+      from auth.sessions s
+     group by s.user_id
+  )
+  update public.profiles p
+     set last_login_crm = greatest(p.last_login_crm, l.seen_crm),
+         last_login_app = greatest(p.last_login_app, l.seen_app)
+    from live l
+   where l.user_id = p.id
+     and (p.last_login_crm is distinct from greatest(p.last_login_crm, l.seen_crm)
+       or p.last_login_app is distinct from greatest(p.last_login_app, l.seen_app));
+
+  return query select p.id, p.last_login_crm, p.last_login_app from public.profiles p;
+end; $$;
+
+revoke all on function public.login_activity() from public;
+revoke all on function public.touch_login(text) from public;
+grant execute on function public.login_activity() to authenticated, service_role;
+grant execute on function public.touch_login(text) to authenticated, service_role;
+notify pgrst, 'reload schema';`;
+
 // Per-driver expense tracking: every cost (fuel, hotels, materials, tolls…) linked
 // to driver/truck/trip/job, with bank-vs-driver-cash source so cash taken from
 // customer collections reconciles against the "in circulation" money.
@@ -3271,6 +3344,10 @@ function LoginScreen() {
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) setError("Incorrect email or password.");
+      // Record it as a CRM login. The browser's user agent also identifies the
+      // session in auth.sessions, but that row is deleted on sign-out — this
+      // stamp isn't. Quiet: a failed stamp must never block signing in.
+      else dbFailed(await supabase.rpc("touch_login", { platform: "crm" }), "touch_login", { quiet: true });
     }
     setLoading(false);
   }
@@ -3748,6 +3825,26 @@ const APP_ROLE_COLORS = {
   master: { bg:"#ECE6FB", fg:"#5B3FBF" },
 };
 
+// A function that isn't deployed yet: PostgREST answers PGRST202, Postgres 42883.
+const isMissingFn = (error) =>
+  !!error && /42883|PGRST202|does not exist|Could not find the function/i.test(`${error.code || ""} ${error.message || ""}`);
+
+// One "last login" per device. The CRM stamps its own (touch_login) and the
+// app's is read off the user agent stored with the session, so a sign-in that
+// predates this — or whose session was signed out before it was ever read —
+// belongs to neither column. That timestamp still says something, so it shows
+// on hover instead of being thrown away.
+function LoginCell({ at, fallback }) {
+  const shown = fmtTs(at);
+  if (shown) return <span>{shown}</span>;
+  const unknown = fmtTs(fallback);
+  if (!unknown) return <span>—</span>;
+  return (
+    <span title={tr(`Signed in ${unknown}, device not identified`, `Ingresó ${unknown}, dispositivo no identificado`)}
+          style={{ borderBottom:"1px dotted #ddd", cursor:"help" }}>—</span>
+  );
+}
+
 // Admin-only section: list users, invite new ones (email + per-section permissions),
 // edit roles/permissions, activate/deactivate, and send password-reset emails.
 function UsersSection({ session }) {
@@ -3760,6 +3857,7 @@ function UsersSection({ session }) {
   const [busy, setBusy] = useState(false);
   const [drivers, setDrivers] = useState([]);   // para vincular un usuario con su driver
   const [appRoleMissing, setAppRoleMissing] = useState(false); // la columna todavía no está en la DB
+  const [loginTrackingMissing, setLoginTrackingMissing] = useState(false); // falta LOGIN_TRACKING_SQL
 
   // La lista de drivers alimenta el desplegable "Driver vinculado".
   useEffect(() => {
@@ -3793,6 +3891,30 @@ function UsersSection({ session }) {
     return data || [];
   }, []);
 
+  // Last login split by device. The user agent that tells the CRM apart from the
+  // mobile app lives in auth.sessions, which PostgREST doesn't expose, so
+  // login_activity() (SECURITY DEFINER, admin-only) classifies it in the
+  // database and folds the result into profiles. Returns null — not an error —
+  // when the migration hasn't been run: the list still renders without it.
+  const loginActivity = useCallback(async () => {
+    let { data, error } = await supabase.rpc("login_activity");
+    if (isMissingFn(error)) {
+      // Same self-healing attempt the other sections make before nagging.
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: LOGIN_TRACKING_SQL });
+        if (!rpcErr) break;
+      }
+      ({ data, error } = await supabase.rpc("login_activity"));
+    }
+    if (error) {
+      setLoginTrackingMissing(isMissingFn(error));
+      if (!isMissingFn(error)) console.warn("[users] login_activity:", error.message);
+      return null;
+    }
+    setLoginTrackingMissing(false);
+    return data || [];
+  }, []);
+
   // Self-lockout guard, mirrored from the server, for direct profile writes.
   const writeProfile = useCallback(async (id, patch) => {
     if (id === session.user.id && (patch.role === "member" || patch.active === false))
@@ -3806,20 +3928,31 @@ function UsersSection({ session }) {
     try {
       // Prefer the admin API: it returns the profiles plus each user's last_login
       // (auth.users.last_sign_in_at), which the RLS profiles query can't expose.
-      // Fall back to the direct RLS query if the function is unavailable (then
-      // last_login is simply absent).
+      // That one is only the "device not identified" hover now — the CRM/app
+      // split below comes from the database and survives this falling back.
       let list;
       try { const r = await api("list"); list = r.users || []; setWarn(null); }
       catch (e1) {
         list = await listProfiles();
-        // Surface the outage instead of failing silently (it also explains why
-        // Last login shows "—"): invites won't work until the service is fixed.
-        setWarn(`Admin service unavailable: ${e1.message}. User list loaded in read-only fallback mode (no last login, invites will fail). Open /api/admin-users in the browser for a config health check.`);
+        // Surface the outage instead of failing silently: invites won't work
+        // until the service is fixed.
+        setWarn(`Admin service unavailable: ${e1.message}. User list loaded in read-only fallback mode (invites will fail). Open /api/admin-users in the browser for a config health check.`);
+      }
+      // Per-device logins ride on top of whichever list we got: they come from
+      // the database either way, so the fallback keeps both columns filled.
+      const activity = await loginActivity();
+      if (activity) {
+        const byId = new Map(activity.map(r => [r.id, r]));
+        list = list.map(u => ({
+          ...u,
+          last_login_crm: byId.get(u.id)?.crm_login ?? u.last_login_crm ?? null,
+          last_login_app: byId.get(u.id)?.app_login ?? u.last_login_app ?? null,
+        }));
       }
       setUsers(list);
     } catch (e) { setError(e.message); }
     setLoading(false);
-  }, [listProfiles, api]);
+  }, [listProfiles, api, loginActivity]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -3989,17 +4122,18 @@ function UsersSection({ session }) {
       {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
       {warn && <div style={{ background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#92400e", marginBottom:12 }}>{warn}</div>}
       {notice && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{notice}</div>}
+      {loginTrackingMissing && <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#854F0B", marginBottom:12 }}>Run the database setup SQL once in Supabase (Settings → Database setup) to split last login by device.</div>}
 
       <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead><tr>
-            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>{tr("Mobile app", "App mobile")}</th><th style={th}>Last login</th><th style={th}>Status</th><th style={th}></th>
+            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>{tr("Mobile app", "App mobile")}</th><th style={th}>Last login · CRM</th><th style={th}>Last login · App</th><th style={th}>Status</th><th style={th}></th>
           </tr></thead>
           <tbody>
             {loading ? (
-              <tr><td style={td} colSpan={8}>Loading…</td></tr>
+              <tr><td style={td} colSpan={9}>Loading…</td></tr>
             ) : users.length === 0 ? (
-              <tr><td style={td} colSpan={8}>No users yet.</td></tr>
+              <tr><td style={td} colSpan={9}>No users yet.</td></tr>
             ) : users.map(u => (
               <tr key={u.id}>
                 <td style={td}>{u.email}</td>
@@ -4009,7 +4143,8 @@ function UsersSection({ session }) {
                 </td>
                 <td style={{ ...td, color:"#888", maxWidth:280 }}>{permSummary(u)}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>{appRoleCell(u)}</td>
-                <td style={{ ...td, color:"#888", whiteSpace:"nowrap" }}>{fmtTs(u.last_login) || "—"}</td>
+                <td style={{ ...td, color:"#888", whiteSpace:"nowrap" }}><LoginCell at={u.last_login_crm} fallback={u.last_login} /></td>
+                <td style={{ ...td, color:"#888", whiteSpace:"nowrap" }}><LoginCell at={u.last_login_app} fallback={u.last_login} /></td>
                 <td style={td}>{u.active !== false ? <span style={{ color:"#3B6D11" }}>Active</span> : <span style={{ color:"#b91c1c" }}>Inactive</span>}</td>
                 <td style={{ ...td, whiteSpace:"nowrap", textAlign:"right" }}>
                   <button onClick={() => openEdit(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Edit</button>
@@ -14675,7 +14810,7 @@ export default function App() {
       })()}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, GEO_CACHE_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL, DRIVER_APP_SETTINGS_SQL, CRM_SETTINGS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, GEO_CACHE_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL, DRIVER_APP_SETTINGS_SQL, CRM_SETTINGS_SQL, LOGIN_TRACKING_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
