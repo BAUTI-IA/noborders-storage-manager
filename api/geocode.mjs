@@ -6,6 +6,10 @@
 //
 //   GET /api/geocode?q=<address>          → address → lat/lng via OpenStreetMap
 //                                           Nominatim (no key, no auth).
+//   POST /api/geocode?geo=batch           → many addresses at once, served from
+//                                           the public.geo_cache table, for the
+//                                           live map's job pins. Returns what it
+//                                           could not resolve in `pending`.
 //   GET /api/geocode?fleet=status         → which ELD providers are wired up.
 //   GET /api/geocode?fleet=sync           → pull live GPS from every configured
 //                                           provider into public.trucks.
@@ -301,6 +305,156 @@ async function fleet(req, res, action) {
   }
 }
 
+// ── Batch geocoding for the live map's job pins ──────────────────────────────
+// The map asks for every scheduled job's pickup and delivery in one go. Doing
+// that through ?q= one address at a time would be hopeless: Nominatim's usage
+// policy allows one request per second, so a hundred jobs is a three-minute
+// wait — every single time somebody opens the tab.
+//
+// So this reads what public.geo_cache already knows in ONE bulk query and only
+// pays the one-per-second price for genuinely new addresses. That spend is
+// capped per call and whatever is left comes back in `pending`, so the browser
+// asks again and the map fills in progressively instead of hanging (or timing
+// out) on a cold cache.
+
+const GEO_UA = "NoBordersMovingCRM/1.0 (live-load map geocoding)";
+// Nominatim's usage policy caps us at one request per second. Google's does not,
+// so when a key is configured the whole cold-cache problem mostly goes away.
+const GEO_THROTTLE_MS = 1100;
+const googleKey = () => process.env.GOOGLE_MAPS_API_KEY || "";
+// How many NEW addresses one call may look up. On Nominatim that is ~28s of
+// sleeping, comfortably inside the maxDuration declared at the top; on Google
+// there is no sleep, so the budget can be far larger.
+const maxGeoLookups = () => (googleKey() ? 120 : 25);
+// One bad address must not eat the whole budget walking its own fallback ladder,
+// so a stop gets at most this many attempts before the rest of its candidates
+// wait for another call.
+const MAX_TRIES_PER_STOP = 2;
+// A confirmed miss is worth re-trying eventually — the address may have been
+// fixed since — but nowhere near every time the map opens.
+const GEO_MISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// PostgREST builds `in.(...)` into the URL, so ask in chunks it can carry.
+const GEO_READ_CHUNK = 200;
+
+const normQ = (q) => String(q || "").trim().toLowerCase().replace(/\s+/g, " ");
+const geoSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// When the map fills a cold cache it calls this repeatedly, so pacing only
+// WITHIN a call would still let the first lookup of each call land on the heels
+// of the last one of the previous. Warm lambdas share this timestamp — same
+// best-effort trick as lastSyncAt above.
+let lastGeoAt = 0;
+async function geoPace() {
+  const wait = GEO_THROTTLE_MS - (Date.now() - lastGeoAt);
+  if (wait > 0) await geoSleep(wait);
+  lastGeoAt = Date.now();
+}
+
+// Resolves one query. Returns null when the geocoder looked and found nothing (a
+// real miss, worth caching); THROWS when the request itself failed, so a network
+// blip never gets written down as "this address does not exist".
+async function geocodeOne(q) {
+  const key = googleKey();
+  if (key) {
+    const url = "https://maps.googleapis.com/maps/api/geocode/json?address=" + encodeURIComponent(q)
+      + "&components=country:US|country:CA&key=" + encodeURIComponent(key);
+    const r = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!r.ok) throw new Error(`Geocoder responded ${r.status}`);
+    const d = await r.json();
+    if (d.status === "ZERO_RESULTS") return null;
+    // OVER_QUERY_LIMIT / REQUEST_DENIED are our problem, not the address's —
+    // throw so they stay uncached and the caller retries.
+    if (d.status !== "OK" || !d.results?.length) throw new Error(`Geocoder said ${d.status || "no status"}`);
+    const hit = d.results[0];
+    return { lat: Number(hit.geometry.location.lat), lng: Number(hit.geometry.location.lng), label: hit.formatted_address || q };
+  }
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us,ca&q=" + encodeURIComponent(q);
+  const r = await fetch(url, { headers: { "User-Agent": GEO_UA, Accept: "application/json" } });
+  if (!r.ok) throw new Error(`Geocoder responded ${r.status}`);
+  const data = await r.json();
+  if (!Array.isArray(data) || !data.length) return null;
+  return { lat: Number(data[0].lat), lng: Number(data[0].lon), label: data[0].display_name || q };
+}
+
+async function geoBatch(req, res) {
+  if (!(await requireUser(req, res))) return;
+  if (!admin) { res.status(500).json({ error: "Geocoding cache unavailable (no service role configured)." }); return; }
+
+  let body = req.body;
+  if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = null; } }
+  const raw = Array.isArray(body?.stops) ? body.stops : null;
+  if (!raw) { res.status(400).json({ error: "body must be { stops: [{ key, candidates }] }" }); return; }
+
+  // Each stop carries its candidates most-specific-first (geoCandidates() in the
+  // app): full address → city+state+zip → zip+state → city+state → state.
+  const stops = [];
+  const all = new Set();
+  for (const s of raw.slice(0, 2000)) {
+    const key = String(s?.key || "");
+    const cands = (Array.isArray(s?.candidates) ? s.candidates : []).map(normQ).filter(Boolean);
+    if (!key || !cands.length) continue;
+    stops.push({ key, cands });
+    for (const c of cands) all.add(c);
+  }
+
+  const known = new Map();   // normalised query → cache row
+  const list = [...all];
+  for (let i = 0; i < list.length; i += GEO_READ_CHUNK) {
+    const { data, error } = await admin.from("geo_cache")
+      .select("q,lat,lng,label,fetched_at").in("q", list.slice(i, i + GEO_READ_CHUNK));
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    for (const r of (data || [])) known.set(r.q, r);
+  }
+
+  // A miss old enough to be worth another look counts as "not cached".
+  const usable = (r) => r && (r.lat != null || Date.now() - new Date(r.fetched_at || 0).getTime() <= GEO_MISS_TTL_MS);
+
+  const resolved = {};
+  const pending = [];
+  const budget = maxGeoLookups();
+  const throttled = !googleKey();
+  let spent = 0;
+
+  for (const w of stops) {
+    let out = null;      // stays null when every candidate is a confirmed miss
+    let stalled = false; // ran out of budget, or the geocoder is failing
+    let tries = 0;       // network attempts spent on THIS stop
+    for (let i = 0; i < w.cands.length; i++) {
+      const q = w.cands[i];
+      const cached = known.get(q);
+      if (usable(cached)) {
+        if (cached.lat == null) continue;                       // known miss → try the next candidate
+        out = { lat: Number(cached.lat), lng: Number(cached.lng), label: cached.label || "", approx: i > 0 };
+        break;
+      }
+      // Out of global budget, or this one stop has had its fair share.
+      if (spent >= budget || tries >= MAX_TRIES_PER_STOP) { stalled = true; break; }
+      if (throttled) await geoPace();
+      spent++; tries++;
+      let hit;
+      try {
+        hit = await geocodeOne(q);
+      } catch {
+        // Transport/HTTP failure: leave it uncached and let the client retry.
+        stalled = true;
+        break;
+      }
+      const row = { q, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null, label: hit ? hit.label : null, fetched_at: new Date().toISOString() };
+      known.set(q, row);
+      // Cached before the loop moves on, misses included, so the next call for
+      // this address costs nothing.
+      const { error } = await admin.from("geo_cache").upsert(row, { onConflict: "q" });
+      if (error) console.error("geo_cache upsert:", error.message);
+      if (hit) { out = { lat: hit.lat, lng: hit.lng, label: hit.label, approx: i > 0 }; break; }
+    }
+    if (out) resolved[w.key] = out;
+    else if (stalled) pending.push(w.key);
+    else resolved[w.key] = null;      // genuinely unlocatable — don't ask again
+  }
+
+  res.status(200).json({ resolved, pending, lookups: spent });
+}
+
 export default async function handler(req, res) {
   const action = (req.query?.fleet || "").toString().trim();
   if (action === "webhook") {
@@ -308,6 +462,12 @@ export default async function handler(req, res) {
     // vercel.json pins the provider on each public URL; Verizon's predates the
     // parameter and its rewrite does not send one.
     return gpsWebhook(req, res, (req.query?.provider || "verizon").toString().trim().toLowerCase());
+  }
+  // Ahead of the GET-only guard below: the batch geocoder POSTs its stop list,
+  // which is far too big to hang off the query string.
+  if ((req.query?.geo || "").toString().trim() === "batch") {
+    if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+    return geoBatch(req, res);
   }
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });

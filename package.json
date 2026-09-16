@@ -21,7 +21,9 @@
     "test:verizon": "node scripts/test-verizon.mjs",
     "test:motive": "node scripts/test-motive.mjs",
     "test:reports": "node scripts/test-reports.mjs",
-    "test:voice-layout": "node scripts/test-voice-layout.mjs"
+    "test:geopins": "node scripts/test-geo-pins.mjs",
+    "test:voice-layout": "node scripts/test-voice-layout.mjs",
+    "geo:backfill": "node scripts/backfill-geo-cache.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

@@ -224,6 +224,7 @@ export const I18N_ES = {
   "The Motive columns are not in the database yet. Run the setup SQL once and save again.": "Las columnas de Motive todavía no están en la base. Corré el SQL de setup una vez y guardá de nuevo.",
   "They owe us (AR)": "Nos deben (AR)",
   "To link trucks and drivers to Motive, run the updated setup SQL once in Supabase.": "Para vincular trucks y drivers con Motive, corré una vez el SQL de setup actualizado en Supabase.",
+  "To plot scheduled jobs on the map, run the updated setup SQL once in Supabase.": "Para ver los jobs agendados en el mapa, corré una vez el SQL de setup actualizado en Supabase.",
   "To pay in 30 days": "A pagar en 30 días",
   "Transport": "Transporte",
   "Type to the agent": "Escribile al agente",
