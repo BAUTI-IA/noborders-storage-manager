@@ -20,6 +20,7 @@ import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
 import { ELD, ELD_KEYS, eldOfTruck, eldOfDriver } from "./eldData.js";
 import { selectAll, dbFailed } from "./db.js";
+import { mapJobStops, JOB_PIN_DAYS } from "./geoData.js";
 import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
@@ -1024,6 +1025,37 @@ alter table public.driver_hos_days enable row level security;
 drop policy if exists "driver_hos_days_all" on public.driver_hos_days;
 create policy "driver_hos_days_all" on public.driver_hos_days for all to anon, authenticated using (true) with check (true);`;
 
+// Geocoding cache: address query -> lat/lng, so the live map never re-asks
+// Nominatim for an address it already resolved. Keyed by the NORMALISED query
+// string (lowercased, whitespace collapsed) built from fmtPlace().
+//
+// A row with a null lat is a confirmed miss — Nominatim looked and found
+// nothing. Storing those matters as much as storing the hits: without them
+// every "TBD" address in the book re-hits the geocoder on every map open, and
+// Nominatim's usage policy only allows one request per second.
+//
+// The primary key here IS a customer's street address, so reads are gated on the
+// sections that already see job addresses rather than on "authenticated" — an
+// account denied jobs/dispatching must not get the address book through a cache.
+// There are no write policies at all: RLS default-denies, and every write goes
+// through the service role in api/geocode.mjs, same as zip_geo in api/distance.mjs.
+const GEO_CACHE_SQL = `create table if not exists public.geo_cache (
+  q text primary key,
+  lat numeric,
+  lng numeric,
+  label text,
+  fetched_at timestamptz default now()
+);
+create index if not exists geo_cache_fetched_at_idx on public.geo_cache (fetched_at);
+alter table public.geo_cache enable row level security;
+drop policy if exists "geo_cache_read" on public.geo_cache;
+create policy "geo_cache_read" on public.geo_cache
+  for select to authenticated using (
+    public.has_perm('trips','view') or public.has_perm('jobs','view')
+    or public.has_perm('dispatching','view') or public.has_perm('calendario','view')
+    or public.has_perm('calendario_entregas','view') or public.has_perm('jobcalc','view')
+  );`;
+
 // Trips / Live Load: trucks + trips tables + trip link columns on storage_jobs.
 const TRIPS_SQL = `create table if not exists public.trucks (
   id bigint generated always as identity primary key,
@@ -1712,6 +1744,11 @@ const TRUCK_MAP_CSS = `
 .tlm-pin.sel .tlm-dot{transform:scale(1.3)}
 .tlm-pin:hover .tlm-dot{transform:scale(1.18)}
 @keyframes tlmhalo{0%,100%{transform:scale(1);opacity:.22}50%{transform:scale(1.75);opacity:.04}}
+.tlm-job{position:relative;width:0;height:0}
+.tlm-job i{position:absolute;left:-6px;top:-6px;width:12px;height:12px;border-radius:3px;border:2px solid #fff;
+  box-shadow:0 1px 4px rgba(16,49,79,.4);transition:transform .15s;display:block}
+.tlm-job:hover i{transform:scale(1.25)}
+.tlm-job.approx i{opacity:.55;border-style:dashed}
 .tlm-tip{font:600 11.5px/1.45 system-ui,sans-serif}
 .tlm-tip small{display:block;font-weight:400;color:#6b7785}
 .tlm-map .leaflet-control-layers{margin-top:52px;border-radius:8px;border:1px solid #dde5ee;box-shadow:0 1px 5px rgba(16,42,67,.14)}
@@ -1722,10 +1759,14 @@ const TRUCK_MAP_CSS = `
 
 const esc = (x) => String(x ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
 
-function LeafletTruckMap({ trucks, selected, onSelect }) {
+function LeafletTruckMap({ trucks, selected, onSelect, jobPins = [], jobLines = [] }) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef(new Map());   // truck id → L.Marker
+  // Job pins live in their own layer and their own ref maps, so the five-minute
+  // truck refresh never touches them (and vice versa).
+  const jobMarksRef = useRef(new Map());  // stop key → L.Marker
+  const jobLinesRef = useRef(new Map());  // job key  → L.Polyline
   // Held in a ref so the marker click handlers never need rebinding.
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
@@ -1755,6 +1796,11 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
     }
     layers["Streets"].addTo(map);
     L.control.layers(layers, null, { position: "topright" }).addTo(map);
+    // Job pins get their own panes so trucks always draw — and hover — on top.
+    // Leaflet's defaults are overlayPane 400 and markerPane 600; slotting in
+    // just under each keeps the truck code untouched.
+    map.createPane("jobLines").style.zIndex = 380;
+    map.createPane("jobPins").style.zIndex = 590;
     mapRef.current = map;
     // The map lives inside a grid that settles after mount, and Leaflet measures
     // itself once — without this it renders into a stale box and tiles tear. The
@@ -1765,7 +1811,10 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
       if (!touchedRef.current) fitRef.current?.();
     });
     ro.observe(elRef.current);
-    return () => { ro.disconnect(); map.remove(); mapRef.current = null; markersRef.current.clear(); };
+    return () => {
+      ro.disconnect(); map.remove(); mapRef.current = null;
+      markersRef.current.clear(); jobMarksRef.current.clear(); jobLinesRef.current.clear();
+    };
   }, []);
 
   // Markers are reused across refreshes: rebuilding them every five minutes
@@ -1814,6 +1863,64 @@ function LeafletTruckMap({ trucks, selected, onSelect }) {
       if (!seen.has(id)) { m.remove(); markersRef.current.delete(id); }
     }
   }, [located, selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Job pins, in their own effect and their own refs so the five-minute truck
+  // refresh never tears down a job tooltip (and job data never disturbs a truck
+  // marker). Keyed on a digest of the pins rather than the array identity: the
+  // realtime subscription hands back a brand-new jobs array on any edit anywhere
+  // in the CRM, and rebuilding every icon for that would be the one slow thing here.
+  const jobPinsKey = jobPins.map(p => `${p.key}@${p.lat.toFixed(4)},${p.lng.toFixed(4)},${p.color},${p.approx ? 1 : 0}`).join("|");
+  const jobLinesKey = jobLines.map(l => `${l.key}@${l.from.join(",")}>${l.to.join(",")}`).join("|");
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const seen = new Set();
+    for (const p of jobPins) {
+      seen.add(p.key);
+      const isPickup = p.kind === "pickup";
+      // Pickup reads as hollow, delivery as filled, so the direction of the work
+      // is legible without opening anything.
+      const icon = L.divIcon({
+        className: "", iconSize: [0, 0],
+        html: `<div class="tlm-job ${p.approx ? "approx" : ""}"><i style="background:${
+          isPickup ? "#fff" : p.color};border-color:${isPickup ? p.color : "#fff"}"></i></div>`,
+      });
+      let m = jobMarksRef.current.get(p.key);
+      if (!m) {
+        m = L.marker([p.lat, p.lng], { icon, pane: "jobPins" }).addTo(map);
+        jobMarksRef.current.set(p.key, m);
+      } else {
+        m.setLatLng([p.lat, p.lng]);
+        m.setIcon(icon);
+      }
+      m.unbindTooltip();
+      m.bindTooltip(p.tip, { direction: "top", offset: [0, -10], opacity: 1 });
+    }
+    for (const [k, m] of jobMarksRef.current) {
+      if (!seen.has(k)) { m.remove(); jobMarksRef.current.delete(k); }
+    }
+  }, [jobPinsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const seen = new Set();
+    for (const ln of jobLines) {
+      seen.add(ln.key);
+      let pl = jobLinesRef.current.get(ln.key);
+      if (!pl) {
+        // interactive:false — a clickable hairline would steal hover from the pins.
+        pl = L.polyline([ln.from, ln.to], { pane: "jobLines", color: "#8a94a0", weight: 1.5,
+          opacity: 0.55, dashArray: "4 4", interactive: false }).addTo(map);
+        jobLinesRef.current.set(ln.key, pl);
+      } else {
+        pl.setLatLngs([ln.from, ln.to]);
+      }
+    }
+    for (const [k, pl] of jobLinesRef.current) {
+      if (!seen.has(k)) { pl.remove(); jobLinesRef.current.delete(k); }
+    }
+  }, [jobLinesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keyed on which trucks have a position, not on the positions themselves, so
   // the five-minute refresh never re-frames the map under somebody's nose.
@@ -1871,11 +1978,14 @@ function loadGoogleMaps(key) {
   return gmapsPromise;
 }
 
-function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
+function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail, jobPins = [], jobLines = [] }) {
   const elRef = useRef(null);
   const mapRef = useRef(null);
   const gRef = useRef(null);
   const marksRef = useRef(new Map());
+  // Job pins keep their own maps so a truck refresh never touches them.
+  const jobMarksRef = useRef(new Map());  // stop key → maps.Marker
+  const jobLinesRef = useRef(new Map());  // job key  → maps.Polyline
   const infoRef = useRef(null);
   const touchedRef = useRef(false);
   const onSelectRef = useRef(onSelect);
@@ -1964,6 +2074,66 @@ function GoogleTruckMap({ trucks, selected, onSelect, apiKey, onFail }) {
       if (!seen.has(id)) { m.setMap(null); marksRef.current.delete(id); }
     }
   }, [ready, located, selected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Job pins — the Google twin of the Leaflet effects above. Trucks keep their
+  // zIndex 1/10; jobs sit at 0 and their lines below that, so a truck always
+  // wins an overlap and the hover that goes with it.
+  const jobPinsKey = jobPins.map(p => `${p.key}@${p.lat.toFixed(4)},${p.lng.toFixed(4)},${p.color},${p.approx ? 1 : 0}`).join("|");
+  const jobLinesKey = jobLines.map(l => `${l.key}@${l.from.join(",")}>${l.to.join(",")}`).join("|");
+  useEffect(() => {
+    const maps = gRef.current, map = mapRef.current;
+    if (!ready || !maps || !map) return;
+    const seen = new Set();
+    for (const p of jobPins) {
+      seen.add(p.key);
+      const isPickup = p.kind === "pickup";
+      // A rounded square, to read as a different kind of thing from the truck dots.
+      const icon = {
+        path: "M -5,-5 5,-5 5,5 -5,5 z",
+        fillColor: isPickup ? "#ffffff" : p.color, fillOpacity: p.approx ? 0.55 : 1,
+        strokeColor: isPickup ? p.color : "#ffffff", strokeWeight: 2, scale: 1,
+      };
+      let m = jobMarksRef.current.get(p.key);
+      if (!m) {
+        m = new maps.Marker({ map, position: { lat: p.lat, lng: p.lng }, icon, zIndex: 0 });
+        jobMarksRef.current.set(p.key, m);
+      } else {
+        m.setPosition({ lat: p.lat, lng: p.lng });
+        m.setIcon(icon);
+      }
+      for (const ev of ["mouseover", "mouseout"]) maps.event.clearListeners(m, ev);
+      // The one shared InfoWindow the truck markers already use.
+      m.addListener("mouseover", () => { infoRef.current.setContent(p.tip); infoRef.current.open({ anchor: m, map }); });
+      m.addListener("mouseout", () => infoRef.current.close());
+    }
+    for (const [k, m] of jobMarksRef.current) {
+      if (!seen.has(k)) { m.setMap(null); jobMarksRef.current.delete(k); }
+    }
+  }, [ready, jobPinsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const maps = gRef.current, map = mapRef.current;
+    if (!ready || !maps || !map) return;
+    const seen = new Set();
+    for (const ln of jobLines) {
+      seen.add(ln.key);
+      const path = [{ lat: ln.from[0], lng: ln.from[1] }, { lat: ln.to[0], lng: ln.to[1] }];
+      let pl = jobLinesRef.current.get(ln.key);
+      if (!pl) {
+        // Google has no dashArray: a transparent stroke plus a repeating dash
+        // symbol is the documented way to draw a dashed line.
+        pl = new maps.Polyline({ map, path, strokeOpacity: 0, clickable: false, zIndex: -1,
+          icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 0.55, strokeWeight: 1.5, strokeColor: "#8a94a0", scale: 3 },
+                    offset: "0", repeat: "12px" }] });
+        jobLinesRef.current.set(ln.key, pl);
+      } else {
+        pl.setPath(path);
+      }
+    }
+    for (const [k, pl] of jobLinesRef.current) {
+      if (!seen.has(k)) { pl.setMap(null); jobLinesRef.current.delete(k); }
+    }
+  }, [ready, jobLinesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const locatedKey = located.map(t => t.id).sort().join(",");
   useEffect(() => {
@@ -2130,6 +2300,70 @@ function geoCandidates({ address, city, state, zip }) {
 function deliveryQuery(j) {
   return fmtPlace({ address: j.delivery_address, city: j.delivery_city, state: j.delivery_state, zip: j.delivery_zip });
 }
+// "Mar 12" for the pin tooltips. The dates live in template strings the i18n
+// DOM pass can never reach, so the month name goes through t().
+function pinDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = String(iso).split("-");
+  if (!y || !m || !d) return String(iso);
+  return `${t(MONTHS_EN[parseInt(m, 10) - 1] || "")} ${parseInt(d, 10)}`;
+}
+
+// Hover card for a job pin. Leaflet tooltips and Google info windows both take
+// raw HTML, so this is a string builder (same shape as the truck tooltip above)
+// and every label goes through tr() rather than the DOM pass.
+function jobPinTip(g, kind, approx) {
+  const isPickup = kind === "pickup";
+  const where = isPickup
+    ? [g.pickup_city, US_CODE_TO_NAME[(g.pickup_state || "").toUpperCase()] || g.pickup_state].filter(Boolean).join(", ")
+    : [g.delivery_city, US_CODE_TO_NAME[(g.delivery_state || "").toUpperCase()] || g.delivery_state].filter(Boolean).join(", ");
+  const when = isPickup
+    ? (g.pickup_date_from === g.pickup_date_to
+        ? pinDate(g.pickup_date_from)
+        : [pinDate(g.pickup_date_from), pinDate(g.pickup_date_to)].filter(Boolean).join(" – "))
+    : pinDate(g.delivery_date);
+  const cf = Math.round(effCf(g) || 0);
+  const owed = Math.round(jobToCollect(g) || 0);
+  const line2 = [
+    esc(tr(isPickup ? "Pickup" : "Delivery", isPickup ? "Pickup" : "Delivery")),
+    where ? esc(where) : "",
+  ].filter(Boolean).join(" · ");
+  const line3 = [when ? esc(when) : "", cf ? `${cf} CF` : ""].filter(Boolean).join(" · ");
+  const line4 = owed ? `$${owed.toLocaleString()} ${esc(tr("to collect", "a cobrar"))}` : "";
+  return `<div class="tlm-tip">📦 ${esc(g.job_number ? "#" + g.job_number : tr("Job", "Job"))}${
+    g.customer ? " — " + esc(g.customer) : ""}<small>${line2}</small>${
+    line3 ? `<small>${line3}</small>` : ""}${
+    line4 ? `<small>${line4}</small>` : ""}${
+    approx ? `<small>≈ ${esc(tr("Approximate location", "Ubicación aproximada"))}</small>` : ""}</div>`;
+}
+
+// Turns the stop list + whatever the geocoder has resolved so far into the
+// markers and connecting lines the two map implementations draw. Pure, so the
+// caller can memoise it: the marker effects re-run on every parent render and
+// rebuilding a few hundred icons each time is the one thing here that would
+// actually be slow.
+function buildJobPins(jobStops, geo) {
+  const pins = [];
+  const lines = [];
+  for (const { job, stops } of jobStops) {
+    const color = calEventColor(job).bar;
+    const ends = {};
+    for (const st of stops) {
+      const g = geo[st.key];
+      if (!g || g.lat == null) continue;
+      ends[st.kind] = [Number(g.lat), Number(g.lng)];
+      pins.push({
+        key: st.key, jobKey: job.key, kind: st.kind, color,
+        lat: Number(g.lat), lng: Number(g.lng), approx: !!g.approx,
+        tip: jobPinTip(job, st.kind, !!g.approx),
+      });
+    }
+    // Only worth a line when both ends actually resolved.
+    if (ends.pickup && ends.delivery) lines.push({ key: job.key, from: ends.pickup, to: ends.delivery });
+  }
+  return { pins, lines };
+}
+
 // Every place a job could have been loaded from, most preferred first: storage
 // unit → warehouse → the job's own pickup address (matching how routeUrl resolves
 // origin). Each option: { kind, label, query, candidates }.
@@ -4057,6 +4291,13 @@ export default function App() {
   const [verizonOn, setVerizonOn] = useState(null);   // null until the server answers
   const [motiveOn, setMotiveOn] = useState(null);     // idem, for Motive
   const [motiveColsMissing, setMotiveColsMissing] = useState(false);  // motive_* link columns not yet in DB
+  const [geoCacheMissing, setGeoCacheMissing] = useState(false);      // geo_cache table not yet in DB (job pins on the live map)
+  const [showJobPins, setShowJobPins] = useState(true);               // draw scheduled jobs on the live map
+  const [jobGeo, setJobGeo] = useState({});                           // stop key -> {lat,lng,approx} | null (unlocatable)
+  const [jobGeoPending, setJobGeoPending] = useState(0);              // addresses still waiting on the geocoder
+  // Mirrors jobGeo so the resolver can read what it already has without
+  // re-subscribing the effect to its own output.
+  const jobGeoRef = useRef({});
   const [fleetSync, setFleetSync] = useState({ busy:false, at:null, error:null });
   const [vzVehicles, setVzVehicles] = useState(null);      // Reveal roster | null
   const [vzVehiclesErr, setVzVehiclesErr] = useState(null);
@@ -4987,6 +5228,27 @@ export default function App() {
     return () => { cancelled = true; };
   }, [session, tripsMissing]);
 
+  // Probe / auto-migrate the geocoding cache the live map's job pins read from.
+  // Unlike the probes above this one is not gated on tripsMissing: the cache is
+  // its own table, and the map degrades to "trucks only" without it rather than
+  // breaking, so the banner is informational.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { error } = await supabase.from("geo_cache").select("q").limit(1);
+      if (cancelled) return;
+      if (!error) { setGeoCacheMissing(false); return; }
+      let created = false;
+      for (const fn of ["exec_sql", "exec", "execute_sql"]) {
+        const { error: rpcErr } = await supabase.rpc(fn, { sql: GEO_CACHE_SQL });
+        if (!rpcErr) { created = true; break; }
+      }
+      if (!cancelled) setGeoCacheMissing(!created);
+    })();
+    return () => { cancelled = true; };
+  }, [session, tripsMissing]);
+
   // Probe the Extras & Commissions module (job_extras + employees tables).
   useEffect(() => {
     if (!session) return;
@@ -5754,6 +6016,66 @@ export default function App() {
     for (const g of map.values()) (byDate[g.delivery_date] = byDate[g.delivery_date] || []).push(g);
     return byDate;
   }, [jobs]);
+
+  // ── Scheduled-job pins on the live map ─────────────────────────────────────
+  // Jobs are already entirely in memory (loadJobs pulls the whole table), so the
+  // map needs no fetch of its own — only the coordinates, which storage_jobs
+  // does not store.
+  const liveJobStops = useMemo(
+    () => (showJobPins && !geoCacheMissing ? mapJobStops(jobs, { from: today(), days: JOB_PIN_DAYS, geoCandidates }) : []),
+    [jobs, showJobPins, geoCacheMissing],
+  );
+  // The resolver keys on WHICH stops exist, not on the jobs array: the realtime
+  // subscription re-pulls all of storage_jobs on any change, and keying on that
+  // would restart the geocoding every time anyone touches a job.
+  const liveStopKey = useMemo(
+    () => liveJobStops.flatMap(x => x.stops.map(st => st.key)).sort().join(","),
+    [liveJobStops],
+  );
+
+  // Resolve pin coordinates through the cached batch geocoder. The endpoint caps
+  // how many NEW addresses it looks up per call — Nominatim allows one a second
+  // — and hands the rest back in `pending`, so this loops until nothing new
+  // comes back and the map fills in progressively instead of stalling on a cold
+  // cache.
+  useEffect(() => {
+    if (!session || page !== "trips" || tripsView !== "live") return;
+    if (!liveStopKey) { setJobGeoPending(0); return; }
+    let cancelled = false;
+    (async () => {
+      for (let round = 0; round < 8 && !cancelled; round++) {
+        const want = [];
+        for (const { stops } of liveJobStops) {
+          for (const st of stops) if (!(st.key in jobGeoRef.current)) want.push({ key: st.key, candidates: st.candidates });
+        }
+        if (cancelled) return;
+        setJobGeoPending(want.length);
+        if (!want.length) return;
+        let out;
+        try {
+          const r = await fetch("/api/geocode?geo=batch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+            body: JSON.stringify({ stops: want }),
+          });
+          if (!r.ok) return;
+          out = await r.json();
+        } catch { return; }   // offline / endpoint down: the map just shows trucks
+        if (cancelled) return;
+        const got = out?.resolved || {};
+        // No progress at all means retrying would only spin.
+        if (!Object.keys(got).length) return;
+        jobGeoRef.current = { ...jobGeoRef.current, ...got };
+        setJobGeo(jobGeoRef.current);
+        if (!out.pending || !out.pending.length) { setJobGeoPending(0); return; }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [liveStopKey, session, page, tripsView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Memoised because both marker effects re-run on every parent render, and
+  // rebuilding a few hundred icons each time is the one genuinely slow thing here.
+  const jobPinData = useMemo(() => buildJobPins(liveJobStops, jobGeo), [liveJobStops, jobGeo]);
 
   // Jobs that should get a delivery date: picked up and waiting (in storage /
   // warehouse / client not ready) or broker deliveries, with no delivery_date yet.
@@ -11138,6 +11460,12 @@ export default function App() {
                       <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
                     </div>
                   )}
+                  {geoCacheMissing && (
+                    <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#854F0B", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                      <span>To plot scheduled jobs on the map, run the updated setup SQL once in Supabase.</span>
+                      <button onClick={() => setShowSetup(true)} style={{ background:"#854F0B", border:"none", color:"#fff", fontWeight:600, borderRadius:7, padding:"5px 12px", cursor:"pointer", fontSize:12 }}>View SQL</button>
+                    </div>
+                  )}
                   <div style={{ display:"grid", gridTemplateColumns:"minmax(280px, 360px) 1fr", gap:14, alignItems:"start" }}>
                     {/* Verizon-style side list */}
                     <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", maxHeight:560, display:"flex", flexDirection:"column" }}>
@@ -11145,6 +11473,19 @@ export default function App() {
                         {[["all",`${tr("All", "Todos")} (${located.length})`],["moving",`${tr("In transit", "En movimiento")} (${moving})`],["stopped",`${tr("Stopped", "Detenidos")} (${stopped})`]].map(([v,l]) => (
                           <button key={v} onClick={() => setLiveStatusFilter(v)} style={{ fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor:"pointer", border:"1px solid", borderColor: liveStatusFilter===v?"#111":"#e5e5e5", background: liveStatusFilter===v?"#111":"#fff", color: liveStatusFilter===v?"#fff":"#666", fontWeight: liveStatusFilter===v?600:500 }}>{l}</button>
                         ))}
+                      </div>
+                      {/* Scheduled-job pins. Lives here rather than in the legend
+                          row under the map, which is already overflow:hidden. */}
+                      <div style={{ padding:"9px 14px", borderBottom:"1px solid #f0f0f0", display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+                        <button onClick={() => setShowJobPins(v => !v)}
+                          style={{ fontSize:11.5, padding:"4px 10px", borderRadius:20, cursor:"pointer", border:"1px solid",
+                            borderColor: showJobPins ? "#639922" : "#e5e5e5", background: showJobPins ? "#EAF3DE" : "#fff",
+                            color: showJobPins ? "#3B6D11" : "#666", fontWeight: showJobPins ? 600 : 500 }}>
+                          📦 {tr("Scheduled jobs", "Jobs agendados")} ({liveJobStops.length})
+                        </button>
+                        {showJobPins && jobGeoPending > 0 && (
+                          <span style={{ fontSize:11, color:"#aaa" }}>{tr(`Locating ${jobGeoPending}…`, `Ubicando ${jobGeoPending}…`)}</span>
+                        )}
                       </div>
                       <div style={{ overflowY:"auto" }}>
                         {trucksList.length === 0 ? (
@@ -11195,7 +11536,8 @@ export default function App() {
                     </div>
                     {/* Map */}
                     <div>
-                      <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} googleKey={googleKey} />
+                      <TruckLiveMap trucks={visible} selected={liveSelTruck} onSelect={setLiveSelTruck} googleKey={googleKey}
+                        jobPins={jobPinData.pins} jobLines={jobPinData.lines} />
                       <div style={{ display:"flex", gap:14, flexWrap:"nowrap", alignItems:"center", fontSize:11, color:"#666", padding:"8px 4px 0", paddingRight:78, overflow:"hidden" }}>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexShrink:0 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#1A8A4E" }} />In transit</span>
                         <span style={{ display:"inline-flex", alignItems:"center", gap:5, flexShrink:0 }}><span style={{ width:10, height:10, borderRadius:"50%", background:"#E24B4A" }} />Detenido</span>
@@ -11227,6 +11569,17 @@ export default function App() {
                           )}
                         </span>
                       </div>
+                      {/* Second legend line — the row above is overflow:hidden and
+                          already full, so job pins get their own. */}
+                      {showJobPins && jobPinData.pins.length > 0 && (
+                        <div style={{ display:"flex", gap:14, flexWrap:"wrap", alignItems:"center", fontSize:11, color:"#666", padding:"5px 4px 0" }}>
+                          <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+                            <span style={{ width:10, height:10, borderRadius:3, background:"#fff", border:"2px solid #639922" }} />{tr("Pickup", "Pickup")}</span>
+                          <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+                            <span style={{ width:10, height:10, borderRadius:3, background:"#639922", border:"2px solid #fff", boxShadow:"0 0 0 1px #cfd8e0" }} />{tr("Delivery", "Delivery")}</span>
+                          <span style={{ color:"#aaa" }}>{tr("Pin colour follows the calendar status · dashed = approximate", "El color del pin sigue el estado del calendario · punteado = aproximado")}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </>
@@ -14280,7 +14633,7 @@ export default function App() {
       })()}
 
       {showSetup && (() => {
-        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL, DRIVER_APP_SETTINGS_SQL, CRM_SETTINGS_SQL].join("\n\n");
+        const allSql = [STORAGE_JOBS_SQL, JOB_COLS_SQL, CRM_V2_SQL, BILLING_SQL, CRM_V3_SQL, SETTLEMENTS_SQL, TRIPS_SQL, TRIP_STOPS_SQL, GEO_CACHE_SQL, EQUIPMENT_SQL, JOB_EVENTS_SQL, EXTRAS_SQL, PAYMENTS_SQL, COMPLIANCE_SQL, CLAIMS_SQL, EXPENSES_SQL, DRIVER_APP_SETTINGS_SQL, CRM_SETTINGS_SQL].join("\n\n");
         return (
         <Modal title="Database setup" onClose={() => setShowSetup(false)}
           footer={<Btn primary onClick={() => setShowSetup(false)}>Listo</Btn>}>
