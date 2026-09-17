@@ -86,6 +86,31 @@ function Kv({ k, children, flag }) {
   );
 }
 
+// One estimated-vs-real row. The gap is the whole point, so it is coloured only
+// when it is big enough to mean something — 15% off is noise, not a lesson.
+function Delta({ k, est, real, money: isMoney }) {
+  if (real == null || real === "") return null;
+  const e = est == null || est === "" ? null : num(est);
+  const r = num(real);
+  const fmt = (v) => (isMoney ? money(v) : Math.round(v * 10) / 10);
+  const off = e != null && e > 0 ? (r - e) / e : null;
+  const tone = off == null || Math.abs(off) < 0.15 ? "#111" : off > 0 ? "#A32D2D" : "#3B6D11";
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: "1px solid #f6f6f6", fontSize: 12.5 }}>
+      <span style={{ color: "#999" }}>{k}</span>
+      <span style={{ textAlign: "right" }}>
+        {e != null && <span style={{ color: "#bbb" }}>{fmt(e)} → </span>}
+        <b style={{ fontWeight: 600, color: tone }}>{fmt(r)}</b>
+        {off != null && Math.abs(off) >= 0.15 && (
+          <span style={{ color: tone, fontSize: 11, marginLeft: 5 }}>
+            {off > 0 ? "+" : ""}{Math.round(off * 100)}%
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 export function PipelineSection({ supabase, session, profile, can = () => true, isAdmin = false, Btn, Modal, onConvertLead }) {
   const canCreate = can("pipeline", "create") || isAdmin;
   const canEdit = can("pipeline", "edit") || isAdmin;
@@ -666,6 +691,32 @@ function LeadDetail({ lead, brokerName, onEvaluate, busy, td0 }) {
           </>}
         </div>
       </div>
+
+      {/* Estimated against what it really cost. This is the payoff of the loop:
+          until the actuals came back automatically the cost model could only
+          age, because nobody was ever going to type them in by hand. */}
+      {ev?.actuals_at && (
+        <div style={{ ...card, marginTop: 12 }}>
+          <div style={cap}>Estimated vs real
+            <span style={{ marginLeft: "auto", fontWeight: 500, letterSpacing: 0, textTransform: "none", fontSize: 11, color: "#bbb" }}>
+              {ev.actuals_source === "eld"
+                ? tr("from the truck's GPS", "del GPS del camión")
+                : tr("from payroll", "de la nómina")}
+            </span>
+          </div>
+          <Delta k={tr("Truck-days", "Días-camión")} est={ev.truck_days} real={ev.actual_truck_days} />
+          <Delta k={tr("Miles", "Millas")} est={ev.total_miles} real={ev.actual_miles} />
+          <Delta k={tr("Fuel", "Combustible")} est={null} real={ev.actual_fuel} money />
+          <Delta k={tr("Tolls", "Peajes")} est={null} real={ev.actual_tolls} money />
+          <Delta k={tr("Hotel nights", "Noches de hotel")} est={ev.hotel_nights} real={ev.actual_hotel_nights} />
+          {ev.actuals_shared && (
+            <div style={{ fontSize: 11, color: "#854D0E", background: "#FEF9C3", borderRadius: 6, padding: "7px 9px", marginTop: 9 }}>
+              {tr("This job shared its trip, so these are its share of it. The cost model does not learn from a shared run — it was priced as if the truck were all its own.",
+                  "Este job compartió el viaje, así que esto es su parte. El modelo de costos no aprende de un viaje compartido — se coteó como si tuviera el camión para él solo.")}
+            </div>
+          )}
+        </div>
+      )}
 
       {lead.raw_text && (
         <details style={{ ...card, marginTop: 12 }}>

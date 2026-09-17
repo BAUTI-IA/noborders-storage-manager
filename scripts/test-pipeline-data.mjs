@@ -13,6 +13,7 @@ import {
   senderDomain, isAllowedSender, clampRawText, MAX_RAW_TEXT,
   isLowConfidence, missingFields, isEvaluable,
   haversineMiles, nearestTruck,
+  withinRange, jobRunWindow, distinctExpenseDates, sumExpenses, computeActuals,
 } from "../src/pipelineData.js";
 
 const t = (name, fn) => {
@@ -327,4 +328,142 @@ t("nearestTruck answers null when nothing is locatable", () => {
   assert.equal(nearestTruck([{ id: 1 }], 28.5, -81.3), null);
   assert.equal(nearestTruck([], 28.5, -81.3), null);
   assert.equal(nearestTruck([{ id: 1, last_lat: 28, last_lng: -81 }], NaN, -81.3), null);
+});
+
+// ── Actuals: closing the calibration loop ────────────────────────────────────
+t("withinRange is inclusive and tolerant of open bounds", () => {
+  assert.equal(withinRange("2026-07-25", "2026-07-20", "2026-07-27"), true);
+  assert.equal(withinRange("2026-07-20", "2026-07-20", "2026-07-27"), true);  // inclusive
+  assert.equal(withinRange("2026-07-27", "2026-07-20", "2026-07-27"), true);  // inclusive
+  assert.equal(withinRange("2026-07-28", "2026-07-20", "2026-07-27"), false);
+  assert.equal(withinRange("2026-07-01", null, "2026-07-27"), true);           // open start
+  assert.equal(withinRange("", "2026-07-20", "2026-07-27"), false);
+});
+
+t("the run window is the trip, not the job's whole life", () => {
+  // A job can sit in storage for months; sweeping that whole span would pull in
+  // expenses that have nothing to do with the run.
+  const job = { pickup_date: "2026-03-01", date_out: "2026-07-27" };
+  assert.deepEqual(jobRunWindow(job, { departure_date: "2026-07-24" }),
+                   { start: "2026-07-24", end: "2026-07-27" });
+  assert.deepEqual(jobRunWindow(job, null), { start: "2026-03-01", end: "2026-07-27" });
+});
+
+t("a job that has not been delivered has no window", () => {
+  assert.equal(jobRunWindow({ pickup_date: "2026-07-24" }, null), null);
+  assert.equal(jobRunWindow({ date_out: "" }, null), null);
+});
+
+t("a departure after the delivery does not invert the window", () => {
+  const w = jobRunWindow({ date_out: "2026-07-27" }, { departure_date: "2026-07-30" });
+  assert.ok(w.start <= w.end, `inverted: ${JSON.stringify(w)}`);
+});
+
+t("expenses sum by category and hotel nights count distinct dates", () => {
+  const exp = [
+    { category: "fuel", amount: 300, expense_date: "2026-07-24" },
+    { category: "fuel", amount: 250, expense_date: "2026-07-26" },
+    { category: "hotel", amount: 120, expense_date: "2026-07-24" },
+    { category: "hotel", amount: 130, expense_date: "2026-07-24" }, // same night, two rows
+    { category: "hotel", amount: 140, expense_date: "2026-07-25" },
+    { category: "tolls", amount: 40, expense_date: "2026-07-25" },
+  ];
+  assert.equal(sumExpenses(exp, "fuel"), 550);
+  assert.equal(sumExpenses(exp, "materials"), 0);
+  assert.equal(distinctExpenseDates(exp, "hotel"), 2);
+});
+
+const JOB = { id: 1, job_number: "B8417142", date_out: "2026-07-27", trip_id: 9, driver_ids: [4] };
+const TRIP = { id: 9, truck_id: 3, driver_id: 4, departure_date: "2026-07-24" };
+const PINGS = [
+  { date: "2026-07-24", miles: 210, moved: true },
+  { date: "2026-07-25", miles: 240, moved: true },
+  { date: "2026-07-26", miles: 0,   moved: false }, // parked: not a day out
+  { date: "2026-07-27", miles: 150, moved: true },
+];
+const EXP = [
+  { category: "fuel", amount: 400, expense_date: "2026-07-25" },
+  { category: "tolls", amount: 60, expense_date: "2026-07-25" },
+  { category: "materials", amount: 80, expense_date: "2026-07-24" },
+  { category: "hotel", amount: 130, expense_date: "2026-07-24" },
+];
+
+t("a job alone on its trip takes the whole cost and is clean", () => {
+  const a = computeActuals({
+    job: JOB, trip: TRIP, siblingCf: [{ jobKey: "n:b8417142", cuFt: 820 }],
+    jobCuFt: 820, pingDays: PINGS, expenses: EXP, workDays: [],
+  });
+  assert.equal(a.actual_truck_days, 3);        // parked day excluded
+  assert.equal(a.actual_miles, 600);
+  assert.equal(a.actual_fuel, 400);
+  assert.equal(a.actual_tolls, 60);
+  assert.equal(a.actual_materials, 80);
+  assert.equal(a.actual_hotel_nights, 1);
+  assert.equal(a.actuals_shared, false);       // → calibrate() will learn from it
+  assert.equal(a.actuals_source, "eld");
+  assert.equal(a.actual_trucks, 1);
+  assert.equal(a.actual_drivers, 1);
+  assert.equal(a.actual_helpers, null);        // never tracked; falls back to planned
+});
+
+t("a shared trip is split by cubic feet AND flagged so calibration skips it", () => {
+  const a = computeActuals({
+    job: JOB, trip: TRIP,
+    siblingCf: [{ jobKey: "n:b8417142", cuFt: 820 }, { jobKey: "n:x", cuFt: 1640 }],
+    jobCuFt: 820, pingDays: PINGS, expenses: EXP, workDays: [],
+  });
+  assert.equal(a.actuals_shared, true);        // the whole point
+  assert.equal(a.actual_truck_days, 1);        // 3 × (820/2460)
+  assert.equal(a.actual_miles, 200);           // 600 × ⅓
+  assert.equal(a.actual_fuel, 133.33);
+});
+
+t("with no volumes recorded a shared trip splits evenly", () => {
+  const a = computeActuals({
+    job: JOB, trip: TRIP,
+    siblingCf: [{ jobKey: "a", cuFt: 0 }, { jobKey: "b", cuFt: 0 }],
+    jobCuFt: 0, pingDays: PINGS, expenses: EXP, workDays: [],
+  });
+  assert.equal(a.actuals_shared, true);
+  assert.equal(a.actual_truck_days, 1.5);      // 3 / 2
+});
+
+t("payroll fills in for a truck with no ELD", () => {
+  const a = computeActuals({
+    job: JOB, trip: TRIP, siblingCf: [{ jobKey: "a", cuFt: 820 }], jobCuFt: 820,
+    pingDays: [], expenses: EXP,
+    workDays: [
+      { driver_id: 4, work_date: "2026-07-24" },
+      { driver_id: 7, work_date: "2026-07-24" },  // two drivers, one day
+      { driver_id: 4, work_date: "2026-07-25" },
+    ],
+  });
+  assert.equal(a.actual_truck_days, 2);        // distinct DATES, not rows
+  assert.equal(a.actual_drivers, 2);
+  assert.equal(a.actual_miles, null);          // nothing measured it
+  assert.equal(a.actuals_source, "payroll");
+});
+
+t("nothing measured means nothing written — no invented actuals", () => {
+  assert.equal(computeActuals({
+    job: JOB, trip: TRIP, siblingCf: [], jobCuFt: 820,
+    pingDays: [], expenses: EXP, workDays: [],
+  }), null);
+  assert.equal(computeActuals({
+    job: { id: 1 }, trip: null, siblingCf: [], jobCuFt: 0,
+    pingDays: PINGS, expenses: [], workDays: [],
+  }), null);  // not delivered
+});
+
+t("a job with no trip is its own run and reads clean", () => {
+  const a = computeActuals({
+    job: { id: 1, date_out: "2026-07-27", pickup_date: "2026-07-26", driver_ids: [4] },
+    trip: null, siblingCf: [{ jobKey: "a", cuFt: 500 }], jobCuFt: 500,
+    pingDays: [], expenses: [{ category: "fuel", amount: 90, expense_date: "2026-07-26" }],
+    workDays: [{ driver_id: 4, work_date: "2026-07-26" }],
+  });
+  assert.equal(a.actuals_shared, false);
+  assert.equal(a.actual_truck_days, 1);
+  assert.equal(a.actual_fuel, 90);
+  assert.equal(a.actual_trucks, null);   // no trip, so no truck to claim
 });
