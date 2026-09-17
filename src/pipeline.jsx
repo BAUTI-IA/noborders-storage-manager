@@ -18,6 +18,7 @@ import {
   mergePipelineSettings, holdDates, holdStage, holdProgress,
   rankLeads, pipelineTotals, leadScore, findDuplicate,
   leadToJobForm, isEvaluable, missingFields, isLowConfidence, num,
+  DEADHEAD_ORIGINS,
 } from "./pipelineData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -683,6 +684,17 @@ function LeadDetail({ lead, brokerName, onEvaluate, busy, td0 }) {
             <Kv k={tr("Miles", "Millas")}>
               {tr(`${Math.round(num(ev.loaded_miles)).toLocaleString()} loaded + ${Math.round(num(ev.deadhead_miles)).toLocaleString()} empty`,
                   `${Math.round(num(ev.loaded_miles)).toLocaleString()} cargadas + ${Math.round(num(ev.deadhead_miles)).toLocaleString()} vacías`)}
+            </Kv>
+            {/* Where the empty miles were measured from changes the verdict, so
+                the screen says it instead of leaving the operator to assume. */}
+            <Kv k={tr("Empty miles from", "Millas vacías desde")}>
+              {lead.parsed?.deadhead_from === DEADHEAD_ORIGINS.truck
+                ? tr(`🚛 ${near?.truck_name || "the closest truck"}${lead.parsed?.deadhead_zip ? ` · ${lead.parsed.deadhead_zip}` : ""}`,
+                     `🚛 ${near?.truck_name || "el camión más cerca"}${lead.parsed?.deadhead_zip ? ` · ${lead.parsed.deadhead_zip}` : ""}`)
+                : lead.parsed?.deadhead_from === DEADHEAD_ORIGINS.base
+                ? tr(`the base${lead.parsed?.deadhead_zip ? ` · ${lead.parsed.deadhead_zip}` : ""}`,
+                     `la base${lead.parsed?.deadhead_zip ? ` · ${lead.parsed.deadhead_zip}` : ""}`)
+                : tr("not measured", "sin medir")}
             </Kv>
             {near && <Kv k={tr("Closest truck", "Camión más cerca")}>
               {tr(`🚛 ${near.truck_name} · ${near.location || "unknown"} · ~${near.straight_miles} mi`,
