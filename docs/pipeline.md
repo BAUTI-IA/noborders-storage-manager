@@ -186,6 +186,29 @@ La lógica compartida vive en `lib/leads.mjs`, que no se despliega como función
 
 ---
 
+## Modelos
+
+| Para qué | Modelo | Variable para cambiarlo |
+|---|---|---|
+| Leer un mail y sacarle los campos | `claude-sonnet-5` | `PIPELINE_EXTRACT_MODEL` |
+| Ordenar la tanda de leads | `claude-opus-5` | `PIPELINE_RANK_MODEL` |
+
+El semáforo, el break-even y el $/día-camión **no pasan por ningún modelo**: son
+`evaluateJob()` en `src/jobCalcData.js`, matemática determinística. Si se apaga la
+API key el tablero sigue funcionando entero; sólo se caen el "pegar el mail" y el
+botón de analizar la tanda.
+
+La extracción queda en Sonnet 5 a propósito: es un parseo contra un esquema
+cerrado, corre en cada lead, y Sonnet 5 sale menos de la mitad que Opus 5. Para
+moverla alcanza con `PIPELINE_EXTRACT_MODEL=claude-opus-5` en Vercel — sin deploy.
+
+**Opus 5 piensa por defecto** (en Opus 4.8, omitir `thinking` significaba no
+pensar). Los tokens de razonamiento salen del mismo `max_tokens` que la respuesta,
+así que cada llamada lo declara explícito y tiene presupuesto de sobra: si un día
+las respuestas aparecen cortadas, ese es el primer lugar donde mirar.
+
+---
+
 ## Tests
 
 ```

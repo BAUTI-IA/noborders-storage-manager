@@ -64,8 +64,12 @@ export default async function handler(req, res) {
     }
 
     const message = await client.messages.create({
-      model: "claude-opus-4-8",
-      max_tokens: 8192,
+      model: "claude-opus-5",
+      // Opus 5 thinks by default; thinking shares the max_tokens budget with the
+      // answer, so this leaves room for a long statement plus the reasoning.
+      max_tokens: 16000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
       messages: [{ role: "user", content }],
     });
     const text = message.content.filter(b => b.type === "text").map(b => b.text).join("");

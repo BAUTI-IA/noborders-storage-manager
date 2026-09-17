@@ -43,8 +43,12 @@ export default async function handler(req, res) {
 
   try {
     const message = await client.messages.create({
-      model: "claude-opus-4-8",
-      max_tokens: 4096,
+      model: "claude-opus-5",
+      // Locating field boxes is mechanical, so effort stays low; thinking is on
+      // by default on Opus 5 and shares the budget, hence the larger max_tokens.
+      max_tokens: 8000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
       messages: [{ role: "user", content: [
         { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image_base64 } },
         { type: "text", text: prompt },

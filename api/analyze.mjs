@@ -41,8 +41,13 @@ export default async function handler(req, res) {
       return;
     }
     const message = await client.messages.create({
-      model: "claude-opus-4-8",
-      max_tokens: 2048,
+      model: "claude-opus-5",
+      // Thinking is ON by default on Opus 5 (on 4.8, omitting it meant none), so
+      // it is spelled out here and max_tokens has room for it — thinking tokens
+      // come out of the same budget, and 2048 would now truncate the answer.
+      max_tokens: 8000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
       messages: [{ role: "user", content: prompt }],
     });
     const text = message.content

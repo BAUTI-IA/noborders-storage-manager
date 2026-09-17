@@ -307,7 +307,7 @@ export default async function handler(req, res) {
 
   try {
     const message = await client.messages.create({
-      model: "claude-opus-4-8",
+      model: "claude-opus-5",
       max_tokens: 16000,
       thinking: { type: "adaptive" },
       // effort "medium" keeps latency reasonable; the dispatcher reviews every

@@ -88,7 +88,7 @@ En grupos el bot solo responde a `/chatid` — la conversación normal del grupo
 El chat del CRM (`src/agentChat.jsx` → `POST /api/agent-hub` con `stream:true`) recibe la respuesta **en streaming** por SSE: el texto aparece mientras se escribe, y entre medio muestra en qué anda ("🔎 Consultando la base…", "📝 Armando el plan…", "⚙️ Ejecutando…"). Telegram y WhatsApp no soportan streaming; ahí el bot muestra "escribiendo…" hasta que llega la respuesta.
 
 Además:
-- Modelo por defecto `claude-sonnet-5` con `effort: medium` — se puede cambiar sin tocar código con `AGENT_MODEL` / `AGENT_EFFORT` en Vercel (ej. `AGENT_MODEL=claude-opus-4-8` si preferís profundidad sobre velocidad).
+- Modelo por defecto `claude-sonnet-5` con `effort: medium` — se puede cambiar sin tocar código con `AGENT_MODEL` / `AGENT_EFFORT` en Vercel (ej. `AGENT_MODEL=claude-opus-5` si preferís profundidad sobre velocidad; el resto del CRM ya corre en Opus 5, el copilot queda en Sonnet 5 a propósito porque por WhatsApp la latencia se nota).
 - Brokers, drivers, camiones, trips abiertos y storages van **precargados** en el prompt (cache de 5 min), así resolver "el camión 3" o "Full Value" no cuesta una vuelta extra al modelo.
 - El esquema de la base y ese directorio se piden en paralelo y se cachean por instancia.
 
