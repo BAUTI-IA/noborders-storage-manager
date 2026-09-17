@@ -87,6 +87,13 @@ create table if not exists public.pipeline_settings (
 );
 insert into public.pipeline_settings (id, settings) values (1, '{}'::jsonb) on conflict (id) do nothing;
 
+-- Calibración automática. Un trip lleva varios jobs pero la evaluación coteja
+-- cada uno como si fuera solo en el camión, así que una fila de viaje compartido
+-- se registra igual (el operador la quiere ver) pero marcada: calibrate() la
+-- saltea, porque promediarla enseñaría que todo sale más barato de lo que sale.
+alter table public.job_evaluations add column if not exists actuals_shared boolean not null default false;
+alter table public.job_evaluations add column if not exists actuals_source text;
+
 alter table public.job_leads enable row level security;
 alter table public.pipeline_settings enable row level security;
 

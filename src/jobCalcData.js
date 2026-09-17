@@ -1034,7 +1034,12 @@ function accessLoad(row) {
  * not a measurement, and the UI has to say so.
  */
 export function calibrate(rows) {
-  const done = (rows || []).filter((r) => !r.deleted_at && num(r.actual_truck_days) > 0);
+  // `actuals_shared` marks a row whose actuals are one job's slice of a trip it
+  // shared with others. The estimate priced it alone on the truck, so the two
+  // are not comparable: averaging the slice in would drag every derived cost
+  // downwards. Rows written before the flag existed have it undefined, which is
+  // falsy, so they keep counting exactly as they did.
+  const done = (rows || []).filter((r) => !r.deleted_at && !r.actuals_shared && num(r.actual_truck_days) > 0);
 
   // cuFtPerHour: only clean rows — direct/direct, no long carry, no shuttle AND
   // the baseline crew, so neither the access multipliers nor the crew scaling

@@ -350,3 +350,118 @@ export function nearestTruck(trucks, lat, lng) {
   }
   return best;
 }
+
+// ── Closing the loop: actuals from what the CRM already recorded ─────────────
+//
+// job_evaluations has columns for what a job REALLY cost, and calibrate() in
+// jobCalcData.js turns them into corrected settings. Until now they were typed
+// by hand, which means they were never typed at all, so the cost model could
+// only age. Everything they need is already in the CRM: the ELD pings say how
+// far the truck went and on which days it moved, and the expense rows say what
+// was spent on fuel, tolls, materials and hotels.
+//
+// THE TRAP this guards against: a trip carries several jobs, but the evaluation
+// priced each one as if it had the truck to itself. Feeding a job its slice of
+// a shared trip would teach the model that everything is cheaper than it is.
+// So a job that shared its trip still gets its actuals recorded — the operator
+// wants to see them — but flagged `actuals_shared`, and calibrate() skips it.
+// Only a job that ran alone is a clean reading.
+
+/** Inclusive ISO date-range test, tolerant of missing bounds. */
+export const withinRange = (iso, start, end) => {
+  const d = String(iso || "").slice(0, 10);
+  if (!d) return false;
+  if (start && d < String(start).slice(0, 10)) return false;
+  if (end && d > String(end).slice(0, 10)) return false;
+  return true;
+};
+
+/**
+ * The window a job was actually on the road. A job can sit in storage for
+ * months, so the run is the trip's departure (or the pickup) through delivery —
+ * never the job's whole life, which would sweep in unrelated expenses.
+ * Returns null when the job has not been delivered.
+ */
+export function jobRunWindow(job, trip) {
+  const end = String(job?.date_out || "").slice(0, 10);
+  if (!end) return null;
+  const start = String(
+    trip?.departure_date || job?.pickup_date || job?.pickup_date_from || ""
+  ).slice(0, 10) || end;
+  return start <= end ? { start, end } : { start: end, end };
+}
+
+/** Distinct calendar dates an expense category appears on — the hotel-night proxy. */
+export const distinctExpenseDates = (expenses, category) =>
+  new Set((expenses || [])
+    .filter((e) => e && e.category === category && e.expense_date)
+    .map((e) => String(e.expense_date).slice(0, 10))).size;
+
+export const sumExpenses = (expenses, category) =>
+  (expenses || []).filter((e) => e && e.category === category)
+    .reduce((a, e) => a + num(e.amount), 0);
+
+/**
+ * What a delivered job really cost, from rows the CRM already has.
+ *
+ * @param job         the representative storage_jobs row (delivered)
+ * @param trip        its trips row, or null when it rode no trip
+ * @param siblingCf   [{ jobKey, cuFt }] every job on that trip, this one included
+ * @param jobCuFt     this job's own cubic feet
+ * @param pingDays    truckDays() rows for THIS truck, already filtered to the window
+ * @param expenses    expense rows already filtered to the trip/job and the window
+ * @param workDays    driver_work_days rows already filtered to the trip and window
+ * @returns a patch for job_evaluations, or null when there is nothing to record
+ */
+export function computeActuals({ job, trip, siblingCf = [], jobCuFt = 0, pingDays = [], expenses = [], workDays = [] }) {
+  const window = jobRunWindow(job, trip);
+  if (!window) return null;
+
+  // How much of a shared trip is this job's. Cubic feet is the weight the cost
+  // model itself thinks in; with no volumes recorded, split evenly.
+  const totalCf = (siblingCf || []).reduce((a, s) => a + num(s.cuFt), 0);
+  const siblings = Math.max(1, (siblingCf || []).length);
+  const share = totalCf > 0 && num(jobCuFt) > 0 ? num(jobCuFt) / totalCf : 1 / siblings;
+  const shared = siblings > 1;
+
+  // Miles and days out come off the GPS breadcrumbs — the same numbers the
+  // Reports screen shows, so the two screens can never disagree.
+  const moved = (pingDays || []).filter((d) => d && d.moved);
+  const pingMiles = moved.reduce((a, d) => a + num(d.miles), 0);
+  const pingDayCount = moved.length;
+
+  // Payroll is the fallback for days when the truck has no ELD: distinct dates
+  // somebody was paid to be out.
+  const paidDates = new Set((workDays || [])
+    .filter((w) => w && w.work_date).map((w) => String(w.work_date).slice(0, 10)));
+
+  const truckDaysActual = pingDayCount > 0 ? pingDayCount : paidDates.size;
+  if (truckDaysActual <= 0) return null; // nothing measured — record nothing
+
+  const source = pingDayCount > 0 ? "eld" : "payroll";
+  const drivers = new Set();
+  for (const w of workDays || []) if (w?.driver_id != null) drivers.add(String(w.driver_id));
+  if (trip?.driver_id != null) drivers.add(String(trip.driver_id));
+  for (const d of job?.driver_ids || []) if (d != null) drivers.add(String(d));
+
+  const round2 = (v) => Math.round(v * 100) / 100;
+  const money = (v) => Math.round(v * 100) / 100;
+
+  return {
+    actual_truck_days: round2(truckDaysActual * share),
+    actual_miles: pingMiles > 0 ? round2(pingMiles * share) : null,
+    actual_fuel: money(sumExpenses(expenses, "fuel") * share),
+    actual_tolls: money(sumExpenses(expenses, "tolls") * share),
+    actual_materials: money(sumExpenses(expenses, "materials") * share),
+    // No column records nights, so distinct hotel-expense dates stand in for them.
+    actual_hotel_nights: distinctExpenseDates(expenses, "hotel"),
+    actual_trucks: trip?.truck_id != null ? 1 : null,
+    actual_drivers: drivers.size > 0 ? drivers.size : null,
+    // helpers are not tracked as a role anywhere, so this stays null and
+    // rowCrew() falls back to what was planned.
+    actual_helpers: null,
+    actuals_shared: shared,
+    actuals_source: source,
+    actuals_at: null, // the caller stamps this
+  };
+}

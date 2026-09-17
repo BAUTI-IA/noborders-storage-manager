@@ -186,6 +186,47 @@ La lógica compartida vive en `lib/leads.mjs`, que no se despliega como función
 
 ---
 
+## Calibración automática de actuals
+
+`job_evaluations` tenía desde la primera migración columnas para lo que un job
+**realmente** costó, y `calibrate()` las convierte en settings corregidos. Pero se
+cargaban a mano, así que no se cargaban nunca, y el modelo de costos sólo podía
+envejecer. Todo lo que hacen falta ya estaba en el CRM.
+
+`calibrateDelivered()` corre dentro del cron diario, sobre los jobs entregados en
+los últimos 45 días cuyo lead todavía tiene la evaluación sin completar:
+
+| Campo | De dónde sale |
+|---|---|
+| `actual_truck_days` | Días que el camión **se movió** según el GPS (`truck_pings`, vía `truckDays()` de `reportsData.js` — el mismo número que muestra Reports). Si el camión no tiene ELD, cae a fechas distintas de `driver_work_days`. |
+| `actual_miles` | Suma de las millas de esos días |
+| `actual_fuel` · `actual_tolls` · `actual_materials` | `expenses` de esa categoría, del trip o del job, dentro de la ventana |
+| `actual_hotel_nights` | Fechas distintas con gasto de hotel (no hay columna de noches; es el proxy) |
+| `actual_drivers` · `actual_trucks` | El trip y los `driver_ids` del job |
+| `actual_helpers` | Queda `null` — helper no se registra como rol en ningún lado, así que `rowCrew()` cae a lo planificado |
+
+**La ventana** es del `departure_date` del trip (o el pickup) hasta el `date_out`.
+Nunca la vida entera del job: un job puede estar meses en storage y barrer todo
+ese período metería gastos que no tienen nada que ver con el viaje.
+
+### La trampa que esto evita
+
+Un trip lleva varios jobs, pero la evaluación coteó cada uno **como si tuviera el
+camión para él solo**. Imputarle a un job su tajada de un viaje compartido y
+después promediarla le enseñaría al modelo que todo sale más barato de lo que
+sale, y el sesgo iría siempre para el mismo lado.
+
+Por eso un job que compartió viaje **igual registra sus actuals** —se ven en el
+detalle del lead, prorrateados por pies cúbicos— pero con `actuals_shared = true`,
+y `calibrate()` saltea esas filas. Sólo aprende de los jobs que corrieron solos,
+que son lectura limpia. Es el mismo criterio con el que `calibrate()` ya filtraba
+las filas "clean" para `cuFtPerHour`.
+
+Si no hay nada medido —ni GPS ni nómina— no se escribe nada. Un actual inventado
+es peor que ninguno.
+
+---
+
 ## Modelos
 
 | Para qué | Modelo | Variable para cambiarlo |

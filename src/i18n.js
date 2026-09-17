@@ -2287,6 +2287,7 @@ export const I18N_ES = {
   "Pricing…": "Evaluando…",
   "Price it now": "Evaluarlo ahora",
   "Original message": "Mensaje original",
+  "Estimated vs real": "Estimado vs real",
   "Reading…": "Leyendo…",
   "New": "Nuevos",
   "Evaluated": "Evaluados",
