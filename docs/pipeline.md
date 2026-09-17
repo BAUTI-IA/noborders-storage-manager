@@ -186,6 +186,39 @@ La lógica compartida vive en `lib/leads.mjs`, que no se despliega como función
 
 ---
 
+## Las millas vacías salen de donde está el camión
+
+El Job Calculator mide el deadhead desde un ZIP base fijo de configuración, que
+es lo único que puede hacer para un job a una semana vista. Pero un lead se
+evalúa **ahora**, y la flota reporta dónde está: las millas vacías que importan
+son las que tiene que manejar el camión que realmente tomaría el job.
+
+El ELD da lat/lng y el modelo de costos habla en ZIPs, así que `lib/geo.mjs`
+hace el geocoding inverso de la posición (Google si hay key, si no Nominatim
+paceado a su política) y lo cachea para siempre en `geo_cache` con clave `rev:`.
+Un coordenada redondeada a dos decimales — un kilómetro — así el cache sirve
+aunque el GPS de un camión estacionado tiemble.
+
+**Las dos piernas son asimétricas a propósito**, porque es lo que pasa de verdad:
+
+| Pierna | Desde | Hasta |
+|---|---|---|
+| Ida | **donde está el camión ahora** | el pickup |
+| Vuelta | el delivery | el ZIP base — el camión eventualmente vuelve |
+
+`deadheadFor()` ya las tomaba por separado, así que los tres supuestos
+(`roundTrip` / `oneWay` / `none`) siguen funcionando sin tocarlos.
+
+Si el geocoding inverso falla o el camión no tiene posición, cae al ZIP base y
+se comporta como antes. El detalle del lead dice **de dónde** se midieron, así
+que no hay que suponerlo: cambia el veredicto.
+
+**Limitación honesta:** es la posición al momento de evaluar. Para cuando el job
+realmente salga el camión puede estar en otro lado — pero es la mejor
+información que hay cuando hay que decidir, que es el momento que importa.
+
+---
+
 ## Calibración automática de actuals
 
 `job_evaluations` tenía desde la primera migración columnas para lo que un job

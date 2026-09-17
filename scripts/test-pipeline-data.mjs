@@ -14,6 +14,7 @@ import {
   isLowConfidence, missingFields, isEvaluable,
   haversineMiles, nearestTruck,
   withinRange, jobRunWindow, distinctExpenseDates, sumExpenses, computeActuals,
+  deadheadOrigin, deadheadOriginLabel, DEADHEAD_ORIGINS,
 } from "../src/pipelineData.js";
 
 const t = (name, fn) => {
@@ -466,4 +467,37 @@ t("a job with no trip is its own run and reads clean", () => {
   assert.equal(a.actual_truck_days, 1);
   assert.equal(a.actual_fuel, 90);
   assert.equal(a.actual_trucks, null);   // no trip, so no truck to claim
+});
+
+// ── Where the empty miles start ──────────────────────────────────────────────
+t("the truck's live position beats the base ZIP", () => {
+  const r = deadheadOrigin("34470", "33166");   // Truck 3 in Ocala vs the yard
+  assert.equal(r.zip, "34470");
+  assert.equal(r.from, DEADHEAD_ORIGINS.truck);
+});
+
+t("the base ZIP is the fallback, not the default", () => {
+  for (const bad of [null, "", "   ", "34", "not a zip", undefined]) {
+    const r = deadheadOrigin(bad, "33166");
+    assert.equal(r.zip, "33166", `truckZip ${JSON.stringify(bad)} should fall back`);
+    assert.equal(r.from, DEADHEAD_ORIGINS.base);
+  }
+});
+
+t("with neither, the empty miles are honestly not in play", () => {
+  const r = deadheadOrigin("", "");
+  assert.equal(r.zip, "");
+  assert.equal(r.from, DEADHEAD_ORIGINS.none);
+});
+
+t("a ZIP+4 or a padded string is not silently accepted", () => {
+  // reverseZip() already trims to five digits; anything else reaching here is junk.
+  assert.equal(deadheadOrigin("34470-1234", "33166").from, DEADHEAD_ORIGINS.base);
+});
+
+t("the label says where the miles were measured from", () => {
+  assert.equal(deadheadOriginLabel(DEADHEAD_ORIGINS.truck, "Truck 3"), "from Truck 3");
+  assert.equal(deadheadOriginLabel(DEADHEAD_ORIGINS.truck, ""), "from the closest truck");
+  assert.equal(deadheadOriginLabel(DEADHEAD_ORIGINS.base), "from the base");
+  assert.equal(deadheadOriginLabel(DEADHEAD_ORIGINS.none), "not measured");
 });

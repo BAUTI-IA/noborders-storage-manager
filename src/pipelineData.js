@@ -465,3 +465,42 @@ export function computeActuals({ job, trip, siblingCf = [], jobCuFt = 0, pingDay
     actuals_at: null, // the caller stamps this
   };
 }
+
+// ── Where the empty miles are measured from ─────────────────────────────────
+//
+// The Job Calculator measures deadhead from a fixed company base ZIP, which is
+// the only thing it can do for a job a week out. But a lead is priced NOW, and
+// the fleet reports where it is: the empty miles that matter are the ones the
+// truck that would actually take the job has to drive to reach the pickup.
+//
+// The two legs are deliberately asymmetric, because that is what really happens:
+//   · out  — from where the truck IS to the pickup (the real approach)
+//   · back — from the delivery to the company base (it eventually comes home)
+// deadheadFor() in jobCalcData.js already takes them separately, so the three
+// assumptions (roundTrip / oneWay / none) keep working unchanged.
+
+export const DEADHEAD_ORIGINS = {
+  truck: "truck",   // measured from the closest truck's live position
+  base: "base",     // measured from the company base ZIP — the old behaviour
+  none: "none",     // no base at all, so empty miles are not in play
+};
+
+/**
+ * Which ZIP the approach leg starts at, and why.
+ * @param truckZip the nearest free truck's position reverse-geocoded, or "" / null
+ * @param baseZip  the company base ZIP from the Job Calculator settings
+ */
+export function deadheadOrigin(truckZip, baseZip) {
+  const t = String(truckZip || "").trim();
+  const b = String(baseZip || "").trim();
+  if (/^\d{5}$/.test(t)) return { zip: t, from: DEADHEAD_ORIGINS.truck };
+  if (/^\d{5}$/.test(b)) return { zip: b, from: DEADHEAD_ORIGINS.base };
+  return { zip: "", from: DEADHEAD_ORIGINS.none };
+}
+
+/** One line for the operator saying where the empty miles were measured from. */
+export function deadheadOriginLabel(from, truckName) {
+  if (from === DEADHEAD_ORIGINS.truck) return truckName ? `from ${truckName}` : "from the closest truck";
+  if (from === DEADHEAD_ORIGINS.base) return "from the base";
+  return "not measured";
+}
