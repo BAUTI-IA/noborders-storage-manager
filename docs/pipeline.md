@@ -76,17 +76,32 @@ de la tabla). No hace falta SQL.
 |---|---|---|
 | `holdReminderDays` | `2` | Día del recordatorio |
 | `holdDecisionDays` | `7` | Día en que hay que decidir |
-| `allowedEmailDomains` | `[]` | Dominios de brokers habilitados. **Vacío no acepta a nadie.** |
+| `allowedEmailDomains` | `[]` | Quién puede mandarnos leads: dominios y/o direcciones enteras. **Vacío no acepta a nadie.** |
 | `carriers` | `[]` | Carriers a los que se puede ofrecer un job |
 | `maxLeadsPerSenderPerDay` | `40` | Tope de leads **por remitente** por día |
 | `maxLeadsPerDay` | `200` | Tope de todos los remitentes juntos, por día |
 
-`mergePipelineSettings()` limpia lo que se guarda: los dominios se normalizan
-(`@Allied.com`, `https://allied.com/x` y `dispatch@allied.com` terminan todos en
-`allied.com`), las listas pierden duplicados, los topes tienen piso 1 y el global
-nunca queda por debajo del de un remitente. Guardar desde la pantalla **mergea**
-sobre lo que hay, así que una clave que agregue un deploy nuevo no se pierde si
-alguien guarda desde una pestaña vieja.
+`mergePipelineSettings()` limpia lo que se guarda: las listas pierden duplicados,
+los topes tienen piso 1 y el global nunca queda por debajo del de un remitente.
+Guardar desde la pantalla **mergea** sobre lo que hay, así que una clave que
+agregue un deploy nuevo no se pierde si alguien guarda desde una pestaña vieja.
+
+### Quién puede mandarnos leads (`allowedEmailDomains`)
+
+Cada entrada es **un dominio entero** o **una dirección exacta**, y la diferencia
+importa:
+
+| Entrada | Deja entrar a | Cuándo usarla |
+|---|---|---|
+| `allied.com` | Cualquiera `@allied.com` y sus subdominios (`dispatch@mail.allied.com`) | El broker tiene dominio propio |
+| `shawn@gmail.com` | Esa casilla y **nada más** | Quien escribe desde una cuenta personal |
+
+`@Allied.com`, `ALLIED.com` y `https://allied.com/jobs` significan todos el
+dominio. Una dirección entera **no** se recorta al dominio: si lo hiciera,
+escribir `shawn@gmail.com` abriría el tablero a cualquiera con un Gmail. Por la
+misma razón, un dominio público (`gmail.com`, `outlook.com`, `yahoo.com`… la
+lista está en `PUBLIC_MAILBOX_DOMAINS`) **se rechaza como regla de dominio**: a
+esos remitentes hay que nombrarlos dirección por dirección.
 
 Por SQL, si hace falta, conviene mergear en vez de reemplazar:
 
@@ -198,8 +213,8 @@ export default {
 3. Variables del Worker: `CRM_URL` (`https://TU-APP.vercel.app`) y `PIPELINE_SECRET`
    (el mismo valor que pusiste en Vercel).
 4. **Email Routing → Routes**: mandá `jobs@tudominio.com` a ese Worker.
-5. Cargá los dominios de los brokers en `allowedEmailDomains` (ver arriba) — si no,
-   todo se descarta.
+5. Cargá los remitentes habilitados en **⚙ Settings** (ver arriba) — si no, todo
+   se descarta.
 
 ### 3. Probarlo sin esperar ningún mail
 
@@ -238,9 +253,11 @@ todos juntos) y `no_sender`.
 Un mail de broker es texto de afuera que termina en un prompt. Las reglas son
 duras y fallan cerradas:
 
-- **Allowlist de dominios.** Sin dominios configurados no entra nada. Un remitente
+- **Allowlist de remitentes.** Sin nada configurado no entra nada. Un remitente
   rechazado recibe `202` y nada más — el endpoint no le dice a internet qué
-  dominios aceptamos. Del lado de adentro sí queda registrado (ver arriba).
+  dominios aceptamos. Del lado de adentro sí queda registrado (ver arriba). Un
+  dominio de correo público no se acepta como regla de dominio, así que una
+  casilla personal habilitada nunca arrastra al resto del proveedor.
 - **Dos topes diarios.** Uno por remitente (`maxLeadsPerSenderPerDay`, contado
   sobre `parsed->>sender`) y uno global de respaldo (`maxLeadsPerDay`). El que
   importa es el primero: contar todos los remitentes juntos, como se hacía antes,

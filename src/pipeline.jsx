@@ -18,7 +18,7 @@ import {
   mergePipelineSettings, holdDates, holdStage, holdProgress,
   rankLeads, pipelineTotals, leadScore, findDuplicate,
   leadToJobForm, isEvaluable, missingFields, isLowConfidence, num,
-  DEADHEAD_ORIGINS, normalizeDomains, normalizeCarriers, dropReasonMeta,
+  DEADHEAD_ORIGINS, normalizeSenderRules, normalizeCarriers, dropReasonMeta,
 } from "./pipelineData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -705,13 +705,17 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
             </div>
 
             <div>
-              <div style={cap}>Broker email domains</div>
-              <ListEditor items={draft.allowedEmailDomains} normalize={normalizeDomains}
+              <div style={cap}>Who may send us leads</div>
+              <ListEditor items={draft.allowedEmailDomains} normalize={normalizeSenderRules}
                 onChange={(v) => setDraft({ ...draft, allowedEmailDomains: v })}
                 placeholder="allied.com"
                 hint={tr(
-                  "Email from anyone else is discarded. Empty means no email is accepted at all — subdomains of a listed domain are.",
-                  "El mail de cualquier otro se descarta. Vacío quiere decir que no entra ningún mail — los subdominios de un dominio listado sí entran.")} />
+                  "A domain lets the whole company in, subdomains included. A full address lets in that one mailbox and nobody else — use it for anyone who writes from a personal account. Email from anyone else is discarded, and an empty list accepts nobody.",
+                  "Un dominio deja entrar a toda la empresa, subdominios incluidos. Una dirección entera deja entrar sólo a esa casilla y a nadie más — usala para quien escribe desde una cuenta personal. El mail de cualquier otro se descarta, y la lista vacía no acepta a nadie.")} />
+              <div style={{ fontSize: 11.5, color: "#B45309", marginTop: 6 }}>
+                {tr("A public domain like gmail.com is refused on purpose — it would be the whole internet. Write the person's full address instead.",
+                    "Un dominio público como gmail.com se rechaza a propósito — sería internet entero. Poné la dirección completa de la persona.")}
+              </div>
             </div>
 
             <div>

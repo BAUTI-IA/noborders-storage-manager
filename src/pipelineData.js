@@ -70,29 +70,58 @@ export function mergePipelineSettings(saved) {
   // A cap of 0 would silently switch the email channel off; 1 is the floor.
   out.maxLeadsPerSenderPerDay = Math.max(1, Math.round(num(out.maxLeadsPerSenderPerDay, 40)));
   out.maxLeadsPerDay = Math.max(out.maxLeadsPerSenderPerDay, Math.round(num(out.maxLeadsPerDay, 200)));
-  out.allowedEmailDomains = normalizeDomains(out.allowedEmailDomains);
+  out.allowedEmailDomains = normalizeSenderRules(out.allowedEmailDomains);
   out.carriers = normalizeCarriers(out.carriers);
   return out;
 }
 
 /**
- * What a typed domain becomes before it is stored or compared. People paste
- * "@Allied.com", "https://allied.com/" and "dispatch@allied.com" meaning the
- * same thing, and a stored "@Allied.com" would match nothing.
+ * What a typed allowlist entry becomes before it is stored or compared.
+ *
+ * An entry is EITHER a whole domain ("allied.com", which also covers its
+ * subdomains) OR one exact address ("shawn@gmail.com", which covers nobody
+ * else). Keeping both matters: brokers who send from a company domain want the
+ * first, and someone who sends from a personal mailbox needs the second —
+ * reducing "shawn@gmail.com" to "gmail.com" would hand the whole of Gmail a way
+ * into the board.
+ *
+ * "@Allied.com", "https://allied.com/jobs" and "ALLIED.com" all mean the domain.
  */
-export function normalizeDomain(value) {
-  let d = String(value == null ? "" : value).trim().toLowerCase();
-  d = d.replace(/^[a-z]+:\/\//, "").replace(/[/\\].*$/, "");
-  if (d.includes("@")) d = d.slice(d.lastIndexOf("@") + 1);
-  d = d.replace(/^\.+/, "").replace(/\.+$/, "");
-  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d) ? d : "";
+export function normalizeSenderRule(value) {
+  let s = String(value == null ? "" : value).trim().toLowerCase();
+  s = s.replace(/^[a-z]+:\/\//, "").replace(/^mailto:/, "").replace(/[/\\].*$/, "");
+  // A leading @ is how people write "the whole domain".
+  if (s.startsWith("@")) s = s.slice(1);
+  const isDomain = (d) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d);
+  if (s.includes("@")) {
+    const at = s.lastIndexOf("@");
+    const local = s.slice(0, at), domain = s.slice(at + 1);
+    return local && !/\s/.test(local) && isDomain(domain) ? local + "@" + domain : "";
+  }
+  s = s.replace(/^\.+/, "").replace(/\.+$/, "");
+  // A public mailbox domain is not a company: allowing it would allow anyone
+  // with a free account. Those senders have to be named address by address.
+  if (PUBLIC_MAILBOX_DOMAINS.has(s)) return "";
+  return isDomain(s) ? s : "";
 }
 
+/**
+ * Domains anyone can get a mailbox on. Never a broker's identity, so they are
+ * refused as a whole-domain rule — "shawn@gmail.com" is fine, "gmail.com" is
+ * every stranger on the internet.
+ */
+export const PUBLIC_MAILBOX_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "hotmail.com",
+  "outlook.com", "live.com", "msn.com", "aol.com", "icloud.com", "me.com",
+  "mac.com", "proton.me", "protonmail.com", "gmx.com", "mail.com", "zoho.com",
+  "yandex.com", "qq.com", "163.com",
+]);
+
 /** Clean, de-duplicated, order-preserving. Anything unparseable is dropped. */
-export function normalizeDomains(list) {
+export function normalizeSenderRules(list) {
   const out = [];
   for (const raw of Array.isArray(list) ? list : []) {
-    const d = normalizeDomain(raw);
+    const d = normalizeSenderRule(raw);
     if (d && !out.includes(d)) out.push(d);
   }
   return out;
@@ -336,18 +365,22 @@ export const DROP_REASONS = [
 export const dropReasonMeta = (v) => DROP_REASONS.find((r) => r.v === v) || { v, l: v, hint: "" };
 
 /**
- * Fail closed: with no configured domains nothing is accepted. A broker email
- * is untrusted input feeding an LLM, so the allowlist is the first gate and the
+ * Fail closed: with nothing configured nobody is accepted. A broker email is
+ * untrusted input feeding an LLM, so the allowlist is the first gate and the
  * strict output schema is the second.
+ *
+ * A rule with an "@" is one exact address and matches only that mailbox; a bare
+ * domain matches the domain and its subdomains.
  */
 export function isAllowedSender(address, settings) {
   const s = mergePipelineSettings(settings);
   const dom = senderDomain(address);
+  const addr = senderAddress(address);
   if (!dom) return false;
-  return (s.allowedEmailDomains || [])
-    .map((d) => String(d || "").trim().toLowerCase().replace(/^@/, ""))
-    .filter(Boolean)
-    .some((d) => dom === d || dom.endsWith("." + d));
+  return (s.allowedEmailDomains || []).some((rule) =>
+    rule.includes("@")
+      ? (!!addr && addr === rule)
+      : (dom === rule || dom.endsWith("." + rule)));
 }
 
 /** Hard cap on what we store from an email body. */
