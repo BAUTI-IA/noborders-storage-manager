@@ -48,8 +48,12 @@ export const DEFAULT_PIPELINE_SETTINGS = {
   allowedEmailDomains: [],
   // Partner carriers a job can be handed to when we pass on it.
   carriers: [],
-  // Leads per sender per day, for the inbound-email path.
+  // Leads one sender may create in a day. Counted per address, so a busy broker
+  // can never starve the others out of the board.
   maxLeadsPerSenderPerDay: 40,
+  // Backstop across every sender, for the day an over-broad domain is allowed
+  // in by mistake. The per-sender cap is the one that normally bites.
+  maxLeadsPerDay: 200,
 };
 
 export function mergePipelineSettings(saved) {
@@ -63,6 +67,44 @@ export function mergePipelineSettings(saved) {
   out.holdReminderDays = Math.max(0, Math.round(num(out.holdReminderDays, 2)));
   out.holdDecisionDays = Math.max(1, Math.round(num(out.holdDecisionDays, 7)));
   if (out.holdReminderDays > out.holdDecisionDays) out.holdReminderDays = out.holdDecisionDays;
+  // A cap of 0 would silently switch the email channel off; 1 is the floor.
+  out.maxLeadsPerSenderPerDay = Math.max(1, Math.round(num(out.maxLeadsPerSenderPerDay, 40)));
+  out.maxLeadsPerDay = Math.max(out.maxLeadsPerSenderPerDay, Math.round(num(out.maxLeadsPerDay, 200)));
+  out.allowedEmailDomains = normalizeDomains(out.allowedEmailDomains);
+  out.carriers = normalizeCarriers(out.carriers);
+  return out;
+}
+
+/**
+ * What a typed domain becomes before it is stored or compared. People paste
+ * "@Allied.com", "https://allied.com/" and "dispatch@allied.com" meaning the
+ * same thing, and a stored "@Allied.com" would match nothing.
+ */
+export function normalizeDomain(value) {
+  let d = String(value == null ? "" : value).trim().toLowerCase();
+  d = d.replace(/^[a-z]+:\/\//, "").replace(/[/\\].*$/, "");
+  if (d.includes("@")) d = d.slice(d.lastIndexOf("@") + 1);
+  d = d.replace(/^\.+/, "").replace(/\.+$/, "");
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d) ? d : "";
+}
+
+/** Clean, de-duplicated, order-preserving. Anything unparseable is dropped. */
+export function normalizeDomains(list) {
+  const out = [];
+  for (const raw of Array.isArray(list) ? list : []) {
+    const d = normalizeDomain(raw);
+    if (d && !out.includes(d)) out.push(d);
+  }
+  return out;
+}
+
+/** Carrier names are free text; only trimming and de-duplication apply. */
+export function normalizeCarriers(list) {
+  const out = [];
+  for (const raw of Array.isArray(list) ? list : []) {
+    const c = String(raw == null ? "" : raw).trim().replace(/\s+/g, " ");
+    if (c && !out.some((x) => x.toLowerCase() === c.toLowerCase())) out.push(c);
+  }
   return out;
 }
 
@@ -261,6 +303,17 @@ export function leadToJobForm(lead, emptyJob) {
 
 // ── Inbound email containment ────────────────────────────────────────────────
 
+/**
+ * The bare address out of a From header, lowercased. `"Allied Dispatch
+ * <Dispatch@Allied.com>"` and `"dispatch@allied.com"` both come back the same,
+ * which is what makes the per-sender count mean one sender.
+ */
+export function senderAddress(address) {
+  const m = String(address || "").match(/<([^>]*)>\s*$/);
+  const addr = (m ? m[1] : String(address || "")).trim().toLowerCase().replace(/^mailto:/, "");
+  return /^[^\s@]+@[^\s@]+$/.test(addr) ? addr : "";
+}
+
 /** The domain of an address, lowercased. "" when it does not parse. */
 export function senderDomain(address) {
   const m = String(address || "").match(/<([^>]*)>\s*$/);
@@ -268,6 +321,19 @@ export function senderDomain(address) {
   const at = addr.lastIndexOf("@");
   return at < 0 ? "" : addr.slice(at + 1).replace(/[>\s]+$/, "");
 }
+
+/**
+ * Why an inbound email never became a lead. The webhook answers a flat 202 in
+ * every case — it must not tell the internet which domains we accept — so this
+ * is the only place an operator can find out, and it is worth being plain.
+ */
+export const DROP_REASONS = [
+  { v: "sender_not_allowed", l: "Sender not on the allowlist", hint: "Add the domain in Settings if it is a broker of ours." },
+  { v: "rate_limited", l: "Over this sender's daily cap", hint: "Raise the per-sender cap in Settings, or check whether the sender is looping." },
+  { v: "day_cap", l: "Over the daily cap for all senders", hint: "Raise the daily cap in Settings." },
+  { v: "no_sender", l: "No readable sender address", hint: "The forwarder did not send a usable From header." },
+];
+export const dropReasonMeta = (v) => DROP_REASONS.find((r) => r.v === v) || { v, l: v, hint: "" };
 
 /**
  * Fail closed: with no configured domains nothing is accepted. A broker email

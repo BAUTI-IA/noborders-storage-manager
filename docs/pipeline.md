@@ -69,21 +69,33 @@ sección.
 
 ### Parámetros (`pipeline_settings.settings`)
 
+Se editan desde **Pipeline → ⚙ Settings** (sólo admin, que es lo que pide la RLS
+de la tabla). No hace falta SQL.
+
 | Clave | Default | Qué hace |
 |---|---|---|
 | `holdReminderDays` | `2` | Día del recordatorio |
 | `holdDecisionDays` | `7` | Día en que hay que decidir |
 | `allowedEmailDomains` | `[]` | Dominios de brokers habilitados. **Vacío no acepta a nadie.** |
 | `carriers` | `[]` | Carriers a los que se puede ofrecer un job |
-| `maxLeadsPerSenderPerDay` | `40` | Tope de leads por mail por día |
+| `maxLeadsPerSenderPerDay` | `40` | Tope de leads **por remitente** por día |
+| `maxLeadsPerDay` | `200` | Tope de todos los remitentes juntos, por día |
+
+`mergePipelineSettings()` limpia lo que se guarda: los dominios se normalizan
+(`@Allied.com`, `https://allied.com/x` y `dispatch@allied.com` terminan todos en
+`allied.com`), las listas pierden duplicados, los topes tienen piso 1 y el global
+nunca queda por debajo del de un remitente. Guardar desde la pantalla **mergea**
+sobre lo que hay, así que una clave que agregue un deploy nuevo no se pierde si
+alguien guarda desde una pestaña vieja.
+
+Por SQL, si hace falta, conviene mergear en vez de reemplazar:
 
 ```sql
-update public.pipeline_settings set settings = jsonb_build_object(
-  'holdReminderDays', 2,
-  'holdDecisionDays', 7,
-  'allowedEmailDomains', jsonb_build_array('allied.com', 'atlasvanlines.com'),
-  'carriers', jsonb_build_array('Shawn')
-) where id = 1;
+update public.pipeline_settings
+set settings = settings || jsonb_build_object(
+      'allowedEmailDomains', jsonb_build_array('allied.com', 'atlasvanlines.com')
+    )
+where id = 1;
 ```
 
 ---
@@ -93,16 +105,71 @@ update public.pipeline_settings set settings = jsonb_build_object(
 El tablero funciona sin esto: **"+ New lead"** abre un textarea donde se pega el
 mail y los campos salen solos. El canal automático sólo evita el copiar y pegar.
 
-Elegí Cloudflare Email Routing y no leer Gmail desde el cron porque el cron es
-diario: un mail podría tardar 24 h en entrar, y contra un reloj de 2 días eso se
-come media ventana.
+Lo que **no** sirve es leer la casilla desde el cron diario de Vercel: un mail
+podría tardar 24 h en entrar y contra un reloj de 2 días eso se come media
+ventana. El canal tiene que empujar, no esperar al cron.
 
-### 1. Variable en Vercel
+Cuál de los dos usar lo decide **dónde vive la casilla**, no el gusto:
 
-- `PIPELINE_INBOUND_SECRET` — un string aleatorio. **Sin esta variable el endpoint
-  responde 503**: no hay secreto por defecto.
+| La casilla está en… | Camino | Por qué |
+|---|---|---|
+| Google Workspace / Gmail | **A — Apps Script** | No toca DNS. Cloudflare Email Routing se queda con el MX del dominio, así que apuntarlo ahí con Workspace activo corta el resto del mail de la empresa |
+| No existe todavía, dominio en Cloudflare | **B — Email Routing** | Gratis y en tiempo real, sin casilla ni servidor |
+| Workspace pero se quiere Cloudflare igual | B sobre un subdominio (`jobs@jobs.noborders.com`) | El MX del subdominio es propio; el dominio principal no se toca |
 
-### 2. Cloudflare Email Routing
+### 1. Variable en Vercel (los dos caminos)
+
+- `PIPELINE_INBOUND_SECRET` — un string aleatorio (`openssl rand -hex 32`).
+  **Sin esta variable el endpoint responde 503**: no hay secreto por defecto.
+  Hay que hacer redeploy después de agregarla.
+
+### 2.A Google Workspace — Apps Script
+
+1. En la casilla, un filtro por broker (`from:@allied.com`) que aplique la
+   etiqueta **`jobs`**.
+2. En [script.google.com](https://script.google.com) **con esa cuenta**, proyecto
+   nuevo:
+
+```js
+const CRM_URL = 'https://TU-APP.vercel.app/api/inbound-email';
+const SECRET  = 'EL_SECRETO';   // el mismo de Vercel
+const LABEL   = 'jobs';
+
+function pushNewJobs() {
+  const label = GmailApp.getUserLabelByName(LABEL);
+  if (!label) return;
+  const done = GmailApp.getUserLabelByName(LABEL + '/enviado')
+            || GmailApp.createLabel(LABEL + '/enviado');
+
+  for (const thread of label.getThreads(0, 20)) {
+    let ok = true;
+    for (const msg of thread.getMessages()) {
+      const res = UrlFetchApp.fetch(CRM_URL, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'x-pipeline-secret': SECRET },
+        payload: JSON.stringify({
+          from: msg.getFrom(),
+          subject: msg.getSubject(),
+          message_id: msg.getId(),
+          text: msg.getPlainBody().slice(0, 40000),
+        }),
+        muteHttpExceptions: true,
+      });
+      if (res.getResponseCode() >= 400) { console.error(res.getContentText()); ok = false; }
+    }
+    // Sólo se mueve de etiqueta si salió bien: si falló, el próximo tick reintenta.
+    if (ok) { thread.removeLabel(label); thread.addLabel(done); }
+  }
+}
+```
+
+3. **Triggers** → `pushNewJobs` → Time-driven → Minutes timer → cada 5 minutos.
+
+Reintentar no duplica: `message_id` se guarda en `source_ref` y `ingestEmail()`
+devuelve el lead que ya existe.
+
+### 2.B Cloudflare Email Routing
 
 1. El dominio de la empresa tiene que estar en Cloudflare.
 2. **Email → Email Routing → Email Workers**, creá un Worker con esto:
@@ -134,7 +201,7 @@ export default {
 5. Cargá los dominios de los brokers en `allowedEmailDomains` (ver arriba) — si no,
    todo se descarta.
 
-Probar sin Cloudflare:
+### 3. Probarlo sin esperar ningún mail
 
 ```
 curl -X POST https://TU-APP.vercel.app/api/inbound-email \
@@ -142,6 +209,27 @@ curl -X POST https://TU-APP.vercel.app/api/inbound-email \
   -d '{"from":"dispatch@allied.com","subject":"Job available",
        "text":"820 cu ft, pickup 7/25-7/26 Miami FL 33125, delivery Atlanta GA 30301, FADD 8/1, $3,200"}'
 ```
+
+| Respuesta | Qué pasó |
+|---|---|
+| `{"ok":true,"lead_id":N}` | Entró. Está en el tablero con el semáforo calculado |
+| `{"ok":true}` sin `lead_id` | Se descartó. El motivo sale en el tablero (ver abajo), no en la respuesta |
+| `401` | El secreto no coincide con el de Vercel |
+| `503` | Falta `PIPELINE_INBOUND_SECRET`, o faltó el redeploy |
+
+### Qué se descartó y por qué
+
+El webhook contesta `202` a todo el mundo para no ser un oráculo de qué dominios
+aceptamos, lo cual también haría desaparecer sin rastro a un broker real que
+todavía no está en la allowlist. Por eso cada descarte escribe una fila en
+`action_log` (`entity = job_leads`, `action = dropped`), y el tablero muestra
+arriba **"Hoy se descartaron N mails entrantes · Ver por qué"** con el remitente,
+el asunto, el motivo y qué hacer al respecto. El historial completo está en
+**Trash → History**.
+
+Los motivos posibles están en `DROP_REASONS` (`src/pipelineData.js`):
+`sender_not_allowed`, `rate_limited` (tope de ese remitente), `day_cap` (tope de
+todos juntos) y `no_sender`.
 
 ---
 
@@ -152,7 +240,11 @@ duras y fallan cerradas:
 
 - **Allowlist de dominios.** Sin dominios configurados no entra nada. Un remitente
   rechazado recibe `202` y nada más — el endpoint no le dice a internet qué
-  dominios aceptamos.
+  dominios aceptamos. Del lado de adentro sí queda registrado (ver arriba).
+- **Dos topes diarios.** Uno por remitente (`maxLeadsPerSenderPerDay`, contado
+  sobre `parsed->>sender`) y uno global de respaldo (`maxLeadsPerDay`). El que
+  importa es el primero: contar todos los remitentes juntos, como se hacía antes,
+  dejaba que un broker movido se comiera el presupuesto del día y tapara al resto.
 - **Esquema cerrado.** El extractor sólo puede devolver los campos del schema, y el
   prompt le dice explícitamente que el cuerpo del mail es dato a parsear y que
   cualquier instrucción adentro se ignora.

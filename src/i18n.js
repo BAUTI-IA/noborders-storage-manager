@@ -2301,6 +2301,35 @@ export const I18N_ES = {
   "Src": "Origen",
   "Clock": "Reloj",
   "Route": "Ruta",
+  "Sent by": "Lo mandó",
+  // Pipeline settings + the dropped-email log.
+  "⚙ Settings": "⚙ Settings",
+  "⚙ Open settings": "⚙ Abrir settings",
+  "Pipeline settings": "Settings del Pipeline",
+  "The hold clock": "El reloj del hold",
+  "Remind after (days)": "Avisar a los (días)",
+  "Decide within (days)": "Decidir antes de (días)",
+  "Broker email domains": "Dominios de mail de brokers",
+  "Partner carriers": "Carriers asociados",
+  "Carrier name": "Nombre del carrier",
+  "allied.com": "allied.com",          // a sample domain: the same in both languages
+  "Inbound limits": "Topes de entrada",
+  "Per sender, per day": "Por remitente, por día",
+  "All senders, per day": "Todos los remitentes, por día",
+  "Remove": "Sacar",
+  "See why": "Ver por qué",
+  "Emails dropped today": "Mails descartados hoy",
+  "The webhook answers the same way to everyone, so a stranger cannot learn which domains we accept. That means a real broker who is not on the allowlist yet would disappear silently — these are those messages.":
+    "El webhook le contesta igual a todo el mundo, así que un desconocido no puede averiguar qué dominios aceptamos. Eso también significa que un broker de verdad que todavía no está en la lista desaparecería sin dejar rastro — estos son esos mensajes.",
+  "Sender not on the allowlist": "El remitente no está en la lista",
+  "Add the domain in Settings if it is a broker of ours.": "Agregá el dominio en Settings si es un broker nuestro.",
+  "Over this sender's daily cap": "Pasó el tope diario de ese remitente",
+  "Raise the per-sender cap in Settings, or check whether the sender is looping.":
+    "Subí el tope por remitente en Settings, o fijate si el remitente está en loop.",
+  "Over the daily cap for all senders": "Pasó el tope diario de todos los remitentes",
+  "Raise the daily cap in Settings.": "Subí el tope diario en Settings.",
+  "No readable sender address": "No se pudo leer la dirección del remitente",
+  "The forwarder did not send a usable From header.": "El reenviador no mandó un From usable.",
 };
 const i18nCache = new WeakMap();   // text node -> original English value
 export function i18nApply() {

@@ -10,7 +10,8 @@ import {
   leadScore, rankLeads, pipelineTotals,
   isSameOpportunity, findDuplicate,
   leadToJobForm,
-  senderDomain, isAllowedSender, clampRawText, MAX_RAW_TEXT,
+  senderDomain, senderAddress, isAllowedSender, clampRawText, MAX_RAW_TEXT,
+  normalizeDomain, normalizeDomains, normalizeCarriers, dropReasonMeta, DROP_REASONS,
   isLowConfidence, missingFields, isEvaluable,
   haversineMiles, nearestTruck,
   withinRange, jobRunWindow, distinctExpenseDates, sumExpenses, computeActuals,
@@ -279,6 +280,67 @@ t("the allowlist matches the domain and its subdomains only", () => {
 t("raw text is capped before it is stored", () => {
   assert.equal(clampRawText("x".repeat(MAX_RAW_TEXT + 500)).length, MAX_RAW_TEXT);
   assert.equal(clampRawText(null), "");
+});
+
+t("senderAddress reduces a From header to one comparable address", () => {
+  assert.equal(senderAddress("dispatch@allied.com"), "dispatch@allied.com");
+  // The whole point of the per-sender cap: these three are one sender.
+  assert.equal(senderAddress("Allied Dispatch <Dispatch@Allied.com>"), "dispatch@allied.com");
+  assert.equal(senderAddress("  mailto:DISPATCH@allied.com "), "dispatch@allied.com");
+  assert.equal(senderAddress("garbage"), "");
+  assert.equal(senderAddress("two addresses@here @there"), "");
+  assert.equal(senderAddress(null), "");
+});
+
+// ── Settings hygiene ─────────────────────────────────────────────────────────
+t("a typed domain is normalized to something the allowlist can match", () => {
+  assert.equal(normalizeDomain("@Allied.com"), "allied.com");
+  assert.equal(normalizeDomain("  ALLIED.com  "), "allied.com");
+  assert.equal(normalizeDomain("dispatch@allied.com"), "allied.com");
+  assert.equal(normalizeDomain("https://allied.com/jobs"), "allied.com");
+  assert.equal(normalizeDomain("mail.atlas.co.uk"), "mail.atlas.co.uk");
+  assert.equal(normalizeDomain("allied"), "");          // no dot: not a domain
+  assert.equal(normalizeDomain("not a domain"), "");
+  assert.equal(normalizeDomain(null), "");
+});
+
+t("domain lists lose duplicates and junk but keep their order", () => {
+  assert.deepEqual(
+    normalizeDomains(["@Allied.com", "atlas.com", "allied.com", "", "garbage", null]),
+    ["allied.com", "atlas.com"]
+  );
+  assert.deepEqual(normalizeDomains(null), []);
+});
+
+t("carrier names are trimmed and de-duplicated case-insensitively", () => {
+  assert.deepEqual(normalizeCarriers(["  Acme  Transport ", "acme transport", "Beta"]),
+    ["Acme Transport", "Beta"]);
+  assert.deepEqual(normalizeCarriers(["", null, "  "]), []);
+});
+
+t("saved settings are cleaned on the way in, so a bad row cannot break matching", () => {
+  const s = mergePipelineSettings({ allowedEmailDomains: ["@Allied.com", "allied.com"], carriers: [" X ", "x"] });
+  assert.deepEqual(s.allowedEmailDomains, ["allied.com"]);
+  assert.deepEqual(s.carriers, ["X"]);
+  assert.equal(isAllowedSender("dispatch@allied.com", s), true);
+});
+
+t("the daily caps have floors, and the global one can never sit below the per-sender one", () => {
+  assert.equal(mergePipelineSettings(null).maxLeadsPerSenderPerDay, 40);
+  assert.equal(mergePipelineSettings(null).maxLeadsPerDay, 200);
+  // 0 would switch the email channel off without saying so.
+  assert.equal(mergePipelineSettings({ maxLeadsPerSenderPerDay: 0 }).maxLeadsPerSenderPerDay, 1);
+  const s = mergePipelineSettings({ maxLeadsPerSenderPerDay: 60, maxLeadsPerDay: 10 });
+  assert.equal(s.maxLeadsPerDay, 60);
+});
+
+t("every drop reason has a label and a way out", () => {
+  for (const r of DROP_REASONS) {
+    assert.ok(r.l && r.hint, `${r.v} needs a label and a hint`);
+  }
+  assert.equal(dropReasonMeta("sender_not_allowed").l, "Sender not on the allowlist");
+  // An unknown reason still renders rather than blanking the row.
+  assert.equal(dropReasonMeta("something_new").l, "something_new");
 });
 
 // ── Field confidence and readiness ───────────────────────────────────────────
