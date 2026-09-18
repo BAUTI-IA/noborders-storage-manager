@@ -2309,7 +2309,7 @@ export const I18N_ES = {
   "The hold clock": "El reloj del hold",
   "Remind after (days)": "Avisar a los (días)",
   "Decide within (days)": "Decidir antes de (días)",
-  "Broker email domains": "Dominios de mail de brokers",
+  "Who may send us leads": "Quién nos puede mandar leads",
   "Partner carriers": "Carriers asociados",
   "Carrier name": "Nombre del carrier",
   "allied.com": "allied.com",          // a sample domain: the same in both languages

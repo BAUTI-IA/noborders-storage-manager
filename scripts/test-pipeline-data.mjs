@@ -11,7 +11,7 @@ import {
   isSameOpportunity, findDuplicate,
   leadToJobForm,
   senderDomain, senderAddress, isAllowedSender, clampRawText, MAX_RAW_TEXT,
-  normalizeDomain, normalizeDomains, normalizeCarriers, dropReasonMeta, DROP_REASONS,
+  normalizeSenderRule, normalizeSenderRules, normalizeCarriers, dropReasonMeta, DROP_REASONS,
   isLowConfidence, missingFields, isEvaluable,
   haversineMiles, nearestTruck,
   withinRange, jobRunWindow, distinctExpenseDates, sumExpenses, computeActuals,
@@ -293,23 +293,50 @@ t("senderAddress reduces a From header to one comparable address", () => {
 });
 
 // ── Settings hygiene ─────────────────────────────────────────────────────────
-t("a typed domain is normalized to something the allowlist can match", () => {
-  assert.equal(normalizeDomain("@Allied.com"), "allied.com");
-  assert.equal(normalizeDomain("  ALLIED.com  "), "allied.com");
-  assert.equal(normalizeDomain("dispatch@allied.com"), "allied.com");
-  assert.equal(normalizeDomain("https://allied.com/jobs"), "allied.com");
-  assert.equal(normalizeDomain("mail.atlas.co.uk"), "mail.atlas.co.uk");
-  assert.equal(normalizeDomain("allied"), "");          // no dot: not a domain
-  assert.equal(normalizeDomain("not a domain"), "");
-  assert.equal(normalizeDomain(null), "");
+t("a typed domain rule is normalized to something the allowlist can match", () => {
+  assert.equal(normalizeSenderRule("@Allied.com"), "allied.com");
+  assert.equal(normalizeSenderRule("  ALLIED.com  "), "allied.com");
+  assert.equal(normalizeSenderRule("https://allied.com/jobs"), "allied.com");
+  assert.equal(normalizeSenderRule("mail.atlas.co.uk"), "mail.atlas.co.uk");
+  assert.equal(normalizeSenderRule("allied"), "");          // no dot: not a domain
+  assert.equal(normalizeSenderRule("not a domain"), "");
+  assert.equal(normalizeSenderRule(null), "");
 });
 
-t("domain lists lose duplicates and junk but keep their order", () => {
+t("a full address stays whole instead of collapsing to its domain", () => {
+  // The regression this guards: reducing it to "gmail.com" would let every
+  // stranger with a free account post leads into the board.
+  assert.equal(normalizeSenderRule("shawn@gmail.com"), "shawn@gmail.com");
+  assert.equal(normalizeSenderRule("  Dispatch@Allied.com "), "dispatch@allied.com");
+  assert.equal(normalizeSenderRule("mailto:shawn@gmail.com"), "shawn@gmail.com");
+  assert.equal(normalizeSenderRule("@gmail.com"), "");      // the whole of Gmail: refused
+  assert.equal(normalizeSenderRule("gmail.com"), "");
+  assert.equal(normalizeSenderRule("outlook.com"), "");
+  assert.equal(normalizeSenderRule("shawn@"), "");
+  assert.equal(normalizeSenderRule("@allied.com"), "allied.com");  // still a domain rule
+});
+
+t("an address rule admits that mailbox and nobody else on the domain", () => {
+  const s = mergePipelineSettings({ allowedEmailDomains: ["shawn@gmail.com"] });
+  assert.deepEqual(s.allowedEmailDomains, ["shawn@gmail.com"]);
+  assert.equal(isAllowedSender("shawn@gmail.com", s), true);
+  assert.equal(isAllowedSender("Shawn <Shawn@Gmail.com>", s), true);
+  assert.equal(isAllowedSender("stranger@gmail.com", s), false);
+  assert.equal(isAllowedSender("shawn@gmail.com.attacker.net", s), false);
+  // A domain rule keeps covering its subdomains; an address rule never does.
+  const d = mergePipelineSettings({ allowedEmailDomains: ["allied.com"] });
+  assert.equal(isAllowedSender("anyone@mail.allied.com", d), true);
+  const a = mergePipelineSettings({ allowedEmailDomains: ["ops@allied.com"] });
+  assert.equal(isAllowedSender("anyone@mail.allied.com", a), false);
+  assert.equal(isAllowedSender("other@allied.com", a), false);
+});
+
+t("rule lists lose duplicates and junk but keep their order", () => {
   assert.deepEqual(
-    normalizeDomains(["@Allied.com", "atlas.com", "allied.com", "", "garbage", null]),
-    ["allied.com", "atlas.com"]
+    normalizeSenderRules(["@Allied.com", "shawn@gmail.com", "atlas.com", "allied.com", "", "garbage", null]),
+    ["allied.com", "shawn@gmail.com", "atlas.com"]
   );
-  assert.deepEqual(normalizeDomains(null), []);
+  assert.deepEqual(normalizeSenderRules(null), []);
 });
 
 t("carrier names are trimmed and de-duplicated case-insensitively", () => {
