@@ -18,7 +18,7 @@ import {
   mergePipelineSettings, holdDates, holdStage, holdProgress,
   rankLeads, pipelineTotals, leadScore, findDuplicate,
   leadToJobForm, isEvaluable, missingFields, isLowConfidence, num,
-  DEADHEAD_ORIGINS,
+  DEADHEAD_ORIGINS, normalizeDomains, normalizeCarriers, dropReasonMeta,
 } from "./pipelineData.js";
 
 // Shown in the setup banner when the tables don't exist yet.
@@ -64,6 +64,9 @@ const today = () => {
   const d = new Date(), p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
+
+/** This morning's midnight where the operator is, as an instant. */
+const midnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
 
 // Local style tokens, same values every other module redeclares.
 const inp = { fontSize: 13, padding: "8px 10px", borderRadius: 8, border: "1px solid #e5e5e5", background: "#fff", color: "#111", width: "100%", outline: "none" };
@@ -112,6 +115,58 @@ function Delta({ k, est, real, money: isMoney }) {
   );
 }
 
+// A short list of short strings, edited as chips. Used for the broker domains
+// and the partner carriers — both are lists people add to one at a time and
+// occasionally remove from, which a textarea handles badly.
+function ListEditor({ items, onChange, placeholder, normalize, hint }) {
+  const [draft, setDraft] = useState("");
+  // One paste can hold several: "allied.com, atlas.com" should not become one
+  // nonsense entry.
+  const add = () => {
+    const parts = draft.split(/[,;\s]+/).filter(Boolean);
+    if (!parts.length) return;
+    const next = normalize([...items, ...parts]);
+    setDraft("");
+    if (next.length !== items.length || next.some((v, i) => v !== items[i])) onChange(next);
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: items.length ? 8 : 0 }}>
+        {items.map((v) => (
+          <span key={v} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f5f5f5", border: "1px solid #ececec", borderRadius: 20, padding: "3px 6px 3px 11px", fontSize: 12.5 }}>
+            {v}
+            <button type="button" onClick={() => onChange(items.filter((x) => x !== v))} title="Remove"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "#aaa", fontWeight: 700, fontSize: 14, lineHeight: 1, padding: "0 2px" }}>×</button>
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input value={draft} onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); } }}
+          onBlur={add} placeholder={placeholder} style={{ ...inp, flex: 1 }} />
+        <button type="button" onClick={add} disabled={!draft.trim()}
+          style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #e5e5e5", background: "#fff", color: "#444", fontSize: 12.5, fontWeight: 600, cursor: draft.trim() ? "pointer" : "default", opacity: draft.trim() ? 1 : 0.5 }}>Add</button>
+      </div>
+      {hint && <div style={{ fontSize: 11.5, color: "#bbb", marginTop: 6 }}>{hint}</div>}
+    </div>
+  );
+}
+
+// One labelled number input. The caps and the two hold days are all this shape.
+// Only digits get through, and mergePipelineSettings() applies the floors on
+// save, so there is nothing to validate here.
+function NumField({ label, value, onChange, hint }) {
+  return (
+    <label style={{ fontSize: 12, color: "#666", display: "block" }}>
+      {label}
+      <input value={value} inputMode="numeric"
+        onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))}
+        style={{ ...inp, marginTop: 4, width: 120 }} />
+      {hint && <div style={{ fontSize: 11.5, color: "#bbb", marginTop: 4, fontWeight: 400 }}>{hint}</div>}
+    </label>
+  );
+}
+
 export function PipelineSection({ supabase, session, profile, can = () => true, isAdmin = false, Btn, Modal, onConvertLead }) {
   const canCreate = can("pipeline", "create") || isAdmin;
   const canEdit = can("pipeline", "edit") || isAdmin;
@@ -135,6 +190,16 @@ export function PipelineSection({ supabase, session, profile, can = () => true, 
   const [rank, setRank] = useState(null);       // { ranked, notes } | { error }
   const [rankOpen, setRankOpen] = useState(false);
   const [decide, setDecide] = useState(null);   // { kind, lead, reason, to, rate }
+
+  // Emails the webhook refused today. A rejected sender gets a flat 202 so the
+  // endpoint tells the internet nothing, which would also hide a real broker
+  // who is not on the allowlist yet — this is where that becomes visible.
+  const [drops, setDrops] = useState([]);
+  const [dropsOpen, setDropsOpen] = useState(false);
+
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [draft, setDraft] = useState(null);     // the settings being edited
+  const [saving, setSaving] = useState(false);
 
   const td0 = today();
   const seq = useRef(0);
@@ -162,12 +227,20 @@ export function PipelineSection({ supabase, session, profile, can = () => true, 
     }
     setLeads((data || []).filter(notDel).map((l) => ({ ...l, evaluation: byEval.get(l.evaluation_id) || null })));
 
-    const [{ data: bk }, { data: st }] = await Promise.all([
+    const [{ data: bk }, { data: st }, { data: dr }] = await Promise.all([
       supabase.from("brokers").select("id, name").is("deleted_at", null).order("name"),
       supabase.from("pipeline_settings").select("settings").eq("id", 1).maybeSingle(),
+      // Local midnight, sent as an instant: "today" has to mean the operator's
+      // today, not UTC's. action_log predates this module and may be missing on
+      // an old install, so a failure here must not take the board down with it.
+      supabase.from("action_log").select("id, created_at, label, after")
+        .eq("entity", "job_leads").eq("action", "dropped")
+        .gte("created_at", midnight())
+        .order("created_at", { ascending: false }).limit(50),
     ]);
     setBrokers(bk || []);
     setSettings(mergePipelineSettings(st?.settings));
+    setDrops(dr || []);
     setLoading(false);
   }, [supabase]);
 
@@ -230,6 +303,29 @@ export function PipelineSection({ supabase, session, profile, can = () => true, 
       await load();
     } catch (e) { setErr(e.message); }
     setBusy(false);
+  }
+
+  // The settings row is a jsonb singleton, so a save merges onto whatever is
+  // stored rather than replacing it: a key this build does not know about (one
+  // added by a newer deploy, or by hand in SQL) must survive being saved from
+  // an older screen.
+  async function saveSettings() {
+    if (saving) return;
+    setSaving(true); setErr("");
+    const { data: cur, error: readErr } = await supabase
+      .from("pipeline_settings").select("settings").eq("id", 1).maybeSingle();
+    if (readErr) { setErr(readErr.message); setSaving(false); return; }
+
+    const clean = mergePipelineSettings(draft);
+    const next = { ...(cur?.settings || {}), ...clean };
+    if (dbFailed(await supabase.from("pipeline_settings")
+      .update({ settings: next, updated_at: new Date().toISOString(), updated_by: session?.user?.id || null })
+      .eq("id", 1), "pipeline_settings")) {
+      setErr(tr("The settings could not be saved.", "No se pudieron guardar los settings."));
+      setSaving(false); return;
+    }
+    setSettings(mergePipelineSettings(next));
+    setSaving(false); setSetupOpen(false); setDraft(null);
   }
 
   async function evaluateNow(lead) {
@@ -335,6 +431,7 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a lead"
           style={{ ...inp, width: 220 }} />
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {isAdmin && <Btn onClick={() => { setDraft({ ...settings }); setSetupOpen(true); }}>⚙ Settings</Btn>}
           <Btn disabled={busy} onClick={analyzeBatch}>✨ Analyze batch</Btn>
           {canCreate && <Btn primary disabled={busy} onClick={() => { setNewText(""); setShowNew(true); }}>+ New lead</Btn>}
         </div>
@@ -369,6 +466,19 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
             </button>
           ))}
           <button onClick={() => setAlertOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#C08585", cursor: "pointer", fontWeight: 700 }}>×</button>
+        </div>
+      )}
+
+      {/* Emails the webhook refused today */}
+      {drops.length > 0 && (
+        <div style={{ background: "#FFF7ED", border: "1px solid #FED7AA", color: "#9A3412", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600 }}>
+            {tr(`${drops.length} incoming email(s) were dropped today`, `Hoy se descartaron ${drops.length} mail(s) entrantes`)}
+          </span>
+          <button onClick={() => setDropsOpen(true)}
+            style={{ background: "#fff", border: "1px solid #FED7AA", borderRadius: 20, padding: "2px 11px", fontSize: 11.5, color: "#9A3412", cursor: "pointer", fontWeight: 600 }}>
+            See why
+          </button>
         </div>
       )}
 
@@ -547,6 +657,86 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
         </Modal>
       )}
 
+      {/* ── Dropped emails ── */}
+      {dropsOpen && (
+        <Modal wide title="Emails dropped today" onClose={() => setDropsOpen(false)}
+          footer={<>
+            {isAdmin && <Btn onClick={() => { setDropsOpen(false); setDraft({ ...settings }); setSetupOpen(true); }}>⚙ Open settings</Btn>}
+            <Btn onClick={() => setDropsOpen(false)}>Close</Btn>
+          </>}>
+          <div style={{ fontSize: 12.5, color: "#666", marginBottom: 10 }}>
+            The webhook answers the same way to everyone, so a stranger cannot learn which domains we accept. That means a real broker who is not on the allowlist yet would disappear silently — these are those messages.
+          </div>
+          {drops.map((d, i) => {
+            const meta = dropReasonMeta(d.after?.reason);
+            return (
+              <div key={d.id} style={{ padding: "10px 0", borderTop: i ? "1px solid #f4f4f4" : "none" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <span style={{ color: "#aaa", fontSize: 11.5, whiteSpace: "nowrap" }}>{String(d.created_at).slice(11, 16)}</span>
+                  <b style={{ fontSize: 12.5, fontWeight: 600 }}>{d.after?.from || tr("(no sender)", "(sin remitente)")}</b>
+                  <Tag meta={{ bg: "#FFF7ED", text: "#9A3412", l: meta.l }} />
+                </div>
+                {d.after?.subject && <div style={{ fontSize: 12, color: "#777", marginTop: 3 }}>{d.after.subject}</div>}
+                <div style={{ fontSize: 11.5, color: "#bbb", marginTop: 3 }}>{meta.hint}</div>
+              </div>
+            );
+          })}
+        </Modal>
+      )}
+
+      {/* ── Settings ── */}
+      {setupOpen && draft && (
+        <Modal title="Pipeline settings" onClose={() => setSetupOpen(false)}
+          footer={<>
+            <Btn onClick={() => setSetupOpen(false)}>Cancel</Btn>
+            <Btn primary disabled={saving} onClick={saveSettings}>{saving ? "Saving…" : "Save"}</Btn>
+          </>}>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div>
+              <div style={cap}>The hold clock</div>
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                <NumField label="Remind after (days)" value={String(draft.holdReminderDays)}
+                  onChange={(v) => setDraft({ ...draft, holdReminderDays: v })}
+                  hint={tr("Day the reminder goes out.", "Día en que sale el recordatorio.")} />
+                <NumField label="Decide within (days)" value={String(draft.holdDecisionDays)}
+                  onChange={(v) => setDraft({ ...draft, holdDecisionDays: v })}
+                  hint={tr("Day the lead expires.", "Día en que el lead vence.")} />
+              </div>
+            </div>
+
+            <div>
+              <div style={cap}>Broker email domains</div>
+              <ListEditor items={draft.allowedEmailDomains} normalize={normalizeDomains}
+                onChange={(v) => setDraft({ ...draft, allowedEmailDomains: v })}
+                placeholder="allied.com"
+                hint={tr(
+                  "Email from anyone else is discarded. Empty means no email is accepted at all — subdomains of a listed domain are.",
+                  "El mail de cualquier otro se descarta. Vacío quiere decir que no entra ningún mail — los subdominios de un dominio listado sí entran.")} />
+            </div>
+
+            <div>
+              <div style={cap}>Partner carriers</div>
+              <ListEditor items={draft.carriers} normalize={normalizeCarriers}
+                onChange={(v) => setDraft({ ...draft, carriers: v })}
+                placeholder="Carrier name"
+                hint={tr("Offered to these when we pass on a job.", "A estos se les ofrece cuando dejamos pasar un job.")} />
+            </div>
+
+            <div>
+              <div style={cap}>Inbound limits</div>
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                <NumField label="Per sender, per day" value={String(draft.maxLeadsPerSenderPerDay)}
+                  onChange={(v) => setDraft({ ...draft, maxLeadsPerSenderPerDay: v })}
+                  hint={tr("One busy broker cannot crowd out the rest.", "Un broker movido no puede tapar al resto.")} />
+                <NumField label="All senders, per day" value={String(draft.maxLeadsPerDay)}
+                  onChange={(v) => setDraft({ ...draft, maxLeadsPerDay: v })}
+                  hint={tr("Backstop. Never lower than the one on the left.", "Tope de seguridad. Nunca menor al de la izquierda.")} />
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* ── Reject / Offer ── */}
       {decide?.kind === "reject" && (
         <Modal title="Reject this lead" onClose={() => setDecide(null)}
@@ -571,7 +761,7 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
           <div style={{ display: "grid", gap: 10 }}>
             <label style={{ fontSize: 12, color: "#666" }}>Carrier
               <input value={decide.to} onChange={(e) => setDecide({ ...decide, to: e.target.value })}
-                list="pipeline-carriers" placeholder="Shawn" style={{ ...inp, marginTop: 4 }} />
+                list="pipeline-carriers" placeholder="Carrier name" style={{ ...inp, marginTop: 4 }} />
               <datalist id="pipeline-carriers">
                 {(settings.carriers || []).map((c) => <option key={c} value={c} />)}
               </datalist>
@@ -629,6 +819,7 @@ function LeadDetail({ lead, brokerName, onEvaluate, busy, td0 }) {
             </span>
           </div>
           <Kv k={tr("Broker", "Broker")}>{f("broker", brokerName)}</Kv>
+          {lead.parsed?.sender && <Kv k={tr("Sent by", "Lo mandó")}>{lead.parsed.sender}</Kv>}
           <Kv k={tr("Client", "Cliente")} flag={isLowConfidence(lead, "customer")}>{f("c", lead.customer)}</Kv>
           <Kv k={tr("Origin", "Origen")} flag={isLowConfidence(lead, "origin_zip")}>
             {[lead.origin_city, lead.origin_state, lead.origin_zip].filter(Boolean).join(" · ") || "—"}
