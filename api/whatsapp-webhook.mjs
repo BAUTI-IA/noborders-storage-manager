@@ -6,10 +6,16 @@
 // Configure Twilio → Messaging → WhatsApp → inbound webhook (POST) to
 // https://APP_URL/api/whatsapp-webhook. Trust comes from the Twilio signature
 // (TWILIO_AUTH_TOKEN) plus the WHATSAPP_ALLOWED_NUMBERS whitelist.
+//
+// Also hosts the WATI (WhatsApp Coexistence) webhook — the business number's
+// conversations with brokers, customers and drivers — as ?provider=wati,
+// reached through the /api/wati-webhook rewrite in vercel.json (api/ is at the
+// Hobby plan's 12-function cap). That half lives in lib/wati.mjs.
 import { waitUntil } from "@vercel/functions";
 import { verifyTwilioSignature, twimlReply, normalizePhone, sendWhatsApp } from "../lib/twilio.mjs";
 import { admin, handleIncoming, REPLY_MAX } from "../lib/agent.mjs";
 import { transcribeAudio } from "../lib/transcribe.mjs";
+import { watiWebhook } from "../lib/wati.mjs";
 
 export const config = { api: { bodyParser: false } }; // raw body: the signature covers the exact form params
 export const maxDuration = 300;
@@ -23,19 +29,24 @@ function sendTwiml(res, text) {
   res.status(200).send(twimlReply(text ? String(text).slice(0, REPLY_MAX + 100) : ""));
 }
 
+function readRaw(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 export default async function handler(req, res) {
+  if (req.query?.provider === "wati") { await watiWebhook(req, res, await readRaw(req)); return; }
   if (req.method !== "POST") { res.status(405).end(); return; }
   if (!admin || !process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "server not configured" }); return; }
   // Without the auth token no request can be verified — refuse everything rather
   // than accept unsigned posts (a missing env var must never open the webhook).
   if (!process.env.TWILIO_AUTH_TOKEN) { res.status(503).json({ error: "server not configured: TWILIO_AUTH_TOKEN" }); return; }
 
-  const raw = await new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
+  const raw = await readRaw(req);
   const params = new URLSearchParams(raw.toString("utf8"));
 
   // Signature over the exact public URL Twilio was configured with (APP_URL,

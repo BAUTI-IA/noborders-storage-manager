@@ -15,6 +15,10 @@
       "destination": "/api/geocode?fleet=webhook&provider=motive"
     },
     {
+      "source": "/api/wati-webhook",
+      "destination": "/api/whatsapp-webhook?provider=wati"
+    },
+    {
       "source": "/api/inbound-email",
       "destination": "/api/agent-hub?action=inbound_email"
     }
