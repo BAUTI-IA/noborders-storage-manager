@@ -4108,10 +4108,18 @@ function UsersSection({ session }) {
     );
   }
 
+  // One line per user: section chips in a single row that scrolls sideways
+  // instead of wrapping the whole table row downwards.
   function permSummary(u) {
-    if (u.role === "admin") return "Full access (admin)";
-    const ids = PERMISSION_SECTIONS.filter(s => u.permissions?.[s.id]?.view).map(s => s.label);
-    return ids.length ? ids.join(", ") : "No access";
+    if (u.role === "admin") return tr("Full access (admin)", "Acceso total (admin)");
+    const labels = PERMISSION_SECTIONS.filter(s => u.permissions?.[s.id]?.view).map(s => t(s.label));
+    if (!labels.length) return tr("No access", "Sin acceso");
+    return (
+      <div title={labels.join(", ")} style={{ display:"flex", gap:4, overflowX:"auto", whiteSpace:"nowrap", maxWidth:280, paddingBottom:2 }}>
+        <span style={{ flex:"none", fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:20, background:"#e8eefc", color:"#1d4ed8" }}>{labels.length}/{PERMISSION_SECTIONS.length}</span>
+        {labels.map(l => <span key={l} style={{ flex:"none", fontSize:11, padding:"2px 7px", borderRadius:20, background:"#f1f1f1", color:"#555" }}>{l}</span>)}
+      </div>
+    );
   }
 
   return (
@@ -4136,8 +4144,8 @@ function UsersSection({ session }) {
               <tr><td style={td} colSpan={9}>No users yet.</td></tr>
             ) : users.map(u => (
               <tr key={u.id}>
-                <td style={td}>{u.email}</td>
-                <td style={td}>{u.full_name || "—"}</td>
+                <td style={{ ...td, whiteSpace:"nowrap" }}>{u.email}</td>
+                <td style={{ ...td, whiteSpace:"nowrap" }}>{u.full_name || "—"}</td>
                 <td style={td}>
                   <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: u.role==="admin" ? "#EAF3DE" : "#f1f1f1", color: u.role==="admin" ? "#3B6D11" : "#888" }}>{u.role}</span>
                 </td>
