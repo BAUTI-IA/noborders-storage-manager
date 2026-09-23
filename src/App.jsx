@@ -3858,6 +3858,8 @@ function UsersSection({ session }) {
   const [drivers, setDrivers] = useState([]);   // para vincular un usuario con su driver
   const [appRoleMissing, setAppRoleMissing] = useState(false); // la columna todavía no está en la DB
   const [loginTrackingMissing, setLoginTrackingMissing] = useState(false); // falta LOGIN_TRACKING_SQL
+  const [uFilter, setUFilter] = useState({ q:"", role:"", app:"", status:"" });
+  const [uSort, setUSort] = useState({ key:"email", dir:"asc" });
 
   // La lista de drivers alimenta el desplegable "Driver vinculado".
   useEffect(() => {
@@ -4082,14 +4084,19 @@ function UsersSection({ session }) {
   const td = { padding:"10px 12px", fontSize:13, borderBottom:"1px solid #f3f3f3", textAlign:"left", verticalAlign:"middle" };
   const th = { ...td, fontSize:11, fontWeight:600, color:"#999", textTransform:"uppercase", letterSpacing:"0.05em" };
 
+  // Actions stay pinned to the right edge while the table scrolls sideways.
+  const stickyR = st => ({ ...st, position:"sticky", right:0, background:"#fff", boxShadow:"-8px 0 8px -8px rgba(0,0,0,0.12)" });
+
   // Qué ve este usuario en la app del teléfono. Si nadie eligió un rol, se
   // muestra el que va a deducir el servidor, para que no parezca vacío.
+  function appRoleOf(u) {
+    return u.app_role || (u.role === "admin" ? "master"
+      : (u.permissions?.jobs?.edit || u.permissions?.jobs?.create) ? "office"
+      : "driver");
+  }
   function appRoleCell(u) {
     const explicito = u.app_role || null;
-    const deducido = u.role === "admin" ? "master"
-      : (u.permissions?.jobs?.edit || u.permissions?.jobs?.create) ? "office"
-      : "driver";
-    const valor = explicito || deducido;
+    const valor = appRoleOf(u);
     const c = APP_ROLE_COLORS[valor] || { bg:"#f1f1f1", fg:"#888" };
     const nombre = valor === "driver" ? "Driver" : valor === "office" ? "Back office" : tr("Master", "Maestro");
     return (
@@ -4115,46 +4122,99 @@ function UsersSection({ session }) {
     const labels = PERMISSION_SECTIONS.filter(s => u.permissions?.[s.id]?.view).map(s => t(s.label));
     if (!labels.length) return tr("No access", "Sin acceso");
     return (
-      <div title={labels.join(", ")} style={{ display:"flex", gap:4, overflowX:"auto", whiteSpace:"nowrap", maxWidth:280, paddingBottom:2 }}>
+      <div title={labels.join(", ")} style={{ display:"flex", gap:4, overflowX:"auto", whiteSpace:"nowrap", maxWidth:240, paddingBottom:2 }}>
         <span style={{ flex:"none", fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:20, background:"#e8eefc", color:"#1d4ed8" }}>{labels.length}/{PERMISSION_SECTIONS.length}</span>
         {labels.map(l => <span key={l} style={{ flex:"none", fontSize:11, padding:"2px 7px", borderRadius:20, background:"#f1f1f1", color:"#555" }}>{l}</span>)}
       </div>
     );
   }
 
+  const accessCount = u => u.role === "admin" ? Infinity : PERMISSION_SECTIONS.filter(s => u.permissions?.[s.id]?.view).length;
+  const loginTs = at => { const n = at ? new Date(at).getTime() : NaN; return isNaN(n) ? null : n; };
+  const SORT_VAL = {
+    email: u => (u.email || "").toLowerCase(),
+    name: u => (u.full_name || "").toLowerCase() || null,
+    role: u => u.role || "",
+    access: accessCount,
+    app: u => ({ master:0, office:1, driver:2 })[appRoleOf(u)] ?? 3,
+    crm: u => loginTs(u.last_login_crm || u.last_login),
+    applogin: u => loginTs(u.last_login_app || u.last_login),
+    status: u => (u.active !== false ? 0 : 1),
+  };
+  const q = uFilter.q.trim().toLowerCase();
+  const shownUsers = users
+    .filter(u => !q || (u.email || "").toLowerCase().includes(q) || (u.full_name || "").toLowerCase().includes(q))
+    .filter(u => !uFilter.role || u.role === uFilter.role)
+    .filter(u => !uFilter.app || appRoleOf(u) === uFilter.app)
+    .filter(u => !uFilter.status || (uFilter.status === "active") === (u.active !== false))
+    .sort((a, b) => {
+      const f = SORT_VAL[uSort.key]; if (!f) return 0;
+      const va = f(a), vb = f(b);
+      // Empty values (no name, never logged in) always go last.
+      if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
+      const c = va < vb ? -1 : va > vb ? 1 : 0;
+      return uSort.dir === "asc" ? c : -c;
+    });
+  const filtersOn = !!(uFilter.q || uFilter.role || uFilter.app || uFilter.status);
+  function sortBy(key) {
+    setUSort(s => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+      // Dates and access count read best newest/most first.
+      : { key, dir: ["crm", "applogin", "access"].includes(key) ? "desc" : "asc" });
+  }
+  const sortTh = (k, label) => (
+    <th key={k} style={{ ...th, cursor:"pointer", userSelect:"none", whiteSpace:"nowrap", color: uSort.key === k ? "#111" : th.color }} onClick={() => sortBy(k)}>
+      {label}<span style={{ marginLeft:4, fontSize:10 }}>{uSort.key === k ? (uSort.dir === "asc" ? "▲" : "▼") : "↕"}</span>
+    </th>
+  );
+  const fSel = { padding:"7px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", fontSize:13 };
+
   return (
     <div>
-      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:12 }}>
-        <Btn primary onClick={openNew}>+ New user</Btn>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center", marginBottom:12 }}>
+        <input value={uFilter.q} onChange={e => setUFilter(f => ({ ...f, q: e.target.value }))} placeholder="Search email or name…" style={{ ...fSel, flex:"1 1 220px", maxWidth:320 }} />
+        <select value={uFilter.role} onChange={e => setUFilter(f => ({ ...f, role: e.target.value }))} style={fSel}>
+          <option value="">All roles</option><option value="admin">Admin</option><option value="member">Member</option>
+        </select>
+        <select value={uFilter.app} onChange={e => setUFilter(f => ({ ...f, app: e.target.value }))} style={fSel}>
+          <option value="">All app roles</option><option value="master">{tr("Master", "Maestro")}</option><option value="office">Back office</option><option value="driver">Driver</option>
+        </select>
+        <select value={uFilter.status} onChange={e => setUFilter(f => ({ ...f, status: e.target.value }))} style={fSel}>
+          <option value="">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option>
+        </select>
+        {filtersOn && <button onClick={() => setUFilter({ q:"", role:"", app:"", status:"" })} style={{ ...fSel, cursor:"pointer", color:"#666" }}>Clear filters</button>}
+        <span style={{ fontSize:12, color:"#999" }}>{shownUsers.length}/{users.length}</span>
+        <div style={{ marginLeft:"auto" }}><Btn primary onClick={openNew}>+ New user</Btn></div>
       </div>
       {error && <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#b91c1c", marginBottom:12 }}>{error}</div>}
       {warn && <div style={{ background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#92400e", marginBottom:12 }}>{warn}</div>}
       {notice && <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#166534", marginBottom:12 }}>{notice}</div>}
       {loginTrackingMissing && <div style={{ background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#854F0B", marginBottom:12 }}>Run the database setup SQL once in Supabase (Settings → Database setup) to split last login by device.</div>}
 
-      <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflow:"hidden" }}>
+      <div style={{ background:"#fff", border:"1px solid #efefef", borderRadius:12, overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead><tr>
-            <th style={th}>Email</th><th style={th}>Name</th><th style={th}>Role</th><th style={th}>Access</th><th style={th}>{tr("Mobile app", "App mobile")}</th><th style={th}>Last login · CRM</th><th style={th}>Last login · App</th><th style={th}>Status</th><th style={th}></th>
+            {sortTh("email", "Email")}{sortTh("name", "Name")}{sortTh("role", "Role")}{sortTh("access", "Access")}{sortTh("app", tr("Mobile app", "App mobile"))}{sortTh("crm", "Last login · CRM")}{sortTh("applogin", "Last login · App")}{sortTh("status", "Status")}<th style={stickyR(th)}></th>
           </tr></thead>
           <tbody>
             {loading ? (
               <tr><td style={td} colSpan={9}>Loading…</td></tr>
             ) : users.length === 0 ? (
               <tr><td style={td} colSpan={9}>No users yet.</td></tr>
-            ) : users.map(u => (
+            ) : shownUsers.length === 0 ? (
+              <tr><td style={td} colSpan={9}>No users match these filters.</td></tr>
+            ) : shownUsers.map(u => (
               <tr key={u.id}>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>{u.email}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>{u.full_name || "—"}</td>
                 <td style={td}>
                   <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background: u.role==="admin" ? "#EAF3DE" : "#f1f1f1", color: u.role==="admin" ? "#3B6D11" : "#888" }}>{u.role}</span>
                 </td>
-                <td style={{ ...td, color:"#888", maxWidth:280 }}>{permSummary(u)}</td>
+                <td style={{ ...td, color:"#888", maxWidth:240, whiteSpace:"nowrap" }}>{permSummary(u)}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>{appRoleCell(u)}</td>
                 <td style={{ ...td, color:"#888", whiteSpace:"nowrap" }}><LoginCell at={u.last_login_crm} fallback={u.last_login} /></td>
                 <td style={{ ...td, color:"#888", whiteSpace:"nowrap" }}><LoginCell at={u.last_login_app} fallback={u.last_login} /></td>
                 <td style={td}>{u.active !== false ? <span style={{ color:"#3B6D11" }}>Active</span> : <span style={{ color:"#b91c1c" }}>Inactive</span>}</td>
-                <td style={{ ...td, whiteSpace:"nowrap", textAlign:"right" }}>
+                <td style={stickyR({ ...td, whiteSpace:"nowrap", textAlign:"right" })}>
                   <button onClick={() => openEdit(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Edit</button>
                   <button onClick={() => sendReset(u)} style={{ marginRight:6, padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12 }}>Send reset</button>
                   <button onClick={() => toggleActive(u)} disabled={busy} style={{ padding:"5px 10px", borderRadius:7, border:"1px solid #eee", background:"#fff", cursor:"pointer", fontSize:12, color: u.active !== false ? "#b91c1c" : "#3B6D11" }}>{u.active !== false ? "Deactivate" : "Activate"}</button>
