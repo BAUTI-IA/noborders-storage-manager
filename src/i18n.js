@@ -20,6 +20,15 @@ export const tr = (en, es) => (currentLang === "es" ? es : en);
 export const t = (en) => (currentLang === "es" ? (I18N_ES[en] || en) : en);
 
 export const I18N_ES = {
+  "All roles": "Todos los roles",
+  "All app roles": "Todos los roles de app",
+  "Back office": "Back office",
+  "Admin": "Admin",
+  "Member": "Member",
+  "Inactive": "Inactivo",
+  "Clear filters": "Limpiar filtros",
+  "Search email or name…": "Buscar email o nombre…",
+  "No users match these filters.": "Ningún usuario coincide con estos filtros.",
   "(choose a unit)": "(elegí una unidad)",
   "(no #)": "(sin #)",
   "(no client)": "(sin cliente)",
