@@ -706,6 +706,16 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
 
             <div>
               <div style={cap}>Who may send us leads</div>
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, marginBottom: 10, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!draft.acceptAllSenders} style={{ marginTop: 2 }}
+                  onChange={(e) => setDraft({ ...draft, acceptAllSenders: e.target.checked })} />
+                <span>
+                  <b>Every email becomes a lead</b>
+                  <span style={{ display: "block", fontSize: 11.5, color: "#888", marginTop: 2 }}>
+                    Any sender is accepted; emails that are not a job offer (newsletters, receipts, notices) are still discarded. Use it only when the forwarder reads a mailbox you trust — the secret is then the only gate.
+                  </span>
+                </span>
+              </label>
               <ListEditor items={draft.allowedEmailDomains} normalize={normalizeSenderRules}
                 onChange={(v) => setDraft({ ...draft, allowedEmailDomains: v })}
                 placeholder="allied.com"

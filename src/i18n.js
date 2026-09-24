@@ -2339,6 +2339,12 @@ export const I18N_ES = {
   "Raise the daily cap in Settings.": "Subí el tope diario en Settings.",
   "No readable sender address": "No se pudo leer la dirección del remitente",
   "The forwarder did not send a usable From header.": "El reenviador no mandó un From usable.",
+  "Not a job offer": "No es una oferta de job",
+  "The email had no move in it (newsletter, invoice, notification). If it was a job, paste it with + New lead.":
+    "El mail no traía ninguna mudanza (newsletter, factura, notificación). Si era un job, pegalo con + New lead.",
+  "Every email becomes a lead": "Cada mail se convierte en lead",
+  "Any sender is accepted; emails that are not a job offer (newsletters, receipts, notices) are still discarded. Use it only when the forwarder reads a mailbox you trust — the secret is then the only gate.":
+    "Se acepta cualquier remitente; los mails que no son una oferta de job (newsletters, recibos, avisos) igual se descartan. Usalo sólo si el reenviador lee una casilla de confianza — ahí el secreto es la única barrera.",
 };
 const i18nCache = new WeakMap();   // text node -> original English value
 export function i18nApply() {

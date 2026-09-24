@@ -76,6 +76,7 @@ de la tabla). No hace falta SQL.
 |---|---|---|
 | `holdReminderDays` | `2` | Día del recordatorio |
 | `holdDecisionDays` | `7` | Día en que hay que decidir |
+| `acceptAllSenders` | `false` | Cualquier remitente puede crear leads (para el script de todo el inbox). Sólo `true` literal lo prende |
 | `allowedEmailDomains` | `[]` | Quién puede mandarnos leads: dominios y/o direcciones enteras. **Vacío no acepta a nadie.** |
 | `carriers` | `[]` | Carriers a los que se puede ofrecer un job |
 | `maxLeadsPerSenderPerDay` | `40` | Tope de leads **por remitente** por día |
@@ -140,10 +141,38 @@ Cuál de los dos usar lo decide **dónde vive la casilla**, no el gusto:
 
 ### 2.A Google Workspace — Apps Script
 
+Hay dos modos, según qué llega a la casilla:
+
+| Modo | Script | Allowlist |
+|---|---|---|
+| **Todo el inbox** — cada mail que entra es candidato a lead | `scripts/gmail-to-pipeline.gs` | **⚙ Settings → "Every email becomes a lead"** tildado |
+| Sólo lo etiquetado `jobs` por un filtro de Gmail | el de abajo | dominios de brokers en Settings |
+
+**Todo el inbox (lo recomendado para una casilla dedicada a jobs):**
+
+1. En [script.google.com](https://script.google.com), **logueado con la casilla**
+   (la cuenta de Workspace), proyecto nuevo → pegar `scripts/gmail-to-pipeline.gs`.
+2. Completar `CRM_URL` y `SECRET` (el mismo `PIPELINE_INBOUND_SECRET` de Vercel).
+3. Elegir `install` → **Run** una vez. Pide permiso de Gmail y crea el trigger
+   de cada 5 minutos. Desde ese momento, todo mail nuevo del inbox se manda al CRM
+   (`BACKFILL_HOURS` > 0 manda también las últimas N horas en la primera corrida).
+4. En **Pipeline → ⚙ Settings** tildar **"Every email becomes a lead"**.
+
+El script avanza un checkpoint por fecha (Script Properties): cada mail se manda
+una vez, y si el CRM contesta error el checkpoint queda ahí y el próximo tick
+reintenta. Los propios mails de la cuenta (respuestas) no se mandan.
+
+**No todo mail es un job.** Con cualquier remitente habilitado, el extractor
+decide además `is_job_offer`: newsletters, recibos y avisos de Google se
+descartan con el motivo `not_a_job` y aparecen en **"Emails dropped today"**
+(nada desaparece en silencio). Si uno era un job, se pega con **+ New lead**.
+Los topes por remitente y por día siguen valiendo.
+
+**Sólo lo etiquetado `jobs`:**
+
 1. En la casilla, un filtro por broker (`from:@allied.com`) que aplique la
    etiqueta **`jobs`**.
-2. En [script.google.com](https://script.google.com) **con esa cuenta**, proyecto
-   nuevo:
+2. En script.google.com **con esa cuenta**, proyecto nuevo:
 
 ```js
 const CRM_URL = 'https://TU-APP.vercel.app/api/inbound-email';
@@ -244,7 +273,7 @@ el asunto, el motivo y qué hacer al respecto. El historial completo está en
 
 Los motivos posibles están en `DROP_REASONS` (`src/pipelineData.js`):
 `sender_not_allowed`, `rate_limited` (tope de ese remitente), `day_cap` (tope de
-todos juntos) y `no_sender`.
+todos juntos), `no_sender` y `not_a_job` (el extractor leyó que no era una oferta).
 
 ---
 

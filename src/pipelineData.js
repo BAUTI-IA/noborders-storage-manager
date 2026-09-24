@@ -46,6 +46,11 @@ export const DEFAULT_PIPELINE_SETTINGS = {
   // Sender domains a lead may arrive from. Empty means "accept none by email" —
   // fail closed, so an unconfigured install never ingests from the open internet.
   allowedEmailDomains: [],
+  // Take email from ANY sender. Meant for a mailbox that only a trusted
+  // forwarder reads (the Gmail Apps Script in docs/pipeline.md): the shared
+  // secret is then the real gate, the caps below still apply, and mail that is
+  // not a job offer is dropped by the extractor. Off by default — fail closed.
+  acceptAllSenders: false,
   // Partner carriers a job can be handed to when we pass on it.
   carriers: [],
   // Leads one sender may create in a day. Counted per address, so a busy broker
@@ -71,6 +76,8 @@ export function mergePipelineSettings(saved) {
   out.maxLeadsPerSenderPerDay = Math.max(1, Math.round(num(out.maxLeadsPerSenderPerDay, 40)));
   out.maxLeadsPerDay = Math.max(out.maxLeadsPerSenderPerDay, Math.round(num(out.maxLeadsPerDay, 200)));
   out.allowedEmailDomains = normalizeSenderRules(out.allowedEmailDomains);
+  // Only a real `true` opens the door — "false", 1, "yes" all stay closed.
+  out.acceptAllSenders = out.acceptAllSenders === true;
   out.carriers = normalizeCarriers(out.carriers);
   return out;
 }
@@ -361,6 +368,7 @@ export const DROP_REASONS = [
   { v: "rate_limited", l: "Over this sender's daily cap", hint: "Raise the per-sender cap in Settings, or check whether the sender is looping." },
   { v: "day_cap", l: "Over the daily cap for all senders", hint: "Raise the daily cap in Settings." },
   { v: "no_sender", l: "No readable sender address", hint: "The forwarder did not send a usable From header." },
+  { v: "not_a_job", l: "Not a job offer", hint: "The email had no move in it (newsletter, invoice, notification). If it was a job, paste it with + New lead." },
 ];
 export const dropReasonMeta = (v) => DROP_REASONS.find((r) => r.v === v) || { v, l: v, hint: "" };
 
@@ -370,13 +378,15 @@ export const dropReasonMeta = (v) => DROP_REASONS.find((r) => r.v === v) || { v,
  * strict output schema is the second.
  *
  * A rule with an "@" is one exact address and matches only that mailbox; a bare
- * domain matches the domain and its subdomains.
+ * domain matches the domain and its subdomains. `acceptAllSenders` lets any
+ * readable address through — an explicit opt-in, never the default.
  */
 export function isAllowedSender(address, settings) {
   const s = mergePipelineSettings(settings);
   const dom = senderDomain(address);
   const addr = senderAddress(address);
   if (!dom) return false;
+  if (s.acceptAllSenders) return !!addr;
   return (s.allowedEmailDomains || []).some((rule) =>
     rule.includes("@")
       ? (!!addr && addr === rule)

@@ -277,6 +277,15 @@ t("the allowlist matches the domain and its subdomains only", () => {
   assert.equal(isAllowedSender("", s), false);
 });
 
+t("acceptAllSenders opens the door only when it is literally true", () => {
+  assert.equal(isAllowedSender("anyone@gmail.com", { acceptAllSenders: true }), true);
+  assert.equal(isAllowedSender("Ops <ops@random.net>", { acceptAllSenders: true }), true);
+  assert.equal(isAllowedSender("garbage", { acceptAllSenders: true }), false);
+  assert.equal(isAllowedSender("anyone@gmail.com", { acceptAllSenders: "true" }), false);
+  assert.equal(mergePipelineSettings({ acceptAllSenders: 1 }).acceptAllSenders, false);
+  assert.equal(mergePipelineSettings(null).acceptAllSenders, false);
+});
+
 t("raw text is capped before it is stored", () => {
   assert.equal(clampRawText("x".repeat(MAX_RAW_TEXT + 500)).length, MAX_RAW_TEXT);
   assert.equal(clampRawText(null), "");
