@@ -531,8 +531,11 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
                 const why = ev?.reason
                   ? tr(`${ev.truck_days} truck-days · break-even ${money(ev.breakeven_price)} · ask ${money(ev.ask_price)}`,
                        `${ev.truck_days} días-camión · break-even ${money(ev.breakeven_price)} · pedir ${money(ev.ask_price)}`)
-                  : tr("Not priced yet — complete both ZIPs, the volume and the price.",
-                       "Sin evaluar — completá los dos ZIPs, el volumen y el precio.");
+                  : isEvaluable(l)
+                    ? tr("Not priced yet — open it and press Price it now.",
+                         "Sin evaluar — abrilo y tocá Price it now.")
+                    : tr("Not priced yet — complete both ZIPs, the volume and the price.",
+                         "Sin evaluar — completá los dos ZIPs, el volumen y el precio.");
                 const near = l.parsed?.nearest_truck;
                 return (
                   <tr key={l.id} style={{ borderTop: "1px solid #efefef" }}>
