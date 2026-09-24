@@ -185,7 +185,7 @@ async function pipelineAction(action, body, { res, lang, token, userId }) {
       const lead = await createLeadFromText({ text, source: "manual", createdBy: userId || null });
       // Best effort: a lead with no cached route still lands on the board.
       let evaluation = null;
-      try { const r = await evaluateLead(lead, { token }); evaluation = r.evaluation || null; } catch { /* saved anyway */ }
+      try { const r = await evaluateLead(lead, { token, appUrl }); evaluation = r.evaluation || null; } catch { /* saved anyway */ }
       res.status(200).json({ lead, evaluation });
       return;
     }
@@ -195,7 +195,7 @@ async function pipelineAction(action, body, { res, lang, token, userId }) {
       if (!Number.isFinite(id)) { res.status(400).json({ error: tr("Missing lead.", "Falta el lead.") }); return; }
       const { data: lead, error } = await admin.from("job_leads").select("*").eq("id", id).is("deleted_at", null).maybeSingle();
       if (error || !lead) { res.status(404).json({ error: tr("Lead not found.", "No se encontró el lead.") }); return; }
-      const r = await evaluateLead(lead, { token });
+      const r = await evaluateLead(lead, { token, appUrl });
       if (r.skipped === "incomplete") { res.status(400).json({ error: tr("Fill in both ZIPs, the volume and the price first.", "Completá primero los dos ZIPs, el volumen y el precio.") }); return; }
       if (r.skipped === "no_miles") { res.status(400).json({ error: tr("Could not measure the route between those ZIPs.", "No se pudo medir la ruta entre esos ZIPs.") }); return; }
       if (r.skipped) { res.status(500).json({ error: r.error?.message || tr("Could not price this lead.", "No se pudo evaluar este lead.") }); return; }
@@ -233,6 +233,11 @@ export default async function handler(req, res) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   const { data: { user } = {}, error: authErr } = token ? await admin.auth.getUser(token) : { data: {}, error: true };
   if (authErr || !user) { res.status(401).json({ error: "No autorizado." }); return; }
+
+  // This deployment's own origin, for the /api/distance call a lead makes when
+  // its route is not cached yet. On Vercel the host always routes back here.
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  const appUrl = host ? `${String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim()}://${host}` : null;
 
   const body = req.body || {};
   const lang = body.lang === "es" ? "es" : "en"; // AI output + error language follows the user's display language
