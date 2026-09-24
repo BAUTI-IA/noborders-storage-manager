@@ -176,7 +176,7 @@ function tripEconomics({ totalCf, miles, revenue, helpers, driverRate, settings 
 // All three only read and price; none of them creates a job. The heavy lifting
 // (the closed extraction schema, the cost model, the containment rules) lives in
 // lib/leads.mjs so the email webhook in api/agent-hub.mjs runs the same code.
-async function pipelineAction(action, body, { res, lang, token, userId }) {
+async function pipelineAction(action, body, { res, lang, token, userId, appUrl }) {
   const tr = (en, es) => (lang === "es" ? es : en);
   try {
     if (action === "lead_extract") {
@@ -245,7 +245,7 @@ export default async function handler(req, res) {
 
   // Pipeline actions ride this function (12-function cap). No action = the
   // original trip-suggestion behaviour.
-  if (body.action) { await pipelineAction(String(body.action), body, { res, lang, token, userId: user.id }); return; }
+  if (body.action) { await pipelineAction(String(body.action), body, { res, lang, token, userId: user.id, appUrl }); return; }
   const today = typeof body.today === "string" && body.today ? body.today : new Date().toISOString().slice(0, 10);
   const rawJobs = Array.isArray(body.jobs) ? body.jobs : [];
   const rawTrucks = Array.isArray(body.trucks) ? body.trucks : [];
