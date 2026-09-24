@@ -2328,8 +2328,8 @@ export const I18N_ES = {
   "Remove": "Sacar",
   "See why": "Ver por qué",
   "Emails dropped today": "Mails descartados hoy",
-  "The webhook answers the same way to everyone, so a stranger cannot learn which domains we accept. That means a real broker who is not on the allowlist yet would disappear silently — these are those messages.":
-    "El webhook le contesta igual a todo el mundo, así que un desconocido no puede averiguar qué dominios aceptamos. Eso también significa que un broker de verdad que todavía no está en la lista desaparecería sin dejar rastro — estos son esos mensajes.",
+  "Emails that did not become a lead: not a job offer, a sender not on the allowlist, or over a daily cap. The webhook answers the same way to everyone, so this list is the only place to see them.":
+    "Mails que no se convirtieron en lead: no eran una oferta de job, el remitente no estaba en la lista o se pasó un tope diario. El webhook le contesta igual a todo el mundo, así que esta lista es el único lugar donde verlos.",
   "Sender not on the allowlist": "El remitente no está en la lista",
   "Add the domain in Settings if it is a broker of ours.": "Agregá el dominio en Settings si es un broker nuestro.",
   "Over this sender's daily cap": "Pasó el tope diario de ese remitente",

@@ -668,7 +668,7 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
             <Btn onClick={() => setDropsOpen(false)}>Close</Btn>
           </>}>
           <div style={{ fontSize: 12.5, color: "#666", marginBottom: 10 }}>
-            The webhook answers the same way to everyone, so a stranger cannot learn which domains we accept. That means a real broker who is not on the allowlist yet would disappear silently — these are those messages.
+            Emails that did not become a lead: not a job offer, a sender not on the allowlist, or over a daily cap. The webhook answers the same way to everyone, so this list is the only place to see them.
           </div>
           {drops.map((d, i) => {
             const meta = dropReasonMeta(d.after?.reason);
