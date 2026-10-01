@@ -22,6 +22,8 @@ import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
 import { ELD, ELD_KEYS, eldOfTruck, eldOfDriver } from "./eldData.js";
 import { selectAll, dbFailed } from "./db.js";
 import { mapJobStops, JOB_PIN_DAYS } from "./geoData.js";
+import { TripAssignModal } from "./tripAssign.jsx";
+import { TRIP_ACTIVE, tripUnitKey, jobDriverIds, needsTripFor, jobsAwaitingTrip, nextStopOrder, promote, tripDriverSync, driverTruck, jobOpen, nextMove } from "./tripAssignData.js";
 import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
@@ -156,7 +158,6 @@ function TripBadge({ status }) {
   const c = TRIP_STATUS[status] || TRIP_STATUS.loading;
   return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:20, background:c.bg, color:c.text, whiteSpace:"nowrap" }}><span style={{ width:6, height:6, borderRadius:"50%", background:c.dot, flexShrink:0 }} />{c.l}</span>;
 }
-const TRIP_ACTIVE = (s) => s === "loading" || s === "in_transit";
 // Field Expenses form constants (EMPTY_EXPENSE, categories, statuses, driver
 // adjustments) live in expenses.jsx — one copy shared by the page UI and
 // App.jsx state.
@@ -636,12 +637,8 @@ const jobInStorageNow = (j) => !j.date_out && j.status !== "out_for_delivery" &&
 // locations (no delivery, balances NOT collected on this trip); null/'delivery' = normal.
 const isRelocation = (j) => j?.trip_purpose === "relocation";
 
-// Trip-layer identity. Everything OUTSIDE trips groups a job by jobKey (job_number),
-// so a job stays ONE job in billing/analytics/client view. But a split job has
-// "portion" rows (same job_number) that must ride different trucks, so inside the
-// Trips layer the assignment unit is the individual row. Non-split rows keep
-// collapsing by jobKey (no regression); split portions are addressed by row id.
-const tripUnitKey = (j) => j.split_group ? "row:" + j.id : jobKey(j);
+// Trip-layer identity (tripUnitKey) and TRIP_ACTIVE live in tripAssignData.js,
+// next to the driver → trip suggestion math that shares them.
 
 // Order rows of a job so the money-bearing one comes first: non-split unit rows
 // before split rows, then by id. Groupings that take job-level fields from the
@@ -4528,6 +4525,18 @@ export default function App() {
   const [editingTripId, setEditingTripId] = useState(null);
   const [tripSaving, setTripSaving] = useState(false);
   const [tripJobSearch, setTripJobSearch] = useState("");
+  // Driver → trip suggestions (tripAssign.jsx). `{ keys:[jobKey], driverIds }`
+  // right after a driver is assigned; `{ queue:true }` = the Trips page list of
+  // jobs that have a driver but no trip.
+  const [tripAssign, setTripAssign] = useState(null);
+  const [tripAssignBusy, setTripAssignBusy] = useState(false);
+  // A driver save waiting for the job reload before its suggestion can open.
+  const pendingTripAssign = useRef(null);
+  // Jobs the dispatcher set aside in that list ("jobKey|driver ids" — new drivers bring them back).
+  const [tripAssignDismissed, setTripAssignDismissed] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem("tripAssignDismissed") || "[]")); } catch { return new Set(); } });
+  // Quick driver assignment from the calendar, the dispatch board and the job drawer.
+  const [assignDrv, setAssignDrv] = useState(null);   // { key, ids:[driver id…] } | null
+  const [assignDrvSaving, setAssignDrvSaving] = useState(false);
   // Custom (non-job) stops on a trip: maintenance, DOT inspection, fuel, etc.
   const [tripStops, setTripStops] = useState([]);
   const [tripStopsMissing, setTripStopsMissing] = useState(false); // trip_stops table not yet in DB
@@ -6487,6 +6496,13 @@ export default function App() {
 
   // ── Trips / Live Load derived data ──
   const truckById = useMemo(() => { const m = {}; for (const t of trucksList) m[t.id] = t; return m; }, [trucksList]);
+  // A driver's standing truck as a label: the linked truck's name, or the legacy
+  // hand-typed text when it matches no truck.
+  const driverTruckLabel = useCallback((d) => {
+    if (!d) return "";
+    const tk = driverTruck(d, trucksList, []).truck;
+    return tk ? (tk.name || `#${tk.id}`) : String(d.truck_id || "").trim();
+  }, [trucksList]);
   const tripById = useMemo(() => { const m = {}; for (const t of trips) m[t.id] = t; return m; }, [trips]);
   // Distinct-by-job storage_jobs rows assigned to each trip, ordered by stop order.
   const jobsByTrip = useMemo(() => {
@@ -6738,6 +6754,42 @@ export default function App() {
     }
     return out;
   }, [trips, tripCalc, truckById]);
+
+  // ── Driver → trip suggestions ──
+  // Who may put jobs on trips from the suggestion popup, and who may set a
+  // job's drivers from the calendar / dispatch board / job drawer.
+  const canTripAssign = isAdmin || can("trips", "create") || can("trips", "edit") || can("dispatching", "edit");
+  const canAssignDriver = !crmV3Missing && (isAdmin || can("dispatching", "edit") || can("jobs", "edit"));
+  // Jobs with a driver whose units still need a trip — the Trips page list —
+  // minus the ones the dispatcher put aside ("Not now").
+  const awaitingAll = useMemo(() => tripsMissing ? [] : jobsAwaitingTrip({ jobs, trips, drivers: driversList }),
+    [tripsMissing, jobs, trips, driversList]);
+  const awaitingTrip = useMemo(() => awaitingAll.filter(x => !tripAssignDismissed.has(x.sig)), [awaitingAll, tripAssignDismissed]);
+  // The jobs the popup shows: the one just assigned, or the whole list.
+  const tripAssignItems = useMemo(() => {
+    if (!tripAssign) return [];
+    if (tripAssign.queue) return awaitingTrip;
+    return (tripAssign.keys || []).map(k => {
+      const rows = jobs.filter(j => jobKey(j) === k);
+      if (!rows.length) return null;
+      const rep = rows.find(r => !r.split_group) || rows[0];
+      const driverIds = tripAssign.driverIds?.length ? tripAssign.driverIds : jobDriverIds(rep, driversList);
+      return driverIds.length ? { key: k, rows, rep, driverIds } : null;
+    }).filter(Boolean);
+  }, [tripAssign, awaitingTrip, jobs, driversList]);
+  // A driver save opens its trip suggestion once the reloaded rows carry the
+  // new drivers — and only if the job still needs a trip for them.
+  useEffect(() => {
+    const p = pendingTripAssign.current;
+    if (!p) return;
+    if (Date.now() - p.at > 60000) { pendingTripAssign.current = null; return; }
+    const rows = jobs.filter(j => jobKey(j) === p.key);
+    if (!rows.length) return;
+    const rep = rows.find(r => !r.split_group) || rows[0];
+    if (jobDriverIds(rep, driversList).join(",") !== p.driverIds.join(",")) return; // the reload isn't in yet
+    pendingTripAssign.current = null;
+    if (needsTripFor(rows, p.driverIds, trips)) setTripAssign({ keys: [p.key], driverIds: p.driverIds });
+  }, [jobs, trips, driversList]);
 
   // ── Legal & Compliance derived data ──
   const companyById = useMemo(() => { const m = {}; for (const c of companies) m[c.id] = c; return m; }, [companies]);
@@ -7446,6 +7498,10 @@ export default function App() {
 
     const hasLoc = jobForm.storage_ids.length > 0 || jobForm.warehouses.length > 0;
     const jobEntries = [];
+    // Drivers before this save, to spot a new assignment (→ trip suggestion).
+    const prevRows = editingJobKey ? jobs.filter(j => jobKey(j) === editingJobKey) : [];
+    const prevDriverIds = prevRows.length ? jobDriverIds(prevRows.find(r => !r.split_group) || prevRows[0], driversList) : [];
+    let savedKey = editingJobKey;
     if (editingJobKey) {
       const current = jobs.filter(j => jobKey(j) === editingJobKey);
       const created = { ...fields, created_by: userEmail };
@@ -7498,6 +7554,7 @@ export default function App() {
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
       undoMgr.record(`Job ${jobForm.job_number || ""} editado`.replace(/\s+/g, " ").trim(), jobEntries);
+      if (fields.job_number) savedKey = jobKey({ job_number: fields.job_number });
     } else {
       const created = { ...fields, created_by: userEmail };
       const rows = hasLoc ? [
@@ -7508,6 +7565,7 @@ export default function App() {
       setJobSaving(false);
       if (error) { setJobErr(error.message); return; }
       undoMgr.record(`Job ${jobForm.job_number || ""} creado`.replace(/\s+/g, " ").trim(), (data || []).map(r => undoMgr.createEntry("storage_jobs", r)));
+      savedKey = data && data.length ? jobKey(data[0]) : null;
       // Close the Pipeline loop: the lead now points at the job it became, so
       // the estimate can later be compared against what really happened.
       if (pendingLeadId && data && data.length) {
@@ -7517,6 +7575,12 @@ export default function App() {
         }).eq("id", pendingLeadId), "job_leads", { quiet: true })) { /* the job is saved either way */ }
         setPendingLeadId(null);
       }
+    }
+    // A driver was just assigned or changed: once the reload is in, offer the
+    // trip for that driver's truck (see the pendingTripAssign effect).
+    const newDriverIds = Array.isArray(fields.driver_ids) ? fields.driver_ids : [];
+    if (savedKey && canTripAssign && newDriverIds.length && newDriverIds.join(",") !== prevDriverIds.join(",")) {
+      pendingTripAssign.current = { key: savedKey, driverIds: newDriverIds, at: Date.now() };
     }
     setShowAddJob(false);
     loadJobs();
@@ -7586,7 +7650,10 @@ export default function App() {
   function openAddDriver() { setEditingDriverId(null); setDriverForm(EMPTY_DRIVER); setShowDriverModal(true); }
   function openEditDriver(d) {
     setEditingDriverId(d.id);
-    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id:d.truck_id||"", daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false, verizon_driver_id: d.verizon_driver_id || "", motive_driver_id: d.motive_driver_id || "", eld: eldOfDriver(d) || "" });
+    // A legacy hand-typed truck ("T-12") that matches a truck opens as that truck,
+    // so saving stores its id; text matching nothing is kept as typed.
+    const standingTruck = driverTruck(d, trucksList, []).truck;
+    setDriverForm({ name:d.name||"", phone:d.phone||"", whatsapp_group_link:d.whatsapp_group_link||"", truck_id: standingTruck ? String(standingTruck.id) : (d.truck_id||""), daily_rate:d.daily_rate ?? "", hourly_rate:d.hourly_rate ?? "", notes:d.notes||"", active: d.active !== false, verizon_driver_id: d.verizon_driver_id || "", motive_driver_id: d.motive_driver_id || "", eld: eldOfDriver(d) || "" });
     setShowDriverModal(true);
   }
   async function saveDriver() {
@@ -8416,7 +8483,7 @@ export default function App() {
       // Who can actually go, and what a day of theirs costs.
       drivers: (driversList || []).filter(d => d.active !== false && !d.deleted_at).slice(0, 30).map(d => ({
         id: d.id, name: d.name || "", day_rate: numv(d.daily_rate),
-        busy: trips.some(t => TRIP_ACTIVE.includes(t.status) && String(t.driver_id) === String(d.id)),
+        busy: trips.some(t => TRIP_ACTIVE(t.status) && String(t.driver_id) === String(d.id)),
       })),
       loading_trips: loadingTripsWithRoom,
     };
@@ -8436,8 +8503,9 @@ export default function App() {
     setTripAILoading(false);
   }
   // Accepting a suggestion never writes directly: it prefills the existing trip
-  // modal (create or edit) so the dispatcher picks the driver, reviews the live
-  // capacity bar and confirms through saveTrip() as always.
+  // modal (create or edit) — truck, jobs and the AI's driver pick — so the
+  // dispatcher reviews the crew and the live capacity bar and confirms through
+  // saveTrip() as always.
   function applyTripSuggestion(s, kind) {
     const live = new Set(tripCandidateJobs.map(tripUnitKey));
     const valid = s.job_keys.filter(k => live.has(k));
@@ -8461,7 +8529,7 @@ export default function App() {
       setEditingTripId(null);
       setTripForm({
         ...EMPTY_TRIP, trip_number: nextTripNumber(), departure_date: today(),
-        truck_id: String(s.truck_id), job_keys: valid,
+        truck_id: String(s.truck_id), driver_id: s.driver_id ? String(s.driver_id) : "", job_keys: valid,
         notes: s.reasoning ? ("IA: " + s.reasoning).slice(0, 200) : "",
       });
     }
@@ -8506,9 +8574,178 @@ export default function App() {
       const toClear = jobs.filter(j => j.trip_id === tripId && !wantedSet.has(tripUnitKey(j))).map(j => j.id);
       if (!error && toClear.length) { ({ error } = await supabase.from("storage_jobs").update({ trip_id: null, trip_stop_order: null, ...(tripPurposeColMissing ? {} : { trip_purpose: null }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", toClear)); }
     }
+    // The jobs on the trip follow its driver (a changed driver asks first).
+    // Which of a job's drivers is the main one only moves for jobs that just
+    // joined the trip, or when the trip itself changes driver.
+    if (!error && tripId && payload.driver_id) {
+      const prev = editingTripId ? trips.find(x => x.id === editingTripId)?.driver_id : null;
+      const changed = prev == null || Number(prev) !== payload.driver_id;
+      const from = prev != null && changed ? Number(prev) : null;
+      const already = new Set((editingTripId ? jobsByTrip[editingTripId] || [] : []).map(tripUnitKey));
+      const promoteKeys = changed ? null : new Set(tripForm.job_keys.filter(k => !already.has(k)));
+      const synced = await syncTripJobDrivers({ id: tripId, trip_number: payload.trip_number }, tripForm.job_keys, payload.driver_id, from, { promoteKeys });
+      if (synced?.length) undoMgr.record(`${payload.trip_number || "Trip"}: job drivers`, synced);
+    }
     setTripSaving(false);
     if (error) { window.alert(error.message); return; }
     setShowTripModal(false); loadTrips(); loadJobs();
+  }
+  // ── Driver → trip suggestions (tripAssign.jsx / tripAssignData.js) ──
+  // Row ids of one trip unit being put on a trip: the portion row for a split
+  // key; for a job key its open non-split rows (split portions ride on their own).
+  const unitRowIds = (k) => (typeof k === "string" && k.startsWith("row:"))
+    ? [Number(k.slice(4))]
+    : jobs.filter(j => jobKey(j) === k && !j.split_group && jobOpen(j)).map(j => j.id);
+  const driverNames = (ids) => ids.map(id => driverById[id]?.name).filter(Boolean).join(", ") || null;
+  function openTripSuggestion(key) {
+    const rows = jobs.filter(j => jobKey(j) === key);
+    if (!rows.length) return;
+    const ids = jobDriverIds(rows.find(r => !r.split_group) || rows[0], driversList);
+    if (!ids.length) { setAssignDrv({ key, ids: [] }); return; }   // no driver yet: pick one first
+    setTripAssign({ keys: [key], driverIds: ids });
+  }
+  function openAssignDriver(key) {
+    const rows = jobs.filter(j => jobKey(j) === key);
+    if (!rows.length) return;
+    setAssignDrv({ key, ids: jobDriverIds(rows.find(r => !r.split_group) || rows[0], driversList) });
+  }
+  // Set a job's drivers without the full job form (calendar, dispatch board,
+  // job drawer) — the same fields saveJob writes — then offer the trip.
+  async function saveJobDrivers(key, ids) {
+    const rows = jobs.filter(j => jobKey(j) === key);
+    if (!rows.length || crmV3Missing) return;
+    const rep = rows.find(r => !r.split_group) || rows[0];
+    const before = jobDriverIds(rep, driversList);
+    const list = [...new Set(ids.map(Number))];
+    const patch = { driver_ids: list, driver: driverNames(list), updated_by: userEmail, updated_at: new Date().toISOString() };
+    setAssignDrvSaving(true);
+    if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", rows.map(r => r.id)), "storage_jobs")) { setAssignDrvSaving(false); return; }
+    undoMgr.record(`Job ${rep.job_number || ""}: drivers`.replace(/\s+/g, " ").trim(), rows.map(r => undoMgr.updateEntry("storage_jobs", r, patch)));
+    setAssignDrvSaving(false); setAssignDrv(null);
+    if (list.length && list.join(",") !== before.join(",") && canTripAssign) pendingTripAssign.current = { key, driverIds: list, at: Date.now() };
+    loadJobs();
+    showToast(list.length ? `Driver: ${patch.driver}` : tr("Driver removed", "Driver quitado"));
+  }
+  // Save a confirmed suggestion: create the trip (or give a driverless one its
+  // driver), put the units on it after the stops it already has, and make the
+  // trip's driver the job's main driver. One undo step; it stops at the first
+  // write that fails and keeps what was already saved undoable.
+  async function applyTripPlan(plan) {
+    const driverId = Number(plan?.driverId);
+    if (tripAssignBusy || !driverId) return null;
+    const now = new Date().toISOString();
+    const entries = [];
+    const drvName = driverById[driverId]?.name || "";
+    let trip = null;
+    setTripAssignBusy(true);
+    try {
+      if (plan.option.kind === "new") {
+        const row = { trip_number: nextTripNumber(), truck_id: plan.option.truckId ? Number(plan.option.truckId) : null, driver_id: driverId, departure_date: plan.option.departure || today(), status: "loading" };
+        const { data, error } = await supabase.from("trips").insert([row]).select("*").single();
+        if (dbFailed({ error }, "trips") || !data) return null;
+        trip = data;
+        entries.push(undoMgr.createEntry("trips", data));
+      } else {
+        trip = trips.find(t => t.id === plan.option.tripId) || null;
+        if (!trip || !TRIP_ACTIVE(trip.status)) { window.alert(tr("That trip is no longer active.", "Ese trip ya no está activo.")); return null; }
+        const tripDrv = trip.driver_id == null ? null : Number(trip.driver_id);
+        if (tripDrv !== null && tripDrv !== driverId) {
+          window.alert(tr(`${trip.trip_number || "That trip"} has another driver now. Close and reopen the suggestion.`, `${trip.trip_number || "Ese trip"} ahora tiene otro driver. Cerrá y volvé a abrir la sugerencia.`));
+          return null;
+        }
+        if (tripDrv === null) {
+          const patch = { driver_id: driverId };
+          if (dbFailed(await supabase.from("trips").update(patch).eq("id", trip.id), "trips")) return null;
+          entries.push(undoMgr.updateEntry("trips", trip, patch));
+        }
+      }
+      // The units, after the stops the trip already has, in the plan's order.
+      let order = nextStopOrder(trip.id, jobs, tripStops);
+      let addedCf = 0, firstRow = null;
+      for (const k of plan.unitKeys || []) {
+        const ids = unitRowIds(k);
+        const rows = jobs.filter(j => ids.includes(j.id));
+        if (!rows.length) continue;
+        // A load moving between loading trips keeps its relocation flag; anything
+        // else rides as a normal delivery, the trip form's default.
+        const keepReloc = isRelocation(rows[0]) && rows.some(r => r.trip_id && TRIP_ACTIVE(tripById[r.trip_id]?.status));
+        const patch = { trip_id: trip.id, trip_stop_order: order++, ...(tripPurposeColMissing ? {} : { trip_purpose: keepReloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: now };
+        if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", rows.map(r => r.id)), "storage_jobs")) return null;
+        rows.forEach(r => entries.push(undoMgr.updateEntry("storage_jobs", r, patch)));
+        addedCf += effCf(rows[0]);
+        if (!firstRow) firstRow = rows[0];
+        if (trip.status === "in_transit") await logTripEvent(trip.id, "job_added", { job_id: Math.min(...rows.map(r => r.id)), notes: rows[0].job_number || "", created_by: userEmail });
+      }
+      // Whoever takes the truck goes first on the job (and a legacy typed
+      // driver gets its real id).
+      if (!crmV3Missing) {
+        for (const k of plan.anchorKeys || []) {
+          const ids = unitRowIds(k);
+          const rows = jobs.filter(j => ids.includes(j.id));
+          if (!rows.length) continue;
+          const cur = jobDriverIds(rows[0], driversList);
+          const hasIds = Array.isArray(rows[0].driver_ids) && rows[0].driver_ids.length > 0;
+          if (cur[0] === driverId && hasIds) continue;
+          const after = promote(cur, driverId);
+          const patch = { driver_ids: after, driver: driverNames(after), updated_by: userEmail, updated_at: now };
+          if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", rows.map(r => r.id)), "storage_jobs")) return null;
+          rows.forEach(r => entries.push(undoMgr.updateEntry("storage_jobs", r, patch)));
+        }
+      }
+      const waHref = trip.status === "in_transit" && firstRow ? tripUpdateWaLink(trip, firstRow, tripCalc(trip).loadedCf + addedCf) : null;
+      showToast(`${plan.label || "Job"} → ${trip.trip_number || "trip"} · ${drvName}`);
+      return { trip, waHref };
+    } finally {
+      if (entries.length) {
+        undoMgr.record(`${trip?.trip_number || "Trip"}: ${plan.label || "jobs"} → ${drvName}`, entries);
+        loadJobs(); loadTrips();
+      }
+      setTripAssignBusy(false);
+    }
+  }
+  // "Edit in trip form": the same plan, opened in the regular trip modal.
+  function openTripFormFromPlan(plan) {
+    setTripAssign(null);
+    if (plan.option.kind === "existing") {
+      const t = trips.find(x => x.id === plan.option.tripId);
+      if (!t) return;
+      openEditTrip(t);
+      setTripForm(f => ({ ...f, driver_id: f.driver_id || String(plan.driverId), job_keys: [...f.job_keys, ...plan.unitKeys.filter(k => !f.job_keys.includes(k))] }));
+    } else {
+      setEditingTripId(null);
+      setTripForm({ ...EMPTY_TRIP, trip_number: nextTripNumber(), truck_id: plan.option.truckId ? String(plan.option.truckId) : "", driver_id: String(plan.driverId), departure_date: plan.option.departure || today(), job_keys: plan.unitKeys });
+      setTripJobSearch(""); setShowTripModal(true);
+    }
+  }
+  // "Not now" on the Trips page list: hidden in this browser until the job's
+  // drivers change (or "Show the … put aside").
+  function setTripAssignHidden(next) {
+    try { localStorage.setItem("tripAssignDismissed", JSON.stringify([...next].slice(-500))); } catch { /* ignore */ }
+    setTripAssignDismissed(next);
+  }
+  function dismissTripAssign(item) { const next = new Set(tripAssignDismissed); next.add(item.sig); setTripAssignHidden(next); }
+  // A trip and its jobs on the same driver (tripDriverSync): jobs with nobody
+  // take the trip's driver, a job whose drivers include the trip's driver puts
+  // them first, and — after asking — jobs of the previous trip driver hand over.
+  // Returns the undo entries of what it wrote, or null if a write failed.
+  async function syncTripJobDrivers(trip, unitKeys, toDriverId, fromDriverId, { askFollow = true, promoteKeys = null } = {}) {
+    if (crmV3Missing || !toDriverId) return [];
+    const units = unitKeys.map(k => { const ids = unitRowIds(k); return { key: k, rows: jobs.filter(j => ids.includes(j.id)) }; });
+    const plan = tripDriverSync({ units, toDriverId, fromDriverId, drivers: driversList, promoteKeys });
+    const follow = plan.filter(x => x.kind === "follow");
+    const toNm = driverById[toDriverId]?.name || "—", fromNm = driverById[fromDriverId]?.name || "—";
+    const okFollow = follow.length > 0 && (!askFollow || window.confirm(tr(
+      `${follow.length} job(s) on ${trip.trip_number || "this trip"} were ${fromNm}'s. Hand them to ${toNm} too? From now on their cash and extras default to ${toNm}.`,
+      `${follow.length} job(s) de ${trip.trip_number || "este trip"} eran de ${fromNm}. ¿Pasarlos también a ${toNm}? Desde ahora el efectivo y los extras de esos jobs quedan a nombre de ${toNm}.`)));
+    const entries = [];
+    const now = new Date().toISOString();
+    for (const x of plan) {
+      if (x.kind === "follow" && !okFollow) continue;
+      const patch = { driver_ids: x.after, driver: driverNames(x.after), updated_by: userEmail, updated_at: now };
+      if (dbFailed(await supabase.from("storage_jobs").update(patch).in("id", x.rows.map(r => r.id)), "storage_jobs")) return null;
+      x.rows.forEach(r => entries.push(undoMgr.updateEntry("storage_jobs", r, patch)));
+    }
+    return entries;
   }
   // Manual trip status change — always dispatcher-initiated and confirmed.
   async function setTripStatus(t, status) {
@@ -8770,6 +9007,11 @@ export default function App() {
     if (dbFailed(await supabase.from("trips").update({ driver_id: toId }).eq("id", trip.id), "trips")) { setTripBusy(false); return; }
     const fromNm = driverById[trip.driver_id]?.name || "—";
     const toNm = driverById[toId]?.name || "—";
+    // The whole truck changes hands, so its pending jobs do too (the handoff
+    // confirm already said so).
+    const pendingKeys = (jobsByTrip[trip.id] || []).filter(j => !(j.date_out || j.status === "delivered")).map(tripUnitKey);
+    const synced = await syncTripJobDrivers(trip, pendingKeys, toId, trip.driver_id != null ? Number(trip.driver_id) : null, { askFollow: false });
+    if (synced?.length) { undoMgr.record(`${trip.trip_number || "Trip"}: jobs → ${toNm}`, synced); loadJobs(); }
     await logTripEvent(trip.id, "driver_handoff", { notes: `Trip completo · ${fromNm} → ${toNm} · ${handoffReasonLabel(reason)}${note ? ` · ${note}` : ""}`, created_by: userEmail });
     await loadTrips();
     setTripBusy(false);
@@ -8788,6 +9030,10 @@ export default function App() {
     const status = rows[0].date_out ? rows[0].status : (reloc ? "picked_up" : "out_for_delivery");
     if (dbFailed(await supabase.from("storage_jobs").update({ trip_id: trip.id, trip_stop_order: order, status, ...(tripPurposeColMissing ? {} : { trip_purpose: reloc ? "relocation" : "delivery" }), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids), "storage_jobs")) { setTripBusy(false); return; }
     await logTripEvent(trip.id, "job_added", { job_id: Math.min(...ids), notes: (rows[0].job_number || "") + (reloc ? " · relocation" : "") });
+    if (trip.driver_id != null) {
+      const synced = await syncTripJobDrivers(trip, [k], Number(trip.driver_id), null);
+      if (synced?.length) undoMgr.record(`${trip.trip_number || "Trip"}: job driver`, synced);
+    }
     const newTotal = tripCalc(trip).loadedCf + effCf(rows[0]);
     await loadJobs();
     setTripBusy(false); setTripAction(null); setTripAddJobSearch("");
@@ -8850,6 +9096,8 @@ export default function App() {
       fadd: f.fadd || null, broker_id: f.broker_id ? Number(f.broker_id) : null,
       sticker_color: f.sticker_color || null, lot_number: f.lot_number || null,
       job_type: "direct", status: "out_for_delivery", trip_id: trip.id, trip_stop_order: order,
+      // Picked up by whoever drives the trip.
+      ...(trip.driver_id != null && !crmV3Missing ? { driver_ids: [Number(trip.driver_id)], driver: driverById[trip.driver_id]?.name || null } : {}),
       created_by: userEmail,
     };
     const { data, error } = await supabase.from("storage_jobs").insert([payload]).select("id").single();
@@ -10383,6 +10631,8 @@ export default function App() {
                   {bal > 0 && <span>💵 <b style={{ color:"#1A8A4E" }}>{money(bal)}</b> {kind === "pickup" ? tr("at pickup", "en el pickup") : tr("to collect", "a cobrar")}</span>}
                 </div>
               </div>
+              {!drv && canAssignDriver && <Btn onClick={(e) => { e.stopPropagation(); openAssignDriver(g.key); }} title="Assign a driver" style={{ padding:"4px 10px", fontSize:11.5 }}>+ Driver</Btn>}
+              {drv && !gTrip && canTripAssign && jobDriverIds(g, driversList).length > 0 && <Btn onClick={(e) => { e.stopPropagation(); openTripSuggestion(g.key); }} title="Put it on the driver's trip" style={{ padding:"4px 10px", fontSize:11.5 }}>+ Trip</Btn>}
               {ns && <Btn onClick={(e) => { e.stopPropagation(); advanceStatus(g); }} style={{ padding:"4px 10px", fontSize:11.5 }}>→ {statusMeta(ns).l}</Btn>}
             </div>
           );
@@ -10626,11 +10876,17 @@ export default function App() {
                             <div style={{ color:"#aaa", fontSize:11, marginTop:2 }}>{[g.delivery_city, g.delivery_state].filter(Boolean).join(", ") || "—"}</div>
                           </td>
                           <td style={{ padding:"10px 12px", minWidth:120 }}>
-                            <div style={{ fontWeight:600, color: drv ? "#111" : "#B91C1C" }}>{drv || tr("No driver", "Sin driver")}</div>
-                            <div style={{ fontSize:11, marginTop:2 }}>
+                            <div style={{ fontWeight:600, color: drv ? "#111" : "#B91C1C", display:"flex", alignItems:"center", gap:6 }}>
+                              <span>{drv || tr("No driver", "Sin driver")}</span>
+                              {canAssignDriver && <button onClick={e => { e.stopPropagation(); openAssignDriver(g.key); }} title={drv ? "Change driver" : "Assign a driver"}
+                                style={{ border:"1px solid #e5e5e5", background:"#fff", borderRadius:6, padding:"0 6px", fontSize:10.5, fontWeight:700, color:"#555", cursor:"pointer", lineHeight:"17px" }}>{drv ? "✏️" : "+ Driver"}</button>}
+                            </div>
+                            <div style={{ fontSize:11, marginTop:2, display:"flex", alignItems:"center", gap:6 }}>
                               {gTrip
                                 ? <button onClick={e => { e.stopPropagation(); setPage("trips"); }} style={{ fontFamily:"monospace", fontSize:11, fontWeight:700, color:"#6D28D9", background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline" }}>🛣️ {gTrip.trip_number || "#" + gTrip.id}</button>
                                 : <span style={{ color:"#B91C1C", fontWeight:700 }}>{tr("No trip", "Sin trip")}</span>}
+                              {!gTrip && canTripAssign && jobDriverIds(g, driversList).length > 0 && <button onClick={e => { e.stopPropagation(); openTripSuggestion(g.key); }} title="Put it on the driver's trip"
+                                style={{ border:"1px solid #DDD3F7", background:"#F5F3FF", borderRadius:6, padding:"0 6px", fontSize:10.5, fontWeight:700, color:"#6D28D9", cursor:"pointer", lineHeight:"17px" }}>+ Trip</button>}
                             </div>
                           </td>
                           <td style={{ padding:"10px 12px", fontSize:12, color:"#555", minWidth:120 }}>
@@ -10685,6 +10941,10 @@ export default function App() {
               const c = cs !== "active" ? calEventColor(g)
                 : bad ? { bg:"#FCEBEB", text:"#A32D2D" }
                 : kind === "pickup" ? { bg:"#E6F1FB", text:"#185FA5" } : { bg:"#EAF3DE", text:"#3B6D11" };
+              // Fix it from here: assign the driver, then put the job on that
+              // driver's trip — no need to open the job.
+              const hasDrv = jobDriverIds(g, driversList).length > 0;
+              const evBtn = { border:"none", borderRadius:4, background:"rgba(255,255,255,0.75)", color:"inherit", fontSize:9.5, fontWeight:700, padding:"1px 5px", cursor:"pointer" };
               return (
                 <div onClick={() => setJobDetailKey(g.key)} title={`${g.job_number || ""} ${g.customer || ""}`}
                   style={{ background:c.bg, color:c.text, borderLeft:`3px solid ${bar}`, borderRadius:5, padding:"3px 6px", marginBottom:4, cursor:"pointer", fontSize:10.5, lineHeight:1.3 }}>
@@ -10695,6 +10955,12 @@ export default function App() {
                     {jobDriverNames(g) ? ` · ${jobDriverNames(g).split(" ")[0]}` : tr(" · no driver", " · sin driver")}
                     {!g.trip_id ? tr(" · no trip", " · sin trip") : ""}
                   </div>
+                  {((!hasDrv && canAssignDriver) || (hasDrv && !g.trip_id && canTripAssign)) && (
+                    <div style={{ display:"flex", gap:4, marginTop:3, flexWrap:"wrap" }}>
+                      {!hasDrv && <button onClick={e => { e.stopPropagation(); openAssignDriver(g.key); }} title="Assign a driver" style={evBtn}>+ Driver</button>}
+                      {hasDrv && !g.trip_id && <button onClick={e => { e.stopPropagation(); openTripSuggestion(g.key); }} title="Put it on the driver's trip" style={evBtn}>+ Trip</button>}
+                    </div>
+                  )}
                 </div>
               );
             };
@@ -11018,14 +11284,14 @@ export default function App() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                  {["Driver","Phone","WhatsApp group","Active jobs","ELD","Status",""].map((h,i) => (
+                  {["Driver","Phone","Truck","WhatsApp group","Active jobs","ELD","Status",""].map((h,i) => (
                     <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {driversList.length === 0 ? (
-                  <tr><td colSpan={7} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV3Missing ? "Run the setup SQL to enable drivers." : "No drivers. Add one with “+ Driver”."}</td></tr>
+                  <tr><td colSpan={8} style={{ padding:"48px", textAlign:"center", color:"#bbb", fontSize:14 }}>{crmV3Missing ? "Run the setup SQL to enable drivers." : "No drivers. Add one with “+ Driver”."}</td></tr>
                 ) : driversList.map(d => {
                   const act = new Set(jobs.filter(j => !j.date_out && j.status !== "cancelled" && ((Array.isArray(j.driver_ids) && j.driver_ids.includes(d.id)) || (j.driver && d.name && j.driver.includes(d.name)))).map(jobKey)).size;
                   return (
@@ -11034,6 +11300,12 @@ export default function App() {
                         <button onClick={() => setDriverDetailId(d.id)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#111", fontWeight:600, textDecoration:"underline" }}>{d.name}</button>
                       </td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{d.phone ? <a href={`tel:${d.phone}`} style={{ color:"#185FA5", textDecoration:"none" }}>{d.phone}</a> : "—"}</td>
+                      <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{(() => {
+                        const tk = driverTruck(d, trucksList, []).truck;
+                        if (tk) return <span>🚛 {tk.name || `#${tk.id}`}</span>;
+                        if (String(d.truck_id || "").trim()) return <span title="Not linked to a truck in Trucks — edit the driver to pick one" style={{ color:"#B45309" }}>⚠ {d.truck_id}</span>;
+                        return <span style={{ color:"#bbb" }}>—</span>;
+                      })()}</td>
                       <td style={{ padding:"12px" }}>{d.whatsapp_group_link ? <a href={d.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Open group ↗</a> : "—"}</td>
                       <td style={{ padding:"12px" }}><span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", minWidth:22, height:22, padding:"0 7px", borderRadius:11, fontSize:12, fontWeight:600, background: act>0?"#EAF3DE":"#f5f5f5", color: act>0?"#3B6D11":"#bbb" }}>{act}</span></td>
                       <td style={{ padding:"12px", whiteSpace:"nowrap" }}>{(() => {
@@ -11675,6 +11947,24 @@ export default function App() {
                 </div>
               ))}
             </div>
+
+            {/* Jobs that already have a driver but ride no trip yet: one click
+                 each puts them on that driver's truck (tripAssign.jsx). */}
+            {canTripAssign && awaitingTrip.length === 0 && awaitingAll.length > 0 && (
+              <div style={{ fontSize:12, color:"#999", marginBottom:12 }}>
+                {tr(`${awaitingAll.length} job(s) with a driver and no trip were put aside.`, `${awaitingAll.length} job(s) con driver y sin trip quedaron para después.`)}{" "}
+                <button onClick={() => setTripAssign({ queue: true })} style={{ border:"none", background:"none", color:"#185FA5", textDecoration:"underline", cursor:"pointer", padding:0, fontSize:12 }}>Review</button>
+              </div>
+            )}
+            {canTripAssign && awaitingTrip.length > 0 && (
+              <div style={{ background:"#F5F3FF", border:"1px solid #DDD3F7", borderRadius:10, padding:"10px 14px", marginBottom:14, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <span style={{ fontSize:13, color:"#5B3FBF", flex:1, minWidth:220 }}>
+                  🧑‍✈️ <b>{tr(`${awaitingTrip.length} job(s) have a driver but no trip`, `${awaitingTrip.length} job(s) tienen driver pero no tienen trip`)}</b>
+                  {awaitingTrip.some(x => x.driverIds.length > 1) && <span style={{ color:"#7a68c4" }}> · {tr(`${awaitingTrip.filter(x => x.driverIds.length > 1).length} with several drivers — you pick who takes the truck`, `${awaitingTrip.filter(x => x.driverIds.length > 1).length} con varios drivers — elegís quién lleva el camión`)}</span>}
+                </span>
+                <Btn primary onClick={() => setTripAssign({ queue: true })} style={{ padding:"6px 13px", fontSize:12.5 }}>Review</Btn>
+              </div>
+            )}
 
             <div style={{ display:"inline-flex", gap:4, background:"#f5f5f5", borderRadius:10, padding:3, marginBottom:14 }}>
               {[["live","🗺️ Live map"],["active","Active trips"],["unassigned","Unassigned trips"],["all","All trips"]].map(([v,l]) => (
@@ -13469,7 +13759,9 @@ export default function App() {
             </div>
             {/* Row 3: the facts people otherwise dig out of All fields. */}
             <div style={{ marginTop:6, display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#888", fontWeight:400 }}>
-              <span>Driver <b style={{ color: drvNames ? "#111" : "#B91C1C" }}>{drvNames || tr("unassigned", "sin asignar")}</b></span>
+              <span>Driver <b style={{ color: drvNames ? "#111" : "#B91C1C" }}>{drvNames || tr("unassigned", "sin asignar")}</b>
+                {canAssignDriver && <button onClick={() => openAssignDriver(jobDetail.key)} style={{ marginLeft:6, border:"none", background:"none", color:"#185FA5", fontSize:11.5, cursor:"pointer", textDecoration:"underline", padding:0 }}>{drvNames ? "Change" : "Assign"}</button>}
+              </span>
               <span>Type <TypeBadge type={jobDetail.job_type} /></span>
               <span>CF <b style={{ color:"#111" }}>{Math.round(jobCf).toLocaleString()}</b> {jobHasRealCf ? "real" : "est."}</span>
               <span>Pickup <b style={{ color: pkFrom ? "#111" : "#B91C1C" }}>{pkFrom ? (pkTo && pkTo !== pkFrom ? `${pkFrom} → ${pkTo}` : pkFrom) : tr("no date", "sin fecha")}</b></span>
@@ -13656,7 +13948,9 @@ export default function App() {
                     {!jobHasRealCf && <span style={{ marginLeft:"auto", fontSize:11, color:"#bbb" }}>{tr("no real measure", "sin medida real")}</span>}
                   </div>
                   <div style={kvS}><span style={kS}>Pads</span><span style={{ fontWeight:600 }}>{numv(jobDetail.pads_received)} received · {numv(jobDetail.pads_returned)} returned</span>{padsMissingCount > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#B91C1C", fontWeight:700 }}>{tr(`${padsMissingCount} missing`, `faltan ${padsMissingCount}`)}</span>}</div>
-                  <div style={kvS}><span style={kS}>Trip</span>{gTrip ? <span style={{ fontWeight:600, color:"#6D28D9" }}>{gTrip.trip_number || "#" + gTrip.id}</span> : <span style={{ color:"#B91C1C", fontWeight:600 }}>{tr("Unassigned", "Sin asignar")}</span>}</div>
+                  <div style={kvS}><span style={kS}>Trip</span>{gTrip ? <span style={{ fontWeight:600, color:"#6D28D9" }}>{gTrip.trip_number || "#" + gTrip.id}</span> : <span style={{ color:"#B91C1C", fontWeight:600 }}>{tr("Unassigned", "Sin asignar")}</span>}
+                    {!gTrip && canTripAssign && <button onClick={() => openTripSuggestion(jobDetail.key)} style={{ marginLeft:"auto", border:"1px solid #DDD3F7", background:"#F5F3FF", color:"#6D28D9", borderRadius:7, padding:"3px 9px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>{drvNames ? "🛣️ Find the trip" : "🧑‍✈️ Assign a driver first"}</button>}
+                  </div>
                   <div style={kvS}><span style={kS}>Extra stops</span><span style={{ fontWeight:600 }}>{jobDetail.extra_stops || "0"}</span></div>
                   <div style={{ ...kvS, borderBottom:"none" }}><span style={kS}>Price / CF</span><span style={{ fontWeight:600 }}>{money(jobDetail.price_per_cf) || "—"}</span>{numv(jobDetail.fuel_surcharge_pct) > 0 && <span style={{ marginLeft:"auto", fontSize:11, color:"#999" }}>+ {numv(jobDetail.fuel_surcharge_pct)}% fuel</span>}</div>
                 </div>
@@ -14438,7 +14732,7 @@ export default function App() {
                         return (
                           <label key={d.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", fontSize:13, cursor:"pointer", borderBottom:"1px solid #f5f5f5", background: checked ? "#f0fdf4" : "#fff" }}>
                             <input type="checkbox" checked={checked} onChange={() => toggleJobDriver(d.id)} />
-                            <span>🧑‍✈️ {d.name}{d.truck_id ? ` · ${d.truck_id}` : ""}</span>
+                            <span>🧑‍✈️ {d.name}{driverTruckLabel(d) ? ` · ${driverTruckLabel(d)}` : ""}</span>
                           </label>
                         );
                       })}
@@ -14922,7 +15216,14 @@ export default function App() {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
             <Field label="Name" full><input style={inp} value={driverForm.name} onChange={e => setDriverForm(f => ({...f, name:e.target.value}))} placeholder="Driver name" /></Field>
             <Field label="Phone"><input style={inp} value={driverForm.phone} onChange={e => setDriverForm(f => ({...f, phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
-            <Field label="Truck ID"><input style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))} placeholder="e.g. T-12" /></Field>
+            <Field label="Truck">
+              <select style={inp} value={driverForm.truck_id} onChange={e => setDriverForm(f => ({...f, truck_id:e.target.value}))}>
+                <option value="">— No truck —</option>
+                {trucksList.filter(tk => tk.active !== false || String(tk.id) === String(driverForm.truck_id)).map(tk => <option key={tk.id} value={String(tk.id)}>{tk.name || `#${tk.id}`}{tk.plate ? ` · ${tk.plate}` : ""}</option>)}
+                {driverForm.truck_id && !trucksList.some(tk => String(tk.id) === String(driverForm.truck_id)) && <option value={driverForm.truck_id}>{tr(`${driverForm.truck_id} (not in Trucks)`, `${driverForm.truck_id} (no está en Camiones)`)}</option>}
+              </select>
+              <div style={{ fontSize:10.5, color:"#aaa", marginTop:3 }}>Trip suggestions put this driver's jobs on this truck</div>
+            </Field>
             <Field label="Daily rate ($/día)"><input type="number" min="0" step="0.01" style={inp} value={driverForm.daily_rate} onChange={e => setDriverForm(f => ({...f, daily_rate:e.target.value}))} placeholder="e.g. 250" /></Field>
             {(() => {
               const rosters = { verizon: vzDrivers, motive: mtDrivers };
@@ -16372,7 +16673,7 @@ export default function App() {
                     <Field label="Pasar a *">
                       <select style={inp} value={hf.to} onChange={e => setH({ to: e.target.value })}>
                         <option value="">— Choose driver —</option>
-                        {driversList.filter(d => d.name !== fromNm).map(d => <option key={d.id} value={d.id}>{d.name}{d.truck_id ? ` · ${d.truck_id}` : ""}</option>)}
+                        {driversList.filter(d => d.name !== fromNm).map(d => <option key={d.id} value={d.id}>{d.name}{driverTruckLabel(d) ? ` · ${driverTruckLabel(d)}` : ""}</option>)}
                       </select>
                     </Field>
                     <Field label="Motivo">
@@ -16385,7 +16686,9 @@ export default function App() {
                   <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
                     <Btn primary disabled={tripBusy || !hf.to} onClick={async () => {
                       const toNm = driverById[Number(hf.to)]?.name || "";
-                      if (!window.confirm(hf.jobKey ? `¿Pasar el job a ${toNm}? Desde ahora los extras y el efectivo de este job quedan a su nombre.` : `¿Pasar el trip completo a ${toNm}?`)) return;
+                      if (!window.confirm(hf.jobKey
+                        ? tr(`Hand the job to ${toNm}? From now on this job's extras and cash are in their name.`, `¿Pasar el job a ${toNm}? Desde ahora los extras y el efectivo de este job quedan a su nombre.`)
+                        : tr(`Hand the whole trip to ${toNm}? Its pending jobs go to ${toNm} too (cash and extras in their name from now on).`, `¿Pasar el trip completo a ${toNm}? Sus jobs pendientes también pasan a ${toNm} (efectivo y extras a su nombre desde ahora).`))) return;
                       if (hf.jobKey) await handoffJob(hf.jobKey, hf.to, hf.reason, hf.note);
                       else await handoffTrip(t, hf.to, hf.reason, hf.note);
                       setTripAction(null);
@@ -17324,7 +17627,7 @@ export default function App() {
             {driverD && (
               <Modal title={`Driver · ${driverD.name}`} onClose={() => setDriverDetailId(null)} footer={<Btn primary onClick={() => setDriverDetailId(null)}>Close</Btn>}>
                 <DetailRow label="Phone" value={driverD.phone} />
-                <DetailRow label="Truck" value={driverD.truck_id} />
+                <DetailRow label="Truck" value={driverTruckLabel(driverD)} />
                 {driverD.whatsapp_group_link && <div style={{ display:"flex", gap:8, padding:"7px 0", borderBottom:"1px solid #f0f0f0", fontSize:13 }}><span style={{ color:"#888", minWidth:150 }}>WhatsApp group</span><a href={driverD.whatsapp_group_link} target="_blank" rel="noreferrer" style={{ color:"#1A8A4E", textDecoration:"none" }}>Open group ↗</a></div>}
                 {!paymentsMissing && (() => {
                   const mine = paymentRows.filter(p => [p.cash_with_whom, p.received_by].some(v => (v || "").trim() && (v || "").trim() === driverD.name));
@@ -17446,6 +17749,73 @@ export default function App() {
             ? <div style={{ background:"#fff", borderRadius:10, padding:24, textAlign:"center" }}><div style={{ fontSize:40 }}>📄</div><a href={payPhotoView} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Open PDF in new tab ↗</a></div>
             : <img src={payPhotoView} alt="documento" style={{ maxWidth:"92%", maxHeight:"92%", borderRadius:8, boxShadow:"0 8px 40px rgba(0,0,0,0.4)" }} onClick={e => e.stopPropagation()} />}
         </div>
+      )}
+
+      {/* Quick driver assignment (calendar, dispatch board, job drawer). Saving
+           opens the trip suggestion for the new driver. */}
+      {assignDrv && (() => {
+        const rows = jobs.filter(j => jobKey(j) === assignDrv.key);
+        if (!rows.length) return null;
+        const rep = rows.find(r => !r.split_group) || rows[0];
+        const sel = assignDrv.ids;
+        const curIds = Array.isArray(rep.driver_ids) ? rep.driver_ids.map(Number) : [];
+        const changed = sel.join(",") !== curIds.join(",");
+        const toggle = (id) => setAssignDrv(a => ({ ...a, ids: a.ids.includes(id) ? a.ids.filter(x => x !== id) : [...a.ids, id] }));
+        const list = driversList.filter(d => d.active !== false || sel.includes(d.id));
+        const mv = nextMove(rep);
+        return (
+          <Modal title={tr(`Driver for #${rep.job_number || "—"}`, `Driver para #${rep.job_number || "—"}`)} onClose={() => setAssignDrv(null)}
+            footer={<>
+              <Btn onClick={() => setAssignDrv(null)}>Cancel</Btn>
+              <Btn primary disabled={assignDrvSaving || !changed} onClick={() => saveJobDrivers(assignDrv.key, sel)}>{assignDrvSaving ? "Saving..." : "Save"}</Btn>
+            </>}>
+            <div style={{ fontSize:12.5, color:"#777", marginBottom:12 }}>
+              <b style={{ color:"#111" }}>{rep.customer || "—"}</b>
+              {" · "}{(rep.pickup_state || "?").toUpperCase()} → {(rep.delivery_state || "?").toUpperCase()}
+              {" · "}{mv.date ? `${mv.kind} ${mv.date}` : mv.kind === "pickup" ? tr("no pickup date", "sin fecha de pickup") : tr("no delivery date", "sin fecha de delivery")}
+            </div>
+            {!curIds.length && String(rep.driver || "").trim() && (
+              <div style={{ fontSize:12, color:"#854F0B", background:"#FAEEDA", borderRadius:8, padding:"7px 10px", marginBottom:10 }}>
+                {tr(`Typed on the job: "${rep.driver}" — pick the driver from the list.`, `Escrito en el job: "${rep.driver}" — elegí el driver de la lista.`)}
+              </div>
+            )}
+            {list.length === 0 ? (
+              <div style={{ fontSize:12.5, color:"#bbb", padding:"10px 0" }}>No drivers. Add one in Drivers.</div>
+            ) : (
+              <div style={{ display:"grid", gap:6 }}>
+                {list.map(d => {
+                  const i = sel.indexOf(d.id);
+                  const tk = driverTruckLabel(d);
+                  const own = trips.filter(tp => TRIP_ACTIVE(tp.status) && Number(tp.driver_id) === d.id);
+                  return (
+                    <label key={d.id} style={{ display:"flex", alignItems:"center", gap:9, padding:"8px 11px", borderRadius:9, cursor:"pointer", border:`1px solid ${i >= 0 ? "#111" : "#ececec"}`, background: i >= 0 ? "#fafafa" : "#fff", fontSize:13 }}>
+                      <input type="checkbox" checked={i >= 0} onChange={() => toggle(d.id)} />
+                      <span style={{ fontWeight:600 }}>{d.name}</span>
+                      {i === 0 && sel.length > 1 && <span style={{ fontSize:10, fontWeight:700, color:"#6D28D9", background:"#EDE9FE", borderRadius:20, padding:"1px 7px" }}>main</span>}
+                      {tk && <span style={{ color:"#888", fontSize:12 }}>🚛 {tk}</span>}
+                      <span style={{ marginLeft:"auto", fontSize:11.5, color: own.length ? "#6D28D9" : "#bbb", textAlign:"right" }}>
+                        {own.length ? own.map(tp => `${tp.trip_number || "#" + tp.id} · ${tp.status === "loading" ? tr("loading", "cargando") : tr("on the road", "en ruta")}`).join(" · ") : tr("no active trip", "sin trip activo")}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <div style={{ fontSize:11.5, color:"#999", marginTop:10, lineHeight:1.5 }}>
+              The first driver you tick is the main one. After saving you get the trip for that driver's truck.
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* Driver → trip suggestion: right after an assignment, or the Trips page list. */}
+      {tripAssign && (tripAssign.queue || tripAssignItems.length > 0) && (
+        <TripAssignModal items={tripAssignItems} queue={!!tripAssign.queue} hiddenCount={awaitingAll.length - awaitingTrip.length}
+          jobs={jobs} trips={trips} trucks={trucksList} drivers={driversList} today={today()} busy={tripAssignBusy}
+          onApply={applyTripPlan} onEdit={openTripFormFromPlan} onDismiss={dismissTripAssign} onUnhide={() => setTripAssignHidden(new Set())}
+          onOpenJob={(k) => { setTripAssign(null); setJobDetailKey(k); }}
+          onOpenTrip={(id) => { setTripAssign(null); setJobDetailKey(null); setAssignDrv(null); setPage("trips"); setTripDetailId(id); }}
+          onClose={() => setTripAssign(null)} Btn={Btn} Modal={Modal} inp={inp} />
       )}
 
       {toast && (

@@ -216,13 +216,24 @@ Un **trip** asigna varios jobs a un camión y muestra la carga en tiempo real.
 ### 11.1 Crear un trip
 **"+ Trip"** → número automático (TRIP-001…), elegís **camión**, **driver**, fecha de salida, y **buscás y agregás jobs**. Mientras agregás, una **barra de capacidad** te muestra cuánto CF queda libre. Reordenás las paradas con ↑ / ↓.
 
-### 11.2 Vista "Active trips"
+### 11.2 Asignar un driver arma el trip
+Cuando le asignás un driver a un job, el sistema te **sugiere el trip** en el que tiene que ir — no hace falta armarlo a mano:
+- **Dónde asignás:** en el form del job, o rápido con **"+ Driver"** en el **Pickup Calendar**, en **Today** y en la tabla de **Dispatching**, o con **"Change"** en el detalle del job.
+- **Qué te sugiere:** si el driver ya tiene un trip **cargando**, agregar el job ahí (con la barra de capacidad antes → después). Si no tiene, un **trip nuevo** en **su camión**, saliendo el día del pickup (o del delivery, si el job ya está levantado o en storage).
+- **Otros jobs del mismo driver** sin trip y con fecha cerca (±3 días) aparecen tildados para sumarlos al mismo viaje.
+- **Nada se guarda hasta que confirmás.** "Editar en el formulario del trip" abre el trip completo para ajustar.
+- **Job con varios drivers:** te pregunta **quién lleva el camión**; ese pasa a ser el driver principal del job.
+- En **Trips / Live Load** aparece el aviso **"X job(s) tienen driver pero no tienen trip"** → **Revisar** para resolverlos de a uno ("Ahora no" los deja para después).
+- **Todo queda sincronizado:** si cambiás el driver de un trip, te pregunta si sus jobs pasan al nuevo driver; los jobs sin driver toman el del trip.
+- Para que sugiera bien el camión, cargale a cada driver su **Truck** en **Drivers** (ahora es una lista de tus camiones).
+
+### 11.3 Vista "Active trips"
 Una tarjeta por camión activo: nombre + driver, **barra de capacidad** (verde <70%, ámbar 70-90%, rojo >90%), lista de **stops** (arrastrables para reordenar), con job, cliente, ruta, CF, sticker, FADD y balance. Por cada stop: **Mark delivered**. Totales de CF y de plata a cobrar.
 - **💬 Enviar manifest al driver** — WhatsApp con la lista completa del viaje.
 - **Salir** — marca el trip como "en tránsito".
 - Cuando se entregan todos los jobs, el trip pasa solo a **completado**.
 
-### 11.3 Trucks (camiones)
+### 11.4 Trucks (camiones)
 En **Trucks** cargás la flota (nombre, patente, **capacidad en CF**) y ves la **ocupación actual** de cada camión si está en un trip.
 
 ---

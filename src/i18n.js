@@ -2345,6 +2345,29 @@ export const I18N_ES = {
   "Every email becomes a lead": "Cada mail se convierte en lead",
   "Any sender is accepted; emails that are not a job offer (newsletters, receipts, notices) are still discarded. Use it only when the forwarder reads a mailbox you trust — the secret is then the only gate.":
     "Se acepta cualquier remitente; los mails que no son una oferta de job (newsletters, recibos, avisos) igual se descartan. Usalo sólo si el reenviador lee una casilla de confianza — ahí el secreto es la única barrera.",
+  // ── Driver → trip suggestions (assign a driver, get the trip) ──
+  "Change driver": "Cambiar driver",
+  "Assign a driver": "Asignar un driver",
+  "Put it on the driver's trip": "Subilo al trip del driver",
+  "Not linked to a truck in Trucks — edit the driver to pick one": "No está vinculado a un camión de Camiones — editá el driver para elegir uno",
+  "🛣️ Find the trip": "🛣️ Buscar el trip",
+  "🧑‍✈️ Assign a driver first": "🧑‍✈️ Primero asigná un driver",
+  "Trip suggestions put this driver's jobs on this truck": "Las sugerencias de trip suben los jobs de este driver a este camión",
+  "No drivers. Add one in Drivers.": "No hay drivers. Agregá uno en Drivers.",
+  "The first driver you tick is the main one. After saving you get the trip for that driver's truck.": "El primer driver que marcás es el principal. Al guardar te sugiere el trip para el camión de ese driver.",
+  "The driver is set, so the job should ride that driver's truck. This is the trip it would go on — nothing is saved until you confirm.": "El driver ya está asignado, así que el job tiene que ir en el camión de ese driver. Este es el trip donde iría — no se guarda nada hasta que confirmes.",
+  "These jobs already have a driver but are not on any trip yet. Confirm each one to put it on that driver's truck.": "Estos jobs ya tienen driver pero todavía no están en ningún trip. Confirmá cada uno para subirlo al camión de ese driver.",
+  "📲 Notify the driver": "📲 Avisarle al driver",
+  "Open trip": "Abrir trip",
+  "Every job with a driver is on a trip.": "Todos los jobs con driver están en un trip.",
+  "Pick the driver to see the trip.": "Elegí el driver para ver el trip.",
+  "Not now": "Ahora no",
+  "Edit in trip form": "Editar en el formulario del trip",
+  "Take trip": "Tomar trip",
+  "Review": "Revisar",
+  "Suggested": "Sugerido",
+  "Change": "Cambiar",
+  "main": "principal",
 };
 const i18nCache = new WeakMap();   // text node -> original English value
 export function i18nApply() {
