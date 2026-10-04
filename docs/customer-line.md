@@ -203,30 +203,50 @@ armado desde cero. No reutiliza nada de `No Borders - Intake` ni las tools
 | `request_change` | `tool_4801m43pavk3f7ha2606tcqw3ynx` |
 | `request_callback` | `tool_0101m43pawb4emvsfp28dpbpwkwq` |
 
-### Workflow: la compuerta es determinística
+### Workflow: los cinco pasos, y la compuerta es determinística
 
-Tres nodos `override_agent`, cada uno con solo las tools que necesita:
+```
+Start → Greeting and intent
+          ├─ su propio move ──────────→ Identity check
+          │                                ├─ job_verified (expresión) → Verified customer
+          │                                └─ necesita un humano ─────→ Human escalation
+          ├─ no es cliente / cotiza ──→ New move quote ──(ya tiene un move)──→ Identity check
+          └─ enojado / reembolso / daño / pide un humano → Human escalation
+Verified customer ── necesita un humano ──→ Human escalation
+```
 
-| Nodo | Tools | Entra cuando |
-|---|---|---|
-| `front_desk` | verify, callback | Siempre (arranque) |
-| `customer` | verify, **change**, callback | `job_verified == true` |
-| `escalation` | verify, callback | Pide un humano, reembolso, daño, disputa o está enojado |
+| Paso | Nodo | Tools | Entra cuando |
+|---|---|---|---|
+| 1. Saludo e intención | `front_desk` (Greeting and intent) | ninguna de job | Siempre (arranque) |
+| 2. Verificación | `verify` (Identity check) | verify, callback | Pregunta por su move o da un número de job |
+| 3. Estado, saldo, cambio, storage | `customer` (Verified customer) | verify, **change**, callback | `job_verified == true` |
+| 4. Escalación | `escalation` (Human escalation) | verify, callback | Enojado, reembolso, daño, disputa, pide un humano |
+| 5. No es cliente o cotiza | `quote` (New move quote) | callback | No tiene un move con nosotros y quiere precio |
 
-- **`front_desk` → `customer` no lo decide el LLM.** Es una condición
-  `expression` sobre `job_verified`. Esa variable la asigna la respuesta del
-  servidor (`verified`), no el modelo.
-- **`request_change` no existe antes de verificar.** Recién aparece en
-  `customer`, así que un prompt injection no puede llamarla.
+Las preguntas generales (reclamos, FADD, medios de pago, storage, derechos
+del cliente) se responden desde la knowledge base en cualquier nodo, sin
+verificar.
+
+- **El paso a `customer` no lo decide el LLM.** Es una condición `expression`
+  sobre `job_verified`. Esa variable la asigna la respuesta del servidor
+  (`verified`), no el modelo.
+- **Cada nodo tiene solo las tools que necesita.** El que cotiza no puede
+  verificar ni cambiar nada. `request_change` recién aparece en `customer`,
+  así que un prompt injection no puede llamarla.
 - **El servidor revalida igual:** `request_change` responde `not_verified` si
   la llamada no verificó. El workflow es la primera barrera, no la única.
-- **`escalation` es terminal.** No vuelve a `customer`, pero tiene verify para
+- **Cotizar no es escalar.** `quote` toma los datos y registra un callback
+  `quote`; no pasa por escalación.
+- **`escalation` es terminal.** No vuelve atrás, pero tiene verify para
   adjuntar el job al callback.
+- **La escalación es un callback registrado, no una transferencia.** Todavía
+  no hay un número al que transferir. Cuando lo haya, se agrega un nodo de
+  transfer.
 
-El ruteo a escalación es una condición LLM con umbral explícito: "Mild
-frustration or insisting on information is not enough". Sin ese umbral, un
-cliente que insistía con el saldo terminaba en escalación en vez de recibir la
-respuesta.
+Las condiciones LLM de las aristas tienen exclusiones explícitas. Por
+ejemplo: "Asking to change a date or address … is NOT a reason to escalate" o
+"Never for damage, claims…". Sin ellas, en la medición de la v11 un pedido de
+cambio terminó en escalación y un reclamo por daño en cotización.
 
 ### Procedures
 
