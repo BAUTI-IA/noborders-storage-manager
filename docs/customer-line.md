@@ -350,6 +350,31 @@ motivos de escalación y las fallas de verificación.
   corrida engaña: el modelo no es determinístico y un 9/9 puede esconder un
   bug que aparece 1 de cada 3 veces.
 
+### Test punta a punta contra producción (sin mocks)
+
+`test_7401m44mrfaqfqm81t4bv0rmh5np` corre las tools reales contra
+`/api/customer-line` en Vercel, con el job `DEMO-7001`. No está adjunto al
+agente porque escribe de verdad: cada corrida crea un pedido en
+`customer_requests` y manda el aviso a Telegram. Se corre a mano antes de
+grabar.
+
+Primera corrida (v14, 4 de octubre): **pasó**.
+- `verify_and_get_job` con el header del secret del workspace devolvió
+  `verified:true`. El agente dijo "DEMO7001" sin guion y el servidor lo
+  normalizó.
+- Datos reales del snapshot: `picked_up`, camión cerca de Richmond, VA hace
+  3 h, saldo $2,340 al entregar ($1,000 pagados), entrega sin agendar y FADD
+  presentado como el primer día posible.
+- `request_change` con `confirmed:false` devolvió el read-back. Después del
+  "yes, that's right", `confirmed:true` devolvió `CR-1` con
+  `team_notified:true`, y el agente dijo esa referencia.
+- Latencia de las tools: verify 2.8 s, stage 1.3 s, confirm 0.9 s.
+
+Detalles de tono que vio esta corrida (no exponen datos): el read-back leyó
+el `details` en tercera persona ("The customer is traveling…") y con el año
+("two thousand twenty-six"), y la despedida salió dos veces (en el mensaje y
+en el `end_call`).
+
 ### Cómo se llegó (cada fila es una versión publicada)
 
 | Versión | Resultado | Qué se encontró → qué se cambió |
