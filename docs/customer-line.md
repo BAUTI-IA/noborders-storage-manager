@@ -44,8 +44,9 @@ Lo que queda escrito es exactamente lo que el cliente escuchó y aprobó. Un
 read-back de más de 15 minutos ya no se puede confirmar. Un doble "sí"
 devuelve la misma referencia en vez de crear un segundo pedido.
 
-**Nunca modifica el job.** Los pedidos van a `customer_requests` y dispatch se
-entera por Telegram. Los aprueba un humano.
+**Nunca modifica el job.** Los pedidos van a `customer_requests`, dispatch se
+entera por Telegram y los ve en el CRM: en la bandeja de Dispatch y en la ficha
+del job. Los aprueba un humano.
 
 **El saldo es el mismo número que ve dispatch.** `jobBalance` replica
 `jobOutstanding` (`src/App.jsx:6533`):
@@ -441,9 +442,12 @@ vencido.
 - **El bloqueo por job tiene un costo.** Alguien que conoce un número de job
   puede bloquear la verificación de ese job por 24 horas. El cliente sigue
   teniendo el callback. Es preferible a dejar probar ZIPs sin límite.
-- **Los pedidos no tienen pantalla en el CRM.** Hoy se ven por Telegram y en la
-  tabla, y el agente interno los puede consultar. Una bandeja en Dispatch sería
-  el próximo paso, y ahí sí hay que pasar por i18n.
+- **La bandeja no edita el job.** Los pedidos se ven en Dispatch ("Customer
+  line requests", arriba de las vistas) y en la ficha del job (aviso en Needs
+  attention y la lista de pedidos de ese job). Desde ahí se toman, se marcan
+  como resueltos, se descartan o se reabren, y queda quién y cuándo. El cambio
+  en sí (fecha, dirección) lo hace la persona en el job: la bandeja no lo
+  aplica.
 - **El agente no cambia nada por su cuenta.** Es una decisión, no una carencia:
   cambiar la fecha de entrega afecta el trip, al driver y a otros clientes.
 
