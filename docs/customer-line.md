@@ -280,7 +280,7 @@ para versionarlas y testearlas por separado:
 
 ### Modelo
 
-- **Modelo principal:** `gemini-3.5-flash`. Los nodos heredan el modelo base.
+- **Modelo principal:** `gemini-3.5-flash`. Los nodos heredan el modelo base. Versión publicada: v14 (`agtvrsn_1501m43t0t8seedr6ewyw57qhwab`).
 - **Backup explícito:** `gemini-2.5-flash`.
 - **Por qué no Claude:** el agente estaba en `claude-sonnet-4-6`, pero los
   tests mostraron que **ninguna respuesta la generaba Claude**. Todas salían
@@ -361,6 +361,7 @@ motivos de escalación y las fallas de verificación.
 | v11 | 25/27 | Workflow de 5 nodos. Ruteo: un cambio de fecha fue a escalación y un daño a cotización → condiciones de las aristas con exclusiones explícitas. |
 | v12 | 25/27 | Una referencia inventada ("CB nine eight seven six five") sin llamar a la tool, en un test que igual pasó → la referencia vive en `{{last_reference}}`, que asigna la tool; los tests chequean referencias. |
 | v13 | 27/27 | 0 referencias inventadas en 27 corridas. Nuevo hallazgo: un teléfono inventado ("el número de su paperwork", que el agente nunca ve) → regla explícita y chequeo en los tests. |
+| **v14 (actual)** | **27/27** | 0 teléfonos y 0 referencias inventados. El ruteo fue correcto en las 27 corridas. Ningún cliente vio datos del job sin verificar. Mediana de 1.4 s hasta la respuesta, p90 de 3.2 s. |
 
 **Lo que no se arregla con prompt va al servidor o a los datos.** Los
 problemas graves se cerraron con mecanismos, no con más texto en el prompt:
@@ -368,10 +369,16 @@ la compuerta de verificación, el read-back que arma el servidor, la
 referencia como variable y que el snapshot no traiga el teléfono. El prompt
 cubre el tono y los casos raros, y los tests miden si alcanza.
 
-**Lo que queda (aparece en menos de 1 de cada 10 llamadas, sin riesgo de
-datos):** frases como "as soon as possible", algún "stage" y la frase de
-rechazo a un prompt injection repetida textual. Ninguna expone datos ni
-promete nada: son de tono.
+**Lo que queda en la v14 (1 de 27 corridas o menos, sin riesgo de datos):**
+- Un "as soon as possible".
+- Algún "stage" o "programmed".
+- "The number on file" dicho a un tercero, sin dar el número.
+- Una referencia leída como "hundred eight" en vez de dígito por dígito.
+- Una verificación intentada solo con el número de job: el servidor la
+  rechaza con `missing_factor` sin contar el intento, y el agente pide el
+  ZIP.
+
+Ninguno de estos expone datos ni promete nada.
 
 ## Job de prueba (para el demo)
 
