@@ -12,12 +12,16 @@
 //          the `x-agent-secret` shared secret (see serverToServerAuth).
 //          `action: "inbound_email"` is the Pipeline's broker-email webhook and
 //          authenticates with its own `x-pipeline-secret` (docs/pipeline.md).
+//          `action: "customer_line"` (rewritten from /api/customer-line) is the
+//          customer-facing ElevenLabs agent's tool server, with its own
+//          `x-customer-line-secret` (docs/customer-line.md).
 import { createHash, timingSafeEqual } from "node:crypto";
 import { admin, handleIncoming, warmCaches } from "../lib/agent.mjs";
 import { writesEnabled } from "../lib/agentWrite.mjs";
 import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from "../lib/brief.mjs";
 import { mintVoiceSession, runVoiceTool, vt, VOICE_TOOL_NAMES } from "../lib/voice.mjs";
 import { ingestEmail } from "../lib/leads.mjs";
+import { runCustomerLineTool, CUSTOMER_LINE_TOOLS } from "../lib/customerLine.mjs";
 
 export const maxDuration = 300;
 
@@ -182,6 +186,64 @@ async function inboundEmail(req, res) {
   }
 }
 
+// ── Customer Line ────────────────────────────────────────────────────────────
+//
+// The tool server for the customer-facing ElevenLabs agent (lib/customerLine.mjs,
+// docs/customer-line.md). It shares nothing with the team's agent door above:
+// its own secret, no CRM user, no LLM and no SQL behind it — three fixed
+// operations that can only ever see the one job a caller has proved is theirs.
+// A leaked CUSTOMER_LINE_SECRET therefore exposes what a caller with the right
+// job number and ZIP could already hear, not the CRM. It rides this function
+// because api/ is at the Hobby plan's 12-function cap.
+const CUSTOMER_LINE_HEADER = "x-customer-line-secret";
+
+export function customerLineAuth(req) {
+  const expected = process.env.CUSTOMER_LINE_SECRET;
+  if (!expected) return { ok: false, status: 503, error: "server not configured: CUSTOMER_LINE_SECRET" };
+  const given = req.headers?.[CUSTOMER_LINE_HEADER];
+  if (!given || !secretMatches(given, expected)) return { ok: false, status: 401, error: "unauthorized" };
+  return { ok: true };
+}
+
+const isCustomerLine = (req) => String(req.query?.action || req.body?.action || "") === "customer_line";
+
+export async function customerLine(req, res, deps) {
+  const auth = customerLineAuth(req);
+  if (!auth.ok) { res.status(auth.status).json({ error: auth.error }); return; }
+
+  const b = req.body && typeof req.body === "object" ? req.body : {};
+  // ElevenLabs sends each tool's parameters flat in the body; `input` (how our
+  // own voice tools nest them) is accepted too.
+  const input = { ...(b.input && typeof b.input === "object" && !Array.isArray(b.input) ? b.input : {}), ...b };
+  const tool = String(b.tool || b.name || req.query?.tool || "");
+  if (!CUSTOMER_LINE_TOOLS.has(tool)) {
+    res.status(400).json({ error: `unknown tool "${tool || "?"}"`, valid_tools: [...CUSTOMER_LINE_TOOLS] });
+    return;
+  }
+  // The conversation id IS the session: verification and the pending read-back
+  // hang off it. Without it nothing can be remembered between two tool calls.
+  const conversationId = String(b.conversation_id || "").replace(/[^\w.-]/g, "").slice(0, 80);
+  if (!conversationId) {
+    res.status(400).json({ error: "conversation_id is required — map it to the Dynamic Variable system__conversation_id" });
+    return;
+  }
+
+  const started = Date.now();
+  try {
+    const out = await runCustomerLineTool({ tool, input, conversationId, callerId: b.caller_id || null, deps });
+    console.log(`customer_line ${tool} ${out.ok ? "ok" : out.error} ${Date.now() - started}ms`);
+    res.status(200).json(out);
+  } catch (e) {
+    // Still a 200 with something speakable: the model is mid-call and needs a
+    // next sentence, not a stack trace.
+    console.error(`customer_line ${tool}:`, e);
+    res.status(200).json({
+      ok: false, error: "system_error",
+      instruction: "Something failed on our side. Apologize briefly, don't repeat the same call, and offer a transfer or ask them to call back later.",
+    });
+  }
+}
+
 async function appChat(req, res) {
   // A broker email is not a chat turn: route it before any agent auth runs.
   if (String(req.query?.action || req.body?.action || "") === "inbound_email") return inboundEmail(req, res);
@@ -340,7 +402,10 @@ async function appChat(req, res) {
 }
 
 export default async function handler(req, res) {
-  if (!admin || !process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "server not configured" }); return; }
+  if (!admin) { res.status(500).json({ error: "server not configured" }); return; }
+  // The Customer Line needs no model: route it before the Anthropic check.
+  if (req.method === "POST" && isCustomerLine(req)) return customerLine(req, res);
+  if (!process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "server not configured" }); return; }
   if (req.method === "GET") return dailyBrief(req, res);
   if (req.method === "POST") return appChat(req, res);
   res.status(405).end();

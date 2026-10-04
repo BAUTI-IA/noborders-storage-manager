@@ -21,6 +21,10 @@
     {
       "source": "/api/inbound-email",
       "destination": "/api/agent-hub?action=inbound_email"
+    },
+    {
+      "source": "/api/customer-line",
+      "destination": "/api/agent-hub?action=customer_line"
     }
   ]
 }
