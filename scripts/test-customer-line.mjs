@@ -6,7 +6,7 @@
 //   node scripts/test-customer-line.mjs
 import {
   normJobNumber, jobSearchFragment, matchingJobs, zip5, last4, factorsMatch, cityLevel, firstName,
-  jobBalance, customerSnapshot, validateChange, callbackPhone, teamMessage, MAX_FAILED_PER_CALL, MAX_FAILED_PER_JOB,
+  jobBalance, customerSnapshot, deliverySummary, validateChange, callbackPhone, teamMessage, MAX_FAILED_PER_CALL, MAX_FAILED_PER_JOB,
 } from "../lib/customerLineData.mjs";
 import { runCustomerLineTool } from "../lib/customerLine.mjs";
 import { customerLine } from "../api/agent-hub.mjs";
@@ -104,8 +104,10 @@ eq("nombre de pila de 'Jane & John Doe'", firstName("Jane & John Doe"), "Jane");
   }
   eq("solo campos de la lista blanca", Object.keys(snap), [
     "job_number", "customer_first_name", "status", "status_meaning", "pickup", "first_available_delivery_date",
-    "scheduled_delivery_date", "delivered_on", "delivery_to", "truck_last_seen", "balance", "storage",
+    "scheduled_delivery_date", "delivered_on", "delivery_summary", "delivery_to", "truck_last_seen", "balance", "storage",
   ]);
+  eq("FADD sin fecha agendada: la frase dice que no está agendada y que no es una promesa", snap.delivery_summary,
+    "Delivery is not scheduled yet. 2026-10-08 is the first available delivery date (FADD): the earliest day we could deliver, not a booked day.");
   eq("camión en viaje con posición fresca: ciudad y hace cuánto", snap.truck_last_seen, { near: "Richmond, VA", hours_ago: 3 });
   eq("fecha no agendada viaja como null (el agente no inventa)", snap.scheduled_delivery_date, null);
   eq("destino: ciudad y estado", snap.delivery_to, "Newark, NJ");
@@ -127,6 +129,9 @@ eq("nombre de pila de 'Jane & John Doe'", firstName("Jane & John Doe"), "Jane");
     { location: "our Indiana warehouse", stored_since: "2026-09-10", monthly_rate: 250, first_month_free: false, rent_pending: 500, rent_overdue: 250 });
 }
 
+eq("entrega agendada", deliverySummary({ scheduled: "2026-10-10", fadd: "2026-10-08" }), "Delivery is scheduled for 2026-10-10.");
+eq("entregado", deliverySummary({ delivered: true, deliveredOn: "2026-09-30" }), "Delivered on 2026-09-30.");
+eq("sin FADD ni fecha", deliverySummary({}), "Delivery is not scheduled yet, and there is no first available delivery date on file.");
 eq("cambio: kind inválido", validateChange({ kind: "teleport", details: "x" }).ok, false);
 eq("cambio: sin detalle", validateChange({ kind: "delivery_date" }).ok, false);
 eq("teléfono de callback: 10 dígitos", callbackPhone("+1 (305) 555-0100"), "3055550100");
