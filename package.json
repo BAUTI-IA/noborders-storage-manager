@@ -17,6 +17,7 @@
     "test:undo": "node scripts/test-undo.mjs",
     "agent:prompt": "node scripts/dump-agent-prompt.mjs",
     "test:agent-auth": "node scripts/test-agent-auth.mjs",
+    "test:customer-line": "node scripts/test-customer-line.mjs",
     "test:voice": "node scripts/test-voice.mjs",
     "test:verizon": "node scripts/test-verizon.mjs",
     "test:motive": "node scripts/test-motive.mjs",
