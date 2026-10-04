@@ -189,7 +189,7 @@ Las descripciones van en inglés porque las lee el modelo.
 | `best_time` | string | When to call, in their words. |
 | `callback_phone` | string | Number to call back, if the caller is not verified or wants a different one. |
 | `job_number` | string | Job number an UNVERIFIED caller mentions (stored as "claimed", not trusted). |
-| `caller_id` | dynamic variable `system__caller_id` | Solo en llamadas telefónicas: se usa como teléfono de callback si el cliente no dicta otro. |
+| `caller_id` | dynamic variable `system__caller_id` | **Todavía no está en la tool.** El servidor ya lo acepta, pero se agrega recién cuando la línea tenga número de teléfono (en el widget esa variable no existe). Mientras tanto: si verificó, el callback usa el teléfono del job; si no, el servidor responde `need_phone` y el agente lo pide. |
 
 ## El agente en ElevenLabs
 
