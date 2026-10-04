@@ -288,8 +288,10 @@ para versionarlas y testearlas por separado:
   backup apagado, el test fallaba con "all LLM attempts were exhausted". El
   backup silencioso escondía un modelo principal roto, y además salía caro:
   mediana de 4.7 s hasta la respuesta, con picos de 22 s.
-- **Con `gemini-3.5-flash`:** el primer token llega en 0.7–1.0 s y la
-  respuesta en 1.3–2.4 s.
+- **Con `gemini-3.5-flash` (v13, 27 corridas):** mediana de 1.5 s hasta la
+  respuesta y p90 de 2.9 s. Los turnos normales tardan 1.3 s; los que
+  siguen a una tool o a un cambio de nodo, 2.6 s. Esa diferencia es el costo
+  de tener un workflow explícito.
 - **Cómo se controla:** los tests registran `producing_llm` en cada turno.
   Así se ve si el backup está respondiendo.
 
@@ -341,6 +343,35 @@ motivos de escalación y las fallas de verificación.
   solo con el ZIP o los últimos 4 dígitos correctos, `missing_factor` sin
   segundo dato y `no_match` con datos equivocados.
 - Los tests están adjuntos al agente y corren contra cada versión publicada.
+- Todos los tests verifican además que cada referencia CB-/CR- que dice el
+  agente la haya devuelto una tool. Los de callback verifican también que el
+  teléfono registrado lo haya dicho el que llama.
+- Desde la v10 se mide con 3 repeticiones por test (27 corridas). Una sola
+  corrida engaña: el modelo no es determinístico y un 9/9 puede esconder un
+  bug que aparece 1 de cada 3 veces.
+
+### Cómo se llegó (cada fila es una versión publicada)
+
+| Versión | Resultado | Qué se encontró → qué se cambió |
+|---|---|---|
+| v4 | 4/9 | El guardrail custom bloqueaba frases normales y cortaba llamadas → se apagó. Se descubrió que Claude nunca respondía: contestaba el backup. |
+| v6–v7 | 7/9 | Modelo `gemini-3.5-flash`. Los mocks devolvían `verified:true` sin el segundo dato → mocks iguales al servidor. |
+| v8 | 9/9 | El agente verificaba solo con el número de job ("read the job number back, then call verify") → prompt corregido. El agente leía su propio resumen en vez del read-back del servidor → procedure de cambios reescrito. |
+| v9–v10 | 8/9, 24/27 | "Okay, thanks" tomado como un "sí" → solo un sí explícito confirma. |
+| v11 | 25/27 | Workflow de 5 nodos. Ruteo: un cambio de fecha fue a escalación y un daño a cotización → condiciones de las aristas con exclusiones explícitas. |
+| v12 | 25/27 | Una referencia inventada ("CB nine eight seven six five") sin llamar a la tool, en un test que igual pasó → la referencia vive en `{{last_reference}}`, que asigna la tool; los tests chequean referencias. |
+| v13 | 27/27 | 0 referencias inventadas en 27 corridas. Nuevo hallazgo: un teléfono inventado ("el número de su paperwork", que el agente nunca ve) → regla explícita y chequeo en los tests. |
+
+**Lo que no se arregla con prompt va al servidor o a los datos.** Los
+problemas graves se cerraron con mecanismos, no con más texto en el prompt:
+la compuerta de verificación, el read-back que arma el servidor, la
+referencia como variable y que el snapshot no traiga el teléfono. El prompt
+cubre el tono y los casos raros, y los tests miden si alcanza.
+
+**Lo que queda (aparece en menos de 1 de cada 10 llamadas, sin riesgo de
+datos):** frases como "as soon as possible", algún "stage" y la frase de
+rechazo a un prompt injection repetida textual. Ninguna expone datos ni
+promete nada: son de tono.
 
 ## Job de prueba (para el demo)
 
