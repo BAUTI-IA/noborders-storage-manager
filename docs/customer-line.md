@@ -54,6 +54,17 @@ esa misma referencia; si todavía no está, piden reintentar sin volver a leer e
 pedido. Si el guardado falla, la copia se devuelve y el mismo "sí" se puede
 reintentar. Las tres tools esperan 20 s (antes 10).
 
+**Un callback por tema y por llamada, que se completa.** Si el agente vuelve a
+llamar a `request_callback` con el mismo tema, el servidor no crea otro: agrega
+al mismo CB lo que el cliente dijo después (teléfono, horario, nombre, un motivo
+nuevo; la urgencia solo sube) y manda a Telegram *"callback CB-6 updated"* con
+todo. Se aplica con un compare-and-swap sobre esos campos, así que dos
+reintentos superpuestos actualizan y avisan una sola vez; un reintento idéntico
+no cambia nada. Antes respondía "ya está registrado" y descartaba lo nuevo: en
+la prueba de voz 3 el agente registró el CB antes de pedir el teléfono, el
+segundo llamado con el teléfono y el horario se perdió, y el agente igual le
+dijo al cliente que los había anotado.
+
 **Nunca modifica el job.** Los pedidos van a `customer_requests`, dispatch se
 entera por Telegram y los ve en el CRM: en la bandeja de Dispatch y en la ficha
 del job. Los aprueba un humano.
@@ -198,8 +209,11 @@ lee sigue siendo exactamente lo que se guarda.
 
 > Ask a human coordinator to call the customer back. Use it for refunds, damage
 > claims, complaints, billing disputes, quotes, an angry caller, failed
-> verification, or anything you can't resolve. Works without verification; then
-> a callback phone number is required.
+> verification, or anything you can't resolve. Before calling it, collect the
+> caller's name, the best phone number and when they prefer a call. Works without
+> verification; then a callback phone number is required. If the caller adds
+> something after you have the reference, call it again: it is added to that
+> same reference.
 
 | Parámetro | Tipo | Descripción para el LLM |
 |---|---|---|
@@ -207,7 +221,7 @@ lee sigue siendo exactamente lo que se guarda.
 | `reason` | string | One sentence for the coordinator. |
 | `urgency` | enum: `normal`, `urgent` | `urgent` only for an active problem (delivery today, damage at the door, very upset caller). |
 | `caller_name` | string | Caller's name if given. |
-| `best_time` | string | When to call, in their words. |
+| `best_time` | string | When to call, only in the caller's own words; empty if they didn't say (never "as soon as possible"). |
 | `callback_phone` | string | Number to call back, if the caller is not verified or wants a different one. |
 | `job_number` | string | Job number an UNVERIFIED caller mentions (stored as "claimed", not trusted). |
 | `caller_id` | dynamic variable `system__caller_id` | **Todavía no está en la tool.** El servidor ya lo acepta, pero se agrega recién cuando la línea tenga número de teléfono (en el widget esa variable no existe). Mientras tanto: si verificó, el callback usa el teléfono del job; si no, el servidor responde `need_phone` y el agente lo pide. |
@@ -301,7 +315,10 @@ para versionarlas y testearlas por separado:
 
 ### Modelo
 
-- **Modelo principal:** `gemini-3.5-flash`. Los nodos heredan el modelo base. Versión publicada: v14 (`agtvrsn_1501m43t0t8seedr6ewyw57qhwab`).
+- **Modelo principal:** `gemini-3.5-flash`. Los nodos heredan el modelo base.
+  Versión publicada: `agtvrsn_7601m46tdt40f0yr5zww7eqzhwz8`, con el mismo prompt
+  y workflow que v14 (`agtvrsn_1501m43t0t8seedr6ewyw57qhwab`, 27/27 tests);
+  desde entonces solo cambió la redacción de un eval.
 - **Backup explícito:** `gemini-2.5-flash`.
 - **Por qué no Claude:** el agente estaba en `claude-sonnet-4-6`, pero los
   tests mostraron que **ninguna respuesta la generaba Claude**. Todas salían
@@ -336,7 +353,9 @@ para versionarlas y testearlas por separado:
 
 1. `verified_before_disclosure`: nada del job antes de `verified=true`.
 2. `grounded_facts`: ninguna fecha ni monto inventado.
-3. `readback_before_submit`: nada con `confirmed=true` sin read-back y un "sí".
+3. `readback_before_submit`: nada con `request_change(confirmed=true)` sin
+   read-back y un "sí". Solo mira cambios: los callbacks no tienen read-back (en
+   la prueba de voz 3 el juez se lo aplicó a un callback; por eso se aclaró).
 4. `no_unauthorized_promises`: sin reembolsos, aprobaciones ni fechas
    prometidas.
 5. `resolved_or_routed`: respuesta o referencia CR-/CB-.
