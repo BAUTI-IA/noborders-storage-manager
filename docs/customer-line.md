@@ -44,8 +44,9 @@ Lo que queda escrito es exactamente lo que el cliente escuchó y aprobó. Un
 read-back de más de 15 minutos ya no se puede confirmar. Un doble "sí"
 devuelve la misma referencia en vez de crear un segundo pedido.
 
-**Nunca modifica el job.** Los pedidos van a `customer_requests` y dispatch se
-entera por Telegram. Los aprueba un humano.
+**Nunca modifica el job.** Los pedidos van a `customer_requests`, dispatch se
+entera por Telegram y los ve en el CRM: en la bandeja de Dispatch y en la ficha
+del job. Los aprueba un humano.
 
 **El saldo es el mismo número que ve dispatch.** `jobBalance` replica
 `jobOutstanding` (`src/App.jsx:6533`):
@@ -350,6 +351,31 @@ motivos de escalación y las fallas de verificación.
   corrida engaña: el modelo no es determinístico y un 9/9 puede esconder un
   bug que aparece 1 de cada 3 veces.
 
+### Test punta a punta contra producción (sin mocks)
+
+`test_7401m44mrfaqfqm81t4bv0rmh5np` corre las tools reales contra
+`/api/customer-line` en Vercel, con el job `DEMO-7001`. No está adjunto al
+agente porque escribe de verdad: cada corrida crea un pedido en
+`customer_requests` y manda el aviso a Telegram. Se corre a mano antes de
+grabar.
+
+Primera corrida (v14, 4 de octubre): **pasó**.
+- `verify_and_get_job` con el header del secret del workspace devolvió
+  `verified:true`. El agente dijo "DEMO7001" sin guion y el servidor lo
+  normalizó.
+- Datos reales del snapshot: `picked_up`, camión cerca de Richmond, VA hace
+  3 h, saldo $2,340 al entregar ($1,000 pagados), entrega sin agendar y FADD
+  presentado como el primer día posible.
+- `request_change` con `confirmed:false` devolvió el read-back. Después del
+  "yes, that's right", `confirmed:true` devolvió `CR-1` con
+  `team_notified:true`, y el agente dijo esa referencia.
+- Latencia de las tools: verify 2.8 s, stage 1.3 s, confirm 0.9 s.
+
+Detalles de tono que vio esta corrida (no exponen datos): el read-back leyó
+el `details` en tercera persona ("The customer is traveling…") y con el año
+("two thousand twenty-six"), y la despedida salió dos veces (en el mensaje y
+en el `end_call`).
+
 ### Cómo se llegó (cada fila es una versión publicada)
 
 | Versión | Resultado | Qué se encontró → qué se cambió |
@@ -416,9 +442,12 @@ vencido.
 - **El bloqueo por job tiene un costo.** Alguien que conoce un número de job
   puede bloquear la verificación de ese job por 24 horas. El cliente sigue
   teniendo el callback. Es preferible a dejar probar ZIPs sin límite.
-- **Los pedidos no tienen pantalla en el CRM.** Hoy se ven por Telegram y en la
-  tabla, y el agente interno los puede consultar. Una bandeja en Dispatch sería
-  el próximo paso, y ahí sí hay que pasar por i18n.
+- **La bandeja no edita el job.** Los pedidos se ven en Dispatch ("Customer
+  line requests", arriba de las vistas) y en la ficha del job (aviso en Needs
+  attention y la lista de pedidos de ese job). Desde ahí se toman, se marcan
+  como resueltos, se descartan o se reabren, y queda quién y cuándo. El cambio
+  en sí (fecha, dirección) lo hace la persona en el job: la bandeja no lo
+  aplica.
 - **El agente no cambia nada por su cuenta.** Es una decisión, no una carencia:
   cambiar la fecha de entrega afecta el trip, al driver y a otros clientes.
 

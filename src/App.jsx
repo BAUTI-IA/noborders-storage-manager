@@ -2614,6 +2614,86 @@ function ClaimLine({ claim, onOpen, linkLabel }) {
   );
 }
 
+// ── Customer Line requests ──
+// The ElevenLabs voice agent never edits a job: it logs change requests (CR-)
+// and callbacks (CB-) to customer_requests and a person acts on them here.
+// `topic` holds the change kind for CR- rows and the callback topic for CB- rows.
+// Labels carry their Spanish here (rendered with tr) because "Open" alone is
+// already the verb "Abrir" in I18N_ES.
+const CUST_REQ_TOPIC = {
+  delivery_date:["Delivery date", "Fecha de delivery"], delivery_address:["Delivery address", "Dirección de delivery"],
+  pickup_date:["Pickup date", "Fecha de pickup"], contact_info:["Contact info", "Datos de contacto"],
+  storage:["Storage", "Storage"], other:["Other", "Otro"], quote:["Quote", "Cotización"], refund:["Refund", "Reembolso"],
+  damage_claim:["Damage claim", "Reclamo por daño"], complaint:["Complaint", "Queja"], billing:["Billing", "Facturación"],
+  change_followup:["Change follow-up", "Seguimiento de un cambio"], delivery_issue:["Delivery issue", "Problema con la entrega"],
+};
+const CUST_REQ_STATUS = {
+  open:        { l:["Open", "Abierto"],         bg:"#FCEBEB", text:"#A32D2D" },
+  in_progress: { l:["In progress", "En curso"], bg:"#FFF6E8", text:"#B45309" },
+  done:        { l:["Done", "Resuelto"],        bg:"#EAF3DE", text:"#3B6D11" },
+  dismissed:   { l:["Dismissed", "Descartado"], bg:"#f1f1f1", text:"#888" },
+};
+const custReqRef = (r) => `${r.kind === "change" ? "CR" : "CB"}-${r.id}`;
+const custReqIsOpen = (r) => r.status === "open" || r.status === "in_progress";
+function CustomerRequestRow({ r, jobOf, onOpenJob, onSetStatus, canEdit, whoLabel }) {
+  const job = jobOf ? jobOf(r) : null;
+  const st = CUST_REQ_STATUS[r.status] || CUST_REQ_STATUS.open;
+  const open = custReqIsOpen(r);
+  const small = { padding:"4px 10px", fontSize:11.5 };
+  return (
+    <div style={{ display:"flex", alignItems:"flex-start", gap:12, padding:"10px 14px", borderTop:"1px solid #f4f4f4", opacity: open ? 1 : 0.65 }}>
+      <span style={{ fontSize:16, lineHeight:"20px" }}>{r.kind === "change" ? "📝" : "☎️"}</span>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+          <span style={{ fontFamily:"monospace", fontSize:12.5, fontWeight:700 }}>{custReqRef(r)}</span>
+          <span style={{ fontSize:13, fontWeight:600 }}>{r.kind === "change" ? "Change request" : "Callback"}</span>
+          <span style={{ fontSize:13, color:"#555" }}>{CUST_REQ_TOPIC[r.topic] ? tr(...CUST_REQ_TOPIC[r.topic]) : (r.topic || tr("Other", "Otro"))}</span>
+          {r.urgency === "urgent" && <span style={{ fontSize:10.5, fontWeight:700, color:"#fff", background:"#A32D2D", borderRadius:20, padding:"2px 8px" }}>Urgent</span>}
+          <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:st.bg, color:st.text }}>{tr(...st.l)}</span>
+        </div>
+        <div style={{ display:"flex", gap:12, flexWrap:"wrap", fontSize:12, color:"#888", marginTop:3 }}>
+          {onOpenJob && r.verified && r.job_number && (
+            <span>
+              <button onClick={() => onOpenJob(r)} disabled={!job} style={{ fontFamily:"monospace", fontWeight:700, color: job ? "#185FA5" : "#888", background:"none", border:"none", padding:0, cursor: job ? "pointer" : "default", textDecoration: job ? "underline" : "none", fontSize:12 }}>#{r.job_number}</button>
+              {job?.customer ? <span> · {job.customer}</span> : null}
+            </span>
+          )}
+          {!r.verified && <span>👤 {r.caller_name || tr("Unknown caller", "Persona sin identificar")}{r.claimed_job_number ? tr(` · says job #${r.claimed_job_number} (not verified)`, ` · dice job #${r.claimed_job_number} (sin verificar)`) : ""}</span>}
+          {r.callback_phone && <span>📞 <b style={{ color:"#333" }}>{r.callback_phone}</b></span>}
+          {r.best_time && <span>🕐 {r.best_time}</span>}
+          {r.preferred_date && <span>📅 {tr(`Asks for ${r.preferred_date}`, `Pide el ${r.preferred_date}`)}</span>}
+          <span>{fmtTs(r.created_at)}</span>
+        </div>
+        {r.details && <div style={{ fontSize:12.5, color:"#444", marginTop:5, fontStyle:"italic" }}>“{r.details}”</div>}
+        {r.handled_by && (
+          <div style={{ fontSize:11, color:"#aaa", marginTop:4 }}>{tr(...st.l)} · {whoLabel(r.handled_by)}{r.handled_at ? ` · ${fmtTs(r.handled_at)}` : ""}</div>
+        )}
+      </div>
+      {canEdit && (
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", justifyContent:"flex-end", flexShrink:0 }}>
+          {r.status === "open" && <Btn onClick={() => onSetStatus(r, "in_progress")} style={small}>Take it</Btn>}
+          {open && <Btn primary onClick={() => onSetStatus(r, "done")} style={small}>Mark done</Btn>}
+          {open && <Btn onClick={() => onSetStatus(r, "dismissed")} style={small}>Dismiss</Btn>}
+          {!open && <Btn onClick={() => onSetStatus(r, "open")} style={small}>Reopen</Btn>}
+        </div>
+      )}
+    </div>
+  );
+}
+function CustomerRequestsCard({ rows, ...rowProps }) {
+  return (
+    <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden", marginBottom:14 }}>
+      <div style={{ padding:"10px 14px 8px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:10.5, fontWeight:700, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.06em" }}>
+          <span>📞</span><span>Customer line requests</span><span style={{ marginLeft:"auto", fontWeight:500, letterSpacing:0, textTransform:"none", fontSize:11, color:"#bbb" }}>{rows.filter(custReqIsOpen).length || ""}</span>
+        </div>
+        <div style={{ fontSize:11.5, color:"#999", marginTop:4 }}>Logged by the voice agent. It never edits the job: make the change, call the customer back, then mark it done.</div>
+      </div>
+      {rows.map(r => <CustomerRequestRow key={r.id} r={r} {...rowProps} />)}
+    </div>
+  );
+}
+
 const JOB_TYPES = [{ v:"full", l:"Full" }, { v:"direct", l:"Direct" }, { v:"broker_delivery", l:"Broker" }];
 const jobTypeLabel = (v) => (JOB_TYPES.find(t => t.v === v)?.l) || "—";
 function StatusBadge({ status }) {
@@ -4677,6 +4757,9 @@ export default function App() {
   // Claims & Incidents
   const [claimsMissing, setClaimsMissing] = useState(false);
   const [claims, setClaims] = useState([]);
+  // Customer Line requests (customer_requests, written by the voice agent's tool server)
+  const [custRequests, setCustRequests] = useState([]);
+  const [custRequestsMissing, setCustRequestsMissing] = useState(false);
   const [claimNotes, setClaimNotes] = useState([]);       // notes of the claim currently open in the modal
   const [claimTab, setClaimTab] = useState("all");        // all | open | investigating | resolved | denied
   const [claimSearch, setClaimSearch] = useState("");     // job # / client / description / assigned
@@ -4960,6 +5043,16 @@ export default function App() {
   const loadClaims = useCallback(async () => {
     const { data, error } = await selectAll(() => supabase.from("claims").select("*").order("created_at", { ascending: false }));
     if (!error) setClaims((data || []).filter(notDel));
+  }, []);
+  // Open requests plus the last 30 days of handled ones, so a job still shows
+  // what was asked and who resolved it.
+  const loadCustRequests = useCallback(async () => {
+    const since = new Date(Date.now() - 30 * ONE_DAY).toISOString();
+    const { data, error } = await selectAll(() => supabase.from("customer_requests").select("*")
+      .or(`status.in.(open,in_progress),created_at.gte.${since}`).order("created_at", { ascending: false }));
+    if (error) { if (error.code === "42P01" || error.code === "PGRST205") setCustRequestsMissing(true); return; }
+    setCustRequestsMissing(false);
+    setCustRequests((data || []).filter(notDel));
   }, []);
   const loadClaimNotes = useCallback(async (claimId) => {
     if (!claimId) { setClaimNotes([]); return; }
@@ -5673,6 +5766,21 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, claimsMissing, loadClaims, loadClaimNotes]);
+
+  // The table comes from scripts/setup-customer-line.sql (run by hand); until
+  // it exists the inbox just stays hidden.
+  const canSeeCustRequests = can("dispatching", "view") || can("jobs", "view");
+  useEffect(() => {
+    if (!session || !canSeeCustRequests) return;
+    loadCustRequests();
+  }, [session, canSeeCustRequests, loadCustRequests]);
+  useEffect(() => {
+    if (!session || !canSeeCustRequests || custRequestsMissing) return;
+    const channel = supabase.channel("customer-requests-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "customer_requests" }, () => loadCustRequests())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, canSeeCustRequests, custRequestsMissing, loadCustRequests]);
 
   // Probe the Expenses module (expenses + driver_work_days + material tables).
   useEffect(() => {
@@ -7103,6 +7211,24 @@ export default function App() {
   useEffect(() => { setPickupEditor(null); }, [jobDetailKey]);
 
   const userEmail = session?.user?.email || null;
+
+  // Customer Line inbox: a person moves each request along. The job itself is
+  // edited by hand, never by the voice agent.
+  const custReqJobByNumber = useMemo(() => {
+    const m = new Map();
+    for (const j of jobs) { const k = normJobNumber(j.job_number); if (k && !m.has(k)) m.set(k, j); }
+    return m;
+  }, [jobs]);
+  const custReqJob = (r) => (r.verified && r.job_number ? custReqJobByNumber.get(normJobNumber(r.job_number)) || null : null);
+  const custReqWho = (email) => { const p = teamPeople.find(pp => pp.email === email); return p ? personLabel(p) : (email || "").split("@")[0]; };
+  const setCustRequestStatus = async (r, status) => {
+    if (status === "dismissed" && !window.confirm(tr(`Dismiss ${custReqRef(r)}? Nobody will follow up on it.`, `¿Descartar ${custReqRef(r)}? Nadie le va a dar seguimiento.`))) return;
+    const patch = status === "open"
+      ? { status, handled_by: null, handled_at: null }
+      : { status, handled_by: userEmail, handled_at: new Date().toISOString() };
+    if (dbFailed(await supabase.from("customer_requests").update(patch).eq("id", r.id), "customer_requests")) return;
+    loadCustRequests();
+  };
   // Apply / revert the Spanish UI overlay whenever the language changes.
   useEffect(() => {
     try { localStorage.setItem("lang", lang); } catch { /* ignore */ }
@@ -10416,6 +10542,12 @@ export default function App() {
             </div>
           )}
 
+          {page === "dispatching" && canSeeCustRequests && !custRequestsMissing && custRequests.some(custReqIsOpen) && (
+            <CustomerRequestsCard rows={custRequests.filter(custReqIsOpen)} jobOf={custReqJob}
+              onOpenJob={(r) => { const j = custReqJob(r); if (j) setJobDetailKey(jobKey(j)); }}
+              onSetStatus={setCustRequestStatus} canEdit={isAdmin || can("dispatching", "edit")} whoLabel={custReqWho} />
+          )}
+
           {/* ══ TODAY ══ */}
           {dispatchView === "today" && (<>
             {/* Five numbers, each one a filter. */}
@@ -13325,7 +13457,13 @@ export default function App() {
         // ── Needs attention: what is actually wrong with THIS job. Shared by the
         //    Overview chips, the tab dot and the header. Each flag knows which
         //    tab holds the field that fixes it. ──
+        const jobCustReqs = (canSeeCustRequests && !custRequestsMissing && jobDetail.job_number)
+          ? custRequests.filter(r => r.verified && normJobNumber(r.job_number) === normJobNumber(jobDetail.job_number))
+              .sort((a, b) => Number(custReqIsOpen(b)) - Number(custReqIsOpen(a)))
+          : [];
+        const jobCustReqsOpen = jobCustReqs.filter(custReqIsOpen).length;
         const flags = [];
+        if (jobCustReqsOpen > 0) flags.push({ ic:"📞", c:"#A32D2D", tab:"overview", l: tr(`${jobCustReqsOpen} open customer request(s)`, `${jobCustReqsOpen} pedido(s) del cliente abierto(s)`) });
         if (faddDays !== null && faddDays < 0) flags.push({ ic:"⚠️", c:"#A32D2D", tab:"details", l: tr(`FADD ${Math.abs(faddDays)} days overdue`, `FADD vencido hace ${Math.abs(faddDays)} días`) });
         if (!jobDetail.fadd) flags.push({ ic:"📅", c:"#C2410C", tab:"details", l: tr("No FADD set", "Sin FADD") });
         if (!jobDetail.delivery_date) flags.push({ ic:"📦", c:"#C2410C", tab:"details", l: tr("No delivery date set", "Sin fecha de delivery") });
@@ -13526,6 +13664,11 @@ export default function App() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* ── Customer Line: what the customer asked the voice agent for. ── */}
+            {jobCustReqs.length > 0 && (
+              <CustomerRequestsCard rows={jobCustReqs} onSetStatus={setCustRequestStatus} canEdit={isMgr} whoLabel={custReqWho} />
             )}
 
             {/* ── Pickup date editor: opened from the ⋯ menu, or shown as a
