@@ -34,7 +34,7 @@ create table if not exists public.customer_line_events (
   created_at timestamptz not null default now(),
   conversation_id text,
   tool text not null,
-  outcome text not null,     -- verified | verify_failed | job_locked | staged | submitted | callback
+  outcome text not null,     -- verified | verify_failed | job_locked | staged | submitted | callback | callback_updated
   job_ref text,              -- normalized job number (what the caller said, or the verified job)
   detail jsonb
 );

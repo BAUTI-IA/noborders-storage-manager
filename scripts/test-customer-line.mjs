@@ -161,7 +161,12 @@ function memoryStore(jobRows, ledger = {}) {
       return true;
     },
     async findRecentChange(cid, since) { return s.requests.filter((r) => r.conversation_id === cid && r.kind === "change" && r.created_at >= since).at(-1) || null; },
-    async findOpenCallback(cid, topic) { return s.requests.find((r) => r.conversation_id === cid && r.kind === "callback" && r.topic === topic) || null; },
+    async findOpenCallback(cid, topic) { const r = s.requests.find((x) => x.conversation_id === cid && x.kind === "callback" && x.topic === topic); return r ? { ...r } : null; },
+    async updateRequestIf(id, expected, patch) {
+      const row = s.requests.find((r) => r.id === id);
+      if (!row || Object.entries(expected).some(([k, v]) => (row[k] ?? null) !== v)) return null;
+      return { ...Object.assign(row, patch) };
+    },
   };
   return s;
 }
@@ -292,8 +297,53 @@ const call = (s, tool, input, extra = {}) => runCustomerLineTool({
   eq("…con caller ID alcanza; el job que dice NO queda como verificado",
     [r.ok, s.requests[0].callback_phone, s.requests[0].job_number, s.requests[0].claimed_job_number, s.requests[0].verified],
     [true, "3055550100", null, "7001", false]);
-  const dup = await call(s, "request_callback", { topic: "quote", reason: "again" }, { callerId: "+13055550100" });
-  eq("mismo tema en la misma llamada no duplica", [dup.already_submitted, s.requests.length], [true, 1]);
+  const dup = await call(s, "request_callback", { topic: "quote", reason: "Wants a quote Miami → Boston", caller_name: "Bob" }, { callerId: "+13055550199" });
+  eq("mismo tema en la misma llamada no duplica; el caller ID no pisa el teléfono",
+    [dup.already_submitted, s.requests.length, s.requests[0].callback_phone], [true, 1, "3055550100"]);
+  const more = await call(s, "request_callback", { topic: "quote", reason: "Move date is Nov 3", best_time: "mornings" });
+  eq("no verificado: agregar datos no vuelve a pedir el teléfono", [more.ok, more.updated, s.requests[0].best_time], [true, true, "mornings"]);
+}
+
+// Seen live (voice test 3): the agent logged the callback before asking for a
+// phone, then called again with the phone and time; "already logged" dropped
+// both while the agent told the caller they were noted.
+{
+  const s = memoryStore(JOB);
+  const sent = [];
+  const notify = async (t) => { sent.push(t); return true; };
+  await call(s, "verify_and_get_job", { job_number: "7001", zip: "07102" });
+  const first = await call(s, "request_callback", { topic: "refund", reason: "Angry, wants a refund: no delivery date yet.", caller_name: "Jane", best_time: "As soon as possible", urgency: "urgent" }, { notify });
+  const second = await call(s, "request_callback", { topic: "refund", reason: "Wants a call tonight at 305 555 0188.", caller_name: "Jane", callback_phone: "305 555 0188", best_time: "Today, by tonight", urgency: "urgent" }, { notify, callerId: "+19735550142" });
+  const row = s.requests[0];
+  eq("el segundo callback agrega al mismo CB",
+    [first.reference, second.reference, second.updated, second.already_submitted, s.requests.length], ["CB-100", "CB-100", true, undefined, 1]);
+  eq("…con el teléfono y el horario que dijo después",
+    [row.callback_phone, row.best_time, row.urgency], ["3055550188", "Today, by tonight", "urgent"]);
+  eq("…y el motivo nuevo sin perder el primero", row.details, "Angry, wants a refund: no delivery date yet.\nUpdate: Wants a call tonight at 305 555 0188.");
+  ok("la instrucción dice exactamente qué se agregó", /phone number, preferred time, the new details/.test(second.instruction));
+  ok("el equipo recibe el CB actualizado", sent.length === 2 && sent[1].includes("callback CB-100 updated") && sent[1].includes("Phone: (305) 555-0188") && sent[1].includes("Best time: Today, by tonight"));
+  const retry = await call(s, "request_callback", { topic: "refund", reason: "Wants a call tonight at 305 555 0188.", callback_phone: "3055550188", best_time: "Today, by tonight" }, { notify });
+  eq("un reintento idéntico no cambia nada ni avisa de nuevo", [retry.already_submitted, sent.length, s.requests[0].details], [true, 2, row.details]);
+}
+
+{
+  // Two overlapping follow-ups with the same news: one update, one notice.
+  const s = memoryStore(JOB);
+  const sent = [];
+  const notify = async (t) => { sent.push(t); return true; };
+  await call(s, "verify_and_get_job", { job_number: "7001", zip: "07102" });
+  await call(s, "request_callback", { topic: "refund", reason: "Wants a refund." }, { notify });
+  let open;
+  const gate = new Promise((r) => { open = r; });
+  const update = s.api.updateRequestIf;
+  s.api.updateRequestIf = async (...a) => { await gate; return update(...a); };
+  const both = Promise.all([1, 2].map(() => call(s, "request_callback", { topic: "refund", reason: "Wants a refund.", callback_phone: "3055550188" }, { notify })));
+  await new Promise((r) => setTimeout(r, 0));
+  open();
+  const [a, b] = await both;
+  eq("dos reintentos superpuestos: un solo update y un solo aviso",
+    [[a.updated, b.updated].filter(Boolean).length, [a.already_submitted, b.already_submitted].filter(Boolean).length, sent.length, s.requests[0].callback_phone],
+    [1, 1, 2, "3055550188"]);
 }
 
 {
