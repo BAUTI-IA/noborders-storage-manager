@@ -10,6 +10,9 @@ servidor: el endpoint con las tools del agente y por qué está armado así.
 > `x-agent-secret`, corre como un usuario del CRM y puede leer y escribir todo
 > lo que ese usuario puede. Esta línea no comparte nada con él.
 
+El caso de negocio (quién paga, cuánto cuesta hoy la cola y cuánto el agente) está en
+[customer-line-business-case.md](./customer-line-business-case.md).
+
 ## Por qué está armado así
 
 **Mínimo privilegio por diseño, no por configuración.** Detrás de esta puerta
