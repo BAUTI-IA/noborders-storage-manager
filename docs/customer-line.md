@@ -44,6 +44,16 @@ Lo que queda escrito es exactamente lo que el cliente escuchó y aprobó. Un
 read-back de más de 15 minutos ya no se puede confirmar. Un doble "sí"
 devuelve la misma referencia en vez de crear un segundo pedido.
 
+**Un reintento tampoco duplica.** Si el servidor tarda más que el límite de la
+tool, ElevenLabs corta y el modelo reintenta mientras el primer pedido todavía
+se está guardando (pasó en una prueba real: un timeout de 10 s y después "let
+me try that once more"). Por eso la confirmación primero *reclama* la copia
+guardada con un compare-and-swap sobre `staged_at`: solo la llamada que la gana
+escribe el pedido. Las demás esperan unos segundos a que aparezca y devuelven
+esa misma referencia; si todavía no está, piden reintentar sin volver a leer el
+pedido. Si el guardado falla, la copia se devuelve y el mismo "sí" se puede
+reintentar. Las tres tools esperan 20 s (antes 10).
+
 **Nunca modifica el job.** Los pedidos van a `customer_requests`, dispatch se
 entera por Telegram y los ve en el CRM: en la bandeja de Dispatch y en la ficha
 del job. Los aprueba un humano.

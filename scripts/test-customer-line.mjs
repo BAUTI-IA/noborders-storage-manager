@@ -147,7 +147,14 @@ function memoryStore(jobRows, ledger = {}) {
     async saveSession(cid, patch) { s.sessions.set(cid, { ...(s.sessions.get(cid) || { conversation_id: cid, failed_attempts: 0 }), ...patch }); },
     async recentJobFailures(ref, since) { return s.events.filter((e) => e.job_ref === ref && e.outcome === "verify_failed" && (e.created_at || NOW.toISOString()) >= since).length; },
     async logEvent(e) { s.events.push(e); },
-    async insertRequest(r) { const row = { id: s.nextId++, status: "open", ...r }; s.requests.push(row); return row; },
+    async insertRequest(r) { const row = { id: s.nextId++, status: "open", created_at: NOW.toISOString(), ...r }; s.requests.push(row); return row; },
+    async claimStaged(cid, stagedAt, claimedAt) {
+      const x = s.sessions.get(cid);
+      if (!x || x.staged_at !== stagedAt) return false;
+      s.sessions.set(cid, { ...x, staged_at: null, last_request_id: null, last_request_at: claimedAt });
+      return true;
+    },
+    async findRecentChange(cid, since) { return s.requests.filter((r) => r.conversation_id === cid && r.kind === "change" && r.created_at >= since).at(-1) || null; },
     async findOpenCallback(cid, topic) { return s.requests.find((r) => r.conversation_id === cid && r.kind === "callback" && r.topic === topic) || null; },
   };
   return s;
@@ -155,7 +162,7 @@ function memoryStore(jobRows, ledger = {}) {
 const JOB = [{ id: 31, job_number: "7001", customer: "Jane Doe", created_at: "2026-09-01", status: "out_for_delivery", delivery_zip: "07102", client_phone: "9735550142", delivery_city: "Newark", delivery_state: "NJ", delivery_balance: 2340 }];
 const call = (s, tool, input, extra = {}) => runCustomerLineTool({
   tool, input, conversationId: extra.cid || "conv_1", callerId: extra.callerId || null,
-  deps: { store: s.api, notify: extra.notify || (async () => true), now: extra.now || NOW },
+  deps: { store: s.api, notify: extra.notify || (async () => true), now: extra.now || NOW, sleep: extra.sleep || (async () => {}) },
 });
 
 {
@@ -226,6 +233,48 @@ const call = (s, tool, input, extra = {}) => runCustomerLineTool({
   await call(s, "request_change", { kind: "other", details: "x" });
   const late = await call(s, "request_change", { confirmed: true }, { now: new Date(NOW.getTime() + 20 * 60000) });
   eq("un read-back vencido no se confirma", late.error, "nothing_staged");
+}
+
+{
+  // A confirmation slow enough for the platform to time out, and the model's
+  // retry arriving while the first one is still filing (seen live: a 10 s tool
+  // timeout, then "let me try that once more").
+  const s = memoryStore(JOB);
+  await call(s, "verify_and_get_job", { job_number: "7001", zip: "07102" });
+  await call(s, "request_change", { kind: "delivery_date", details: "Move it to Oct 14", preferred_date: "2026-10-14" });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  setTimeout(() => release(), 50);  // so code that never waits fails the check instead of hanging
+  const insert = s.api.insertRequest;
+  s.api.insertRequest = async (r) => { await gate; return insert(r); };
+  const first = call(s, "request_change", { confirmed: true });
+  const retry = call(s, "request_change", { confirmed: true }, { sleep: async () => { release(); await new Promise((r) => setTimeout(r, 0)); } });
+  const [a, b] = await Promise.all([first, retry]);
+  eq("un reintento mientras el primero sigue guardando no duplica el pedido",
+    [s.requests.length, a.submitted, b.reference, b.already_submitted], [1, true, a.reference, true]);
+}
+
+{
+  const s = memoryStore(JOB);
+  await call(s, "verify_and_get_job", { job_number: "7001", zip: "07102" });
+  await call(s, "request_change", { kind: "delivery_date", details: "Move it to Oct 14" });
+  const s2claim = await s.api.claimStaged("conv_1", s.sessions.get("conv_1").staged_at, NOW.toISOString());
+  const waiting = await call(s, "request_change", { confirmed: true });
+  eq("si el otro sigue guardando sin terminar, pide esperar y no vuelve a stagear", [s2claim, waiting.error, s.requests.length], [true, "submitting", 0]);
+}
+
+{
+  const s = memoryStore(JOB);
+  await call(s, "verify_and_get_job", { job_number: "7001", zip: "07102" });
+  await call(s, "request_change", { kind: "delivery_date", details: "Move it to Oct 14" });
+  const insert = s.api.insertRequest;
+  let fail = true;
+  s.api.insertRequest = async (r) => { if (fail) { fail = false; throw new Error("db down"); } return insert(r); };
+  let threw = false;
+  try { await call(s, "request_change", { confirmed: true }); } catch { threw = true; }
+  const retry = await call(s, "request_change", { confirmed: true });
+  eq("si el guardado falla, el mismo sí se reintenta sin otro read-back",
+    [threw, retry.submitted, retry.already_submitted, s.requests.length], [true, true, undefined, 1]);
 }
 
 {
