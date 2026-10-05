@@ -57,7 +57,8 @@ reintentar. Las tres tools esperan 20 s (antes 10).
 **Un callback por tema y por llamada, que se completa.** Si el agente vuelve a
 llamar a `request_callback` con el mismo tema, el servidor no crea otro: agrega
 al mismo CB lo que el cliente dijo después (teléfono, horario, nombre, un motivo
-nuevo; la urgencia solo sube) y manda a Telegram *"callback CB-6 updated"* con
+nuevo; la urgencia solo sube). Si el motivo nuevo ya incluye el anterior (el
+agente suele reenviar todo más la novedad), lo reemplaza en vez de repetirlo y manda a Telegram *"callback CB-6 updated"* con
 todo. Se aplica con un compare-and-swap sobre esos campos, así que dos
 reintentos superpuestos actualizan y avisan una sola vez; un reintento idéntico
 no cambia nada. Antes respondía "ya está registrado" y descartaba lo nuevo: en

@@ -326,6 +326,18 @@ const call = (s, tool, input, extra = {}) => runCustomerLineTool({
   eq("un reintento idéntico no cambia nada ni avisa de nuevo", [retry.already_submitted, sent.length, s.requests[0].details], [true, 2, row.details]);
 }
 
+// Seen live (voice test 3, re-run): the agent resent the whole first reason
+// plus the news, and the team read the first paragraph twice.
+{
+  const s = memoryStore(JOB);
+  await call(s, "verify_and_get_job", { job_number: "7001", zip: "07102" });
+  const first = "Upset: delivery not scheduled yet. Requesting a refund.";
+  await call(s, "request_callback", { topic: "refund", reason: first, best_time: "after 3 pm", callback_phone: "3055550188" });
+  const r = await call(s, "request_callback", { topic: "refund", reason: `${first} Updated preferred time to after 6 pm.`, best_time: "after 6 pm", callback_phone: "3055550188" });
+  eq("si el motivo nuevo ya incluye el anterior, lo reemplaza en vez de repetirlo",
+    [r.updated, s.requests[0].details, s.requests[0].best_time], [true, `${first} Updated preferred time to after 6 pm.`, "after 6 pm"]);
+}
+
 {
   // Two overlapping follow-ups with the same news: one update, one notice.
   const s = memoryStore(JOB);
