@@ -221,7 +221,7 @@ const call = (s, tool, input, extra = {}) => runCustomerLineTool({
     [s.requests.length, s.requests[0].topic, s.requests[0].details, s.requests[0].job_number, s.requests[0].verified],
     [1, "delivery_date", "Move delivery to Oct 14, mornings", "7001", true]);
   eq("referencia", done.reference, `CR-${s.requests[0].id}`);
-  ok("dispatch recibe el aviso con la referencia", pings[0]?.includes(done.reference) && pings[0].includes("Nada se modificó"));
+  ok("dispatch recibe el aviso con la referencia", pings[0]?.includes(done.reference) && pings[0].includes("Nothing on the job has changed"));
 
   const again = await call(s, "request_change", { confirmed: true });
   eq("doble 'sí' no duplica el pedido", [again.already_submitted, again.reference, s.requests.length], [true, done.reference, 1]);
@@ -294,7 +294,7 @@ const call = (s, tool, input, extra = {}) => runCustomerLineTool({
   const r = await call(s, "request_callback", { topic: "refund", reason: "Wants a refund for the delay", urgency: "urgent" }, { notify: async () => false });
   eq("verificado: el callback lleva el job; Telegram caído no pierde el pedido",
     [r.ok, r.team_notified, s.requests[0].job_number, s.requests[0].verified, s.requests[0].urgency], [true, false, "7001", true, "urgent"]);
-  ok("el aviso del callback marca la urgencia", teamMessage(s.requests[0]).includes("URGENTE"));
+  ok("el aviso del callback marca la urgencia", teamMessage(s.requests[0]).includes("URGENT"));
 }
 
 // ── The door (api/agent-hub.mjs) ─────────────────────────────────────────────
