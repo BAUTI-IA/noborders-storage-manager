@@ -180,9 +180,19 @@ Las descripciones van en inglés porque las lee el modelo.
 | Parámetro | Tipo | Descripción para el LLM |
 |---|---|---|
 | `kind` | enum: `delivery_date`, `delivery_address`, `pickup_date`, `contact_info`, `storage`, `other` | What they want changed. |
-| `details` | string | The request in one or two sentences, in the caller's words. |
+| `details` | string | What the coordinator needs besides the date, in a few words: the new address or contact details for those changes, otherwise the reason or any condition the caller gave ("traveling until then", "mornings only"). Don't repeat the date or the job number. |
 | `preferred_date` | string | YYYY-MM-DD if they asked for a specific date, else empty. |
 | `confirmed` | boolean | false to stage and get the readback; true only after the caller said yes to it. |
+
+La tool no habla antes de ejecutarse (`pre_tool_speech: off`): responde en menos
+de 1,5 s y el relleno automático decía cosas como "I will stage that request".
+
+El read-back lo arma el servidor para que se escuche bien: la fecha una sola
+vez, como se dice ("Wednesday, October 14", sin año), y después la nota:
+*"Move the delivery of job DEMO-7001 to Wednesday, October 14. Note: you're
+traveling until then. Nothing changes until a coordinator confirms it with you."*
+En un cambio de dirección o de contacto la nota es el pedido mismo. Lo que se
+lee sigue siendo exactamente lo que se guarda.
 
 ### `request_callback`
 
