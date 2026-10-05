@@ -6,7 +6,7 @@
 //   node scripts/test-customer-line.mjs
 import {
   normJobNumber, jobSearchFragment, matchingJobs, zip5, last4, factorsMatch, cityLevel, firstName,
-  jobBalance, customerSnapshot, deliverySummary, validateChange, callbackPhone, teamMessage, MAX_FAILED_PER_CALL, MAX_FAILED_PER_JOB,
+  jobBalance, customerSnapshot, deliverySummary, validateChange, changeReadback, callbackPhone, teamMessage, MAX_FAILED_PER_CALL, MAX_FAILED_PER_JOB,
 } from "../lib/customerLineData.mjs";
 import { runCustomerLineTool } from "../lib/customerLine.mjs";
 import { customerLine } from "../api/agent-hub.mjs";
@@ -134,6 +134,12 @@ eq("entregado", deliverySummary({ delivered: true, deliveredOn: "2026-09-30" }),
 eq("sin FADD ni fecha", deliverySummary({}), "Delivery is not scheduled yet, and there is no first available delivery date on file.");
 eq("cambio: kind inválido", validateChange({ kind: "teleport", details: "x" }).ok, false);
 eq("cambio: sin detalle", validateChange({ kind: "delivery_date" }).ok, false);
+eq("read-back de dirección: el detalle es el pedido",
+  changeReadback("DEMO-7001", { kind: "delivery_address", details: "New address is 45 Elm St, Newark NJ 07102.", preferred_date: null }),
+  "Change the delivery address on job DEMO-7001: New address is 45 Elm St, Newark NJ 07102. Nothing changes until a coordinator confirms it with you.");
+eq("read-back de fecha sin día concreto: se lee el detalle",
+  changeReadback("DEMO-7001", { kind: "delivery_date", details: "Any day after the 14th", preferred_date: null }),
+  "Change the delivery date on job DEMO-7001: Any day after the 14th. Nothing changes until a coordinator confirms it with you.");
 eq("teléfono de callback: 10 dígitos", callbackPhone("+1 (305) 555-0100"), "3055550100");
 eq("teléfono de callback: incompleto no sirve", callbackPhone("555-0100", null), null);
 
@@ -212,6 +218,8 @@ const call = (s, tool, input, extra = {}) => runCustomerLineTool({
 
   const staged = await call(s, "request_change", { kind: "delivery_date", details: "Move delivery to Oct 14, mornings", preferred_date: "2026-10-14" });
   ok("el read-back nombra el job y el pedido", staged.staged && staged.readback.includes("7001") && staged.readback.includes("Oct 14"));
+  eq("el read-back dice la fecha como se habla, una vez y sin año",
+    staged.readback, "Move the delivery of job 7001 to Wednesday, October 14. Note: Move delivery to Oct 14, mornings. Nothing changes until a coordinator confirms it with you.");
   eq("stagear no escribe nada", s.requests.length, 0);
 
   const pings = [];
