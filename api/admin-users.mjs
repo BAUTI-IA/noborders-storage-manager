@@ -7,7 +7,10 @@
 //   SUPABASE_SERVICE_ROLE_KEY  - service role key (bypasses RLS)
 //   SUPABASE_URL (or VITE_SUPABASE_URL) - project URL
 //   APP_URL - public app origin, used for invite/redirect links
+//   RESEND_API_KEY / NOTIFY_EMAIL_FROM - optional, email copies of the
+//     notifications bell (`notify_email`, see lib/notifyEmail.mjs)
 import { createClient } from "@supabase/supabase-js";
+import { emailConfig, emailMentionNotifications } from "../lib/notifyEmail.mjs";
 
 // Env values pasted into Vercel often carry stray whitespace/newlines or wrapping
 // quotes; any of those makes the key silently invalid (every call fails 401).
@@ -43,6 +46,7 @@ export default async function handler(req, res) {
       supabase_url_source: process.env.SUPABASE_URL ? "SUPABASE_URL" : (process.env.VITE_SUPABASE_URL ? "VITE_SUPABASE_URL" : "ninguna"),
       service_key: serviceKeyFormat(),
       app_url: APP_URL || "(no configurada)",
+      notify_email: (() => { const c = emailConfig(); return c.apiKey && c.from ? `ok (from ${c.from})` : `desactivado: falta ${[!c.apiKey && "RESEND_API_KEY", !c.from && "NOTIFY_EMAIL_FROM"].filter(Boolean).join(" y ")}`; })(),
     };
     if (!admin) {
       res.status(200).json({ ...report, admin_api: "NO CONFIGURADA: falta SUPABASE_SERVICE_ROLE_KEY o SUPABASE_URL" });
@@ -91,6 +95,18 @@ export default async function handler(req, res) {
       .eq("id", user.id);
     if (error) { res.status(500).json({ error: error.message }); return; }
     res.status(200).json({ ok: true });
+    return;
+  }
+
+  // Any authenticated user who just tagged teammates on a job note: email them
+  // a copy of the notification. Only the caller's own, fresh, never-emailed
+  // notifications for that note are sent (lib/notifyEmail.mjs), so the payload
+  // can't aim an email at anyone the caller didn't tag.
+  if ((req.body || {}).action === "notify_email") {
+    const out = await emailMentionNotifications({
+      db: admin, userId: user.id, eventId: req.body.payload?.event_id, appUrl: APP_URL, ...emailConfig(),
+    });
+    res.status(out.status).json(out.body);
     return;
   }
 

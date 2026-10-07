@@ -5,7 +5,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { BolSection } from "./bol.jsx";
 import { MessagesSection, notifyUser } from "./messages.jsx";
-import { NotificationsBell, sendMentionNotifications } from "./notifications.jsx";
+import { NotificationsBell, sendMentionNotifications, emailMentionCopies } from "./notifications.jsx";
 import { personLabel, mentionPattern, composeNote, mentionQuery, mentionSuggestions, applyMention } from "./notificationsData.js";
 import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
@@ -9126,6 +9126,7 @@ export default function App() {
     const res = await sendMentionNotifications({ supabase, fromId: me, fromName: who, toIds: taggedIds,
       job: { id: repId, job_number: job?.job_number, customer: job?.customer }, eventId: ev?.id, body: stored });
     let ok = res.sent;
+    if (res.sent) emailMentionCopies({ session, eventId: ev?.id });
     if (res.missing) {
       const jn = job?.job_number ? `Job ${job.job_number}` : "Job";
       const alert = `📝 ${jn}${job?.customer ? ` · ${job.customer}` : ""}\n${body}\n— ${who}`;
@@ -9134,6 +9135,25 @@ export default function App() {
     }
     showToast(ok ? tr(`Note added · ${ok} teammate(s) alerted`, `Nota agregada · ${ok} compañero(s) alertado(s)`) : "Note added");
   }
+  // Email links land here as ?job=<row id>&notif=<id> (lib/notifyEmail.mjs):
+  // once signed in and the jobs are loaded, open that job on Activity, mark
+  // the notification read, and drop the params so a reload doesn't reopen it.
+  const deepLink = useRef((() => {
+    try { const sp = new URLSearchParams(window.location.search); return sp.get("job") ? { job: sp.get("job"), notif: sp.get("notif") } : null; } catch { return null; }
+  })());
+  useEffect(() => {
+    const dl = deepLink.current;
+    if (!dl || !session || !jobs.length) return;
+    deepLink.current = null;
+    try {
+      const sp = new URLSearchParams(window.location.search); sp.delete("job"); sp.delete("notif");
+      window.history.replaceState(null, "", window.location.pathname + (sp.toString() ? "?" + sp : "") + window.location.hash);
+    } catch { /* ignore */ }
+    openNotification({ job_id: Number(dl.job) });
+    if (dl.notif) (async () => {
+      dbFailed(await supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("id", dl.notif).is("read_at", null), "notifications", { quiet: true });
+    })();
+  }, [session, jobs]);
   // The bell: open the job a notification is about, on its Activity tab.
   function openNotification(n) {
     const byId = n.job_id != null ? jobKeyByRowId[n.job_id] : null;

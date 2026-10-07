@@ -2,6 +2,7 @@
 // Notifications bell: one row per alert addressed to a teammate (today, the
 // @mentions on dispatch notes). Each user reads and marks only their own rows;
 // the author of the note inserts them. Realtime makes the bell update live.
+// emailed_at marks the ones already copied by email (lib/notifyEmail.mjs).
 //
 // Usage (Node 18+):
 //   SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-notifications.mjs
@@ -20,8 +21,10 @@ const SQL = `create table if not exists public.notifications (
   event_id bigint,
   body text,
   read_at timestamptz,
+  emailed_at timestamptz,
   created_at timestamptz not null default now()
 );
+alter table public.notifications add column if not exists emailed_at timestamptz;
 create index if not exists notifications_user_idx on public.notifications (user_id, created_at desc);
 alter table public.notifications enable row level security;
 drop policy if exists "notifications_select_own" on public.notifications;

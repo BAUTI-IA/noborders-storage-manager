@@ -22,8 +22,10 @@ export const NOTIFICATIONS_SQL = `create table if not exists public.notification
   event_id bigint,
   body text,
   read_at timestamptz,
+  emailed_at timestamptz,
   created_at timestamptz not null default now()
 );
+alter table public.notifications add column if not exists emailed_at timestamptz;
 create index if not exists notifications_user_idx on public.notifications (user_id, created_at desc);
 alter table public.notifications enable row level security;
 drop policy if exists "notifications_select_own" on public.notifications;
@@ -58,6 +60,21 @@ export async function sendMentionNotifications({ supabase, fromId, fromName, toI
   if (isMissingErr(res.error)) return { sent: 0, missing: true };
   if (dbFailed(res, "notifications")) return { sent: 0, missing: false };
   return { sent: rows.length, missing: false };
+}
+
+// Email copy of the alert, sent server side (api/admin-users.mjs →
+// lib/notifyEmail.mjs) for the notifications this note just created. Best
+// effort: the bell already has them, so a failure is only logged — and with
+// no email provider configured the server simply skips it.
+export function emailMentionCopies({ session, eventId }) {
+  if (!session?.access_token || eventId == null) return;
+  fetch("/api/admin-users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.access_token },
+    body: JSON.stringify({ action: "notify_email", payload: { event_id: eventId } }),
+  })
+    .then(r => r.ok ? r.json().then(j => { if (j.failed) console.warn("[notify_email]", j); }) : r.text().then(t => console.warn("[notify_email]", r.status, t)))
+    .catch(e => console.warn("[notify_email]", e?.message || e));
 }
 
 const PURPLE = "#6D28D9";
