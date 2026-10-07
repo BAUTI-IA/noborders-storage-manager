@@ -5,6 +5,8 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { BolSection } from "./bol.jsx";
 import { MessagesSection, notifyUser } from "./messages.jsx";
+import { NotificationsBell, sendMentionNotifications } from "./notifications.jsx";
+import { personLabel, mentionPattern, composeNote, mentionQuery, mentionSuggestions, applyMention } from "./notificationsData.js";
 import { AgentChatWidget } from "./agentChat.jsx";
 import { SuggestionsSection } from "./suggestions.jsx";
 import { ReportsSection, TRUCK_PINGS_SQL } from "./reports.jsx";
@@ -3809,22 +3811,25 @@ const NAV = [
 
 // Flat list of every CRM section id (drives the permissions grid + page fallback).
 const SECTION_IDS = NAV.flatMap(g => g.items.map(it => it.id));
-function Sidebar({ page, setPage, onSignOut, can = () => true, isAdmin = false }) {
+function Sidebar({ page, setPage, onSignOut, can = () => true, isAdmin = false, bell = null }) {
   // Only show sections the user can view; the Users section is admin-only.
   const visibleNav = NAV
     .map(group => ({ ...group, items: group.items.filter(it => it.id === "users" ? isAdmin : (it.id === "suggestions" || it.id === "trash") ? true : can(it.id, "view")) }))
     .filter(group => group.items.length > 0);
   return (
     <div style={{ width:220, flexShrink:0, background:"#fff", borderRight:"1px solid #efefef", display:"flex", flexDirection:"column", height:"100vh", position:"sticky", top:0, alignSelf:"flex-start" }}>
-      <div style={{ padding:"18px 18px 14px", borderBottom:"1px solid #f3f3f3", display:"flex", alignItems:"center", gap:10 }}>
+      <div style={{ padding:"18px 10px 14px 12px", borderBottom:"1px solid #f3f3f3", display:"flex", alignItems:"center", gap:7 }}>
         {/* Brand mark: the No Borders chain-link logo inside a small circle. */}
-        <div style={{ width:36, height:36, borderRadius:"50%", flexShrink:0, background:"#fff", border:"1px solid #e6e6e6", boxShadow:"0 1px 2px rgba(0,0,0,0.06)", display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }}>
-          <img src="/logo-mark.svg" alt="" width={16} height={28} style={{ display:"block" }} />
+        <div style={{ width:30, height:30, borderRadius:"50%", flexShrink:0, background:"#fff", border:"1px solid #e6e6e6", boxShadow:"0 1px 2px rgba(0,0,0,0.06)", display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }}>
+          <img src="/logo-mark.svg" alt="" width={13} height={23} style={{ display:"block" }} />
         </div>
-        <div style={{ minWidth:0 }}>
-          <div style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.01em", lineHeight:1.2 }}>No Borders Moving</div>
-          <div style={{ fontSize:10, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>Operations CRM</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:13, fontWeight:700, letterSpacing:"-0.015em", lineHeight:1.2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>No Borders Moving</div>
+          <div style={{ fontSize:9.5, color:"#aaa", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3, whiteSpace:"nowrap" }}>Operations CRM</div>
         </div>
+        {/* The bell sits here — the sidebar is sticky, so it is on screen on
+            every page and at any scroll, unlike the page header. */}
+        {bell}
       </div>
       <div style={{ flex:1, overflowY:"auto", padding:"10px" }}>
         {visibleNav.map(group => (
@@ -4473,7 +4478,10 @@ export default function App() {
   const [svcEditId, setSvcEditId] = useState(null);
   const [jobMenuOpen, setJobMenuOpen] = useState(false);   // the ⋯ menu in the drawer header
   const [actFilter, setActFilter] = useState("all");       // Activity tab: all | notes | events | claims
-  useEffect(() => { setJobTab("overview"); setNoteDraft(""); setNoteMentions([]); setSvcEditId(null); setJobMenuOpen(false); setActFilter("all"); }, [jobDetailKey]);
+  // A job opened from the notifications bell starts on Activity (where the
+  // note it points at lives); every other way in starts on Overview.
+  const jobTabOnOpen = useRef(null);
+  useEffect(() => { setJobTab(jobTabOnOpen.current || "overview"); jobTabOnOpen.current = null; setNoteDraft(""); setNoteMentions([]); setSvcEditId(null); setJobMenuOpen(false); setActFilter("all"); }, [jobDetailKey]);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -4822,7 +4830,6 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [session]);
-  const personLabel = useCallback((p) => (p?.full_name || "").trim() || (p?.email || "").split("@")[0] || "user", []);
 
   // Save the current user's own display name (any user can edit their own).
   async function saveMyName() {
@@ -9101,26 +9108,41 @@ export default function App() {
   async function saveJobNote(repId, job) {
     const body = noteDraft.trim();
     if (!body || jobEventsMissing) return;
-    // Tagged teammates are recorded inside the note text as @name, so the thread
-    // still reads correctly for anyone opening it later — no extra column needed.
-    const tagged = teamPeople.filter(p => noteMentions.includes(p.id));
-    const stored = tagged.length ? `${tagged.map(p => "@" + personLabel(p)).join(" ")} ${body}` : body;
-    const { error } = await supabase.from("job_events").insert([{ job_id: repId, event_date: today(), event_type: "note", notes: stored, created_by: userEmail }]);
+    // Teammates are tagged by typing @name in the note or with the Alert chips;
+    // chip picks are written into the text as @name too, so the thread still
+    // reads correctly for anyone opening it later — no extra column needed.
+    const me = session?.user?.id || null;
+    const { stored, taggedIds } = composeNote(body, teamPeople, noteMentions, me);
+    const { data: ev, error } = await supabase.from("job_events")
+      .insert([{ job_id: repId, event_date: today(), event_type: "note", notes: stored, created_by: userEmail }]).select("id").single();
     if (error) { window.alert(error.message); return; }
     setNoteDraft(""); setNoteMentions([]);
     await loadJobEvents();
-    // The alert itself: a direct message per tagged teammate, so it lands in the
-    // Chats badge they already watch instead of a channel nobody checks.
-    if (tagged.length && session?.user?.id) {
+    if (!taggedIds.length || !me) { showToast("Note added"); return; }
+    // The alert itself: a row in each tagged teammate's notifications bell.
+    // Until the notifications table exists, fall back to a Chats DM so the
+    // tag still reaches them.
+    const who = profile?.full_name || userEmail;
+    const res = await sendMentionNotifications({ supabase, fromId: me, fromName: who, toIds: taggedIds,
+      job: { id: repId, job_number: job?.job_number, customer: job?.customer }, eventId: ev?.id, body: stored });
+    let ok = res.sent;
+    if (res.missing) {
       const jn = job?.job_number ? `Job ${job.job_number}` : "Job";
-      const who = profile?.full_name || userEmail;
       const alert = `📝 ${jn}${job?.customer ? ` · ${job.customer}` : ""}\n${body}\n— ${who}`;
-      const sent = await Promise.all(tagged.map(p => notifyUser({ supabase, fromId: session.user.id, fromName: who, toId: p.id, body: alert })));
-      const ok = sent.filter(Boolean).length;
-      showToast(ok ? tr(`Note added · ${ok} teammate(s) alerted`, `Nota agregada · ${ok} compañero(s) alertado(s)`) : "Note added");
-      return;
+      const sent = await Promise.all(taggedIds.map(id => notifyUser({ supabase, fromId: me, fromName: who, toId: id, body: alert })));
+      ok = sent.filter(Boolean).length;
     }
-    showToast("Note added");
+    showToast(ok ? tr(`Note added · ${ok} teammate(s) alerted`, `Nota agregada · ${ok} compañero(s) alertado(s)`) : "Note added");
+  }
+  // The bell: open the job a notification is about, on its Activity tab.
+  function openNotification(n) {
+    const byId = n.job_id != null ? jobKeyByRowId[n.job_id] : null;
+    const byNumber = !byId && n.job_number ? jobs.find(j => j.job_number === n.job_number) : null;
+    const k = byId || (byNumber ? jobKey(byNumber) : null);
+    if (!k) { showToast(tr("That job is no longer in the CRM.", "Ese job ya no está en el CRM.")); return; }
+    if (k === jobDetailKey) { setJobTab("activity"); return; }
+    jobTabOnOpen.current = "activity";
+    setJobDetailKey(k);
   }
   // Tell the client their delivery is coming. No mail server involved: the app
   // opens the user's own mail client / WhatsApp with the message pre-written,
@@ -10307,7 +10329,8 @@ export default function App() {
 
   return (
     <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", color:"#111", display:"flex", minHeight:"100vh", background:"#fafafa" }}>
-      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} can={can} isAdmin={isAdmin} />
+      <Sidebar page={page} setPage={setPage} onSignOut={() => supabase.auth.signOut()} can={can} isAdmin={isAdmin}
+        bell={<NotificationsBell supabase={supabase} session={session} isAdmin={isAdmin} onOpen={openNotification} />} />
       <div style={{ flex:1, minWidth:0, padding:"20px 24px 40px" }}>
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:18, flexWrap:"wrap" }}>
         <div style={{ flex:1 }}>
@@ -13441,12 +13464,28 @@ export default function App() {
           .filter(e => partIdSet.has(e.job_id) && (e.event_type === "note" || e.event_type === "service"))
           .slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
         const dayLabel = (d) => d === today() ? tr("Today", "Hoy") : d === shiftDate(today(), -1) ? tr("Yesterday", "Ayer") : d;
-        // Matches "@" + any teammate's display name, longest first, so a
-        // two-word name highlights whole instead of just its first token.
-        const mentionRe = teamPeople.length
-          ? new RegExp("@(" + teamPeople.map(pp => personLabel(pp)).sort((a, b) => b.length - a.length)
-              .map(nm => nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "g")
-          : null;
+        // Matches "@" + any teammate's name (full label or unique first name),
+        // longest first, so a two-word name highlights whole.
+        const mentionRe = mentionPattern(teamPeople);
+        // Typing "@" in a note composer offers teammates to tag; Enter or Tab
+        // takes the first one instead of sending a half-typed name.
+        const mentionSugg = isMgr ? mentionSuggestions(mentionQuery(noteDraft, teamPeople), teamPeople, session?.user?.id) : [];
+        const noteKeyDown = (e) => {
+          if ((e.key === "Enter" || e.key === "Tab") && mentionSugg.length) { e.preventDefault(); setNoteDraft(d => applyMention(d, mentionSugg[0])); return; }
+          if (e.key === "Enter") saveJobNote(repId, jobDetail);
+        };
+        const mentionPicker = mentionSugg.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:5, flexWrap:"wrap", marginTop:7 }}>
+            <span style={{ fontSize:10.5, color:"#999", fontWeight:600 }}>Tag</span>
+            {mentionSugg.map((pp, i) => (
+              <button key={pp.id} onMouseDown={e => e.preventDefault()} onClick={() => setNoteDraft(d => applyMention(d, pp))} title={pp.email || ""}
+                style={{ border:`1px solid ${i === 0 ? "#6D28D9" : "#e3dcf7"}`, background: i === 0 ? "#EDE9FE" : "#fff", color:"#6D28D9", borderRadius:20, padding:"2px 9px", fontSize:11.5, fontWeight:600, cursor:"pointer" }}>
+                @{personLabel(pp)}
+              </button>
+            ))}
+            <span style={{ fontSize:10.5, color:"#bbb" }}>Enter to pick</span>
+          </div>
+        );
         const cityLine = (city, st, zip) => [[city, st].filter(Boolean).join(", "), zip].filter(Boolean).join(" ");
         // Card / label styling shared by every block of the Overview tab.
         const cardS = { background:"#fff", border:"1px solid #efefef", borderRadius:11, padding:"14px 16px" };
@@ -13778,14 +13817,14 @@ export default function App() {
                     {noteRows.length === 0
                       ? <div style={{ fontSize:12.5, color:"#bbb" }}>No notes on this job yet.</div>
                       : (() => { const n = noteRows[0]; return noteRow({ id:"n"+n.id, raw:n, auto: n.event_type === "service", by:n.created_by, date:n.created_at, notes:n.notes }); })()}
-                    {isMgr && (
+                    {isMgr && (<>
                       <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:10 }}>
-                        <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter") saveJobNote(repId, jobDetail); }}
-                          placeholder="Add a note for this job…" style={{ ...inp, flex:1 }} />
+                        <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)} onKeyDown={noteKeyDown}
+                          placeholder="Add a note… type @ to tag a teammate" style={{ ...inp, flex:1 }} />
                         <Btn primary disabled={!noteDraft.trim()} onClick={() => saveJobNote(repId, jobDetail)} style={{ padding:"7px 13px", fontSize:12 }}>Add</Btn>
                       </div>
-                    )}
+                      {mentionPicker}
+                    </>)}
                   </>)}
                 </div>
               </div>
@@ -14116,7 +14155,7 @@ export default function App() {
             );
             return (<>
               {/* ── Dispatch notes: manager writes, everyone reads. ── */}
-              <div style={capS}>Dispatch notes<span style={rightS}>{isMgr ? "manager writes · tagged teammates get a DM" : "written by the dispatch manager"}</span></div>
+              <div style={capS}>Dispatch notes<span style={rightS}>{isMgr ? "manager writes · tagged teammates get a notification" : "written by the dispatch manager"}</span></div>
               {jobEventsMissing ? (
                 <div style={{ fontSize:12, color:"#854F0B", background:"#FAEEDA", border:"1px solid #EF9F27", borderRadius:8, padding:"7px 10px", marginBottom:14 }}>
                   Run the updated SQL to save dispatch notes. <button onClick={() => setShowSetup(true)} style={{ border:"none", background:"none", color:"#854F0B", textDecoration:"underline", cursor:"pointer", fontSize:12 }}>View SQL</button>
@@ -14124,14 +14163,15 @@ export default function App() {
               ) : isMgr ? (
                 <div style={{ ...cardS, marginBottom:14 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:9, marginBottom:8 }}>
-                    <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter") saveJobNote(repId, jobDetail); }}
-                      placeholder="Add a note for this job…" style={{ ...inp, flex:1 }} />
+                    <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)} onKeyDown={noteKeyDown}
+                      placeholder="Add a note… type @ to tag a teammate" style={{ ...inp, flex:1 }} />
                     <Btn primary disabled={!noteDraft.trim()} onClick={() => saveJobNote(repId, jobDetail)} style={{ padding:"7px 13px", fontSize:12 }}>Add note</Btn>
                   </div>
-                  {/* Tag a teammate: each one picked gets a direct message with the
-                      note, so "the client is ready to receive" reaches the person
-                      who has to act on it instead of sitting in a card. */}
+                  {mentionPicker && <div style={{ marginTop:-1, marginBottom:8 }}>{mentionPicker}</div>}
+                  {/* Tag a teammate: each one picked (or typed as @name) gets the
+                      note in their notifications bell, so "the client is ready to
+                      receive" reaches the person who has to act on it instead of
+                      sitting in a card. */}
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                     <span style={{ fontSize:10.5, color:"#999", fontWeight:600 }}>Alert</span>
                     {teamPeople.length === 0 && <span style={{ fontSize:11, color:"#ccc" }}>No teammates to alert</span>}

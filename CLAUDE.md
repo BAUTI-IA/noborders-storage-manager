@@ -2,7 +2,8 @@
 
 React (Vite) single-page CRM backed by Supabase. Main app: `src/App.jsx`; feature
 modules: `src/bank.jsx`, `src/bol.jsx`, `src/expenses.jsx`, `src/messages.jsx`,
-`src/suggestions.jsx`, `src/analytics.jsx`. Serverless endpoints live in `api/`.
+`src/suggestions.jsx`, `src/analytics.jsx`, `src/notifications.jsx` (the sidebar
+bell: @mentions on job notes). Serverless endpoints live in `api/`.
 
 ## Language / i18n — REQUIRED for every new feature
 
