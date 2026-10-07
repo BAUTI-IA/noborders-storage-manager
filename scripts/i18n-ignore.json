@@ -96,6 +96,7 @@
   "mi)",
   "no job",
   "node scripts/setup-chat.mjs",
+  "node scripts/setup-notifications.mjs",
   "node scripts/setup-suggestions.mjs",
   "s/n",
   "scripts/setup-bank-rpc.mjs",
