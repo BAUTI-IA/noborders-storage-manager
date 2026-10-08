@@ -12,6 +12,11 @@
 // because it needs network access and keys.
 //
 //   PLAID_CLIENT_ID=... PLAID_SECRET=<sandbox secret> node scripts/plaid-sandbox-check.mjs
+//
+// In a Claude cloud environment the keys can instead be a network secret for
+// sandbox.plaid.com (headers PLAID-CLIENT-ID and PLAID-SECRET) that the proxy
+// adds to each request; then run it with no keys in env (and
+// NODE_USE_ENV_PROXY=1 so Node's fetch goes through the proxy).
 import assert from "node:assert/strict";
 import {
   plaidConfig, plaidFetch, saveEnrollment, saveLinks, syncAll, feedStatus, composeDigest,
@@ -19,10 +24,10 @@ import {
 } from "../lib/bankFeed.mjs";
 import { fakeDb } from "./fake-supabase.mjs";
 
-const cfg = plaidConfig({ ...process.env, PLAID_ENV: "sandbox" });
+let cfg = plaidConfig({ ...process.env, PLAID_ENV: "sandbox" });
 if (!cfg.ready) {
-  console.error(`Missing ${cfg.missing.join(" and ")} (the Sandbox keys from dashboard.plaid.com → Developers → Keys).`);
-  process.exit(1);
+  console.log(`· no ${cfg.missing.join(" / ")} in env: relying on a network secret for sandbox.plaid.com to add the keys`);
+  cfg = { ...cfg, ready: true };
 }
 
 const db = fakeDb({
