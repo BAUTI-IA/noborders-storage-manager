@@ -1,30 +1,33 @@
-// Bank feed (Chase → Teller → Bancos) and the daily bank email — the pure half.
+// Bank feed (Chase → Plaid → Bancos) and the daily bank email — the pure half.
 //
-// Teller (teller.io) reads the company's bank accounts through the owner's own
-// bank login, connected once from Bancos → Accounts. Every morning the CRM
-// pulls the new POSTED transactions into bank_transactions as `unreviewed`
-// (they still go through categorize → verify like any other line) and builds
-// the daily summary email that scripts/bank-digest-email.gs sends from Gmail.
+// Plaid (plaid.com) reads the company's bank accounts, connected once from
+// Bancos → Accounts: the person signs in on Chase's own page (OAuth) and picks
+// which accounts to share. Every morning the CRM pulls the new POSTED
+// transactions into bank_transactions as `unreviewed` (they still go through
+// categorize → verify like any other line) and builds the daily summary email
+// that scripts/bank-digest-email.gs sends from Gmail.
 //
 // Everything here is pure so scripts/test-bank-feed-data.mjs can run it with
-// node; the I/O (Teller over mTLS, Supabase) lives in lib/bankFeed.mjs and the
+// node; the I/O (Plaid's API, Supabase) lives in lib/bankFeed.mjs and the
 // endpoint is api/bank-analyze.mjs (docs/bank-feed.md).
 import { dedupHash } from "./bankData.js";
 import { numv } from "./analyticsData.js";
 
-export const FEED_SOURCE = "teller";
+export const FEED_SOURCE = "plaid";
 export const MAX_RECIPIENTS = 10;
 export const DIGEST_LIST_CAP = 150;
 export const DIGEST_TZ = "America/New_York";
 
 // One-time migration, shown in the Bancos setup banner and run by
-// scripts/setup-bank-feed.mjs. Re-runnable.
-export const BANK_FEED_SQL = `-- Bank feed (Teller) + daily bank email (docs/bank-feed.md). Re-runnable.
+// scripts/setup-bank-feed.mjs. Re-runnable, and safe on a database where the
+// first (Teller) version of this table was already created.
+export const BANK_FEED_SQL = `-- Bank feed (Plaid) + daily bank email (docs/bank-feed.md). Re-runnable.
 create table if not exists public.bank_feed_connections (
   id bigint generated always as identity primary key,
-  provider text not null default 'teller',
-  enrollment_id text not null unique,
+  provider text not null default 'plaid',
+  item_id text,
   access_token text not null,
+  sync_cursor text,
   institution text,
   accounts jsonb default '[]'::jsonb,
   status text default 'active',
@@ -34,6 +37,11 @@ create table if not exists public.bank_feed_connections (
   created_at timestamptz default now(),
   updated_at timestamptz
 );
+alter table public.bank_feed_connections add column if not exists item_id text;
+alter table public.bank_feed_connections add column if not exists sync_cursor text;
+alter table public.bank_feed_connections alter column provider set default 'plaid';
+do $$ begin alter table public.bank_feed_connections alter column enrollment_id drop not null; exception when undefined_column then null; end $$;
+create unique index if not exists bank_feed_connections_item on public.bank_feed_connections(item_id);
 -- The access token reads the bank: no policy at all, so only the service role
 -- (api/bank-analyze.mjs) can touch this table. Never add it to TABLE_ACL.
 alter table public.bank_feed_connections enable row level security;
@@ -63,18 +71,40 @@ create unique index if not exists bank_accounts_feed_account on public.bank_acco
 const round2 = (v) => Math.round(numv(v) * 100) / 100;
 export const todayInTz = (now = new Date()) => now.toLocaleDateString("en-CA", { timeZone: DIGEST_TZ });
 
-// ── Teller accounts ──────────────────────────────────────────────────────────
-// Teller sends amounts as signed strings; on a depository account a negative
-// amount is money out — the same convention bank_transactions.amount uses.
-export const feedAmount = (t) => round2(t?.amount);
-// Card accounts use the opposite sign and a different balance meaning, so only
-// checking/savings are imported for now.
+// ── Plaid → the CRM's shapes ─────────────────────────────────────────────────
+// Plaid's sign is the opposite of the ledger's: "Positive values when money
+// moves out of the account; negative values when money moves in" (Plaid docs,
+// Transaction.amount). bank_transactions.amount is negative for money out.
+export const ledgerAmount = (plaidAmount) => round2(-numv(plaidAmount));
+
+// A Plaid transaction as the importer sees it. The description is the bank's
+// own text (original_description, the line as it reads on Chase), so it lines
+// up with what a screenshot or CSV of the same line said.
+export const fromPlaidTxn = (t) => ({
+  id: String(t.transaction_id),
+  account_id: t.account_id,
+  date: t.date,
+  amount: ledgerAmount(t.amount),
+  description: String(t.original_description || t.name || "").trim(),
+  counterparty: t.merchant_name || null,
+  pending: !!t.pending,
+});
+
+// What the panel keeps of a Plaid account — never the account number (Plaid
+// only gives the last digits, as `mask`).
+export const fromPlaidAccount = (a, institution = "") => ({
+  id: a.account_id, name: a.name || a.official_name || "", last_four: a.mask || "",
+  type: a.type, subtype: a.subtype || "", institution: { name: institution || "" },
+});
+
+// Cards are left out for now: the panel would show what is owed as a
+// "balance", and nobody asked for them yet.
 export const isFeedSupported = (a) => a?.type === "depository";
 export const newAccountName = (a) => [a?.institution?.name, a?.name].filter(Boolean).join(" ").trim() || "Bank account";
 export const feedAccountLabel = (a) => newAccountName(a) + (a?.last_four ? ` ····${a.last_four}` : "");
 export const crmTypeOf = (a) => (a?.type === "credit" ? "credit_card" : a?.subtype === "savings" ? "savings" : "checking");
 
-// For each Teller account, which CRM account it feeds. An existing link wins;
+// For each bank account, which CRM account it feeds. An existing link wins;
 // otherwise the active CRM account with the same last 4 digits; otherwise a
 // new account (checking/savings) or "don't import" (cards). The person
 // confirms the proposal before anything is imported.
@@ -100,25 +130,18 @@ export function proposeLinks(feedAccounts = [], crmAccounts = [], today = todayI
   });
 }
 
-// How far back a sync has to read: never before the account's import start,
-// and once it has synced, a two-week overlap is enough to catch late postings.
-export function fetchFloor({ since, lastSyncAt, lookbackDays = 14 }) {
-  if (!lastSyncAt) return since || null;
-  const d = new Date(new Date(lastSyncAt).getTime() - lookbackDays * 86400000).toISOString().slice(0, 10);
-  return since && since > d ? since : d;
-}
-
-// Turn one account's Teller transactions into bank_transactions rows.
+// Turn one account's transactions (fromPlaidTxn shape) into bank_transactions rows.
 //   existing: rows already in the table for this account and date range,
 //             as { dedup_hash, source, source_ref }.
 // Rules:
-//   · only POSTED lines (a pending line can still change or disappear);
+//   · only POSTED lines: a pending one can still change or vanish, and when it
+//     posts Plaid sends it again as a new posted transaction;
 //   · nothing dated before the account's import start (feed_since);
-//   · a Teller id already imported is skipped (re-syncs are idempotent);
+//   · a Plaid id already imported is skipped (re-syncs are idempotent);
 //   · a line that matches a screenshot/CSV/manual row (same account, date,
 //     amount and description) is that row — skipped, one match per row;
 //   · two identical lines on the same day are both real (two $50 fills at the
-//     same station): the second one gets a hash suffixed with its Teller id.
+//     same station): the second one gets a hash suffixed with its Plaid id.
 export function planFeedImport({ txns = [], account, existing = [] }) {
   const since = account?.feed_since || "";
   const taken = new Map(existing.map((r) => [r.dedup_hash, r]));
@@ -129,11 +152,11 @@ export function planFeedImport({ txns = [], account, existing = [] }) {
   // Oldest first, so an identical pair is numbered the same way on every sync.
   const list = [...txns].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.id).localeCompare(String(b.id)));
   for (const t of list) {
-    if (t.status !== "posted") { skipped.pending++; continue; }
+    if (t.pending) { skipped.pending++; continue; }
     if (!t.date || (since && t.date < since)) { skipped.before_since++; continue; }
     const ref = String(t.id);
     if (knownRefs.has(ref)) { skipped.already++; continue; }
-    const amount = feedAmount(t);
+    const amount = round2(t.amount);
     const h = dedupHash({ bank_account_id: account.id, txn_date: t.date, amount, raw_description: t.description || "" });
     const ex = taken.get(h);
     if (ex && ex.source !== FEED_SOURCE && !consumed.has(h)) { consumed.add(h); skipped.duplicate++; continue; }
@@ -142,23 +165,11 @@ export function planFeedImport({ txns = [], account, existing = [] }) {
     knownRefs.add(ref);
     rows.push({
       bank_account_id: account.id, txn_date: t.date, amount, direction: amount < 0 ? "out" : "in", currency: "USD",
-      raw_description: t.description || null, counterparty: t.details?.counterparty?.name || null,
+      raw_description: t.description || null, counterparty: t.counterparty || null,
       status: "unreviewed", source: FEED_SOURCE, source_ref: ref, dedup_hash: hash,
     });
   }
   return { rows, skipped };
-}
-
-// The bank's own balance after the newest posted line that carries one. Teller
-// bills balance lookups per call, so the CRM reads it off the transactions
-// instead (null when the bank doesn't report a running balance).
-export function latestRunningBalance(txns = []) {
-  let best = null;
-  for (const t of txns) {
-    if (t.status !== "posted" || t.running_balance == null || t.running_balance === "" || !t.date) continue;
-    if (!best || t.date > best.date) best = { ledger: round2(t.running_balance), date: t.date };
-  }
-  return best;
 }
 
 // ── Daily email ──────────────────────────────────────────────────────────────

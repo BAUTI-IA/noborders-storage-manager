@@ -4,7 +4,7 @@
 // line in the app — this is extraction + suggestion, never final categorization.
 // Mirrors api/bol-analyze.mjs (vision + auth + JSON-only response).
 //
-// It also hosts the bank feed (Chase → Teller → Bancos) and the daily bank
+// It also hosts the bank feed (Chase → Plaid → Bancos) and the daily bank
 // email, because api/ sits at the Hobby plan's 12-function cap
 // (docs/bank-feed.md, logic in lib/bankFeed.mjs):
 //   POST { action: "feed_*" | "digest_settings" | "digest_preview" }
@@ -20,7 +20,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { isAdmin } from "../lib/acl.mjs";
 import {
-  tellerConfig, tellerFetch, syncAll, saveEnrollment, saveLinks, disconnect, feedStatus,
+  plaidConfig, plaidFetch, syncAll, createLinkToken, saveEnrollment, repairConnection, saveLinks, disconnect, feedStatus,
   getDigestSettings, saveDigestSettings, composeDigest, ackDigest, problemsFromStatus,
 } from "../lib/bankFeed.mjs";
 import { parseRecipients, MAX_RECIPIENTS } from "../src/bankFeedData.js";
@@ -120,8 +120,8 @@ async function digestEndpoint(req, res) {
     if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
 
     const settings = await getDigestSettings(admin);
-    const cfg = tellerConfig();
-    const ctx = { db: admin, cfg, teller: tellerFetch, suggest: feedSuggester(25000), actor: "Bank feed" };
+    const cfg = plaidConfig();
+    const ctx = { db: admin, cfg, plaid: plaidFetch, suggest: feedSuggester(25000), actor: "Bank feed" };
     // Sync first, whatever happens with the email: the lines belong in Bancos.
     const sync = cfg.ready
       ? await syncAll(ctx)
@@ -149,18 +149,29 @@ async function feedAction(req, res, action, user) {
   if (!allowed) { res.status(403).json({ error: `You need "${level}" permission on Bancos.` }); return; }
 
   const body = req.body || {};
-  const cfg = tellerConfig();
-  const ctx = { db: admin, cfg, teller: tellerFetch, suggest: feedSuggester(60000), actor: profile.full_name || profile.email || user.email || "Bank feed" };
-  const needsTeller = ["feed_enroll", "feed_link", "feed_sync"].includes(action);
-  if (needsTeller && !cfg.ready) { res.status(503).json({ error: `The bank feed is not configured in Vercel (missing ${cfg.missing.join(", ")}).` }); return; }
+  const cfg = plaidConfig();
+  const ctx = { db: admin, cfg, plaid: plaidFetch, suggest: feedSuggester(60000), actor: profile.full_name || profile.email || user.email || "Bank feed" };
+  const needsPlaid = ["feed_link_token", "feed_enroll", "feed_link", "feed_sync"].includes(action);
+  if (needsPlaid && !cfg.ready) { res.status(503).json({ error: `The bank feed is not configured in Vercel (missing ${cfg.missing.join(", ")}).` }); return; }
 
   try {
     if (action === "feed_status") { res.status(200).json(await feedStatus(ctx)); return; }
 
+    if (action === "feed_link_token") {
+      // connection_id → update mode on that connection (Reconnect); none → a new one.
+      const link_token = await createLinkToken(ctx, { userId: user.id, lang: body.lang, connectionId: body.connection_id ? Number(body.connection_id) : null });
+      res.status(200).json({ link_token });
+      return;
+    }
+
     if (action === "feed_enroll") {
-      const connection_id = await saveEnrollment(ctx, {
-        accessToken: body.accessToken, enrollmentId: body.enrollment?.id, institution: body.enrollment?.institution?.name,
-      });
+      if (body.connection_id) {
+        // Back from Link in update mode: same connection, same token.
+        const sync = await repairConnection(ctx, Number(body.connection_id));
+        res.status(200).json({ connection_id: Number(body.connection_id), sync, status: await feedStatus(ctx) });
+        return;
+      }
+      const connection_id = await saveEnrollment(ctx, { publicToken: body.public_token, institution: body.institution });
       res.status(200).json({ connection_id, status: await feedStatus(ctx) });
       return;
     }

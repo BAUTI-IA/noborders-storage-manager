@@ -4,7 +4,7 @@ React (Vite) single-page CRM backed by Supabase. Main app: `src/App.jsx`; featur
 modules: `src/bank.jsx`, `src/bol.jsx`, `src/expenses.jsx`, `src/messages.jsx`,
 `src/suggestions.jsx`, `src/analytics.jsx`, `src/notifications.jsx` (the sidebar
 bell: @mentions on job notes), `src/bankFeed.jsx` (Bancos → Accounts: the Chase
-feed via Teller and the daily bank email, `docs/bank-feed.md`). Serverless
+feed via Plaid and the daily bank email, `docs/bank-feed.md`). Serverless
 endpoints live in `api/`.
 
 ## Language / i18n — REQUIRED for every new feature

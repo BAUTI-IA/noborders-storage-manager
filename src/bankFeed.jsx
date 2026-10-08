@@ -1,26 +1,27 @@
 // Bancos → Accounts: the bank feed panel and the daily bank email settings.
 //
-// Connect the bank once (Teller Connect: the person signs in to Chase inside
-// Teller's own window — the CRM never sees the password), confirm which CRM
-// account each bank account fills, and from then on every posted line lands in
-// the Inbox as unreviewed, plus a summary email every morning. The access token
-// stays on the server: this panel only ever talks to api/bank-analyze.mjs.
+// Connect the bank once (Plaid Link: for Chase the person signs in on Chase's
+// own page and picks the accounts to share — the CRM never sees the password),
+// confirm which CRM account each bank account fills, and from then on every
+// posted line lands in the Inbox as unreviewed, plus a summary email every
+// morning. The browser only holds Plaid's short-lived link and public tokens;
+// the access token stays on the server (api/bank-analyze.mjs).
 // Logic: lib/bankFeed.mjs (I/O) + src/bankFeedData.js (pure). docs/bank-feed.md.
 import { useState, useEffect, useCallback } from "react";
 import { BANK_FEED_SQL, problemText } from "./bankFeedData.js";
 import { tr, getI18nLang } from "./i18n.js";
 
-const TELLER_CONNECT_JS = "https://cdn.teller.io/connect/connect.js";
-let tellerScript = null;
-const loadTellerConnect = () => tellerScript || (tellerScript = new Promise((resolve, reject) => {
-  if (window.TellerConnect) { resolve(window.TellerConnect); return; }
+const PLAID_LINK_JS = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+let plaidScript = null;
+const loadPlaidLink = () => plaidScript || (plaidScript = new Promise((resolve, reject) => {
+  if (window.Plaid) { resolve(window.Plaid); return; }
   const s = document.createElement("script");
-  s.src = TELLER_CONNECT_JS;
+  s.src = PLAID_LINK_JS;
   s.async = true;
-  s.onload = () => (window.TellerConnect ? resolve(window.TellerConnect) : reject(new Error("Teller Connect did not load.")));
+  s.onload = () => (window.Plaid ? resolve(window.Plaid) : reject(new Error("Plaid Link did not load.")));
   s.onerror = () => {
-    tellerScript = null;
-    reject(new Error(tr("Could not load Teller Connect. Check the connection and try again.", "No se pudo cargar Teller Connect. Revisá la conexión y probá de nuevo.")));
+    plaidScript = null;
+    reject(new Error(tr("Could not load Plaid. Check the connection and try again.", "No se pudo cargar Plaid. Revisá la conexión y probá de nuevo.")));
   };
   document.head.appendChild(s);
 }));
@@ -81,35 +82,45 @@ export function BankFeedPanel({ session, accounts = [], canEdit, onReload, Btn, 
     const parts = [`${s.imported} ${tr("new transactions imported to the Inbox", "movimientos nuevos importados a la Bandeja")}`];
     if (s.skipped?.duplicate) parts.push(`${s.skipped.duplicate} ${tr("were already in the ledger", "ya estaban en el ledger")}`);
     if (s.skipped?.pending) parts.push(`${s.skipped.pending} ${tr("still pending at the bank", "todavía pendientes en el banco")}`);
+    if (s.loading) parts.push(tr("Plaid is still gathering the history: press Sync now in a few minutes", "Plaid todavía está juntando el historial: tocá Sincronizar ahora en unos minutos"));
     return parts.join(" · ");
   };
 
-  // Teller's own window. Passing an enrollment id repairs that connection
-  // (the bank asked to sign in again) instead of adding a new one.
-  const connect = (enrollmentId) => run("connect", async () => {
-    const TC = await loadTellerConnect();
-    await new Promise((resolve, reject) => {
-      TC.setup({
-        applicationId: status.appId,
-        environment: status.environment,
-        products: ["transactions"],
-        selectAccount: "multiple",
-        ...(enrollmentId ? { enrollmentId } : {}),
-        onSuccess: async (enr) => {
-          try {
-            const r = await call("feed_enroll", { accessToken: enr.accessToken, enrollment: enr.enrollment });
-            apply(r.status);
-            setNotice(enrollmentId
-              ? tr("Reconnected. Press Sync now to catch up.", "Reconectado. Tocá Sincronizar ahora para ponerte al día.")
-              : tr("Connected. Check which CRM account each bank account fills and press Save links.", "Conectado. Revisá qué cuenta del CRM llena cada cuenta del banco y tocá Guardar vínculos."));
-            resolve();
-          } catch (e) { reject(e); }
-        },
-        onExit: () => resolve(),
-        onFailure: (f) => reject(new Error(f?.message || "Teller Connect failed.")),
-      }).open();
+  // Plaid's own window. With a connection, Link opens in update mode on that
+  // same connection (the bank asked to sign in again), so it is repaired, not
+  // added: Plaid's free plan allows 10 connections in total and never gives
+  // one back, so a second one is only made after a warning.
+  const connect = (conn) => {
+    if (!conn && (status.connections || []).length && !window.confirm(tr(
+      "A bank is already connected. Each new connection uses one of the 10 that Plaid's free plan allows, and it is not given back even if you disconnect it later. Connect another one anyway?",
+      "Ya hay un banco conectado. Cada conexión nueva gasta una de las 10 que permite el plan gratis de Plaid, y no se devuelve aunque después la desconectes. ¿Conectar otra igual?",
+    ))) return;
+    run("connect", async () => {
+      const { link_token } = await call("feed_link_token", { connection_id: conn?.id, lang });
+      const Plaid = await loadPlaidLink();
+      await new Promise((resolve, reject) => {
+        const handler = Plaid.create({
+          token: link_token,
+          onSuccess: async (public_token, metadata) => {
+            try {
+              const r = await call("feed_enroll", conn ? { connection_id: conn.id } : { public_token, institution: metadata?.institution?.name });
+              apply(r.status);
+              setNotice(conn
+                ? [tr("Reconnected.", "Reconectado."), syncNote(r.sync)].filter(Boolean).join(" ")
+                : tr("Connected. Check which CRM account each bank account fills and press Save links.", "Conectado. Revisá qué cuenta del CRM llena cada cuenta del banco y tocá Guardar vínculos."));
+              resolve();
+            } catch (e) { reject(e); } finally { handler.destroy(); }
+          },
+          onExit: (err) => {
+            handler.destroy();
+            if (err) reject(new Error(err.display_message || err.error_message || "Plaid Link closed with an error."));
+            else resolve();
+          },
+        });
+        handler.open();
+      });
     });
-  });
+  };
 
   const saveLinks = (c) => run("link-" + c.id, async () => {
     const r = await call("feed_link", { connection_id: c.id, links: drafts[c.id] || [] });
@@ -125,8 +136,8 @@ export function BankFeedPanel({ session, accounts = [], canEdit, onReload, Btn, 
   });
   const disconnectConn = (c) => {
     if (!window.confirm(tr(
-      `Disconnect ${c.institution || "the bank"}? New transactions stop arriving. What is already in Bancos stays.`,
-      `¿Desconectar ${c.institution || "el banco"}? Dejan de llegar movimientos nuevos. Lo que ya está en Bancos queda.`,
+      `Disconnect ${c.institution || "the bank"}? New transactions stop arriving. What is already in Bancos stays. On Plaid's free plan the connection is not given back: connecting again later uses another one of the 10.`,
+      `¿Desconectar ${c.institution || "el banco"}? Dejan de llegar movimientos nuevos. Lo que ya está en Bancos queda. En el plan gratis de Plaid la conexión no se devuelve: volver a conectar después gasta otra de las 10.`,
     ))) return;
     run("disc-" + c.id, async () => { apply((await call("feed_disconnect", { connection_id: c.id })).status); onReload?.(); });
   };
@@ -173,7 +184,7 @@ export function BankFeedPanel({ session, accounts = [], canEdit, onReload, Btn, 
       <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:10 }}>
         <div style={{ fontSize:13.5, fontWeight:700, flex:1, minWidth:200 }}>
           🏦 Automatic bank feed
-          {status.environment !== "production" && <span style={{ marginLeft:8, fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EEF2FF", color:"#4338CA" }}>{status.environment === "sandbox" ? "Sandbox: test data" : "Development: real data, free tier"}</span>}
+          {status.environment === "sandbox" && <span style={{ marginLeft:8, fontSize:10.5, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#EEF2FF", color:"#4338CA" }}>Sandbox: test data</span>}
         </div>
         {canEdit && conns.length > 0 && <Btn style={{ fontSize:12, padding:"5px 12px" }} onClick={syncNow} disabled={!!busy}>{busy === "sync" ? "Syncing..." : "Sync now"}</Btn>}
         {canEdit && <Btn primary style={{ fontSize:12, padding:"5px 12px" }} onClick={() => connect()} disabled={!!busy}>{busy === "connect" ? "Connecting…" : "＋ Connect bank"}</Btn>}
@@ -191,7 +202,7 @@ export function BankFeedPanel({ session, accounts = [], canEdit, onReload, Btn, 
               <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 9px", borderRadius:20, background:st.bg, color:st.text }}>{c.status === "active" ? "Connected" : c.status === "disconnected" ? "Needs reconnect" : "Sync error"}</span>
               <span style={small}>Last sync:</span><span style={small}>{when(c.last_sync_at)}</span>
               <span style={{ flex:1 }} />
-              {canEdit && c.status !== "active" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => connect(c.enrollment_id)} disabled={!!busy}>Reconnect</Btn>}
+              {canEdit && c.status !== "active" && <Btn style={{ fontSize:12, padding:"4px 10px" }} onClick={() => connect(c)} disabled={!!busy}>Reconnect</Btn>}
               {canEdit && <button onClick={() => disconnectConn(c)} disabled={!!busy} style={{ border:"none", background:"transparent", cursor:"pointer", color:"#bbb", fontSize:12 }}>Disconnect</button>}
             </div>
             {c.status !== "active" && (
