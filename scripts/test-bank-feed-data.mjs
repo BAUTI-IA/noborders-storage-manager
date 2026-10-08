@@ -2,21 +2,42 @@
 // Run: node scripts/test-bank-feed-data.mjs
 import assert from "node:assert/strict";
 import {
-  FEED_SOURCE, proposeLinks, planFeedImport, latestRunningBalance, fetchFloor,
-  parseRecipients, buildDigest, problemText, money, feedAmount, isFeedSupported, MAX_RECIPIENTS,
+  FEED_SOURCE, proposeLinks, planFeedImport, fromPlaidTxn, fromPlaidAccount, ledgerAmount,
+  parseRecipients, buildDigest, problemText, money, isFeedSupported, MAX_RECIPIENTS,
 } from "../src/bankFeedData.js";
 import { dedupHash } from "../src/bankData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
 
-// Teller fixtures, shaped like GET /accounts and /accounts/:id/transactions.
-const chase = { id: "ins_chase", name: "Chase" };
-const FA = [
-  { id: "acc_3387", name: "TOTAL CHECKING", last_four: "3387", type: "depository", subtype: "checking", institution: chase },
-  { id: "acc_1173", name: "BUS COMPLETE CHK", last_four: "1173", type: "depository", subtype: "checking", institution: chase },
-  { id: "acc_card", name: "INK BUSINESS", last_four: "9001", type: "credit", subtype: "credit_card", institution: chase },
+// Plaid fixtures, shaped like /accounts/get and /transactions/sync. Plaid's
+// amount is POSITIVE when money moves OUT (the opposite of the ledger).
+const PA = [
+  { account_id: "acc_3387", name: "TOTAL CHECKING", mask: "3387", type: "depository", subtype: "checking", balances: { current: 2466.23 } },
+  { account_id: "acc_1173", name: "BUS COMPLETE CHK", mask: "1173", type: "depository", subtype: "checking", balances: { current: 15805.06 } },
+  { account_id: "acc_card", name: "INK BUSINESS", mask: "9001", type: "credit", subtype: "credit card", balances: { current: 120 } },
 ];
-const tx = (id, date, amount, description, extra = {}) => ({ id, account_id: "acc_1173", date, amount: String(amount), description, status: "posted", ...extra });
+const FA = PA.map((a) => fromPlaidAccount(a, "Chase"));
+const ptx = (id, date, plaidAmount, description, extra = {}) => ({
+  transaction_id: id, account_id: "acc_1173", date, amount: plaidAmount, name: description.toLowerCase(),
+  original_description: description, merchant_name: null, pending: false, ...extra,
+});
+const tx = (...a) => fromPlaidTxn(ptx(...a));
+
+// ── Plaid shapes ─────────────────────────────────────────────────────────────
+t("ledgerAmount / fromPlaidTxn: Plaid's sign is flipped (positive = money out)", () => {
+  assert.equal(ledgerAmount(89.1), -89.1);
+  assert.equal(ledgerAmount(-2500), 2500);
+  assert.equal(ledgerAmount(86.456), -86.46);
+  const n = fromPlaidTxn(ptx("t1", "2026-10-06", 89.1, "SHELL OIL 57444", { merchant_name: "Shell" }));
+  assert.deepEqual(n, { id: "t1", account_id: "acc_1173", date: "2026-10-06", amount: -89.1, description: "SHELL OIL 57444", counterparty: "Shell", pending: false });
+  // No original_description from the bank → Plaid's cleaned name.
+  assert.equal(fromPlaidTxn({ ...ptx("t2", "2026-10-06", 5, "X"), original_description: null, name: "Fee" }).description, "Fee");
+});
+
+t("fromPlaidAccount: last 4 from the mask, institution carried, no account number", () => {
+  assert.deepEqual(FA[1], { id: "acc_1173", name: "BUS COMPLETE CHK", last_four: "1173", type: "depository", subtype: "checking", institution: { name: "Chase" } });
+  assert.equal(JSON.stringify(FA).includes("balances"), false);
+});
 
 // ── Account links ────────────────────────────────────────────────────────────
 t("proposeLinks: last-4 match, new for checking, skip for cards", () => {
@@ -49,20 +70,18 @@ t("proposeLinks: one CRM account is never proposed for two bank accounts", () =>
   assert.equal(p[1].bank_account_id, "new");
 });
 
-t("isFeedSupported / feedAmount: depository only, amount keeps Teller's sign", () => {
+t("isFeedSupported: checking/savings yes, cards no", () => {
   assert.equal(isFeedSupported(FA[0]), true);
   assert.equal(isFeedSupported(FA[2]), false);
-  assert.equal(feedAmount({ amount: "-86.456" }), -86.46);
-  assert.equal(feedAmount({ amount: "1200.5" }), 1200.5);
 });
 
 // ── Import plan ──────────────────────────────────────────────────────────────
 const acct = { id: 7, feed_since: "2026-10-01" };
 
-t("planFeedImport: posted lines become unreviewed rows with sign → direction", () => {
+t("planFeedImport: posted lines become unreviewed rows; money out is negative", () => {
   const { rows, skipped } = planFeedImport({
     account: acct,
-    txns: [tx("t1", "2026-10-06", -89.1, "SHELL OIL"), tx("t2", "2026-10-06", 2500, "DEPOSIT", { details: { counterparty: { name: "ALLIED" } } })],
+    txns: [tx("t1", "2026-10-06", 89.1, "SHELL OIL"), tx("t2", "2026-10-06", -2500, "DEPOSIT", { merchant_name: "Allied" })],
   });
   assert.equal(rows.length, 2);
   const shell = rows.find((r) => r.source_ref === "t1");
@@ -71,14 +90,17 @@ t("planFeedImport: posted lines become unreviewed rows with sign → direction",
   assert.equal(shell.status, "unreviewed");
   assert.equal(shell.source, FEED_SOURCE);
   assert.equal(shell.dedup_hash, dedupHash({ bank_account_id: 7, txn_date: "2026-10-06", amount: -89.1, raw_description: "SHELL OIL" }));
-  assert.equal(rows.find((r) => r.source_ref === "t2").counterparty, "ALLIED");
+  const dep = rows.find((r) => r.source_ref === "t2");
+  assert.equal(dep.amount, 2500);
+  assert.equal(dep.direction, "in");
+  assert.equal(dep.counterparty, "Allied");
   assert.deepEqual(skipped, { pending: 0, before_since: 0, already: 0, duplicate: 0 });
 });
 
 t("planFeedImport: pending lines and lines before the import start are left out", () => {
   const { rows, skipped } = planFeedImport({
     account: acct,
-    txns: [tx("p1", "2026-10-07", -10, "PENDING THING", { status: "pending" }), tx("o1", "2026-09-30", -5, "OLD"), tx("k1", "2026-10-01", -5, "ON START DAY")],
+    txns: [tx("p1", "2026-10-07", 10, "PENDING THING", { pending: true }), tx("o1", "2026-09-30", 5, "OLD"), tx("k1", "2026-10-01", 5, "ON START DAY")],
   });
   assert.deepEqual(rows.map((r) => r.source_ref), ["k1"]);
   assert.equal(skipped.pending, 1);
@@ -86,21 +108,21 @@ t("planFeedImport: pending lines and lines before the import start are left out"
 });
 
 t("planFeedImport: a re-sync imports nothing twice", () => {
-  const first = planFeedImport({ account: acct, txns: [tx("t1", "2026-10-06", -89.1, "SHELL OIL")] });
-  const again = planFeedImport({ account: acct, txns: [tx("t1", "2026-10-06", -89.1, "SHELL OIL")], existing: first.rows });
+  const first = planFeedImport({ account: acct, txns: [tx("t1", "2026-10-06", 89.1, "SHELL OIL")] });
+  const again = planFeedImport({ account: acct, txns: [tx("t1", "2026-10-06", 89.1, "SHELL OIL")], existing: first.rows });
   assert.equal(again.rows.length, 0);
   assert.equal(again.skipped.already, 1);
 });
 
 t("planFeedImport: a line already loaded from a screenshot is that row, not a new one", () => {
   const shot = { dedup_hash: dedupHash({ bank_account_id: 7, txn_date: "2026-10-06", amount: -89.1, raw_description: "Shell  oil" }), source: "screenshot", source_ref: "x.png" };
-  const { rows, skipped } = planFeedImport({ account: acct, txns: [tx("t1", "2026-10-06", -89.1, "SHELL OIL")], existing: [shot] });
+  const { rows, skipped } = planFeedImport({ account: acct, txns: [tx("t1", "2026-10-06", 89.1, "SHELL OIL")], existing: [shot] });
   assert.equal(rows.length, 0);
   assert.equal(skipped.duplicate, 1);
 });
 
 t("planFeedImport: two identical lines the same day are both real", () => {
-  const txns = [tx("t9", "2026-10-06", -50, "PILOT #123"), tx("t8", "2026-10-06", -50, "PILOT #123")];
+  const txns = [tx("t9", "2026-10-06", 50, "PILOT #123"), tx("t8", "2026-10-06", 50, "PILOT #123")];
   const { rows } = planFeedImport({ account: acct, txns });
   assert.equal(rows.length, 2);
   assert.notEqual(rows[0].dedup_hash, rows[1].dedup_hash);
@@ -110,30 +132,12 @@ t("planFeedImport: two identical lines the same day are both real", () => {
 
 t("planFeedImport: screenshot had one of an identical pair → the feed adds only the other", () => {
   const h = dedupHash({ bank_account_id: 7, txn_date: "2026-10-06", amount: -50, raw_description: "PILOT #123" });
-  const txns = [tx("t8", "2026-10-06", -50, "PILOT #123"), tx("t9", "2026-10-06", -50, "PILOT #123")];
+  const txns = [tx("t8", "2026-10-06", 50, "PILOT #123"), tx("t9", "2026-10-06", 50, "PILOT #123")];
   const first = planFeedImport({ account: acct, txns, existing: [{ dedup_hash: h, source: "screenshot" }] });
   assert.equal(first.rows.length, 1);
   assert.equal(first.rows[0].dedup_hash, `${h}|${FEED_SOURCE}:t9`);
   const again = planFeedImport({ account: acct, txns, existing: [{ dedup_hash: h, source: "screenshot" }, ...first.rows] });
   assert.equal(again.rows.length, 0);
-});
-
-t("latestRunningBalance: newest posted line that carries a balance", () => {
-  const b = latestRunningBalance([
-    tx("a", "2026-10-07", -1, "x", { status: "pending", running_balance: "1" }),
-    tx("b", "2026-10-06", -1, "x", { running_balance: "14718.13" }),
-    tx("c", "2026-10-06", -1, "x", { running_balance: "14719.13" }),
-    tx("d", "2026-10-05", -1, "x", { running_balance: "15000" }),
-    tx("e", "2026-10-07", -1, "x", { running_balance: null }),
-  ]);
-  assert.deepEqual(b, { ledger: 14718.13, date: "2026-10-06" });
-  assert.equal(latestRunningBalance([tx("a", "2026-10-07", -1, "x")]), null);
-});
-
-t("fetchFloor: import start until the first sync, then a two-week overlap", () => {
-  assert.equal(fetchFloor({ since: "2026-10-01", lastSyncAt: null }), "2026-10-01");
-  assert.equal(fetchFloor({ since: "2026-01-01", lastSyncAt: "2026-10-08T12:00:00Z" }), "2026-09-24");
-  assert.equal(fetchFloor({ since: "2026-10-01", lastSyncAt: "2026-10-08T12:00:00Z" }), "2026-10-01");
 });
 
 // ── Recipients ───────────────────────────────────────────────────────────────

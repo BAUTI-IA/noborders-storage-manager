@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// One-time migration for the bank feed (Chase → Teller → Bancos) and the daily
+// One-time migration for the bank feed (Chase → Plaid → Bancos) and the daily
 // bank email (docs/bank-feed.md):
 //
 //   public.bank_feed_connections — one row per connected bank login, holding
-//                                  Teller's access token. No RLS policy: only
-//                                  the service role (api/bank-analyze.mjs)
-//                                  reads it, never the browser or the agent.
+//                                  Plaid's access token and sync cursor. No
+//                                  RLS policy: only the service role
+//                                  (api/bank-analyze.mjs) reads it, never the
+//                                  browser or the agent.
 //   public.bank_digest_settings  — who gets the email, its language, and the
 //                                  last transaction already sent.
-//   bank_accounts.feed_*         — which Teller account fills each CRM account,
+//   bank_accounts.feed_*         — which Plaid account fills each CRM account,
 //                                  from which date, and the bank's balance.
 //
 // The SQL lives in src/bankFeedData.js (BANK_FEED_SQL), which the Bancos

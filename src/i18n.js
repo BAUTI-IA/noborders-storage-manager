@@ -2375,7 +2375,6 @@ export const I18N_ES = {
   "Not set up yet. Missing in Vercel:": "Todavía no está configurada. Falta en Vercel:",
   "· step by step in docs/bank-feed.md": "· paso a paso en docs/bank-feed.md",
   "Sandbox: test data": "Sandbox: datos de prueba",
-  "Development: real data, free tier": "Development: datos reales, plan gratis",
   "Connecting…": "Conectando…",
   "＋ Connect bank": "＋ Conectar banco",
   "Connected": "Conectado",
