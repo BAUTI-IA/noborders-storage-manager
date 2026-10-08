@@ -16,6 +16,7 @@ import {
 } from "./bankData.js";
 import { numv } from "./analyticsData.js";
 import { tr } from "./i18n.js";
+import { BankFeedPanel } from "./bankFeed.jsx";
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
@@ -179,7 +180,7 @@ export function BancosSection({ supabase, session, profile, payments = [], expen
           Btn={Btn} Modal={Modal} />
       )}
       {tab === "cuentas" && (
-        <AccountsTab accounts={accounts} txns={txns} supabase={supabase} canCreate={canCreate} canEdit={canEdit} onReload={loadAccounts} Btn={Btn} Modal={Modal} />
+        <AccountsTab accounts={accounts} txns={txns} supabase={supabase} session={session} canCreate={canCreate} canEdit={canEdit} onReload={loadAccounts} Btn={Btn} Modal={Modal} />
       )}
       {tab === "categorias" && (
         <CategoriesTab cats={cats} txns={txns} supabase={supabase} canCreate={canCreate} canEdit={canEdit} onReload={loadCats} onReloadTxns={loadTxns} Btn={Btn} Modal={Modal} />
@@ -873,7 +874,7 @@ function ImportModal({ accounts, cats, supabase, session, onClose, onDone, setEr
 }
 
 // ── Tab: Cuentas ─────────────────────────────────────────────────────────────
-function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, Btn, Modal }) {
+function AccountsTab({ accounts, txns, supabase, session, canCreate, canEdit, onReload, Btn, Modal }) {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_BANK_ACCOUNT);
@@ -916,6 +917,7 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
 
   return (
     <div>
+      <BankFeedPanel session={session} accounts={accounts} canEdit={canEdit} onReload={onReload} Btn={Btn} Modal={Modal} />
       {canCreate && <div style={{ marginBottom:12 }}><Btn onClick={openAdd}>＋ New account</Btn></div>}
       <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
@@ -923,10 +925,13 @@ function AccountsTab({ accounts, txns, supabase, canCreate, canEdit, onReload, B
           <tbody>
             {accounts.map(a => (
               <tr key={a.id} style={{ borderBottom:"1px solid #f7f7f7", opacity: a.active === false ? 0.5 : 1 }}>
-                <td style={{ ...td, fontWeight:600 }}>{a.name}{a.account_last4 ? <span style={{ color:"#999", fontWeight:400 }}> ····{a.account_last4}</span> : null}</td>
+                <td style={{ ...td, fontWeight:600 }}>{a.name}{a.account_last4 ? <span style={{ color:"#999", fontWeight:400 }}> ····{a.account_last4}</span> : null}{a.feed_account_id ? <span title="Filled by the automatic bank feed" style={{ marginLeft:6, fontSize:11 }}>🔗</span> : null}</td>
                 <td style={td}>{a.bank_name || "—"}</td>
                 <td style={td}>{a.type || "checking"}</td>
-                <td style={{ ...td, fontWeight:700 }}>{fmt$(balanceOf(a))}</td>
+                <td style={{ ...td, fontWeight:700 }}>
+                  {fmt$(balanceOf(a))}
+                  {a.feed_ledger != null && <div style={{ fontSize:10.5, color:"#888", fontWeight:500 }}><span>Per the bank:</span> {fmt$(numv(a.feed_ledger))}</div>}
+                </td>
                 <td style={td}>{txnCountOf(a)}</td>
                 <td style={td}>{a.active === false ? "No" : "Yes"}</td>
                 <td style={{ ...td, whiteSpace:"nowrap" }}>
