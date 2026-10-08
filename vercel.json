@@ -25,6 +25,10 @@
     {
       "source": "/api/customer-line",
       "destination": "/api/agent-hub?action=customer_line"
+    },
+    {
+      "source": "/api/bank-digest",
+      "destination": "/api/bank-analyze?action=digest"
     }
   ]
 }
