@@ -24,7 +24,7 @@ import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
 import { ELD, ELD_KEYS, eldOfTruck, eldOfDriver } from "./eldData.js";
 import { selectAll, dbFailed } from "./db.js";
 import { mapJobStops, JOB_PIN_DAYS } from "./geoData.js";
-import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
+import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, jobCollectedTotal, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -6573,32 +6573,6 @@ export default function App() {
     }
     return m;
   }, [jobs]);
-  const sheetCalcById = useMemo(() => {
-    const m = {};
-    for (const s of closingSheets) m[s.id] = sheetCalc(s, jobsBySheet[s.id] || []);
-    return m;
-  }, [closingSheets, jobsBySheet]);
-  const settlementMetrics = useMemo(() => {
-    let openCount = 0, owesUs = 0, weOwe = 0, pendingBol = 0, padsValue = 0;
-    for (const s of closingSheets) {
-      const c = sheetCalcById[s.id] || {};
-      if (s.status === "open") { openCount++; pendingBol += c.pending || 0; padsValue += c.padsCharge || 0; }
-      if (s.status !== "settled") { if ((c.net || 0) > 0) owesUs += c.net; else weOwe += -(c.net || 0); }
-    }
-    return { openCount, owesUs, weOwe, pendingBol, padsValue };
-  }, [closingSheets, sheetCalcById]);
-  // Per-broker settlement rollup (non-settled sheets).
-  const brokerSettleStats = useMemo(() => {
-    const m = {};
-    for (const s of closingSheets) {
-      const c = sheetCalcById[s.id] || {};
-      if (!s.broker_id) continue;
-      if (!m[s.broker_id]) m[s.broker_id] = { open:0, owesUs:0, weOwe:0 };
-      if (s.status === "open") m[s.broker_id].open++;
-      if (s.status !== "settled") { if ((c.net||0) > 0) m[s.broker_id].owesUs += c.net; else m[s.broker_id].weOwe += -(c.net||0); }
-    }
-    return m;
-  }, [closingSheets, sheetCalcById]);
 
   // ── Trips / Live Load derived data ──
   const truckById = useMemo(() => { const m = {}; for (const t of trucksList) m[t.id] = t; return m; }, [trucksList]);
@@ -6649,6 +6623,35 @@ export default function App() {
     const k = key || jobKey(j);
     return Math.max(0, jobToCollect(j) - jobCollectedFor(j, k)) + extrasOutstandingFor(k);
   }, [jobCollectedFor, extrasOutstandingFor]);
+  // ── Carrier settlements rollups (after jobCollectedFor, which they use) ──
+  // Collected per job uses the same rule as every other balance in the CRM
+  // (jobCollectedFor), so a job paid in several parts counts all of them.
+  const sheetCalcById = useMemo(() => {
+    const m = {};
+    for (const s of closingSheets) m[s.id] = sheetCalc(s, jobsBySheet[s.id] || [], (j) => jobCollectedFor(j));
+    return m;
+  }, [closingSheets, jobsBySheet, jobCollectedFor]);
+  const settlementMetrics = useMemo(() => {
+    let openCount = 0, owesUs = 0, weOwe = 0, pendingBol = 0, padsValue = 0;
+    for (const s of closingSheets) {
+      const c = sheetCalcById[s.id] || {};
+      if (s.status === "open") { openCount++; pendingBol += c.pending || 0; padsValue += c.padsCharge || 0; }
+      if (s.status !== "settled") { if ((c.net || 0) > 0) owesUs += c.net; else weOwe += -(c.net || 0); }
+    }
+    return { openCount, owesUs, weOwe, pendingBol, padsValue };
+  }, [closingSheets, sheetCalcById]);
+  // Per-broker settlement rollup (non-settled sheets).
+  const brokerSettleStats = useMemo(() => {
+    const m = {};
+    for (const s of closingSheets) {
+      const c = sheetCalcById[s.id] || {};
+      if (!s.broker_id) continue;
+      if (!m[s.broker_id]) m[s.broker_id] = { open:0, owesUs:0, weOwe:0 };
+      if (s.status === "open") m[s.broker_id].open++;
+      if (s.status !== "settled") { if ((c.net||0) > 0) m[s.broker_id].owesUs += c.net; else m[s.broker_id].weOwe += -(c.net||0); }
+    }
+    return m;
+  }, [closingSheets, sheetCalcById]);
   const tripCalc = useCallback((trip) => {
     const jobsIn = jobsByTrip[trip.id] || [];
     // totalCf = everything assigned to the trip; loadedCf = what is physically on
@@ -9629,6 +9632,19 @@ export default function App() {
     loadExtras();
     advanceCommQueue();
   }
+  // Two-way sync: storage_jobs.bol_collected mirrors the TOTAL of the job's
+  // received "job" payments, read back after the save. Writing only the payment
+  // being saved made a second partial payment replace the first, and closing
+  // sheets then overstated what the broker owed. Returns the error, or null.
+  async function syncJobCollected(jobRowId, method, date) {
+    const k = jobKeyByRowId[Number(jobRowId)];
+    const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+    if (!ids.length) return null;
+    const { data, error } = await supabase.from("payments").select("amount, discount, concept, received, deleted_at").in("job_id", ids);
+    if (error) return error;
+    const r = await supabase.from("storage_jobs").update({ bol_collected: jobCollectedTotal(data), bol_payment_method: method || null, bol_collected_date: date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    return r.error || null;
+  }
   // Convert an "A cuenta" payment into allocated lines: the original row
   // becomes the first line (method/check/photo details preserved) and the
   // rest are inserted as siblings sharing its split_group.
@@ -9667,11 +9683,7 @@ export default function App() {
       if (group && !splitMissing) payload.split_group = group;
       ({ error: err } = await supabase.from("payments").insert([payload]));
     }
-    if (!err && jobLineSum > 0 && p.job_id) {
-      const k = jobKeyByRowId[Number(p.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) { ({ error: err } = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: p.method || null, bol_collected_date: p.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids)); }
-    }
+    if (!err && jobLineSum > 0 && p.job_id) err = await syncJobCollected(p.job_id, p.method, p.payment_date);
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
     setReallocPay(null); setEditingPayId(null); setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
@@ -9773,11 +9785,7 @@ export default function App() {
       }
     }
     // Two-way sync: job rows mirror bol_collected on the storage_job rows.
-    if (!err && jobLineSum > 0 && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) { const r = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids); if (r.error) err = r.error; }
-    }
+    if (!err && jobLineSum > 0 && f.job_id) err = await syncJobCollected(f.job_id, lines[0].method, f.payment_date);
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
     undoMgr.record("Pago registrado", entries);
@@ -9889,14 +9897,7 @@ export default function App() {
       }
     }
     // Two-way sync: job rows mirror bol_collected on the storage_job rows.
-    if (!err && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) {
-        const r = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-        if (r.error) err = r.error;
-      }
-    }
+    if (!err && f.job_id) err = await syncJobCollected(f.job_id, lines[0].method, f.payment_date);
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
     undoMgr.record("Pago editado", entries);
@@ -9937,13 +9938,7 @@ export default function App() {
       }
     }
     // Two-way sync: a "job" payment mirrors bol_collected on the storage_job.
-    if (!error && f.concept === "job" && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const idsToSync = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (idsToSync.length) {
-        ({ error } = await supabase.from("storage_jobs").update({ bol_collected: numv(f.amount), bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", idsToSync));
-      }
-    }
+    if (!error && f.concept === "job" && f.job_id) error = await syncJobCollected(f.job_id, f.method, f.payment_date);
     setPaySaving(false);
     if (error) { window.alert(error.message); return; }
     undoMgr.record("Pago editado", payEntries);
