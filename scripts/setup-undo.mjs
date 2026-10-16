@@ -27,7 +27,7 @@ const TABLES = [
   "material_items", "material_movements", "driver_work_days",
   "driver_adjustments", "trips", "trip_stops", "job_events", "payment_accounts",
   "ap_bills", "carriers", "carrier_dispatches", "carrier_messages",
-  "carrier_payments", "carrier_adjustments",
+  "carrier_payments", "carrier_adjustments", "broker_payments",
 ];
 
 const SQL = `

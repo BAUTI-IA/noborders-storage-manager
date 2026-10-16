@@ -5,14 +5,16 @@
 // shown to the dispatcher. Nothing is written to the database here.
 //
 // It also hosts the Pipeline's three read/price actions (lead_extract,
-// lead_evaluate, lead_rank), because api/ sits at the Hobby plan's 12-function
+// lead_evaluate, lead_rank) and the broker paperwork readers (broker_job_extract,
+// settlement_extract), because api/ sits at the Hobby plan's 12-function
 // cap — same reason api/geocode.mjs multiplexes. A request with no `action`
 // behaves exactly as before, so the existing dispatcher caller is untouched.
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import {
-  createLeadFromText, evaluateLead, rankLeadBatch, pipelineSettings, jobCalcSettings,
+  createLeadFromText, evaluateLead, rankLeadBatch, pipelineSettings, jobCalcSettings, brokerNames,
 } from "../lib/leads.mjs";
+import { readBrokerJob, readClosingSheet, IMAGE_TYPES, DOC_TYPES } from "../lib/brokerDocs.mjs";
 import { evaluateJob, crewCostPerDay } from "../src/jobCalcData.js";
 
 export const maxDuration = 300; // planning calls can run 1-2 min; Hobby + Fluid Compute allows up to 300s
@@ -172,6 +174,18 @@ function tripEconomics({ totalCf, miles, revenue, helpers, driverRate, settings 
   };
 }
 
+// A pasted screenshot: { media_type, data (base64) }, images only, ~3 MB.
+// Returns null when there is none, { error } when it can't be read.
+const MAX_IMAGE_B64 = 4_200_000; // Vercel caps request bodies at 4.5 MB
+function inlineImage(img) {
+  if (!img || typeof img !== "object") return null;
+  const media_type = String(img.media_type || "");
+  const data = typeof img.data === "string" ? img.data.replace(/^data:[^,]*,/, "") : "";
+  if (!IMAGE_TYPES.has(media_type) || !data) return { error: { en: "Paste a screenshot (JPG, PNG or WebP).", es: "Pegá una captura (JPG, PNG o WebP)." } };
+  if (data.length > MAX_IMAGE_B64) return { error: { en: "The screenshot is too large (3 MB max).", es: "La captura es muy grande (máximo 3 MB)." } };
+  return { media_type, data };
+}
+
 // ── Pipeline actions ─────────────────────────────────────────────────────────
 // All three only read and price; none of them creates a job. The heavy lifting
 // (the closed extraction schema, the cost model, the containment rules) lives in
@@ -181,8 +195,10 @@ async function pipelineAction(action, body, { res, lang, token, userId, appUrl }
   try {
     if (action === "lead_extract") {
       const text = typeof body.text === "string" ? body.text.trim() : "";
-      if (!text) { res.status(400).json({ error: tr("Paste the broker's message first.", "Pegá primero el mensaje del broker.") }); return; }
-      const lead = await createLeadFromText({ text, source: "manual", createdBy: userId || null });
+      const image = inlineImage(body.image);
+      if (image?.error) { res.status(400).json({ error: tr(image.error.en, image.error.es) }); return; }
+      if (!text && !image) { res.status(400).json({ error: tr("Paste the broker's message first.", "Pegá primero el mensaje del broker.") }); return; }
+      const lead = await createLeadFromText({ text, image, source: "manual", createdBy: userId || null });
       // Best effort: a lead with no cached route still lands on the board.
       let evaluation = null;
       try { const r = await evaluateLead(lead, { token, appUrl }); evaluation = r.evaluation || null; } catch { /* saved anyway */ }
@@ -208,6 +224,34 @@ async function pipelineAction(action, body, { res, lang, token, userId, appUrl }
       if (!leads.length) { res.status(200).json({ ranked: [], notes: tr("No priced leads to rank.", "No hay leads evaluados para ordenar.") }); return; }
       const out = await rankLeadBatch({ leads, trucksFree: Number(body.trucks_free) || 0, lang });
       res.status(200).json(out);
+      return;
+    }
+
+    // A broker job (we are the carrier) from a WhatsApp message, a screenshot
+    // or call notes. Only reads: the app pre-fills its form with the result.
+    if (action === "broker_job_extract") {
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      const image = inlineImage(body.image);
+      if (image?.error) { res.status(400).json({ error: tr(image.error.en, image.error.es) }); return; }
+      if (!text && !image) { res.status(400).json({ error: tr("Paste the message or a screenshot first.", "Pegá primero el mensaje o una captura.") }); return; }
+      const fields = await readBrokerJob({ text, image, brokers: await brokerNames() });
+      res.status(200).json({ fields });
+      return;
+    }
+
+    // A broker's closing sheet, already uploaded to the private settlement-docs
+    // bucket by the app (so a big PDF never crosses Vercel's 4.5 MB body cap).
+    if (action === "settlement_extract") {
+      const path = String(body.path || "");
+      if (!/^sheets\/[\w.\- ]+$/.test(path)) { res.status(400).json({ error: tr("Missing document.", "Falta el documento.") }); return; }
+      const dl = await admin.storage.from("settlement-docs").download(path);
+      if (dl.error || !dl.data) { res.status(404).json({ error: tr("Could not open the document.", "No se pudo abrir el documento.") }); return; }
+      const media_type = String(dl.data.type || "").split(";")[0] || (/\.pdf$/i.test(path) ? "application/pdf" : "image/jpeg");
+      if (!DOC_TYPES.has(media_type)) { res.status(400).json({ error: tr("Upload a PDF or a photo (JPG, PNG).", "Subí un PDF o una foto (JPG, PNG).") }); return; }
+      const buf = Buffer.from(await dl.data.arrayBuffer());
+      if (buf.length > 24 * 1024 * 1024) { res.status(400).json({ error: tr("The document is too large (24 MB max).", "El documento es muy grande (máximo 24 MB).") }); return; }
+      const sheet = await readClosingSheet({ file: { media_type, data: buf.toString("base64") }, brokers: await brokerNames() });
+      res.status(200).json({ sheet });
       return;
     }
 
