@@ -21,7 +21,7 @@ import { numv, jobKey, parseCf } from "./analyticsData.js";
 import { matchBrokerName, matchSheetLines } from "./brokerDocsData.js";
 import { openSheetsFor, allocatePayment, sheetsToSettle, brokerStatement, brokerLedger } from "./brokerSettleData.js";
 
-const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
+const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none", boxSizing:"border-box" };
 const th = { padding:"8px 8px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
 const td = { padding:"7px 8px", fontSize:12.5, verticalAlign:"middle" };
 const fieldLabel = { fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4, display:"block" };
@@ -423,7 +423,7 @@ export function BrokerPaymentModal({ supabase, session, brokers = [], closingShe
       )}
       {f.broker_id && (
         <div style={{ display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap", fontSize:12.5, marginTop:10 }}>
-          <span>{left > 0.01 ? tr(`${fmt$(left)} stays on account (credit)`, `${fmt$(left)} queda a cuenta (crédito)`) : left < -0.01 ? <b style={{ color:"#B91C1C" }}>{tr(`Over-assigned by ${fmt$(-left)}`, `Asignaste ${fmt$(-left)} de más`)}</b> : tr("Fully assigned", "Todo asignado")}</span>
+          <span>{!(numv(f.amount) > 0) ? "" : left > 0.01 ? tr(`${fmt$(left)} stays on account (credit)`, `${fmt$(left)} queda a cuenta (crédito)`) : left < -0.01 ? <b style={{ color:"#B91C1C" }}>{tr(`Over-assigned by ${fmt$(-left)}`, `Asignaste ${fmt$(-left)} de más`)}</b> : tr("Fully assigned", "Todo asignado")}</span>
           {ledger && <span>{tr(`Balance now: ${fmt$(ledger.balance)}`, `Saldo ahora: ${fmt$(ledger.balance)}`)}</span>}
         </div>
       )}
