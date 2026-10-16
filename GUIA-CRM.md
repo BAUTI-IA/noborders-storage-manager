@@ -28,6 +28,7 @@ Todo se navega desde la barra lateral, dividida en cuatro bloques:
 - **🏦 Brokers** — los brokers (Allied, Atlas, Mayflower, etc.) y lo que se les debe.
 - **🧾 Billing** — el cobro mensual de storage a los clientes.
 - **📑 Settlements** — las closing sheets de los broker deliveries.
+- **🤝 Carriers** — los jobs que le damos a carriers externos y lo que nos debe (o le debemos a) cada uno.
 - **➕ Extras** — extras por job (shuttle, long carry, packing…) y las comisiones de drivers y reps.
 - **💰 Payments** — todos los cobros: quién tiene la plata y qué se depositó.
 - **👥 Clientes** — los clientes y sus trabajos.
@@ -104,6 +105,8 @@ Cuando lo marcás **Delivered**, sale de las listas de activos.
 
 Para crear uno nuevo, tocá **"+ Nuevo job"** (arriba a la derecha en Dispatching, Jobs o Calendario).
 
+> **¿Un broker te pasó un job por WhatsApp o por teléfono?** Usá **"+ Broker job"** (en Dispatching y en Jobs): es un formulario corto. Pegá el mensaje o la **captura** de WhatsApp (Ctrl+V), tocá **Read and fill in** y la IA completa los campos. Revisás y tocás **Save job**. Para un llamado, llenalo a mano. Ver punto 9.
+
 ### 4.1 Los 3 tipos de job
 - **Full** — pickup → **storage** → delivery (se guarda en el medio).
 - **Direct** — pickup → delivery (directo).
@@ -158,7 +161,11 @@ Métricas (Total pendiente, Overdue, Vence esta semana, Cobrado este mes) y pest
 
 ## 8. Brokers
 
-Lista de brokers con contacto, teléfono y email. Por cada uno ves **cuántos jobs** y el **balance pendiente** total. Podés agregar, editar o eliminar. Al cargar un job, elegís el broker de la lista.
+Lista de brokers con contacto, teléfono y email. Por cada uno ves **cuántos jobs**, el **balance pendiente** de sus jobs y el **Balance** con el broker: lo que falta cobrar (o pagar) de sus closing sheets **después de los pagos**. Si pagó de más, aparece **a cuenta**. Podés agregar, editar o eliminar. Al cargar un job, elegís el broker de la lista.
+
+- En la ficha del broker cargá su **rate por CF** y su **cargo por pad** habituales: se completan solos al cargar un job de ese broker.
+- **Statement** — el estado de cuenta del broker: sus sheets y sus pagos con el saldo corrido. Se imprime en PDF para mandárselo.
+- **Record broker payment** — registrar un pago del broker (o uno que le hicimos). Ver punto 9.
 
 ---
 
@@ -172,6 +179,19 @@ Para los **broker deliveries**: cada closing sheet agrupa jobs de un broker y ll
 - Botón para **exportar la closing sheet a PDF**.
 
 > Los jobs se **vinculan** a la closing sheet desde el detalle del job — no se cargan datos dos veces.
+
+### 9.1 Cargar la sheet desde el papel del broker ("✨ From document")
+Subís el **PDF o la foto** de la closing sheet que mandó el broker. La IA lee el número de CS, cada línea (job, CF, rate, BOL, pads) y los descuentos, y busca cada job en el CRM. Después ves **lado a lado los números del broker y los del CRM** (lo que no coincide, en naranja), elegís con cuáles quedarte y tocás **Create closing sheet**. **Nada se guarda sin que confirmes.**
+
+### 9.2 Marcar entregados
+En el detalle de la sheet, **Mark N delivered** pasa a *delivered* todos los jobs de la sheet que todavía no lo estaban.
+
+### 9.3 Cerrar el saldo ("Record broker payment")
+Está en Settlements, en el detalle de una sheet y en Brokers. Cargás monto, método, referencia y si **el broker nos pagó** o **le pagamos**. El pago se **reparte solo entre las sheets abiertas, de la más vieja a la más nueva** (se puede editar); lo que sobra queda **a cuenta**. Una sheet que queda cubierta pasa a **settled** sola, y el detalle muestra cuánto se pagó.
+
+> El **BOL cobrado** de cada job ahora es el **total** de sus pagos (antes un segundo pago parcial pisaba al primero). AP / AR muestra de cada sheet **lo que falta**, no el neto entero.
+
+Más detalle: `docs/broker-settlements.md`.
 
 ---
 
@@ -289,7 +309,23 @@ Siempre te pide **confirmación** ("¿Seguro que querés eliminar el job …? Es
 
 ---
 
-## 16. Tips importantes
+## 16. Carriers (jobs que le damos a otros carriers) 🤝
+
+Cuando le damos un job a otro carrier, **la orden sale siempre del CRM**.
+
+1. **Despachar** — en el detalle del job, pestaña **Money**, tarjeta **Carrier** → **Dispatch to carrier**. Elegís carrier, rate (por CF o fijo), lo que tiene que cobrarle al cliente y cómo mandarlo: **mail**, **WhatsApp** o los dos. El mail sale desde la casilla `dispatch@` con el **rate confirmation en PDF**. Con el seguro del carrier vencido no se puede despachar.
+2. **El carrier responde a ese mail**: "ACCEPT" para aceptar, y al terminar manda el **BOL firmado y el comprobante del cobro**.
+3. **El CRM lee la casilla solo**: la IA lee los documentos, los vincula al despacho y avisa por Telegram.
+4. **Revisar** — en **Carriers → Docs to review** ves los archivos y lo que leyó la IA (CF final, cobrado, método, firmas). **Approve** → el despacho queda *Verified*, el job pasa a *delivered* y el saldo del cliente queda en cero.
+5. **Saldos** — la pestaña **Balances** muestra qué carrier nos debe y a cuál le debemos. Los pagos y ajustes (por ejemplo, un claim) se cargan en **Payments & adjustments**. También aparece en **AP / AR**.
+
+> **La cuenta:** si el carrier cobró más que su rate (rate × CF + sus extras), **nos debe la diferencia**. Si cobró menos, se la debemos nosotros. Lo que cobra el carrier no entra en Payments: esa plata no llega a nuestro banco, sólo el neto.
+
+Para dar de alta un carrier: **Carriers → Carriers → + Carrier** (mails desde los que escribe, WhatsApp, MC/DOT, vencimiento del seguro, rate habitual). Setup y detalle: `docs/carrier-dispatch.md`.
+
+---
+
+## 17. Tips importantes
 
 - ✅ **Todo es en vivo:** si un compañero carga algo, lo ves al toque sin recargar.
 - 🔎 **Buscador:** en cada lista buscás por job #, cliente, driver, dirección, etc.
@@ -300,7 +336,7 @@ Siempre te pide **confirmación** ("¿Seguro que querés eliminar el job …? Es
 
 ---
 
-## 17. Glosario rápido
+## 18. Glosario rápido
 
 | Término | Qué significa |
 |---|---|
@@ -312,6 +348,10 @@ Siempre te pide **confirmación** ("¿Seguro que querés eliminar el job …? Es
 | **Balance** | Plata a cobrar (en el pickup o en el delivery). |
 | **BOL** | Bill of Lading — el cobro del broker delivery. |
 | **Closing sheet / Settlement** | Liquidación de un broker (lo que te debe o le debés). |
+| **Carrier (externo)** | Otra empresa a la que le damos un job; cobra al cliente y nos liquida la diferencia. |
+| **Dispatch / Despacho** | La orden que le mandamos a un carrier externo (D57). |
+| **Rate confirmation** | El PDF con el rate y lo que el carrier tiene que cobrar. |
+| **A cuenta** | Plata que un broker pagó de más y queda como crédito. |
 | **Extra** | Cargo adicional de un job (shuttle, long carry, packing…). |
 | **Rep** | Empleado/vendedor interno que participa de un job. |
 | **Comisión** | Lo que se lleva el driver o el rep de un extra. |
