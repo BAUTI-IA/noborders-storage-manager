@@ -5,6 +5,7 @@ import {
   buildReceivables, buildPayables, buildDriverPayables,
   netPosition, aging, sumRows, overdueRows, dueWithin,
   nextDueDate, addMonthsISO, rentDueDate, dueBillsToGenerate, overdueBillIds,
+  AR_SOURCES, AP_SOURCES,
 } from "../src/aparData.js";
 import { dedupeJobs, agingBuckets } from "../src/analyticsData.js";
 
@@ -375,6 +376,36 @@ t("end to end: one job, one bill and one driver week make a net position", () =>
   assert.equal(n.arOverdue, 1600);
   assert.ok(byId(payables, "driver:1:2026-08-19"));
   assert.ok(byId(receivables, "job:n:j-100"));
+});
+
+t("closing sheets show what is left after broker payments", () => {
+  const closingSheets = [
+    { id: 1, broker_id: 7, status: "open", load_date: "2026-09-01", closing_sheet_number: "CS-1" },
+    { id: 2, broker_id: 7, status: "open", load_date: "2026-09-05" },
+    { id: 3, broker_id: 7, status: "open", load_date: "2026-09-09" },
+  ];
+  const sheetCalcById = { 1: { net: 1000 }, 2: { net: 400 }, 3: { net: -300 } };
+  const brokerPayments = [
+    { broker_id: 7, direction: "in", amount: 1400, allocations: [{ sheet_id: 1, amount: 600 }, { sheet_id: 2, amount: 400 }] },
+    { broker_id: 7, direction: "out", amount: 100, allocations: [{ sheet_id: 3, amount: 100 }] },
+  ];
+  const ar = buildReceivables({ closingSheets, sheetCalcById, brokerPayments, brokerName: () => "Allied" });
+  assert.deepEqual(ar.map((r) => [r.id, r.amount, r.meta.paid]), [["settlement:1", 400, 600]]);   // sheet 2 fully paid
+  const ap = buildPayables({ closingSheets, sheetCalcById, brokerPayments, brokerName: () => "Allied" });
+  assert.deepEqual(ap.map((r) => [r.id, r.amount]), [["settlement:3", 200]]);
+});
+
+t("carrier balances land on the side they belong to", () => {
+  const carrierBalances = [
+    { carrierId: 2, name: "Carrier Bravo", balance: 870, oldest: "2026-10-14", verified: 1 },
+    { carrierId: 3, name: "Carrier Charlie", balance: -1320, oldest: "2026-09-25", verified: 2 },
+    { carrierId: 4, name: "Even Steven", balance: 0, verified: 3 },
+  ];
+  const ar = buildReceivables({ carrierBalances });
+  const ap = buildPayables({ carrierBalances });
+  assert.deepEqual(ar.map((r) => [r.id, r.source, r.party, r.amount, r.dueDate, r.label]), [["carrier:2", "carrier", "Carrier Bravo", 870, "2026-10-14", "1 job"]]);
+  assert.deepEqual(ap.map((r) => [r.id, r.amount, r.label]), [["carrier:3", 1320, "2 jobs"]]);
+  assert.ok(AR_SOURCES.includes("carrier") && AP_SOURCES.includes("carrier"));
 });
 
 if (!process.exitCode) console.log("\nAll AP/AR data tests passed.");

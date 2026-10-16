@@ -133,5 +133,8 @@
   "🔄 Handoff",
   "🖨️ PDF",
   "🚚 Delivery",
-  "🧑‍✈️ Drivers"
+  "🧑‍✈️ Drivers",
+  "SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-carriers.mjs",
+  "ops@carrier.com, dispatcher@carrier.com",
+  "MC / DOT"
 ]
