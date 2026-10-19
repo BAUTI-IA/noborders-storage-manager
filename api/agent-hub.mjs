@@ -15,6 +15,10 @@
 //          `action: "customer_line"` (rewritten from /api/customer-line) is the
 //          customer-facing ElevenLabs agent's tool server, with its own
 //          `x-customer-line-secret` (docs/customer-line.md).
+//   GET/POST `action=carrier_mail` (rewritten from /api/carrier-mail) is the
+//          dispatch@ mailbox's Apps Script: the outbox of dispatch emails and
+//          the inbox of carrier documents, with its own `x-carrier-secret`
+//          (docs/carrier-dispatch.md).
 import { createHash, timingSafeEqual } from "node:crypto";
 import { admin, handleIncoming, warmCaches } from "../lib/agent.mjs";
 import { writesEnabled } from "../lib/agentWrite.mjs";
@@ -22,6 +26,7 @@ import { collectBriefData, composeBrief, snapshotAndDeltas, saveSnapshot } from 
 import { mintVoiceSession, runVoiceTool, vt, VOICE_TOOL_NAMES } from "../lib/voice.mjs";
 import { ingestEmail } from "../lib/leads.mjs";
 import { runCustomerLineTool, CUSTOMER_LINE_TOOLS } from "../lib/customerLine.mjs";
+import { carrierMail, CARRIER_MAIL_HEADER } from "../lib/carrierMail.mjs";
 
 export const maxDuration = 300;
 
@@ -244,6 +249,34 @@ export async function customerLine(req, res, deps) {
   }
 }
 
+// ── Carrier mailbox (Apps Script in dispatch@) ──────────────────────────────
+// The script both pulls (GET: the outbox) and pushes (POST: acks, new mail,
+// finalize), so this door is routed before the GET → daily brief branch. It
+// needs no model to send or file mail; reading documents degrades to "a person
+// reads them" when the Anthropic key is missing.
+export function carrierMailAuth(req) {
+  const expected = process.env.CARRIER_MAIL_SECRET;
+  if (!expected) return { ok: false, status: 503, error: "server not configured: CARRIER_MAIL_SECRET" };
+  const given = req.headers?.[CARRIER_MAIL_HEADER];
+  if (!given || !secretMatches(given, expected)) return { ok: false, status: 401, error: "unauthorized" };
+  return { ok: true };
+}
+
+const isCarrierMail = (req) => String(req.query?.action || req.body?.action || "") === "carrier_mail";
+
+export async function carrierMailDoor(req, res, deps) {
+  const auth = carrierMailAuth(req);
+  if (!auth.ok) { res.status(auth.status).json({ error: auth.error }); return; }
+  try {
+    const out = await carrierMail(req, deps);
+    if (out.ok === false) { res.status(out.status || 400).json({ error: out.error }); return; }
+    res.status(200).json(out);
+  } catch (e) {
+    console.error("carrier_mail:", e);
+    res.status(500).json({ error: e?.message || "carrier mail error" });
+  }
+}
+
 async function appChat(req, res) {
   // A broker email is not a chat turn: route it before any agent auth runs.
   if (String(req.query?.action || req.body?.action || "") === "inbound_email") return inboundEmail(req, res);
@@ -405,6 +438,7 @@ export default async function handler(req, res) {
   if (!admin) { res.status(500).json({ error: "server not configured" }); return; }
   // The Customer Line needs no model: route it before the Anthropic check.
   if (req.method === "POST" && isCustomerLine(req)) return customerLine(req, res);
+  if (isCarrierMail(req)) return carrierMailDoor(req, res);
   if (!process.env.ANTHROPIC_API_KEY) { res.status(500).json({ error: "server not configured" }); return; }
   if (req.method === "GET") return dailyBrief(req, res);
   if (req.method === "POST") return appChat(req, res);

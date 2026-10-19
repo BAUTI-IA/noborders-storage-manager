@@ -29,6 +29,10 @@
     {
       "source": "/api/bank-digest",
       "destination": "/api/bank-analyze?action=digest"
+    },
+    {
+      "source": "/api/carrier-mail",
+      "destination": "/api/agent-hub?action=carrier_mail"
     }
   ]
 }

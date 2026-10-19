@@ -25,6 +25,7 @@ export const CASCADE_CHILDREN = {
   payments: [{ table: "job_extras", col: "payment_id" }],
   claims: [{ table: "claim_notes", col: "claim_id" }],
   companies: [{ table: "compliance_documents", col: "entity_id", where: { entity_type: "company" } }],
+  carriers: [{ table: "carrier_dispatches", col: "carrier_id" }],
 };
 // Children are stamped a few hundred ms before their parent in one delete
 // flow; anything outside this window was deleted on its own.

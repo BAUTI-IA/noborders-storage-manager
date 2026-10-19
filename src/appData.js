@@ -49,14 +49,17 @@ export function collectionStatus(j) {
 export const jobPadsMissing = (j) => Math.max(0, numv(j.pads_received) - numv(j.pads_returned));
 // All settlement math for a closing sheet given its (deduped-by-job) job rows.
 // Pads are tallied per job (received/returned), not from the sheet header.
-export function sheetCalc(sheet, jobsIn) {
+// `collectedFor(job)` is what was really collected on a job; the app passes
+// the same rule the rest of the CRM uses (bol_collected or the job's received
+// payments, whichever is higher). Without it, the raw bol_collected column.
+export function sheetCalc(sheet, jobsIn, collectedFor = null) {
   let carrierFee = 0, bolBalance = 0, bolCollected = 0, totalCf = 0, padsSent = 0, padsReturned = 0, padsMissing = 0;
   for (const j of jobsIn) {
     const cf = parseCf(j.volume);
     totalCf += cf;
     carrierFee += cf * numv(j.carrier_rate_per_cf);
     bolBalance += numv(j.bol_balance);
-    bolCollected += numv(j.bol_collected);
+    bolCollected += collectedFor ? numv(collectedFor(j)) : numv(j.bol_collected);
     padsSent += numv(j.pads_received);
     padsReturned += numv(j.pads_returned);
     padsMissing += jobPadsMissing(j);
@@ -67,6 +70,14 @@ export function sheetCalc(sheet, jobsIn) {
   const pending = Math.max(0, bolBalance - bolCollected);
   const net = netCarrier - bolCollected;            // >0 broker owes us, <0 we owe broker
   return { carrierFee, bolBalance, bolCollected, totalCf, padsSent, padsReturned, padsMissing, padsCharge, deductions, netCarrier, pending, net, jobCount: jobsIn.length };
+}
+
+// What a job's received "job" payments add up to. storage_jobs.bol_collected
+// mirrors THIS total (never just the payment being saved: a second partial
+// payment adds to the first instead of replacing it).
+export function jobCollectedTotal(payments) {
+  const t = (payments || []).reduce((s, p) => (p && !p.deleted_at && p.received && p.concept === "job") ? s + _payNet(p) : s, 0);
+  return Math.round(t * 100) / 100;
 }
 
 // ── Payments: money in, who holds it, what's banked ──────────────────────────

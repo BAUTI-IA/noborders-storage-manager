@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   today, fmtDateLocal, addDaysStr, daysSince,
   commissionDefaults, extraCfCalc,
-  collectionStatus, jobPadsMissing, sheetCalc,
+  collectionStatus, jobPadsMissing, sheetCalc, jobCollectedTotal,
   paymentNet, effectiveBanked, bankedDateOf,
   docStatus, docDaysToExpiry,
   groupPayments, moneyStatus,
@@ -139,6 +139,26 @@ t("sheetCalc: empty sheet", () => {
   assert.equal(r.net, 0);
   assert.equal(r.pending, 0);
   assert.equal(r.jobCount, 0);
+});
+
+t("sheetCalc: real collections win over the raw bol_collected column", () => {
+  // Paid in two parts: the column kept only the last one ($100); payments say $160.
+  const r = sheetCalc({ charge_per_pad:"0" }, SHEET_JOBS, (j) => j.bol_balance === "200" ? 160 : 0);
+  assert.equal(r.bolCollected, 160);
+  assert.equal(r.pending, 40);
+  assert.equal(r.net, 2500 - 160);
+});
+
+t("jobCollectedTotal: received job payments only, net of discounts, live rows", () => {
+  assert.equal(jobCollectedTotal([
+    { concept:"job", received:true, amount:"100" },
+    { concept:"job", received:true, amount:"80", discount:"20" },
+    { concept:"job", received:false, amount:"500" },
+    { concept:"extra", received:true, amount:"50" },
+    { concept:"job", received:true, amount:"999", deleted_at:"2026-10-01" },
+  ]), 160);
+  assert.equal(jobCollectedTotal([]), 0);
+  assert.equal(jobCollectedTotal(null), 0);
 });
 
 // ── Payments ─────────────────────────────────────────────────────────────────

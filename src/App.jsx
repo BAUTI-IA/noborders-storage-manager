@@ -18,13 +18,17 @@ import { ExpensesPage, EMPTY_EXPENSE, EMPTY_ADJUSTMENT, FIELD_CAT_BY_BANK, Expen
 import { UsStorageMap, US_GEO_URL, US_NAME_TO_CODE, US_CODE_TO_NAME } from "./usMap.jsx";
 import { BancosSection } from "./bank.jsx";
 import { ApArSection } from "./apar.jsx";
+import { CarriersSection, CarrierDispatchCard } from "./carriers.jsx";
+import { carrierCollectedByJob } from "./carrierData.js";
+import { BrokerJobQuickAdd, SettlementFromDocModal, BrokerPaymentModal, BrokerStatementModal } from "./brokerDesk.jsx";
+import { brokerLedger, allocatedBySheet } from "./brokerSettleData.js";
 import { AnalyticsPage } from "./analytics.jsx";
 import { createUndoManager } from "./undo.js";
 import { I18N_ES, setI18nLang, tr, t, i18nApply, i18nRestore } from "./i18n.js";
 import { ELD, ELD_KEYS, eldOfTruck, eldOfDriver } from "./eldData.js";
 import { selectAll, dbFailed } from "./db.js";
 import { mapJobStops, JOB_PIN_DAYS } from "./geoData.js";
-import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
+import { today, fmtDateLocal, addDaysStr, daysSince, commissionDefaults, extraCfCalc, collectionStatus, jobPadsMissing, sheetCalc, jobCollectedTotal, paymentNet, effectiveBanked, bankedDateOf, docStatus, docDaysToExpiry, groupPayments, moneyStatus } from "./appData.js";
 
 // Reads from Vercel env vars when present (so the test/preview deployment can
 // point to a separate test database), falling back to the production project.
@@ -71,7 +75,7 @@ const STANDARD_SIZES = ["5x5","5x10","5x15","10x10","10x15","10x20","10x25","10x
 // A job can span several locations: one storage_jobs row per location (rented
 // unit via storage_id, or company warehouse via `warehouse`), sharing job_number.
 const WAREHOUSES = ["Indiana", "New Jersey"];
-const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"" };
+const EMPTY_BROKER = { name:"", contact_name:"", contact_phone:"", contact_email:"", notes:"", default_rate_per_cf:"", default_charge_per_pad:"" };
 const EMPTY_DRIVER = { name:"", phone:"", whatsapp_group_link:"", truck_id:"", daily_rate:"", hourly_rate:"", notes:"", active:true, verizon_driver_id:"", motive_driver_id:"", eld:"" };
 const EMPTY_TRUCK = { name:"", plate:"", capacity_cf:"", notes:"", active:true, year:"", make:"", model:"", vin:"", license_plate:"", license_state:"", verizon_vehicle_id:"", motive_vehicle_id:"", eld:"" };
 
@@ -3691,6 +3695,11 @@ const TRASH_TABLES = [
   ["drivers", "Drivers", r => r.name || `#${r.id}`],
   ["trucks", "Trucks", r => r.name || `#${r.id}`],
   ["closing_sheets", "Closing sheets", r => `#${r.closing_sheet_number || r.id}`],
+  ["broker_payments", "Broker payments", r => `$${Math.round(numv(r.amount)).toLocaleString()} · ${r.paid_date || ""}`],
+  ["carriers", "Carriers", r => r.name || `#${r.id}`],
+  ["carrier_dispatches", "Carrier dispatches", r => `${r.job_number || ""} · D${r.id}`],
+  ["carrier_payments", "Carrier payments", r => `$${Math.round(numv(r.amount)).toLocaleString()} · ${r.paid_date || ""}`],
+  ["carrier_adjustments", "Carrier adjustments", r => `$${Math.round(numv(r.amount)).toLocaleString()} · ${r.reason || ""}`],
   ["trips", "Trips", r => `${r.trip_number || r.id}`],
   ["companies", "Companies", r => r.name || `#${r.id}`],
   ["employees", "Employees", r => r.name || `#${r.id}`],
@@ -3783,6 +3792,7 @@ const NAV = [
     { id:"brokers", label:"Brokers", icon:"🏦" },
     { id:"billing", label:"Storage Billing", icon:"🧾" },
     { id:"settlements", label:"Settlements", icon:"📑" },
+    { id:"carriers", label:"Carriers", icon:"🤝" },
     { id:"extras", label:"Extras", icon:"➕" },
     { id:"payments", label:"Payments", icon:"💰" },
     { id:"apar", label:"AP / AR", icon:"📒" },
@@ -3867,6 +3877,7 @@ const PAGE_META = {
   brokers:     { title:"Brokers", sub:"Brokers and outstanding balances" },
   billing:     { title:"Storage Billing", sub:"Monthly storage billing for clients" },
   settlements: { title:"Carrier Settlements", sub:"Broker-delivery closing sheets" },
+  carriers:    { title:"Carriers", sub:"Jobs we give to outside carriers · balance with each one" },
   extras:      { title:"Extras & Commissions", sub:"Extras per job and driver/rep commissions" },
   payments:    { title:"Payments", sub:"Collections, cash in circulation and deposits" },
   apar:        { title:"AP / AR", sub:"Accounts receivable and payable · aging and net position" },
@@ -4552,6 +4563,18 @@ export default function App() {
   // Carrier settlements
   const [settlementsMissing, setSettlementsMissing] = useState(false);
   const [closingSheets, setClosingSheets] = useState([]);
+  // Carriers (we are the broker): loaded here because the job detail card and
+  // the job balances need them; the Carriers section loads its inbox and money.
+  const [carriers, setCarriers] = useState([]);
+  const [carrierDispatches, setCarrierDispatches] = useState([]);
+  const [carriersMissing, setCarriersMissing] = useState(false);
+  // Broker payments against closing sheets (scripts/setup-broker-settle.mjs).
+  const [brokerPayments, setBrokerPayments] = useState([]);
+  const [brokerPaymentsMissing, setBrokerPaymentsMissing] = useState(false);
+  const [showBrokerJob, setShowBrokerJob] = useState(false);       // quick broker job (WhatsApp / call)
+  const [showSheetFromDoc, setShowSheetFromDoc] = useState(false); // closing sheet read from the broker's paper
+  const [brokerPayFor, setBrokerPayFor] = useState(null);          // { brokerId } while recording a broker payment
+  const [statementBroker, setStatementBroker] = useState(null);    // broker whose statement is open
   const [csTab, setCsTab] = useState("open");          // open | settled | disputed | all
   const [csDetailId, setCsDetailId] = useState(null);  // open closing-sheet detail page
   const [csOpenLines, setCsOpenLines] = useState(() => new Set()); // statement lines expanded to their per-job detail
@@ -4987,6 +5010,26 @@ export default function App() {
     if (!error) setClosingSheets((data || []).filter(notDel));
   }, []);
 
+  // Missing table (module not migrated yet) vs any other error.
+  const isMissingTable = (error) => /does not exist|relation|schema cache|42P01|PGRST205/i.test(`${error?.code || ""} ${error?.message || ""}`);
+  const loadCarriers = useCallback(async () => {
+    const { data, error } = await selectAll(() => supabase.from("carriers").select("*"));
+    if (error) { if (isMissingTable(error)) setCarriersMissing(true); return; }
+    setCarriersMissing(false);
+    setCarriers((data || []).filter(notDel));
+  }, []);
+  const loadBrokerPayments = useCallback(async () => {
+    const { data, error } = await selectAll(() => supabase.from("broker_payments").select("*"));
+    if (error) { if (isMissingTable(error)) setBrokerPaymentsMissing(true); return; }
+    setBrokerPaymentsMissing(false);
+    setBrokerPayments((data || []).filter(notDel));
+  }, []);
+  const loadCarrierDispatches = useCallback(async () => {
+    const { data, error } = await selectAll(() => supabase.from("carrier_dispatches").select("*"));
+    if (error) { if (isMissingTable(error)) setCarriersMissing(true); return; }
+    setCarrierDispatches((data || []).filter(notDel));
+  }, []);
+
   const loadTrips = useCallback(async () => {
     const { data, error } = await selectAll(() => supabase.from("trips").select("*").order("created_at", { ascending: false }));
     if (!error) setTrips((data || []).filter(notDel));
@@ -5196,6 +5239,27 @@ export default function App() {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [session, crmV2Missing, loadBrokers]);
+
+  // Carriers module (scripts/setup-carriers.mjs). Missing tables just hide it.
+  useEffect(() => {
+    if (!session) return;
+    loadCarriers(); loadCarrierDispatches(); loadBrokerPayments();
+  }, [session, loadCarriers, loadCarrierDispatches, loadBrokerPayments]);
+  useEffect(() => {
+    if (!session || brokerPaymentsMissing) return;
+    const channel = supabase.channel("broker-payments-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "broker_payments" }, () => loadBrokerPayments())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, brokerPaymentsMissing, loadBrokerPayments]);
+  useEffect(() => {
+    if (!session || carriersMissing) return;
+    const channel = supabase.channel("carriers-app-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "carriers" }, () => loadCarriers())
+      .on("postgres_changes", { event: "*", schema: "public", table: "carrier_dispatches" }, () => loadCarrierDispatches())
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [session, carriersMissing, loadCarriers, loadCarrierDispatches]);
 
   // Probe the CRM v3 extras (drivers table + rep column on storage_jobs).
   useEffect(() => {
@@ -6573,32 +6637,6 @@ export default function App() {
     }
     return m;
   }, [jobs]);
-  const sheetCalcById = useMemo(() => {
-    const m = {};
-    for (const s of closingSheets) m[s.id] = sheetCalc(s, jobsBySheet[s.id] || []);
-    return m;
-  }, [closingSheets, jobsBySheet]);
-  const settlementMetrics = useMemo(() => {
-    let openCount = 0, owesUs = 0, weOwe = 0, pendingBol = 0, padsValue = 0;
-    for (const s of closingSheets) {
-      const c = sheetCalcById[s.id] || {};
-      if (s.status === "open") { openCount++; pendingBol += c.pending || 0; padsValue += c.padsCharge || 0; }
-      if (s.status !== "settled") { if ((c.net || 0) > 0) owesUs += c.net; else weOwe += -(c.net || 0); }
-    }
-    return { openCount, owesUs, weOwe, pendingBol, padsValue };
-  }, [closingSheets, sheetCalcById]);
-  // Per-broker settlement rollup (non-settled sheets).
-  const brokerSettleStats = useMemo(() => {
-    const m = {};
-    for (const s of closingSheets) {
-      const c = sheetCalcById[s.id] || {};
-      if (!s.broker_id) continue;
-      if (!m[s.broker_id]) m[s.broker_id] = { open:0, owesUs:0, weOwe:0 };
-      if (s.status === "open") m[s.broker_id].open++;
-      if (s.status !== "settled") { if ((c.net||0) > 0) m[s.broker_id].owesUs += c.net; else m[s.broker_id].weOwe += -(c.net||0); }
-    }
-    return m;
-  }, [closingSheets, sheetCalcById]);
 
   // ── Trips / Live Load derived data ──
   const truckById = useMemo(() => { const m = {}; for (const t of trucksList) m[t.id] = t; return m; }, [trucksList]);
@@ -6636,7 +6674,14 @@ export default function App() {
     }
     return m;
   }, [payments, jobKeyByRowId]);
-  const jobCollectedFor = useCallback((j, key) => Math.max(numv(j.bol_collected), jobPaidByKey[key || jobKey(j)]?.job || 0), [jobPaidByKey]);
+  // What outside carriers collected on jobs we dispatched to them (verified
+  // dispatches only). The customer paid, just not to us: it adds to the job's
+  // collected total, and the money is owed by the carrier (Carriers section).
+  const carrierCollectedByKey = useMemo(() => carrierCollectedByJob(carrierDispatches), [carrierDispatches]);
+  const jobCollectedFor = useCallback((j, key) => {
+    const k = key || jobKey(j);
+    return Math.max(numv(j.bol_collected), jobPaidByKey[k]?.job || 0) + (carrierCollectedByKey[k] || 0);
+  }, [jobPaidByKey, carrierCollectedByKey]);
   // Extras still owed for a job: billed active extras − extra-concept payments
   // received (aggregate, so legacy unassigned extra payments still count).
   const extrasOwedFor = useCallback((key) => (extrasByJobKey[key] || []).reduce((s, e) => s + (e.active === false ? 0 : numv(e.amount)), 0), [extrasByJobKey]);
@@ -6649,6 +6694,36 @@ export default function App() {
     const k = key || jobKey(j);
     return Math.max(0, jobToCollect(j) - jobCollectedFor(j, k)) + extrasOutstandingFor(k);
   }, [jobCollectedFor, extrasOutstandingFor]);
+  // ── Carrier settlements rollups (after jobCollectedFor, which they use) ──
+  // Collected per job uses the same rule as every other balance in the CRM
+  // (jobCollectedFor), so a job paid in several parts counts all of them.
+  const sheetCalcById = useMemo(() => {
+    const m = {};
+    for (const s of closingSheets) m[s.id] = sheetCalc(s, jobsBySheet[s.id] || [], (j) => jobCollectedFor(j));
+    return m;
+  }, [closingSheets, jobsBySheet, jobCollectedFor]);
+  const settlementMetrics = useMemo(() => {
+    let openCount = 0, owesUs = 0, weOwe = 0, pendingBol = 0, padsValue = 0;
+    for (const s of closingSheets) {
+      const c = sheetCalcById[s.id] || {};
+      if (s.status === "open") { openCount++; pendingBol += c.pending || 0; padsValue += c.padsCharge || 0; }
+      if (s.status !== "settled") { if ((c.net || 0) > 0) owesUs += c.net; else weOwe += -(c.net || 0); }
+    }
+    return { openCount, owesUs, weOwe, pendingBol, padsValue };
+  }, [closingSheets, sheetCalcById]);
+  // Per-broker settlement rollup: what is still open on each broker's sheets
+  // after the payments recorded against them (lib/brokerSettle.mjs), plus any
+  // payment not yet spread over a sheet (credit on account).
+  const brokerSettleStats = useMemo(() => {
+    const m = {};
+    const row = (id) => (m[id] = m[id] || { open:0, owesUs:0, weOwe:0, credit:0, balance:0 });
+    for (const s of closingSheets) { if (s.broker_id && s.status === "open") row(s.broker_id).open++; }
+    for (const r of brokerLedger({ sheets: closingSheets, calcById: sheetCalcById, payments: brokerPayments })) {
+      Object.assign(row(r.brokerId), { owesUs: r.owesUs, weOwe: r.weOwe, credit: r.credit, balance: r.balance });
+    }
+    return m;
+  }, [closingSheets, sheetCalcById, brokerPayments]);
+  const sheetPaidById = useMemo(() => allocatedBySheet(brokerPayments), [brokerPayments]);
   const tripCalc = useCallback((trip) => {
     const jobsIn = jobsByTrip[trip.id] || [];
     // totalCf = everything assigned to the trip; loadedCf = what is physically on
@@ -7405,6 +7480,7 @@ export default function App() {
     employees: loadEmployees,
     driver_work_days: loadWorkDays, driver_adjustments: loadAdjustments, trips: loadTrips,
     trip_stops: loadTripStops, job_events: loadJobEvents, payment_accounts: loadPayAccounts,
+    carriers: loadCarriers, carrier_dispatches: loadCarrierDispatches, broker_payments: loadBrokerPayments,
   }[t]);
   async function doUndo() {
     if (!undoMgr.canUndo()) { showToast("Nada para deshacer"); return; }
@@ -7656,6 +7732,13 @@ export default function App() {
     if (!settlementsMissing) loadClosingSheets();
   }
 
+  // A carrier's documents were approved: the job is delivered (Carriers section).
+  async function markJobDeliveredByNumber(jobNumber) {
+    const k = jobKey({ job_number: jobNumber });
+    const parts = jobs.filter(j => jobKey(j) === k);
+    if (!parts.length || parts.every(p => p.status === "delivered")) return;
+    await setJobStatus({ parts, pickup_date: parts[0].pickup_date }, "delivered");
+  }
   // Advance a job to its next status across all its parts. Reaching "delivered"
   // also stamps date_out (so it leaves the active lists). Falls back to the
   // delivered flag when the CRM status columns aren't present yet.
@@ -7691,13 +7774,18 @@ export default function App() {
   function openAddBroker() { setEditingBrokerId(null); setBrokerForm(EMPTY_BROKER); setShowBrokerModal(true); }
   function openEditBroker(b) {
     setEditingBrokerId(b.id);
-    setBrokerForm({ name:b.name||"", contact_name:b.contact_name||"", contact_phone:b.contact_phone||"", contact_email:b.contact_email||"", notes:b.notes||"" });
+    setBrokerForm({ name:b.name||"", contact_name:b.contact_name||"", contact_phone:b.contact_phone||"", contact_email:b.contact_email||"", notes:b.notes||"", default_rate_per_cf: b.default_rate_per_cf ?? "", default_charge_per_pad: b.default_charge_per_pad ?? "" });
     setShowBrokerModal(true);
   }
   async function saveBroker() {
     if (!brokerForm.name.trim()) return;
     setBrokerSaving(true);
     const payload = { name:brokerForm.name.trim(), contact_name:brokerForm.contact_name||null, contact_phone:brokerForm.contact_phone||null, contact_email:brokerForm.contact_email||null, notes:brokerForm.notes||null };
+    // Defaults that pre-fill a new broker job (scripts/setup-broker-settle.mjs adds the columns).
+    if (!brokerPaymentsMissing) {
+      payload.default_rate_per_cf = brokerForm.default_rate_per_cf === "" ? null : numv(brokerForm.default_rate_per_cf);
+      payload.default_charge_per_pad = brokerForm.default_charge_per_pad === "" ? null : numv(brokerForm.default_charge_per_pad);
+    }
     if (editingBrokerId) {
       const prev = brokers.find(b => b.id === editingBrokerId);
       if (dbFailed(await supabase.from("brokers").update(payload).eq("id", editingBrokerId), "brokers")) { setBrokerSaving(false); return; }
@@ -8973,6 +9061,30 @@ export default function App() {
     showToast(`Job loaded for relocation — no collection`);
   }
   // Create an unplanned new job and immediately add it to the trip.
+  // A broker job (we are the carrier) from the short form: one row, no storage,
+  // job type "broker_delivery". The long job form stays available to edit it.
+  async function saveQuickBrokerJob(f) {
+    const row = {
+      job_number: f.job_number || null, customer: f.customer || null, client_phone: f.client_phone || null,
+      job_type: "broker_delivery", status: "scheduled", calendar_status: "active",
+      broker_id: f.broker_id ? Number(f.broker_id) : null,
+      pickup_city: f.pickup_city || null, pickup_state: (f.pickup_state || "").toUpperCase() || null, pickup_zip: f.pickup_zip || null,
+      delivery_address: f.delivery_address || null, delivery_city: f.delivery_city || null,
+      delivery_state: (f.delivery_state || "").toUpperCase() || null, delivery_zip: f.delivery_zip || null,
+      fadd: f.fadd || null, delivery_date: f.delivery_date || null,
+      volume: f.cf ? String(f.cf) : null, carrier_rate_per_cf: f.carrier_rate_per_cf !== "" ? numv(f.carrier_rate_per_cf) : null,
+      bol_balance: f.bol_balance !== "" ? numv(f.bol_balance) : null,
+      pads_received: f.pads_received !== "" ? parseInt(f.pads_received) || 0 : 0, pads_returned: 0,
+      carrier_notes: f.notes || null, date_in: today(), storage_id: null, warehouse: null, created_by: userEmail,
+    };
+    const { data, error } = await supabase.from("storage_jobs").insert([row]).select("*");
+    if (error) { window.alert(`${tr("Could not save", "No se pudo guardar")}: ${error.message}`); return false; }
+    undoMgr.record(`Job ${row.job_number || ""} creado`.replace(/\s+/g, " ").trim(), (data || []).map(r => undoMgr.createEntry("storage_jobs", r)));
+    await loadJobs();
+    if (data?.[0]) setJobDetailKey(jobKey(data[0]));
+    showToast(tr("Broker job saved", "Job de broker guardado"));
+    return true;
+  }
   async function saveUnplannedPickup(trip) {
     const f = unplannedForm;
     setTripBusy(true);
@@ -9629,6 +9741,19 @@ export default function App() {
     loadExtras();
     advanceCommQueue();
   }
+  // Two-way sync: storage_jobs.bol_collected mirrors the TOTAL of the job's
+  // received "job" payments, read back after the save. Writing only the payment
+  // being saved made a second partial payment replace the first, and closing
+  // sheets then overstated what the broker owed. Returns the error, or null.
+  async function syncJobCollected(jobRowId, method, date) {
+    const k = jobKeyByRowId[Number(jobRowId)];
+    const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
+    if (!ids.length) return null;
+    const { data, error } = await supabase.from("payments").select("amount, discount, concept, received, deleted_at").in("job_id", ids);
+    if (error) return error;
+    const r = await supabase.from("storage_jobs").update({ bol_collected: jobCollectedTotal(data), bol_payment_method: method || null, bol_collected_date: date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
+    return r.error || null;
+  }
   // Convert an "A cuenta" payment into allocated lines: the original row
   // becomes the first line (method/check/photo details preserved) and the
   // rest are inserted as siblings sharing its split_group.
@@ -9667,11 +9792,7 @@ export default function App() {
       if (group && !splitMissing) payload.split_group = group;
       ({ error: err } = await supabase.from("payments").insert([payload]));
     }
-    if (!err && jobLineSum > 0 && p.job_id) {
-      const k = jobKeyByRowId[Number(p.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) { ({ error: err } = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: p.method || null, bol_collected_date: p.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids)); }
-    }
+    if (!err && jobLineSum > 0 && p.job_id) err = await syncJobCollected(p.job_id, p.method, p.payment_date);
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
     setReallocPay(null); setEditingPayId(null); setShowPayModal(false); loadPayments(); loadJobs(); loadExtras();
@@ -9773,11 +9894,7 @@ export default function App() {
       }
     }
     // Two-way sync: job rows mirror bol_collected on the storage_job rows.
-    if (!err && jobLineSum > 0 && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) { const r = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids); if (r.error) err = r.error; }
-    }
+    if (!err && jobLineSum > 0 && f.job_id) err = await syncJobCollected(f.job_id, lines[0].method, f.payment_date);
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
     undoMgr.record("Pago registrado", entries);
@@ -9889,14 +10006,7 @@ export default function App() {
       }
     }
     // Two-way sync: job rows mirror bol_collected on the storage_job rows.
-    if (!err && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const ids = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (ids.length) {
-        const r = await supabase.from("storage_jobs").update({ bol_collected: jobLineSum, bol_payment_method: lines[0].method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", ids);
-        if (r.error) err = r.error;
-      }
-    }
+    if (!err && f.job_id) err = await syncJobCollected(f.job_id, lines[0].method, f.payment_date);
     setPaySaving(false);
     if (err) { window.alert(err.message); return; }
     undoMgr.record("Pago editado", entries);
@@ -9937,13 +10047,7 @@ export default function App() {
       }
     }
     // Two-way sync: a "job" payment mirrors bol_collected on the storage_job.
-    if (!error && f.concept === "job" && f.job_id) {
-      const k = jobKeyByRowId[Number(f.job_id)];
-      const idsToSync = k ? jobs.filter(j => jobKey(j) === k).map(j => j.id) : [];
-      if (idsToSync.length) {
-        ({ error } = await supabase.from("storage_jobs").update({ bol_collected: numv(f.amount), bol_payment_method: f.method || null, bol_collected_date: f.payment_date || today(), updated_by: userEmail, updated_at: new Date().toISOString() }).in("id", idsToSync));
-      }
-    }
+    if (!error && f.concept === "job" && f.job_id) error = await syncJobCollected(f.job_id, f.method, f.payment_date);
     setPaySaving(false);
     if (error) { window.alert(error.message); return; }
     undoMgr.record("Pago editado", payEntries);
@@ -10062,7 +10166,7 @@ export default function App() {
   }
   function exportCsPdf(sheet, calc, brokerNm, driverNm, jobsIn) {
     const m = (n) => `$${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
-    const rows = jobsIn.map(j => `<tr><td>${j.job_number||"-"}</td><td>${j.customer||"-"}</td><td>${Math.round(parseCf(j.volume))} CF</td><td>${m(numv(j.carrier_rate_per_cf))}</td><td>${m(parseCf(j.volume)*numv(j.carrier_rate_per_cf))}</td><td>${m(numv(j.bol_balance))}</td><td>${m(numv(j.bol_collected))}</td></tr>`).join("");
+    const rows = jobsIn.map(j => `<tr><td>${j.job_number||"-"}</td><td>${j.customer||"-"}</td><td>${Math.round(parseCf(j.volume))} CF</td><td>${m(numv(j.carrier_rate_per_cf))}</td><td>${m(parseCf(j.volume)*numv(j.carrier_rate_per_cf))}</td><td>${m(numv(j.bol_balance))}</td><td>${m(jobCollectedFor(j))}</td></tr>`).join("");
     const net = calc.net >= 0 ? `Broker owes you ${m(calc.net)}` : `You owe the broker ${m(-calc.net)}`;
     const html = `<html><head><meta charset="utf-8"><title>CS ${sheet.closing_sheet_number||""}</title>
       <style>body{font-family:system-ui,sans-serif;padding:30px;color:#111}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}th{background:#f5f5f5}.box{border:1px solid #ddd;border-radius:8px;padding:12px;margin-top:10px}.r{display:flex;justify-content:space-between;font-size:13px;margin:3px 0}</style></head>
@@ -10154,7 +10258,6 @@ export default function App() {
 
   // Per-broker stats: active jobs count + pending balance (distinct jobs).
   const brokerStats = useMemo(() => {
-    const num = (v) => (v && !isNaN(Number(v))) ? Number(v) : 0;
     const m = {};
     const seen = new Set();
     for (const j of jobs) {
@@ -10165,11 +10268,12 @@ export default function App() {
       const sk = j.broker_id + "|" + k;
       if (!seen.has(sk) && !j.date_out && j.status !== "cancelled") {
         seen.add(sk);
-        m[j.broker_id].balance += num(j.pickup_balance) + num(j.delivery_balance);
+        // Pickup + delivery + BOL balance, minus what was already collected.
+        m[j.broker_id].balance += jobOutstanding(j, k);
       }
     }
     return m;
-  }, [jobs]);
+  }, [jobs, jobOutstanding]);
 
   // Broker share kept per broker: job-balance share (by job, deduped) + extras share.
   const brokerShareByBroker = useMemo(() => {
@@ -10195,7 +10299,7 @@ export default function App() {
 
   // Brokers page rollup: totals across every broker row shown in the table.
   const brokerTotals = useMemo(() => {
-    let jobsCount = 0, balance = 0, share = 0, openCs = 0, owesUs = 0, weOwe = 0, withJobs = 0;
+    let jobsCount = 0, balance = 0, share = 0, openCs = 0, owesUs = 0, weOwe = 0, withJobs = 0, net = 0;
     for (const b of brokers) {
       const st = brokerStats[b.id];
       const ss = brokerSettleStats[b.id];
@@ -10207,8 +10311,9 @@ export default function App() {
       openCs += ss ? ss.open : 0;
       owesUs += ss ? ss.owesUs : 0;
       weOwe += ss ? ss.weOwe : 0;
+      net += ss ? ss.balance : 0;
     }
-    return { brokers: brokers.length, withJobs, jobs: jobsCount, balance, share, openCs, owesUs, weOwe, net: owesUs - weOwe };
+    return { brokers: brokers.length, withJobs, jobs: jobsCount, balance, share, openCs, owesUs, weOwe, net };
   }, [brokers, brokerStats, brokerSettleStats, brokerShareByBroker]);
 
 
@@ -10377,6 +10482,8 @@ export default function App() {
           {page === "storage" && storageTab === "storage_units" && can("storage","create") && <Btn disabled={!dbReady} onClick={openUnitJobPicker}>+ Job to unit</Btn>}
           {page === "drivers" && can("drivers","create") && <Btn primary disabled={crmV3Missing} onClick={openAddDriver}>+ Driver</Btn>}
           {page === "brokers" && can("brokers","create") && <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ Broker</Btn>}
+          {page === "settlements" && !csDetailId && can("settlements","create") && !brokerPaymentsMissing && <Btn disabled={settlementsMissing} onClick={() => setBrokerPayFor({ brokerId: "" })}>Record broker payment</Btn>}
+          {page === "settlements" && !csDetailId && can("settlements","create") && !brokerPaymentsMissing && <Btn disabled={settlementsMissing} onClick={() => setShowSheetFromDoc(true)}>✨ From document</Btn>}
           {page === "settlements" && !csDetailId && can("settlements","create") && <Btn primary disabled={settlementsMissing} onClick={openAddCs}>+ Closing sheet</Btn>}
           {page === "trips" && can("trips","create") && <Btn disabled={tripsMissing || tripAILoading} onClick={requestTripSuggestions}>✨ Suggest trips (AI)</Btn>}
           {page === "trips" && can("trips","create") && <Btn primary disabled={tripsMissing} onClick={openAddTrip}>+ Trip</Btn>}
@@ -10390,6 +10497,7 @@ export default function App() {
           {page === "expenses" && can("expenses","create") && <Btn primary disabled={expensesMissing} onClick={() => openAddExpense()}>+ Expense</Btn>}
           {page === "claims" && can("claims","create") && <Btn primary disabled={claimsMissing} onClick={() => openAddClaim()}>+ New claim</Btn>}
           {page === "billing" && can("billing","create") && <Btn primary disabled={billingMissing} onClick={openAddBilling}>+ Add billing</Btn>}
+          {(page === "dispatching" || page === "jobs") && (can("jobs","create") || can("dispatching","create")) && <Btn disabled={!dbReady || crmV2Missing} onClick={() => setShowBrokerJob(true)}>+ Broker job</Btn>}
           {(page === "dispatching" || page === "jobs" || page === "calendario" || page === "calendario_entregas") && (can("jobs","create") || can("dispatching","create") || can("calendario","create") || can("calendario_entregas","create")) && <Btn primary disabled={!dbReady} onClick={() => openAddJob("")}>+ New job</Btn>}
         </div>
       </div>
@@ -11073,7 +11181,8 @@ export default function App() {
       {/* ───────────────────────── BROKERS ───────────────────────── */}
       {page === "brokers" && (
         <>
-          <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:14 }}>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginBottom:14 }}>
+            {can("settlements","create") && !brokerPaymentsMissing && <Btn disabled={crmV2Missing} onClick={() => setBrokerPayFor({ brokerId: "" })}>Record broker payment</Btn>}
             <Btn primary disabled={crmV2Missing} onClick={openAddBroker}>+ New broker</Btn>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, marginBottom:16 }}>
@@ -11085,7 +11194,7 @@ export default function App() {
               { label:"Open CS", value:brokerTotals.openCs, color:"#185FA5" },
               { label:"Owes us", value:"$"+Math.round(brokerTotals.owesUs).toLocaleString(), color: brokerTotals.owesUs>0 ? "#1A8A4E" : "#bbb" },
               { label:"We owe", value:"$"+Math.round(brokerTotals.weOwe).toLocaleString(), color: brokerTotals.weOwe>0 ? "#A32D2D" : "#bbb" },
-              { label:"Net", value: brokerTotals.net>=0 ? `+$${Math.round(brokerTotals.net).toLocaleString()}` : `−$${Math.round(-brokerTotals.net).toLocaleString()}`, color: brokerTotals.net>=0 ? "#1A8A4E" : "#A32D2D" },
+              { label:"Balance", value: brokerTotals.net>=0 ? `+$${Math.round(brokerTotals.net).toLocaleString()}` : `−$${Math.round(-brokerTotals.net).toLocaleString()}`, color: brokerTotals.net>=0 ? "#1A8A4E" : "#A32D2D", hint: tr("after payments", "después de pagos") },
             ].map(m => (
               <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #efefef", padding:"12px 14px" }}>
                 <div style={{ fontSize:11, color:"#aaa", fontWeight:500 }}>{m.label}</div>
@@ -11099,7 +11208,7 @@ export default function App() {
               <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                 <thead>
                   <tr style={{ background:"#fafafa", borderBottom:"1px solid #efefef" }}>
-                    {["Broker","Contact","Phone","Jobs","Pending balance","Broker share","Open CS","Owes us","We owe","Net","" ].map((h, i) => (
+                    {["Broker","Contact","Phone","Jobs","Pending balance","Broker share","Open CS","Owes us","We owe","Balance","" ].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, fontSize:11, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -11110,8 +11219,8 @@ export default function App() {
                   ) : brokers.map(b => {
                     const st = brokerStats[b.id] || { jobs:new Set(), balance:0 };
                     const count = st.jobs.size;
-                    const ss = brokerSettleStats[b.id] || { open:0, owesUs:0, weOwe:0 };
-                    const net = ss.owesUs - ss.weOwe;
+                    const ss = brokerSettleStats[b.id] || { open:0, owesUs:0, weOwe:0, credit:0, balance:0 };
+                    const net = ss.balance;
                     return (
                       <tr key={b.id} style={{ borderBottom:"1px solid #fafafa" }}>
                         <td style={{ padding:"12px", fontWeight:600 }}><button onClick={() => setBrokerDetailId(b.id)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", color:"#111", fontWeight:600, textDecoration:"underline" }}>{b.name}</button></td>
@@ -11123,8 +11232,9 @@ export default function App() {
                         <td style={{ padding:"12px" }}>{ss.open || "—"}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap", color: ss.owesUs>0?"#1A8A4E":"#bbb" }}>${Math.round(ss.owesUs).toLocaleString()}</td>
                         <td style={{ padding:"12px", whiteSpace:"nowrap", color: ss.weOwe>0?"#A32D2D":"#bbb" }}>${Math.round(ss.weOwe).toLocaleString()}</td>
-                        <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:700, color: net>=0?"#1A8A4E":"#A32D2D" }}>{net>=0?`+$${Math.round(net).toLocaleString()}`:`−$${Math.round(-net).toLocaleString()}`}</td>
+                        <td style={{ padding:"12px", whiteSpace:"nowrap", fontWeight:700, color: net>=0?"#1A8A4E":"#A32D2D" }}>{net>=0?`+$${Math.round(net).toLocaleString()}`:`−$${Math.round(-net).toLocaleString()}`}{ss.credit > 0.5 && <div style={{ fontSize:10.5, fontWeight:500, color:"#888" }}>{tr(`$${Math.round(ss.credit).toLocaleString()} on account`, `$${Math.round(ss.credit).toLocaleString()} a cuenta`)}</div>}</td>
                         <td style={{ padding:"12px", textAlign:"right", whiteSpace:"nowrap" }}>
+                          {!brokerPaymentsMissing && <Btn onClick={() => setStatementBroker(b)} style={{ padding:"4px 10px", fontSize:12, marginRight:6 }}>Statement</Btn>}
                           <Btn onClick={() => openEditBroker(b)} style={{ padding:"4px 10px", fontSize:12 }}>Edit</Btn>
                           <Btn danger onClick={() => deleteBroker(b)} style={{ padding:"4px 10px", fontSize:12, marginLeft:6 }}>Delete</Btn>
                         </td>
@@ -11362,7 +11472,16 @@ export default function App() {
         const s = sheetById[csDetailId];
         if (!s) return <div style={{ color:"#bbb" }}>Closing sheet not found. <button onClick={() => setCsDetailId(null)} style={{ color:"#185FA5", background:"none", border:"none", cursor:"pointer" }}>Back</button></div>;
         const jobsIn = jobsBySheet[csDetailId] || [];
-        const c = sheetCalc(s, jobsIn);
+        const c = sheetCalcById[s.id] || sheetCalc(s, jobsIn, (j) => jobCollectedFor(j));
+        const paidOnSheet = sheetPaidById[s.id] || 0;
+        const undelivered = jobsIn.filter(j => j.status !== "delivered" && !j.date_out);
+        const deliverAll = async () => {
+          if (!window.confirm(tr(`Mark ${undelivered.length} job(s) on this sheet as delivered?`, `¿Marcar ${undelivered.length} job(s) de esta sheet como entregados?`))) return;
+          for (const j of undelivered) {
+            const parts = jobs.filter(x => jobKey(x) === jobKey(j));
+            await setJobStatus({ parts, pickup_date: j.pickup_date }, "delivered");
+          }
+        };
         const brokerNm = brokerName(s.broker_id);
         const driverNm = driverById[s.driver_id]?.name || "";
         const isImg = s.document_url && /\.(jpe?g|png|gif|webp|heic)$/i.test(s.document_url);
@@ -11409,6 +11528,7 @@ export default function App() {
                 <Btn onClick={() => exportCsPdf(s, c, brokerNm, driverNm, jobsIn)} style={{ padding:"5px 11px", fontSize:12 }}>📄 PDF</Btn>
                 <a href={settlementWaLink(s, c, brokerNm, driverNm)} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}><Btn style={{ padding:"5px 11px", fontSize:12 }}>💬 WhatsApp broker</Btn></a>
                 <Btn onClick={() => openEditCs(s)} style={{ padding:"5px 11px", fontSize:12 }}>Edit</Btn>
+                {s.status !== "settled" && !brokerPaymentsMissing && can("settlements","create") && <Btn onClick={() => setBrokerPayFor({ brokerId: s.broker_id || "" })} style={{ padding:"5px 11px", fontSize:12 }}>Record broker payment</Btn>}
                 {s.status !== "settled" && <Btn primary onClick={() => setCsStatus(s, "settled")} style={{ padding:"5px 11px", fontSize:12 }}>Mark settled</Btn>}
               </span>
             </div>
@@ -11456,12 +11576,13 @@ export default function App() {
                     detail={
                       <table style={{ width:"100%", borderCollapse:"collapse" }}>
                         <tbody>{jobsIn.map(j => {
-                          const pend = Math.max(0, numv(j.bol_balance) - numv(j.bol_collected));
+                          const got = jobCollectedFor(j);
+                          const pend = Math.max(0, numv(j.bol_balance) - got);
                           return (
                             <tr key={j.id}>
                               <td style={{ ...dtd, fontFamily:"monospace", fontWeight:700 }}>{j.job_number || "—"}</td>
                               <td style={dtd}>{j.customer || "—"}</td>
-                              <td style={{ ...dtd, textAlign:"right", color:"#888" }}>{money(j.bol_collected) || "$0"} / {money(j.bol_balance) || "$0"}</td>
+                              <td style={{ ...dtd, textAlign:"right", color:"#888" }}>{money(got) || "$0"} / {money(j.bol_balance) || "$0"}</td>
                               <td style={{ ...dtd, textAlign:"right", fontWeight:700, color: pend > 0 ? "#C2410C" : "#1A8A4E" }}>
                                 {pend > 0 ? tr(`${money(pend)} pending`, `${money(pend)} pendiente`) : (j.bol_payment_method ? (PAY_METHODS.find(p => p.v === j.bol_payment_method)?.l || j.bol_payment_method) : tr("collected", "cobrado"))}
                               </td>
@@ -11474,9 +11595,14 @@ export default function App() {
                     title={c.net >= 0 ? tr("The broker still owes you", "El broker todavía te debe") : tr("You owe the broker", "Le debés al broker")}
                     sub={c.pending > 0 ? tr(`${m(c.pending)} of BOL balance is still uncollected`, `${m(c.pending)} del BOL balance sigue sin cobrar`) : tr("every BOL balance was collected", "todos los BOL balance fueron cobrados")}
                     value={m(Math.abs(c.net))} />
+                  {paidOnSheet > 0 && (
+                    <Line k="paid" sign="−" title={c.net >= 0 ? tr("Paid by the broker", "Pagado por el broker") : tr("Paid to the broker", "Pagado al broker")}
+                      sub={tr(`${m(Math.max(0, Math.abs(c.net) - paidOnSheet))} still open`, `${m(Math.max(0, Math.abs(c.net) - paidOnSheet))} todavía abierto`)} value={m(paidOnSheet)} />
+                  )}
                 </div>
 
-                <div style={cap}>Jobs on this sheet<span style={right}>{tr("CF, rate and BOL balance are editable against the broker's paper", "CF, rate y BOL balance se editan contra el papel del broker")}</span></div>
+                <div style={cap}>Jobs on this sheet<span style={right}>{tr("CF, rate and BOL balance are editable against the broker's paper", "CF, rate y BOL balance se editan contra el papel del broker")}</span>
+                  {undelivered.length > 0 && can("dispatching","edit") && <Btn onClick={deliverAll} style={{ padding:"3px 9px", fontSize:11, marginLeft:8, textTransform:"none", letterSpacing:0 }}>{tr(`Mark ${undelivered.length} delivered`, `Marcar ${undelivered.length} entregados`)}</Btn>}</div>
                 <div style={{ background:"#fff", borderRadius:12, border:"1px solid #efefef", overflow:"hidden" }}>
                   <div style={{ overflowX:"auto" }}>
                     <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12.5, minWidth:760 }}>
@@ -11493,7 +11619,8 @@ export default function App() {
                         ) : jobsIn.map(j => {
                           const k = jobKey(j);
                           const miss = jobPadsMissing(j);
-                          const pend = Math.max(0, numv(j.bol_balance) - numv(j.bol_collected));
+                          const got = jobCollectedFor(j);
+                          const pend = Math.max(0, numv(j.bol_balance) - got);
                           const numIn = { ...inp, width:72, padding:"4px 7px", textAlign:"right", fontVariantNumeric:"tabular-nums" };
                           return (
                             <tr key={j.id} style={{ borderBottom:"1px solid #fafafa", verticalAlign:"top" }}>
@@ -11502,7 +11629,7 @@ export default function App() {
                                   <span style={{ fontSize:13.5, fontWeight:800, letterSpacing:"0.02em", whiteSpace:"nowrap" }}>{(j.pickup_state || "?").toUpperCase()} → {(j.delivery_state || "?").toUpperCase()}</span>
                                   <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:"#185FA5", marginLeft:6 }}>{j.job_number || "(view)"}</span>
                                 </button>
-                                <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{j.customer || "—"}</div>
+                                <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{j.customer || "—"}{(j.status === "delivered" || j.date_out) && <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:"#3B6D11", background:"#EAF3DE", borderRadius:20, padding:"1px 6px" }}>{tr("delivered", "entregado")}</span>}</div>
                               </td>
                               <td style={{ padding:"10px 12px", textAlign:"right" }}>
                                 <input defaultValue={parseCf(j.volume) || ""} onBlur={e => { if (e.target.value !== String(parseCf(j.volume))) updateJobBol(k, "volume", e.target.value); }} style={numIn} aria-label="CF" />
@@ -11515,7 +11642,7 @@ export default function App() {
                                 <input defaultValue={j.bol_balance ?? ""} onBlur={e => { if ((e.target.value || "") !== String(j.bol_balance ?? "")) updateJobBol(k, "bol_balance", e.target.value === "" ? "" : Number(e.target.value)); }} placeholder="0" style={numIn} aria-label="BOL balance" />
                               </td>
                               <td style={{ padding:"10px 12px", textAlign:"right", whiteSpace:"nowrap" }}>
-                                <div style={{ fontWeight:700, color: pend > 0 ? "#C2410C" : "#1A8A4E", fontVariantNumeric:"tabular-nums" }}>{money(j.bol_collected) || "$0"}</div>
+                                <div style={{ fontWeight:700, color: pend > 0 ? "#C2410C" : "#1A8A4E", fontVariantNumeric:"tabular-nums" }}>{money(got) || "$0"}</div>
                                 {pend > 0
                                   ? <Btn disabled={paymentsMissing} onClick={() => { const drv = (Array.isArray(j.driver_ids) && j.driver_ids.length ? driverById[j.driver_ids[0]]?.name : "") || ""; const owed = jobOutstanding(j, k); openAddPayment({ job_id: j.id, received_by: drv, cash_with_whom: drv, amount: owed > 0 ? String(Math.round(owed)) : "" }); }} style={{ padding:"3px 8px", fontSize:11, marginTop:3 }}>Record payment</Btn>
                                   : <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>{j.bol_payment_method ? (PAY_METHODS.find(p => p.v === j.bol_payment_method)?.l || j.bol_payment_method) : "—"}</div>}
@@ -13068,9 +13195,18 @@ export default function App() {
           closingSheets={closingSheets} sheetCalcById={sheetCalcById} brokers={brokers}
           expenses={expenses} storages={records} driversList={driversList}
           workDays={workDays} adjustments={adjustments}
+          carriers={carriersMissing ? [] : carriers} carrierDispatches={carrierDispatches} brokerPayments={brokerPayments}
           jobOutstanding={jobOutstanding} onOpenJob={setJobDetailKey} setPage={setPage}
           arCutoff={crmSettings?.ar_cutoff_date || ""}
           can={can} Btn={Btn} Modal={Modal} />
+      )}
+
+      {/* ───────────────────────── CARRIERS ───────────────────────── */}
+      {page === "carriers" && can("carriers", "view") && (
+        <CarriersSection supabase={supabase} session={session} can={can} Btn={Btn} Modal={Modal}
+          jobs={jobs} carriers={carriers} dispatches={carrierDispatches} missing={carriersMissing}
+          reloadCarriers={loadCarriers} reloadDispatches={loadCarrierDispatches}
+          onOpenJob={setJobDetailKey} onMarkJobDelivered={markJobDeliveredByNumber} />
       )}
 
       {/* ───────────────────────── BANCOS ───────────────────────── */}
@@ -13969,6 +14105,14 @@ export default function App() {
               </div>
 
               <div style={{ display:"grid", gap:14, minWidth:0 }}>
+                {/* ── Outside carrier (we are the broker) ── */}
+                {can("carriers", "view") && (
+                  <CarrierDispatchCard supabase={supabase} session={session} can={can} Btn={Btn} Modal={Modal}
+                    job={jobDetail} repId={repId} outstanding={outstanding} carriers={carriers} dispatches={carrierDispatches}
+                    missing={carriersMissing} cardStyle={cardS} capStyle={capS} logNote={logServiceNote}
+                    onChanged={() => { loadCarrierDispatches(); loadJobEvents?.(); }}
+                    onOpenCarriers={() => { setJobDetailKey(null); setPage("carriers"); }} />
+                )}
                 {/* ── Carrier settlement ── */}
                 {!settlementsMissing && (
                   <div style={cardS}>
@@ -14012,8 +14156,8 @@ export default function App() {
                     <div style={kvS}><span style={kS}>BOL balance to collect</span><InlineField value={jobDetail.bol_balance} onSave={(v) => updateJobField(P, "bol_balance", v === "" ? null : Number(v))} display={money(jobDetail.bol_balance)} /></div>
                     <div style={{ ...kvS, borderBottom:"none" }}><span style={kS}>BOL collected</span>
                       <span style={{ display:"inline-flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-                        <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(jobDetail.bol_collected) || "$0"}</span>
-                        {(() => { const cs = collectionStatus(jobDetail); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
+                        <span style={{ fontWeight:600, color:"#1A8A4E" }}>{money(collected) || "$0"}</span>
+                        {(() => { const cs = collectionStatus({ ...jobDetail, bol_collected: collected }); return <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:20, background:cs.bg, color:cs.text }}><span style={{ width:6, height:6, borderRadius:"50%", background:cs.dot }} />{cs.l}</span>; })()}
                       </span>
                     </div>
                   </div>
@@ -15092,6 +15236,8 @@ export default function App() {
             <Field label="Phone"><input style={inp} value={brokerForm.contact_phone} onChange={e => setBrokerForm(f => ({...f, contact_phone:e.target.value}))} placeholder="(555) 123-4567" /></Field>
             <Field label="Email" full><input style={inp} value={brokerForm.contact_email} onChange={e => setBrokerForm(f => ({...f, contact_email:e.target.value}))} placeholder="ops@broker.com" /></Field>
             <Field label="Notes" full><input style={inp} value={brokerForm.notes} onChange={e => setBrokerForm(f => ({...f, notes:e.target.value}))} placeholder="Notes" /></Field>
+            {!brokerPaymentsMissing && <Field label="Usual rate per CF"><input style={inp} type="number" step="0.01" value={brokerForm.default_rate_per_cf} onChange={e => setBrokerForm(f => ({...f, default_rate_per_cf:e.target.value}))} placeholder="2.50" /></Field>}
+            {!brokerPaymentsMissing && <Field label="Charge per missing pad"><input style={inp} type="number" step="0.5" value={brokerForm.default_charge_per_pad} onChange={e => setBrokerForm(f => ({...f, default_charge_per_pad:e.target.value}))} placeholder="7" /></Field>}
           </div>
         </Modal>
       )}
@@ -17629,6 +17775,28 @@ export default function App() {
             ? <div style={{ background:"#fff", borderRadius:10, padding:24, textAlign:"center" }}><div style={{ fontSize:40 }}>📄</div><a href={payPhotoView} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color:"#185FA5" }}>Open PDF in new tab ↗</a></div>
             : <img src={payPhotoView} alt="documento" style={{ maxWidth:"92%", maxHeight:"92%", borderRadius:8, boxShadow:"0 8px 40px rgba(0,0,0,0.4)" }} onClick={e => e.stopPropagation()} />}
         </div>
+      )}
+
+      {/* ── Broker desk (we are the carrier) ── */}
+      {showBrokerJob && (
+        <BrokerJobQuickAdd session={session} brokers={brokers} Btn={Btn} Modal={Modal}
+          onClose={() => setShowBrokerJob(false)} onSave={saveQuickBrokerJob} />
+      )}
+      {showSheetFromDoc && (
+        <SettlementFromDocModal supabase={supabase} session={session} brokers={brokers} jobs={jobs} closingSheets={closingSheets}
+          jobCollectedFor={jobCollectedFor} Btn={Btn} Modal={Modal} onClose={() => setShowSheetFromDoc(false)}
+          onCreated={async (id) => { setShowSheetFromDoc(false); await Promise.all([loadClosingSheets(), loadJobs()]); setCsDetailId(id); showToast(tr("Closing sheet created", "Closing sheet creada")); }} />
+      )}
+      {brokerPayFor && (
+        <BrokerPaymentModal supabase={supabase} session={session} brokers={brokers} closingSheets={closingSheets}
+          sheetCalcById={sheetCalcById} brokerPayments={brokerPayments} initialBrokerId={brokerPayFor.brokerId}
+          Btn={Btn} Modal={Modal} onClose={() => setBrokerPayFor(null)}
+          onSaved={async (settled) => { setBrokerPayFor(null); await Promise.all([loadBrokerPayments(), loadClosingSheets()]); showToast(settled ? tr(`Payment recorded · ${settled} sheet(s) settled`, `Pago registrado · ${settled} sheet(s) cerradas`) : tr("Payment recorded", "Pago registrado")); }} />
+      )}
+      {statementBroker && (
+        <BrokerStatementModal broker={statementBroker} closingSheets={closingSheets} sheetCalcById={sheetCalcById}
+          brokerPayments={brokerPayments} Btn={Btn} Modal={Modal} onClose={() => setStatementBroker(null)}
+          onPay={can("settlements","create") ? () => { setBrokerPayFor({ brokerId: statementBroker.id }); setStatementBroker(null); } : null} />
       )}
 
       {toast && (

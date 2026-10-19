@@ -185,6 +185,7 @@ export function PipelineSection({ supabase, session, profile, can = () => true, 
 
   const [showNew, setShowNew] = useState(false);
   const [newText, setNewText] = useState("");
+  const [newImage, setNewImage] = useState(null); // pasted/attached screenshot { media_type, data, preview }
   const [busy, setBusy] = useState(false);
 
   const [rank, setRank] = useState(null);       // { ranked, notes } | { error }
@@ -288,18 +289,31 @@ export function PipelineSection({ supabase, session, profile, can = () => true, 
     return data;
   }, [session]);
 
+  // A WhatsApp screenshot works as well as pasted text.
+  function takeImage(file) {
+    if (!file || !/^image\/(jpeg|png|webp|gif)$/.test(file.type)) { window.alert(tr("Use a JPG, PNG or WebP screenshot.", "Usá una captura JPG, PNG o WebP.")); return; }
+    if (file.size > 3 * 1024 * 1024) { window.alert(tr("The screenshot is too large (3 MB max).", "La captura es muy grande (máximo 3 MB).")); return; }
+    const r = new FileReader();
+    r.onload = () => { const url = String(r.result || ""); setNewImage({ media_type: file.type, data: url.replace(/^data:[^,]*,/, ""), preview: url }); };
+    r.readAsDataURL(file);
+  }
+  function onPasteLead(e) {
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+    if (item) { e.preventDefault(); takeImage(item.getAsFile()); }
+  }
+
   async function createFromText() {
-    if (!newText.trim() || busy) return;
+    if ((!newText.trim() && !newImage) || busy) return;
     setBusy(true); setErr("");
     try {
-      const { lead } = await callApi({ action: "lead_extract", text: newText.trim() });
+      const { lead } = await callApi({ action: "lead_extract", text: newText.trim(), image: newImage ? { media_type: newImage.media_type, data: newImage.data } : null });
       const dup = findDuplicate(lead, leads);
       if (dup) {
         setErr(tr(
           `Heads up: this looks like the same job as lead #${dup.id} (${dup.broker_job_number || dup.customer || "no number"}). Review both before deciding.`,
           `Ojo: esto parece el mismo job que el lead #${dup.id} (${dup.broker_job_number || dup.customer || "sin número"}). Revisá los dos antes de decidir.`));
       }
-      setShowNew(false); setNewText(""); setDetailId(lead.id);
+      setShowNew(false); setNewText(""); setNewImage(null); setDetailId(lead.id);
       await load();
     } catch (e) { setErr(e.message); }
     setBusy(false);
@@ -593,18 +607,28 @@ SUPABASE_ACCESS_TOKEN=sbp_xxx node scripts/setup-pipeline.mjs</pre>
         <Modal title="New lead" onClose={() => setShowNew(false)}
           footer={<>
             <Btn onClick={() => setShowNew(false)}>Cancel</Btn>
-            <Btn primary disabled={busy || !newText.trim()} onClick={createFromText}>
+            <Btn primary disabled={busy || (!newText.trim() && !newImage)} onClick={createFromText}>
               {busy ? "Reading…" : "✨ Read it and create the lead"}
             </Btn>
           </>}>
           <div style={{ fontSize: 12.5, color: "#666", marginBottom: 8 }}>
-            Paste the broker's email or message. The fields are extracted for you to check before anything is decided.
+            Paste the broker's email or message, or a WhatsApp screenshot. The fields are extracted for you to check before anything is decided.
           </div>
-          <textarea value={newText} onChange={(e) => setNewText(e.target.value)} rows={10}
+          {newImage && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <img src={newImage.preview} alt="" style={{ height: 70, borderRadius: 8, border: "1px solid #eee" }} />
+              <button onClick={() => setNewImage(null)} style={{ background: "none", border: "none", color: "#B91C1C", cursor: "pointer", fontSize: 12 }}>Remove screenshot</button>
+            </div>
+          )}
+          <textarea value={newText} onChange={(e) => setNewText(e.target.value)} onPaste={onPasteLead} rows={10}
             placeholder="From: dispatch@broker.com&#10;820 cu ft, pickup 7/25-7/26 Miami FL 33125, delivery Atlanta GA 30301, FADD 8/1, $3,200"
             style={{ ...inp, minHeight: 170, fontFamily: "ui-monospace,Menlo,monospace", fontSize: 12.5, lineHeight: 1.6, resize: "vertical" }} />
-          <div style={{ fontSize: 11.5, color: "#bbb", marginTop: 8 }}>
-            The message is read as data. Any instruction written inside it is ignored.
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+            <span style={{ fontSize: 11.5, color: "#bbb" }}>The message is read as data. Any instruction written inside it is ignored.</span>
+            <label style={{ fontSize: 12, color: "#185FA5", cursor: "pointer" }}>
+              <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(e) => takeImage(e.target.files?.[0])} />
+              Attach a screenshot
+            </label>
           </div>
         </Modal>
       )}

@@ -27,9 +27,33 @@ import {
   numv, jobKey, agingBuckets, payWeekStart, addDaysISO, workDayPay,
 } from "./analyticsData.js";
 import { matchBankToExpenses } from "./bankData.js";
+import { allocatedBySheet } from "./brokerSettleData.js";
 
-export const AR_SOURCES = ["job", "storage_billing", "settlement"];
-export const AP_SOURCES = ["bill", "expense", "settlement", "driver"];
+export const AR_SOURCES = ["job", "storage_billing", "settlement", "carrier"];
+export const AP_SOURCES = ["bill", "expense", "settlement", "driver", "carrier"];
+
+// What is still open on a closing sheet once broker payments are spread over
+// it (lib/brokerSettle.mjs). Signed like the net: > 0 the broker owes us.
+function sheetOpen(s, sheetCalcById, allocated) {
+  const net = numv(sheetCalcById[s.id]?.net);
+  const left = Math.max(0, Math.abs(net) - numv(allocated[s.id]));
+  return { net, open: Math.sign(net) * left, paid: numv(allocated[s.id]) };
+}
+
+// One row per carrier with a balance (lib/carriers.mjs carrierBalances):
+// > 0 the carrier owes us (receivable), < 0 we owe it (payable).
+function carrierRow(c, sign) {
+  return {
+    id: `carrier:${c.carrierId}`,
+    source: "carrier",
+    party: c.name || "",
+    label: c.verified === 1 ? "1 job" : `${c.verified || 0} jobs`,
+    amount: round2(sign * c.balance),
+    dueDate: c.oldest || null,
+    ref: { carrierId: c.carrierId },
+    meta: { verified: c.verified || 0 },
+  };
+}
 
 export const BILL_RECURRENCES = ["once", "monthly", "quarterly", "yearly"];
 export const BILL_STATUSES = ["pending", "overdue", "paid", "void"];
@@ -108,6 +132,7 @@ const NON_RECEIVABLE_STATUS = new Set(["scheduled", "cancelled"]);
 export function buildReceivables({
   groups = [], billing = [], closingSheets = [], sheetCalcById = {},
   jobs = [], brokerName = () => "", jobOutstanding, cutoff = null,
+  brokerPayments = [], carrierBalances = [],
 }) {
   const rows = [];
 
@@ -151,22 +176,27 @@ export function buildReceivables({
     });
   }
 
-  // 3. Closing sheets where the net leaves the broker owing us.
+  // 3. Closing sheets where the net leaves the broker owing us — what is left
+  //    after the broker's payments, so a sheet paid in parts shows its balance.
+  const allocated = allocatedBySheet(brokerPayments);
   for (const s of closingSheets) {
     if (!notDel(s) || s.status === "settled") continue;
-    const net = numv(sheetCalcById[s.id]?.net);
-    if (net < OPEN) continue;
+    const { net, open, paid } = sheetOpen(s, sheetCalcById, allocated);
+    if (open < OPEN) continue;
     rows.push({
       id: `settlement:${s.id}`,
       source: "settlement",
       party: brokerName(s.broker_id) || "",
       label: s.closing_sheet_number || `#${s.id}`,
-      amount: round2(net),
+      amount: round2(open),
       dueDate: s.load_date || null,
       ref: { sheetId: s.id, brokerId: s.broker_id || null },
-      meta: { status: s.status || "" },
+      meta: { status: s.status || "", net: round2(net), paid },
     });
   }
+
+  // 4. Outside carriers that collected more than their pay.
+  for (const c of carrierBalances) if (c.balance >= OPEN) rows.push(carrierRow(c, 1));
 
   return sortByDue(applyCutoff(rows, cutoff));
 }
@@ -199,7 +229,7 @@ export function applyCutoff(rows, cutoff) {
 export function buildPayables({
   bills = [], expenses = [], bankTxns = [], bankCategories = [],
   closingSheets = [], sheetCalcById = {}, driverPayables = [],
-  brokerName = () => "",
+  brokerName = () => "", brokerPayments = [], carrierBalances = [],
 }) {
   const rows = [];
 
@@ -247,25 +277,30 @@ export function buildPayables({
     });
   }
 
-  // 3. Closing sheets where the net leaves us owing the broker.
+  // 3. Closing sheets where the net leaves us owing the broker (what is left
+  //    after what we already paid them).
+  const allocated = allocatedBySheet(brokerPayments);
   for (const s of closingSheets) {
     if (!notDel(s) || s.status === "settled") continue;
-    const net = numv(sheetCalcById[s.id]?.net);
-    if (net > -OPEN) continue;
+    const { net, open, paid } = sheetOpen(s, sheetCalcById, allocated);
+    if (open > -OPEN) continue;
     rows.push({
       id: `settlement:${s.id}`,
       source: "settlement",
       party: brokerName(s.broker_id) || "",
       label: s.closing_sheet_number || `#${s.id}`,
-      amount: round2(-net),
+      amount: round2(-open),
       dueDate: s.load_date || null,
       ref: { sheetId: s.id, brokerId: s.broker_id || null },
-      meta: { status: s.status || "" },
+      meta: { status: s.status || "", net: round2(net), paid },
     });
   }
 
   // 4. Driver pay weeks (built separately so the UI can also settle them).
   for (const d of driverPayables) rows.push(d);
+
+  // 5. Outside carriers that collected less than their pay.
+  for (const c of carrierBalances) if (c.balance <= -OPEN) rows.push(carrierRow(c, -1));
 
   return sortByDue(rows);
 }

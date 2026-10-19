@@ -27,6 +27,7 @@ import { effectiveBanked } from "./bankShared.js";
 import { paymentNet } from "./paymentAlloc.js";
 import { tr, t } from "./i18n.js";
 import { selectAll, dbFailed } from "./db.js";
+import { carrierBalances as buildCarrierBalances } from "./carrierData.js";
 
 const inp = { fontSize:13, padding:"8px 10px", borderRadius:8, border:"1px solid #e5e5e5", background:"#fff", color:"#111", width:"100%", outline:"none" };
 const th = { padding:"9px 10px", textAlign:"left", fontWeight:600, fontSize:10.5, color:"#aaa", textTransform:"uppercase", letterSpacing:"0.04em", whiteSpace:"nowrap" };
@@ -49,6 +50,7 @@ const SOURCE_META = {
   bill:            { label:"Bill",       icon:"📄", bg:"#FEF3C7", text:"#92760B" },
   expense:         { label:"Expense",    icon:"💸", bg:"#FDE3CF", text:"#C2410C" },
   driver:          { label:"Driver pay", icon:"🪪", bg:"#f1f1f1", text:"#555" },
+  carrier:         { label:"Carrier",    icon:"🤝", bg:"#FDE3CF", text:"#9A3412" },
 };
 
 function SourceBadge({ source }) {
@@ -110,6 +112,7 @@ export function ApArSection({
   jobs = [], payments = [], jobExtras = [], billing = [], closingSheets = [],
   sheetCalcById = {}, brokers = [], expenses = [], storages = [],
   driversList = [], workDays = [], adjustments = [],
+  carriers = [], carrierDispatches = [], brokerPayments = [],
   jobOutstanding, onOpenJob, setPage, arCutoff = "",
   can = () => true, Btn, Modal,
 }) {
@@ -170,7 +173,21 @@ export function ApArSection({
     if (!error && data) setBankCategories(data);
   }, [supabase]);
 
+  // Carrier payments and adjustments, read-only here (the Carriers section owns
+  // them): with the dispatches they give each carrier's balance. A missing
+  // module just leaves carriers out.
+  const [carrierMoney, setCarrierMoney] = useState({ payments: [], adjustments: [] });
+  const loadCarrierMoney = useCallback(async () => {
+    if (!carriers.length) return;
+    const [p, a] = await Promise.all([
+      selectAll(() => supabase.from("carrier_payments").select("*")),
+      selectAll(() => supabase.from("carrier_adjustments").select("*")),
+    ]);
+    setCarrierMoney({ payments: (p.data || []).filter(r => !r.deleted_at), adjustments: (a.data || []).filter(r => !r.deleted_at) });
+  }, [supabase, carriers.length]);
+
   useEffect(() => { loadBills(); loadBankTxns(); loadBankCats(); }, [loadBills, loadBankTxns, loadBankCats]);
+  useEffect(() => { loadCarrierMoney(); }, [loadCarrierMoney]);
   useEffect(() => {
     if (missing) return;
     const ch = supabase.channel("apar-realtime")
@@ -199,9 +216,16 @@ export function ApArSection({
     return m;
   }, [driversList, payments]);
 
+  const carrierRows = useMemo(() => {
+    const names = Object.fromEntries(carriers.map(c => [c.id, c.name]));
+    return buildCarrierBalances({ carriers, dispatches: carrierDispatches, ...carrierMoney })
+      .filter(b => names[b.carrierId] != null).map(b => ({ ...b, name: names[b.carrierId] }));
+  }, [carriers, carrierDispatches, carrierMoney]);
+
   const receivables = useMemo(() => buildReceivables({
     groups, billing, closingSheets, sheetCalcById, jobs, brokerName, jobOutstanding, cutoff: arCutoff || null,
-  }), [groups, billing, closingSheets, sheetCalcById, jobs, brokerName, jobOutstanding, arCutoff]);
+    brokerPayments, carrierBalances: carrierRows,
+  }), [groups, billing, closingSheets, sheetCalcById, jobs, brokerName, jobOutstanding, arCutoff, brokerPayments, carrierRows]);
 
   const driverPayables = useMemo(() => buildDriverPayables({
     driversList, workDays, adjustments, jobExtras, cashOnHandByDriver,
@@ -209,8 +233,8 @@ export function ApArSection({
 
   const payables = useMemo(() => buildPayables({
     bills, expenses, bankTxns, bankCategories, closingSheets, sheetCalcById,
-    driverPayables, brokerName,
-  }), [bills, expenses, bankTxns, bankCategories, closingSheets, sheetCalcById, driverPayables, brokerName]);
+    driverPayables, brokerName, brokerPayments, carrierBalances: carrierRows,
+  }), [bills, expenses, bankTxns, bankCategories, closingSheets, sheetCalcById, driverPayables, brokerName, brokerPayments, carrierRows]);
 
   const position = useMemo(() => netPosition({ receivables, payables, todayISO: today }), [receivables, payables, today]);
 
@@ -588,6 +612,7 @@ function RowDetail({ row }) {
   const m = row.meta || {};
   if (row.source === "job") return <div style={s}>{[m.status && t(statusLabel(m.status)), m.driver].filter(Boolean).join(" · ")}</div>;
   if (row.source === "storage_billing") return <div style={s}>{m.periodStart} → {m.periodEnd}</div>;
+  if (row.source === "settlement" && m.paid > 0) return <div style={s}>{tr(`${fmt$(m.paid)} of ${fmt$(Math.abs(m.net))} paid`, `${fmt$(m.paid)} de ${fmt$(Math.abs(m.net))} pagado`)}</div>;
   if (row.source === "expense") return <div style={s}>{[m.jobNumber, m.status && t(expenseStatusLabel(m.status))].filter(Boolean).join(" · ")}</div>;
   if (row.source === "bill") {
     const bits = [m.category];
@@ -634,6 +659,7 @@ function RowActions({ row, tab, can, Btn, onOpenJob, setPage, onMarkBillingPaid,
       <Btn style={mini} disabled={!can("billing", "edit")} onClick={() => onMarkBillingPaid(row)}>Mark paid</Btn>
     );
     if (row.source === "settlement") return <Btn style={mini} onClick={() => setPage?.("settlements")}>Open sheet</Btn>;
+    if (row.source === "carrier") return <Btn style={mini} onClick={() => setPage?.("carriers")}>Open carrier</Btn>;
     return null;
   }
   if (row.source === "bill") return (
@@ -645,6 +671,7 @@ function RowActions({ row, tab, can, Btn, onOpenJob, setPage, onMarkBillingPaid,
   );
   if (row.source === "expense") return <Btn style={mini} onClick={() => setPage?.("expenses")}>Open expense</Btn>;
   if (row.source === "settlement") return <Btn style={mini} onClick={() => setPage?.("settlements")}>Open sheet</Btn>;
+  if (row.source === "carrier") return <Btn style={mini} onClick={() => setPage?.("carriers")}>Open carrier</Btn>;
   if (row.source === "driver") return (
     // Stamping the week writes to driver_work_days, driver_adjustments and
     // job_extras — tables the Expenses and Extras sections own, so those are the

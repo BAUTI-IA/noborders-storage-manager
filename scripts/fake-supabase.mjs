@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 
 // ── PostgREST-shaped fake ────────────────────────────────────────────────────
 // The chain shapes lib/bankFeed.mjs uses: select (with count/head), insert,
-// upsert (onConflict, ignoreDuplicates), update, delete; eq/in/gt/gte/not-is;
+// upsert (onConflict, ignoreDuplicates), update, delete; eq/in/gt/gte/lt/lte/
+// is/not-is;
 // order/limit; single/maybeSingle. Ids are identity-like; `unique` columns
 // reject duplicates like a unique index; a missing table answers 42P01.
 export function fakeDb(tables, unique = {}) {
@@ -26,6 +27,9 @@ export function fakeDb(tables, unique = {}) {
       in(c, vs) { filters.push((r) => vs.includes(r[c])); return b; },
       gt(c, v) { filters.push((r) => r[c] > v); return b; },
       gte(c, v) { filters.push((r) => r[c] >= v); return b; },
+      lt(c, v) { filters.push((r) => r[c] < v); return b; },
+      lte(c, v) { filters.push((r) => r[c] <= v); return b; },
+      is(c, v) { filters.push((r) => (v === null ? r[c] == null : r[c] === v)); return b; },
       not(c, o, v) { assert.equal(o, "is"); filters.push((r) => (v === null ? r[c] != null : r[c] !== v)); return b; },
       order(c, { ascending = true } = {}) { order = { c, ascending }; return b; },
       limit(n) { limit = n; return b; },
