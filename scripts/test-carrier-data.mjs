@@ -6,6 +6,7 @@ import {
   replyToFor, tagFromAddresses, refFromSubject, matchInbound, stripQuoted, isAcceptReply,
   buildDispatchEmail, buildDispatchWhatsApp, dispatchSubject, rateConfirmationRows,
   normalizeExtraction, reviewOutcome, docsNotice, jobKeyOf, EXTRACTION_SCHEMA,
+  resultErrors, verifiedPatch,
 } from "../src/carrierData.js";
 
 const t = (name, fn) => { try { fn(); console.log("PASS  " + name); } catch (e) { console.log("FAIL  " + name + " — " + e.message); process.exitCode = 1; } };
@@ -222,6 +223,27 @@ t("review outcome and Telegram notice", () => {
   assert.match(msg, /they owe us \$870/);
   assert.match(msg, /https:\/\/crm\.example › Carriers › Docs to review/);
   assert.match(docsNotice({ dispatch: null, carrier: null, extraction: null }), /not matched/);
+});
+
+t("closing a dispatch: by hand or from documents, the same patch", () => {
+  const d = { ...d57, final_cf: null, collected: null, status: "accepted" };
+  const at = "2026-10-20T15:00:00Z";
+  const p = verifiedPatch(d, { final_cf: "", collected: "2950", method: "", delivered_on: "" }, { at, by: "ops@noborders.com" });
+  assert.deepEqual(p, { final_cf: 800, collected: 2950, collected_method: null, delivered_on: null, status: "verified",
+    verified_at: at, verified_by: "ops@noborders.com", updated_by: "ops@noborders.com", updated_at: at });
+  assert.equal(verifiedPatch(d, { final_cf: "910", collected: 0, method: "zelle", delivered_on: "2026-10-18" }, { at }).final_cf, 910);
+  assert.equal(verifiedPatch(d, { final_cf: "910", collected: 0, method: "zelle", delivered_on: "2026-10-18" }, { at }).collected_method, "zelle");
+  // The balance after closing is what the preview promised.
+  const closed = { ...d, ...verifiedPatch(d, { final_cf: 540, collected: 1400 }, { at }), rate_per_cf: 2.7 };
+  assert.equal(dispatchNet(closed), reviewOutcome({ ...d, rate_per_cf: 2.7 }, { final_cf: 540, collected: 1400 }).net);
+  assert.equal(carrierBalances({ carriers: [bravo], dispatches: [closed] })[0].balance, -58);
+});
+t("a result needs what the carrier collected (0 is fine) and a sane CF", () => {
+  assert.deepEqual(resultErrors({ final_cf: "800", collected: "2950" }), []);
+  assert.deepEqual(resultErrors({ final_cf: "", collected: "0" }), []);
+  assert.deepEqual(resultErrors({ final_cf: "800", collected: "" }), ["collected"]);
+  assert.deepEqual(resultErrors({ final_cf: "-5", collected: "-1" }), ["collected", "final_cf"]);
+  assert.deepEqual(resultErrors({ final_cf: "abc", collected: "10" }), ["final_cf"]);
 });
 
 if (!process.exitCode) console.log("\nAll carrier data tests passed.");
