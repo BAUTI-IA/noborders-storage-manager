@@ -94,6 +94,11 @@ Después de cargarlas, **redeploy**.
    - **Approve**: el despacho pasa a *Verified* y el job a *delivered*;
    - **Mark disputed**;
    - **Discard**.
+
+   **Sin mail:** si el carrier mandó los papeles por WhatsApp o en mano, en la tarjeta
+   del job (o en Carriers → Dispatches) está **Enter result**. Ahí se escriben el CF
+   final, lo cobrado, el método y la fecha, y pasa lo mismo que con Approve: el
+   despacho queda *Verified*, el job *delivered* y el saldo se calcula igual.
 5. **Saldos y pagos.**
    - **Balances**: muestra qué carrier debe y a cuál le debemos.
    - **Payments & adjustments**: registra pagos en las dos direcciones y ajustes

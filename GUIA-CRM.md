@@ -317,6 +317,7 @@ Cuando le damos un job a otro carrier, **la orden sale siempre del CRM**.
 2. **El carrier responde a ese mail**: "ACCEPT" para aceptar, y al terminar manda el **BOL firmado y el comprobante del cobro**.
 3. **El CRM lee la casilla solo**: la IA lee los documentos, los vincula al despacho y avisa por Telegram.
 4. **Revisar** — en **Carriers → Docs to review** ves los archivos y lo que leyó la IA (CF final, cobrado, método, firmas). **Approve** → el despacho queda *Verified*, el job pasa a *delivered* y el saldo del cliente queda en cero.
+   - ¿Te mandó los papeles por **WhatsApp** o en mano? En la tarjeta **Carrier** del job tocá **Enter result** (Cargar resultado), escribí el CF final y lo que cobró, y queda cerrado igual.
 5. **Saldos** — la pestaña **Balances** muestra qué carrier nos debe y a cuál le debemos. Los pagos y ajustes (por ejemplo, un claim) se cargan en **Payments & adjustments**. También aparece en **AP / AR**.
 
 > **La cuenta:** si el carrier cobró más que su rate (rate × CF + sus extras), **nos debe la diferencia**. Si cobró menos, se la debemos nosotros. Lo que cobra el carrier no entra en Payments: esa plata no llega a nuestro banco, sólo el neto.

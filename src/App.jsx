@@ -14110,6 +14110,7 @@ export default function App() {
                   <CarrierDispatchCard supabase={supabase} session={session} can={can} Btn={Btn} Modal={Modal}
                     job={jobDetail} repId={repId} outstanding={outstanding} carriers={carriers} dispatches={carrierDispatches}
                     missing={carriersMissing} cardStyle={cardS} capStyle={capS} logNote={logServiceNote}
+                    onMarkJobDelivered={markJobDeliveredByNumber}
                     onChanged={() => { loadCarrierDispatches(); loadJobEvents?.(); }}
                     onOpenCarriers={() => { setJobDetailKey(null); setPage("carriers"); }} />
                 )}

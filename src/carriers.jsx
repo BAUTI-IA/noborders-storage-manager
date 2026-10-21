@@ -16,7 +16,7 @@ import { effCf } from "./analyticsData.js";
 import {
   num, carrierPay, estimatedPay, dispatchNet, carrierBalances, carrierKpis, insuranceStatus,
   dispatchAlerts, waNumber, buildDispatchEmail, buildDispatchWhatsApp, rateConfirmationRows,
-  reviewOutcome, carrierEmails, jobKeyOf, OPEN_STATUSES, PAYMENT_METHODS,
+  reviewOutcome, carrierEmails, jobKeyOf, OPEN_STATUSES, PAYMENT_METHODS, verifiedPatch, resultErrors,
 } from "./carrierData.js";
 
 const BUCKET = "carrier-docs";
@@ -289,9 +289,64 @@ function DispatchModal({ supabase, session, job, repId, outstanding, carriers, B
   );
 }
 
+// A dispatch still open (or disputed) can be closed by hand.
+const canEnterResult = (d) => !!d && (OPEN_STATUSES.includes(d.status) || d.status === "disputed");
+
+function resultErrorText(errs) {
+  if (errs.includes("collected")) return tr("Enter what the carrier collected (0 if nothing).", "Cargá lo que cobró el carrier (0 si no cobró nada).");
+  if (errs.includes("final_cf")) return tr("The final CF has to be a number.", "El CF final tiene que ser un número.");
+  return "";
+}
+
+/** Close a dispatch by hand: the carrier sent the papers by WhatsApp or on paper,
+ *  so there is no email to review. Writes what approving documents writes. */
+function ResultModal({ supabase, userEmail, dispatch: d, carrier, Btn, Modal, onClose, onSaved, onMarkJobDelivered }) {
+  const [vals, setVals] = useState(() => ({ final_cf: String(num(d.est_cf) || ""), collected: "", method: "", delivered_on: todayISO() }));
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => setVals((s) => ({ ...s, [k]: v }));
+  const errs = resultErrors(vals);
+  const outcome = vals.collected === "" ? null : reviewOutcome(d, vals);
+  const alerts = outcome ? dispatchAlerts({ ...d, final_cf: num(vals.final_cf) || num(d.est_cf), collected: num(vals.collected), status: "verified" }, { today: todayISO() }) : [];
+
+  async function save() {
+    if (errs.length) { window.alert(resultErrorText(errs)); return; }
+    setBusy(true);
+    if (dbFailed(await supabase.from("carrier_dispatches").update(verifiedPatch(d, vals, { at: nowISO(), by: userEmail })).eq("id", d.id), "carrier_dispatches")) { setBusy(false); return; }
+    await onMarkJobDelivered?.(d.job_number);
+    setBusy(false);
+    onSaved?.(vals);
+  }
+
+  return (
+    <Modal title={tr(`Enter the result · ${d.job_number} (D${d.id})`, `Cargar el resultado · ${d.job_number} (D${d.id})`)} onClose={onClose}
+      footer={<><Btn onClick={onClose}>Cancel</Btn><Btn primary disabled={busy} onClick={save} style={{ background:"#1A8A4E", borderColor:"#1A8A4E" }}>{busy ? "Saving…" : "Save result"}</Btn></>}>
+      <div style={{ display:"grid", gap:12 }}>
+        <div style={{ fontSize:12.5, color:"#666" }}>Use this when the carrier sent the papers by WhatsApp or on paper.</div>
+        <div style={{ fontSize:12.5, color:"#444" }}><b>{carrier?.name || "—"}</b> · {d.rate_type === "flat" ? tr(`${fmt$(num(d.flat_rate))} flat`, `${fmt$(num(d.flat_rate))} fijo`) : `${rate$(d.rate_per_cf)} / CF`}</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:10 }}>
+          <Field label="Final CF" style={{ marginBottom:0 }}><input type="number" value={vals.final_cf} onChange={(e) => set("final_cf", e.target.value)} style={inp} />
+            <div style={{ fontSize:10.5, color:"#aaa", marginTop:2 }}>{tr(`est. ${num(d.est_cf)}`, `est. ${num(d.est_cf)}`)}</div></Field>
+          <Field label="Collected" style={{ marginBottom:0 }}><input type="number" step="0.01" value={vals.collected} onChange={(e) => set("collected", e.target.value)} style={inp} autoFocus />
+            <div style={{ fontSize:10.5, color:"#aaa", marginTop:2 }}>{tr(`expected ${fmt$(num(d.expected_collect))}`, `esperado ${fmt$(num(d.expected_collect))}`)}</div></Field>
+          <Field label="Method" style={{ marginBottom:0 }}><select value={vals.method} onChange={(e) => set("method", e.target.value)} style={inp}><option value="">—</option>{PAYMENT_METHODS.map((k) => <option key={k} value={k}>{METHOD_LABEL[k]}</option>)}</select></Field>
+          <Field label="Delivered" style={{ marginBottom:0 }}><input type="date" value={vals.delivered_on} onChange={(e) => set("delivered_on", e.target.value)} style={inp} /></Field>
+        </div>
+        {alerts.map((a, i) => <div key={i} style={{ fontSize:12, fontWeight:600, borderRadius:8, padding:"6px 10px", background:"#FDE3CF", color:"#C2410C" }}>{alertText(a)}</div>)}
+        {outcome && (
+          <div style={{ fontSize:12.5, color:"#555", borderTop:"1px dashed #eee", paddingTop:8 }}>
+            {tr(`Carrier's pay ${fmt$(outcome.pay)} · collected ${fmt$(num(vals.collected))} → `, `Le corresponde ${fmt$(outcome.pay)} · cobró ${fmt$(num(vals.collected))} → `)}<Verdict value={outcome.net} />
+          </div>
+        )}
+        <div style={{ fontSize:11.5, color:"#999" }}>Saving marks the dispatch verified and the job delivered.</div>
+      </div>
+    </Modal>
+  );
+}
+
 /** "Carrier" card in the job detail (Money tab): dispatch the job, or follow its dispatch. */
-export function CarrierDispatchCard({ supabase, session, can = () => true, Btn, Modal, job, repId, outstanding = 0, carriers = [], dispatches = [], missing, onChanged, onOpenCarriers, logNote, cardStyle, capStyle }) {
+export function CarrierDispatchCard({ supabase, session, can = () => true, Btn, Modal, job, repId, outstanding = 0, carriers = [], dispatches = [], missing, onChanged, onOpenCarriers, onMarkJobDelivered, logNote, cardStyle, capStyle }) {
   const [open, setOpen] = useState(false);
+  const [resultOpen, setResultOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const userEmail = session?.user?.email || null;
   const d = liveDispatchFor(job.job_number, dispatches);
@@ -358,6 +413,7 @@ export function CarrierDispatchCard({ supabase, session, can = () => true, Btn, 
             {[d.sent_at && tr(`Sent ${shortDate(d.sent_at)}`, `Enviado ${shortDate(d.sent_at)}`), d.accepted_at && tr(`accepted ${shortDate(d.accepted_at)}`, `aceptado ${shortDate(d.accepted_at)}`), d.verified_at && tr(`verified ${shortDate(d.verified_at)}`, `verificado ${shortDate(d.verified_at)}`)].filter(Boolean).join(" · ") || tr(`Dispatch D${d.id}`, `Despacho D${d.id}`)}
           </div>
           <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:10 }}>
+            {canEdit && canEnterResult(d) && <Btn primary disabled={busy} onClick={() => setResultOpen(true)} style={{ padding:"5px 10px", fontSize:12 }}>Enter result</Btn>}
             {canEdit && d.status === "sent" && <Btn disabled={busy} onClick={() => setStatus("accepted", { accepted_at: nowISO() })} style={{ padding:"5px 10px", fontSize:12 }}>Mark accepted</Btn>}
             {canEdit && ["sent", "accepted"].includes(d.status) && <Btn disabled={busy} onClick={() => setStatus("in_progress")} style={{ padding:"5px 10px", fontSize:12 }}>Mark in progress</Btn>}
             {canEdit && OPEN_STATUSES.includes(d.status) && <Btn disabled={busy} onClick={resend} style={{ padding:"5px 10px", fontSize:12 }}>Resend email</Btn>}
@@ -369,6 +425,13 @@ export function CarrierDispatchCard({ supabase, session, can = () => true, Btn, 
       )}
       {open && <DispatchModal supabase={supabase} session={session} job={job} repId={repId} outstanding={outstanding} carriers={carriers}
         Btn={Btn} Modal={Modal} logNote={logNote} onClose={() => setOpen(false)} onDone={() => { setOpen(false); onChanged?.(); }} />}
+      {resultOpen && d && <ResultModal supabase={supabase} userEmail={userEmail} dispatch={d} carrier={carrier} Btn={Btn} Modal={Modal}
+        onMarkJobDelivered={onMarkJobDelivered} onClose={() => setResultOpen(false)}
+        onSaved={(v) => {
+          setResultOpen(false);
+          logNote?.(repId, tr(`Dispatch D${d.id} closed by hand: collected ${fmt$(num(v.collected))}`, `Despacho D${d.id} cerrado a mano: cobró ${fmt$(num(v.collected))}`));
+          onChanged?.();
+        }} />}
     </div>
   );
 }
@@ -388,6 +451,7 @@ export function CarriersSection({
   const canEdit = can("carriers", "edit"), canCreate = can("carriers", "create");
   const today = todayISO();
   const [messages, setMessages] = useState([]);
+  const [resultFor, setResultFor] = useState(null);
   const [payments, setPayments] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
   const [tab, setTab] = useState("balances");
@@ -581,7 +645,8 @@ export function CarriersSection({
                         <td style={{ ...td, textAlign:"right" }}>{done ? fmt$(carrierPay(d)) : <span style={{ color:"#aaa" }}>≈ {fmt$(estimatedPay(d))}</span>}</td>
                         <td style={{ ...td, textAlign:"right" }}>{done ? fmt$(num(d.collected)) : <span style={{ color:"#aaa" }}>{tr(`${fmt$(num(d.expected_collect))} to collect`, `${fmt$(num(d.expected_collect))} a cobrar`)}</span>}</td>
                         <td style={{ ...td, textAlign:"right", fontWeight:700, color: !done ? "#bbb" : dispatchNet(d) >= 0 ? "#1A8A4E" : "#B91C1C" }}>{done ? fmtSigned(dispatchNet(d)) : "—"}</td>
-                        <td style={td}><StatusPill status={d.status} />{alerts.map((a, i) => <div key={i} style={{ fontSize:10.5, color:"#C2410C", marginTop:3 }}>{alertText(a)}</div>)}</td>
+                        <td style={td}><StatusPill status={d.status} />{alerts.map((a, i) => <div key={i} style={{ fontSize:10.5, color:"#C2410C", marginTop:3 }}>{alertText(a)}</div>)}
+                          {canEdit && canEnterResult(d) && <div style={{ marginTop:5 }}><button onClick={() => setResultFor(d)} style={{ ...linkBtn, fontSize:11.5 }}>Enter result</button></div>}</td>
                       </tr>
                     );
                   })}
@@ -722,6 +787,9 @@ export function CarriersSection({
           ); })()}
         </Modal>
       )}
+      {resultFor && <ResultModal supabase={supabase} userEmail={userEmail} dispatch={resultFor} carrier={carrierById[resultFor.carrier_id]} Btn={Btn} Modal={Modal}
+        onMarkJobDelivered={onMarkJobDelivered} onClose={() => setResultFor(null)}
+        onSaved={() => { setResultFor(null); reloadDispatches?.(); }} />}
     </div>
   );
 }
@@ -749,13 +817,11 @@ function ReviewCard({ m, supabase, userEmail, canEdit, Btn, carrier, dispatches,
   }
   async function approve() {
     if (!d) { window.alert(tr("Choose which dispatch these documents belong to.", "Elegí a qué despacho pertenecen estos documentos.")); return; }
-    if (!(num(vals.collected) >= 0) || vals.collected === "") { window.alert(tr("Enter what the carrier collected (0 if nothing).", "Cargá lo que cobró el carrier (0 si no cobró nada).")); return; }
+    const errs = resultErrors(vals);
+    if (errs.length) { window.alert(resultErrorText(errs)); return; }
     setBusy(true);
     const at = nowISO();
-    if (dbFailed(await supabase.from("carrier_dispatches").update({
-      final_cf: num(vals.final_cf) || num(d.est_cf), collected: num(vals.collected), collected_method: vals.method || null,
-      delivered_on: vals.delivered_on || null, status: "verified", verified_at: at, verified_by: userEmail, updated_by: userEmail, updated_at: at,
-    }).eq("id", d.id), "carrier_dispatches")) { setBusy(false); return; }
+    if (dbFailed(await supabase.from("carrier_dispatches").update(verifiedPatch(d, vals, { at, by: userEmail })).eq("id", d.id), "carrier_dispatches")) { setBusy(false); return; }
     if (dbFailed(await supabase.from("carrier_messages").update({ status: "applied", dispatch_id: d.id, reviewed_by: userEmail, reviewed_at: at, updated_at: at }).eq("id", m.id), "carrier_messages")) { setBusy(false); return; }
     await onMarkJobDelivered?.(d.job_number);
     setBusy(false);
